@@ -35,7 +35,7 @@ router.get("/stats", controller.getStatistics);
 router.get("/reports/drawing-usage", controller.getDrawingUsageReport);
 
 // ============================================
-// LEGACY ROUTES (TETAP DI BAWAH)
+// LEGACY ROUTES
 // ============================================
 router.get("/", controller.getAll);
 router.get("/data", controller.get2data);
@@ -43,14 +43,17 @@ router.get("/datajson", controller.getDataJSON);
 router.get("/mesin/:order", controller.getbymesinid);
 router.get("/csv/", controller.getcsv);
 router.get("/csv/:order_no", controller.getcsvbyid);
-router.get("/:order", controller.getById); // INI HARUS PALING BAWAH!
 router.get("/search/:order_no/:operation_no", controller.getBySSBRAndGroup);
 router.post("/", controller.create);
 router.post("/createex/", controller.createexcel);
 router.post("/upsert", controller.upsert);
-router.put("/updateex/:id", controller.updateexcel);
+
+// PUT ROUTES - SPESIFIK DULU!
+router.put("/updateex/:id", controller.updateexcel);  // <-- PINDAH KE ATAS
 router.put("/finish/", controller.finish);
-router.put("/:id", controller.update);
+router.put("/:id", controller.update);                // <-- GENERIC PALING BAWAH
+
 router.delete("/:id", controller.remove);
+router.get("/:order", controller.getById);            // PALING BAWAH!
 
 module.exports = router;

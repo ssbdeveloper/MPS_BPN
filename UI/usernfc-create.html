@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create NFC User</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 30px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #333;
+            font-size: 24px;
+        }
+
+        .btn-back {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .btn-back:hover {
+            background: #5a6268;
+            transform: translateY(-2px);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            color: #555;
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .form-group label .required {
+            color: #f44336;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group input:disabled {
+            background: #f5f5f5;
+            cursor: not-allowed;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 15px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        .btn-submit {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            width: 100%;
+            transition: all 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn-submit:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(40, 167, 69, 0.4);
+        }
+
+        .btn-submit:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .status-message {
+            margin-bottom: 20px;
+            padding: 12px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            text-align: center;
+            display: none;
+        }
+
+        .status-message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status-message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status-message.active {
+            display: block;
+        }
+
+        .nfc-scan-section {
+            background: #f8f9fa;
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .nfc-scan-section p {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .nfc-id-display {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+            font-family: monospace;
+        }
+
+        .btn-scan {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 10px;
+            transition: all 0.2s;
+        }
+
+        .btn-scan:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .divider {
+            border: none;
+            border-top: 1px solid #e0e0e0;
+            margin: 25px 0;
+        }
+
+        .section-title {
+            color: #667eea;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2 id="pageTitle">➕ Create NFC User</h2>
+            <a href="usernfc.html" class="btn-back">← Back</a>
+        </div>
+
+        <div class="status-message" id="statusMessage"></div>
+
+        <form id="userForm">
+            <!-- NFC Scan Section -->
+            <div class="nfc-scan-section">
+                <p>📱 Scan NFC Card atau masukkan ID manual</p>
+                <div class="nfc-id-display" id="nfcIdDisplay">-</div>
+                <button type="button" class="btn-scan" id="btnScan">🔄 Simulate Scan</button>
+            </div>
+
+            <div class="form-group">
+                <label for="nfcid">NFC ID <span class="required">*</span></label>
+                <input type="text" id="nfcid" name="nfcid" required placeholder="Masukkan NFC ID">
+            </div>
+
+            <hr class="divider">
+            <div class="section-title">👤 User Information</div>
+
+            <div class="form-group">
+                <label for="full_name">Full Name <span class="required">*</span></label>
+                <input type="text" id="full_name" name="full_name" required placeholder="Masukkan nama lengkap">
+            </div>
+
+            <div class="form-group">
+                <label for="snssb">SNSSB <span class="required">*</span></label>
+                <input type="text" id="snssb" name="snssb" required placeholder="Masukkan SNSSB">
+            </div>
+
+            <hr class="divider">
+            <div class="section-title">🏭 Machine Assignment</div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="machineid">Machine ID</label>
+                    <input type="text" id="machineid" name="machineid" placeholder="Masukkan Machine ID">
+                </div>
+                <div class="form-group">
+                    <label for="machinename">Machine Name</label>
+                    <input type="text" id="machinename" name="machinename" placeholder="Masukkan Machine Name">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="workcenter">Work Center</label>
+                    <input type="text" id="workcenter" name="workcenter" placeholder="Masukkan Work Center">
+                </div>
+                <div class="form-group">
+                    <label for="roles">Roles</label>
+                    <select id="roles" name="roles">
+                        <option value="">-- Pilih Role --</option>
+                        <option value="operator">Operator</option>
+                        <option value="supervisor">Supervisor</option>
+                        <option value="admin">Admin</option>
+                        <option value="technician">Technician</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-submit" id="btnSubmit">💾 Save User</button>
+        </form>
+    </div>
+
+    <script>
+        const form = document.getElementById('userForm');
+        const statusMessage = document.getElementById('statusMessage');
+        const pageTitle = document.getElementById('pageTitle');
+        const btnSubmit = document.getElementById('btnSubmit');
+        const btnScan = document.getElementById('btnScan');
+        const nfcIdInput = document.getElementById('nfcid');
+        const nfcIdDisplay = document.getElementById('nfcIdDisplay');
+
+        let isEditMode = false;
+        let editNfcId = null;
+
+        // Cek apakah mode edit
+        const urlParams = new URLSearchParams(window.location.search);
+        const editId = urlParams.get('edit');
+
+        if (editId) {
+            isEditMode = true;
+            editNfcId = editId;
+            pageTitle.textContent = '✏️ Edit NFC User';
+            btnSubmit.textContent = '💾 Update User';
+            nfcIdInput.disabled = true;
+            loadUserData(editId);
+        }
+
+        function showStatus(message, type) {
+            statusMessage.textContent = message;
+            statusMessage.className = `status-message ${type} active`;
+            setTimeout(() => {
+                statusMessage.classList.remove('active');
+            }, 5000);
+        }
+
+        // Simulate NFC Scan (dummy)
+        btnScan.addEventListener('click', () => {
+            const randomId = 'NFC' + Math.random().toString(36).substring(2, 10).toUpperCase();
+            nfcIdInput.value = randomId;
+            nfcIdDisplay.textContent = randomId;
+        });
+
+        // Update display saat input manual
+        nfcIdInput.addEventListener('input', () => {
+            nfcIdDisplay.textContent = nfcIdInput.value || '-';
+        });
+
+        // Load user data untuk edit mode
+        async function loadUserData(nfcid) {
+            try {
+                const response = await fetch(`/usernfc/${nfcid}`);
+                
+                if (!response.ok) {
+                    throw new Error('User tidak ditemukan');
+                }
+                
+                const user = await response.json();
+                
+                // Fill form
+                nfcIdInput.value = user.nfcid || '';
+                nfcIdDisplay.textContent = user.nfcid || '-';
+                document.getElementById('full_name').value = user.full_name || '';
+                document.getElementById('snssb').value = user.snssb || '';
+                document.getElementById('machineid').value = user.machineid || '';
+                document.getElementById('machinename').value = user.machinename || '';
+                document.getElementById('workcenter').value = user.workcenter || '';
+                document.getElementById('roles').value = user.roles || '';
+                
+            } catch (error) {
+                console.error('Error loading user:', error);
+                showStatus('✗ Gagal memuat data user: ' + error.message, 'error');
+            }
+        }
+
+        // Form submit
+        
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    btnSubmit.disabled = true;
+    btnSubmit.textContent = '⏳ Saving...';
+
+    const formData = {
+        nfcid: nfcIdInput.value.trim(),
+        full_name: document.getElementById('full_name').value.trim(),
+        snssb: document.getElementById('snssb').value.trim(),
+        machineid: document.getElementById('machineid').value.trim(),
+        machinename: document.getElementById('machinename').value.trim(),
+        workcenter: document.getElementById('workcenter').value.trim(),
+        roles: document.getElementById('roles').value
+    };
+
+    try {
+        // Step 1: Cek apakah nfcid sudah ada
+        let isExist = false;
+        
+        try {
+            const checkResponse = await fetch(`/usernfc/nfcid/${formData.nfcid}`);
+            if (checkResponse.ok) {
+                isExist = true;
+            }
+        } catch (err) {
+            isExist = false;
+        }
+
+        let response;
+        
+        if (isExist) {
+            // Step 2a: Update jika sudah ada
+            console.log('User exists, updating...');
+            response = await fetch(`/usernfc/nfcedit/${formData.nfcid}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData)
+            });
+        } else {
+            // Step 2b: Create jika belum ada
+            console.log('User not found, creating...');
+            response = await fetch('/usernfc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData)
+            });
+        }
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Gagal menyimpan data');
+        }
+
+        const result = await response.json();
+        const action = isExist ? 'updated' : 'created';
+        
+        // Redirect ke halaman list
+        window.location.href = `usernfc.html?msg=${action}`;
+
+    } catch (error) {
+        console.error('Error saving user:', error);
+        showStatus('✗ Gagal menyimpan: ' + error.message, 'error');
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = '💾 Save User';
+    }
+});
+    </script>
+</body>
+</html>

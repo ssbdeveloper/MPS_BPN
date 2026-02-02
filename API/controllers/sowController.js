@@ -120,13 +120,97 @@ exports.getbymesinid = async (req, res) => {
 // CREATE
 exports.create = async (req, res) => {
   try {
-    const { name } = req.body; // contoh field
+    // Log request masuk
+    console.log("=".repeat(50));
+    console.log("[SOW CREATE] Request received:", new Date().toISOString());
+    console.log("[SOW CREATE] Body:", JSON.stringify(req.body, null, 2));
+
+    const {
+      order_no,
+      operation_no,
+      ssbr_id,
+      part_number,
+      part_name,
+      model,
+      customer,
+      location,
+      wct_group,
+      workcenter,
+      operationtext,
+      workcenterdescription,
+      planhours,
+      confirmation,
+      status,
+      finish_date,
+      type,
+      group_name,  // atau "group" kalau di DB namanya group
+      category,
+      remark
+    } = req.body;
+
+    // Log sebelum insert
+    console.log("[SOW CREATE] Inserting to database...");
+
     const result = await db.query(
-      "INSERT INTO sow (name) VALUES ($1) RETURNING *",
-      [name]
+      `INSERT INTO sow (
+        order_no,
+        operation_no,
+        ssbr_id,
+        part_number,
+        part_name,
+        model,
+        customer,
+        location,
+        wct_group,
+        workcenter,
+        operationtext,
+        workcenterdescription,
+        planhours,
+        confirmation,
+        status,
+        finish_date,
+        type,
+        "group",
+        category,
+        remark
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+      RETURNING *`,
+      [
+        order_no,
+        operation_no,
+        ssbr_id,
+        part_number,
+        part_name,
+        model,
+        customer,
+        location,
+        wct_group,
+        workcenter,
+        operationtext,
+        workcenterdescription,
+        planhours,
+        confirmation,
+        status,
+        finish_date,
+        type,
+        group_name,  // nilai dari group_name masuk ke kolom "group"
+        category,
+        remark
+      ]
     );
+
+    // Log sukses
+    console.log("[SOW CREATE] Success! ID:", result.rows[0].idsow);
+    console.log("=".repeat(50));
+
     res.json(result.rows[0]);
+
   } catch (err) {
+    // Log error
+    console.error("[SOW CREATE] ERROR:", err.message);
+    console.error("[SOW CREATE] Stack:", err.stack);
+    console.error("=".repeat(50));
+    
     res.status(500).json({ error: err.message });
   }
 };
@@ -173,10 +257,26 @@ exports.finish = async (req, res) => {
 exports.remove = async (req, res) => {
   try {
     const { id } = req.params;
-    await db.query("DELETE FROM sow WHERE id = $1", [id]);
-    res.json({ message: "Deleted successfully" });
+
+    const result = await db.query(
+      "DELETE FROM sow WHERE idsow = $1",
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        message: "ID not found"
+      });
+    }
+
+    res.status(200).json({
+      message: "Deleted successfully",
+      id: id
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: err.message
+    });
   }
 };
 
@@ -252,7 +352,13 @@ exports.createexcel = async (req, res) => {
 // UPDATE
 exports.updateexcel = async (req, res) => {
   try {
-    const { id } = req.params; // id = idsow
+    const { id } = req.params;
+
+    // TAMBAHKAN LOGGING INI
+    console.log('========== updateexcel CALLED ==========');
+    console.log('ID:', id);
+    console.log('FULL BODY:', JSON.stringify(req.body, null, 2));
+
     const {
       order_no,
       operation_no,
@@ -267,8 +373,20 @@ exports.updateexcel = async (req, res) => {
       operationtext,
       workcenterdescription,
       planhours,
-      confirmation
+      confirmation,
+      status,
+      finish_date,
+      type,
+      group_name,
+      category,
+      remark
     } = req.body;
+
+    // LOG SETIAP VARIABEL
+    console.log('type:', type);
+    console.log('group_name:', group_name);
+    console.log('category:', category);
+    console.log('remark:', remark);
 
     const result = await db.query(
       `UPDATE sow SET
@@ -285,8 +403,14 @@ exports.updateexcel = async (req, res) => {
         operationtext = $11,
         workcenterdescription = $12,
         planhours = $13,
-        confirmation = $14
-      WHERE idsow = $15
+        confirmation = $14,
+        status = $15,
+        finish_date = $16,
+        type = $17,
+        "group" = $18,
+        category = $19,
+        remark = $20
+      WHERE idsow = $21
       RETURNING *`,
       [
         order_no,
@@ -303,15 +427,27 @@ exports.updateexcel = async (req, res) => {
         workcenterdescription,
         planhours,
         confirmation,
+        status,
+        finish_date,
+        type,
+        group_name,
+        category,
+        remark,
         id
       ]
     );
 
+    // LOG HASIL QUERY
+    console.log('QUERY RESULT:', JSON.stringify(result.rows[0], null, 2));
+    console.log('========== updateexcel END ==========');
+
     res.json(result.rows[0]);
   } catch (err) {
+    console.error('ERROR in updateexcel:', err);
     res.status(500).json({ error: err.message });
   }
 };
+
 //============UPSERT EXCEL=============
 // UPSERT berdasarkan order_no dan operation_no
 exports.upsert = async (req, res) => {
