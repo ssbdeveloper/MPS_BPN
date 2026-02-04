@@ -9,7 +9,6 @@ router.get("/nama/:nama", controller.getname);
 router.post("/", controller.create);
 router.put("/update/", controller.updatemesin);
 router.put("/:snssb", controller.update);
-router.put("/nfcedit/:nfcid", controller.updatenfc);
 router.delete("/:nfcid", controller.remove);
 
 module.exports = router;

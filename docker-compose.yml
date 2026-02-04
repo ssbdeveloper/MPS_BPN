@@ -87,7 +87,7 @@ services:
     networks:
       - timesheet-network
 
-  sow_exporter:
+sow_exporter:
     build:
       context: .
       dockerfile: pythonscript/Dockerfile
@@ -105,8 +105,6 @@ services:
         condition: service_healthy
     networks:
       - timesheet-network
-
-
 volumes:
   postgres_data:
     driver: local

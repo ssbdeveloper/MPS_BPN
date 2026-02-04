@@ -1,24 +1,19 @@
 .env
-venv/
-*.log
-*.tmp
-
-# Python
-__pycache__/
 *.pyc
 *.pyo
 *.pyd
 _pycache/
 .psycache/
-
-node_modules/
-
+*.log
+*.tmp
+# Python
+__pycache__/
 # FastAPI / tools
 *.log
 instance/
 .coverage
 htmlcov/
-
 # IDE
 .vscode/
 .idea/
+node_modules/

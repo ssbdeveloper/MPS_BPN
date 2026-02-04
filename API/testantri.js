@@ -1,6 +1,8 @@
 const fetch = global.fetch;
 
-
+const API_URL = "https://mst.it-cpi002-rt.cfapps.ap10.hana.ondemand.com/http/timesheet_QA";
+const USERNAME = "sb-536163d0-4359-40c4-8d17-07ec0fd8d3e1!b672|it-rt-mst!b80";
+const PASSWORD = "74a46ba6-2c31-4116-814f-4c6af186581f$og9p7Ha3hijivoXXMChQBTEyBAxnfJWZQsvVjjFVx6k=";
 
 // Encode Basic Auth
 const basicAuth = "Basic " + Buffer.from(`${USERNAME}:${PASSWORD}`).toString("base64");
