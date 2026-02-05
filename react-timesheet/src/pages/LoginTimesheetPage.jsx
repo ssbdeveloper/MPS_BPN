@@ -296,67 +296,71 @@ const LoginTimesheetPage = () => {
       {/* Main Content - Flexible space */}
       <main className="flex-1 flex flex-col justify-center items-center px-3 py-2 overflow-hidden">
         {/* Menu Buttons - Centered */}
-        <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-2">
-          {/* Productive Button - Orange CTA */}
+        <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-2 sm:gap-3">
+          {/* Productive Button - Orange CTA with 3D effect */}
           <button
             onClick={() => handleButtonClick('start')}
             disabled={selectedAction === 'start'}
             className={`
               aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-              text-[10px] sm:text-xs font-bold rounded transition-all duration-150
+              text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
               ${selectedAction === 'start'
-                ? 'bg-orange-400 shadow-inner opacity-60 translate-y-0.5 cursor-not-allowed'
-                : 'bg-gradient-to-b from-orange-500 to-orange-600 text-white shadow-md hover:from-orange-600 hover:to-orange-700 active:translate-y-0.5'
+                ? 'bg-orange-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-b from-orange-500 to-orange-600 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-orange-600 hover:to-orange-700'
               }
             `}
+            style={selectedAction !== 'start' ? { boxShadow: '0 6px 16px -2px rgba(249, 115, 22, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' } : {}}
           >
-            <span className="text-lg sm:text-xl">✅</span>
+            <span className="text-xl sm:text-2xl">✅</span>
             <span>Productive</span>
           </button>
 
-          {/* Unproductive Button - Blue */}
+          {/* Unproductive Button - Blue with 3D effect */}
           <button
             onClick={() => handleButtonClick('unprod')}
             disabled={selectedAction === 'unprod'}
             className={`
               aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-              text-[10px] sm:text-xs font-bold rounded transition-all duration-150
+              text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
               ${selectedAction === 'unprod'
-                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-0.5 cursor-not-allowed'
-                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-md hover:from-blue-700 hover:to-blue-800 active:translate-y-0.5'
+                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
               }
             `}
+            style={selectedAction !== 'unprod' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' } : {}}
           >
-            <span className="text-lg sm:text-xl">⚠️</span>
+            <span className="text-xl sm:text-2xl">⚠️</span>
             <span>Unproductive</span>
           </button>
 
-          {/* Stop Timesheet Button - Blue */}
+          {/* Stop Timesheet Button - Blue with 3D effect */}
           <button
             onClick={() => handleButtonClick('stop')}
             disabled={selectedAction === 'stop'}
             className={`
               aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-              text-[10px] sm:text-xs font-bold rounded transition-all duration-150
+              text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
               ${selectedAction === 'stop'
-                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-0.5 cursor-not-allowed'
-                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-md hover:from-blue-700 hover:to-blue-800 active:translate-y-0.5'
+                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
               }
             `}
+            style={selectedAction !== 'stop' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' } : {}}
           >
-            <span className="text-lg sm:text-xl">🛑</span>
+            <span className="text-xl sm:text-2xl">🛑</span>
             <span>Stop Timesheet</span>
           </button>
 
-          {/* Tools & Consumable Button - Blue */}
+          {/* Tools & Consumable Button - Blue with 3D effect */}
           <button
             className="aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-            text-[10px] sm:text-xs font-bold rounded transition-all duration-150
-            bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-md
-            hover:from-blue-700 hover:to-blue-800 active:translate-y-0.5"
+            text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
+            bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1
+            hover:from-blue-700 hover:to-blue-800"
+            style={{ boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' }}
             onClick={() => alert('Tools & Consumable - Coming Soon')}
           >
-            <span className="text-lg sm:text-xl">🔧</span>
+            <span className="text-xl sm:text-2xl">🔧</span>
             <span>Tools & Consumable</span>
           </button>
         </div>
@@ -380,14 +384,14 @@ const LoginTimesheetPage = () => {
       </main>
 
       {/* Status Bar - Fixed height */}
-      <footer className="flex flex-wrap justify-between items-center bg-gray-200 px-3 py-2 text-xs md:text-sm text-gray-800 flex-shrink-0 gap-2">
-        <div>
+      <footer className="flex items-center justify-between bg-gray-200 px-3 py-2 text-xs md:text-sm text-gray-800 flex-shrink-0">
+        <div className="flex-1 text-left">
           Status: <span className="font-semibold">{status}</span>
         </div>
-        <div>
+        <div className="flex-1 text-center">
           Ver: <span className="font-semibold">2.0.0</span>
         </div>
-        <div>
+        <div className="flex-1 text-right">
           ID: <span className="font-semibold">{nfcId}</span>
         </div>
       </footer>
