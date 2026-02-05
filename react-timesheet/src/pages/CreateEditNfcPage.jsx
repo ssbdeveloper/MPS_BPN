@@ -294,7 +294,8 @@ const CreateEditNfcPage = () => {
         <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md sticky top-0 z-10">
           <button
             onClick={() => navigate('/nfc-users')}
-            className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+            className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded shadow-lg hover:shadow-xl active:shadow-sm active:translate-y-1 transition-all duration-150 transform"
+            style={{ boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
           >
             ← Back
           </button>
@@ -342,11 +343,12 @@ const CreateEditNfcPage = () => {
                     type="button"
                     onClick={handleNfcScan}
                     disabled={mode === 'edit'}
-                    className={`flex-1 px-4 py-3 text-sm font-bold rounded shadow-md transition-all ${
+                    className={`flex-1 px-4 py-3 text-sm font-bold rounded transition-all duration-150 transform ${
                       mode === 'edit'
-                        ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
-                        : 'bg-gradient-to-b from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900'
+                        ? 'bg-gray-300 text-gray-600 cursor-not-allowed shadow-sm'
+                        : 'bg-gradient-to-b from-blue-700 to-blue-800 text-white hover:from-blue-800 hover:to-blue-900 shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1'
                     }`}
+                    style={mode !== 'edit' ? { boxShadow: '0 6px 12px -2px rgba(37, 99, 235, 0.4), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' } : {}}
                   >
                     📱 Scan NFC Card
                   </button>
@@ -356,11 +358,12 @@ const CreateEditNfcPage = () => {
                     type="button"
                     onClick={generateNfcId}
                     disabled={mode === 'edit'}
-                    className={`flex-1 px-4 py-3 text-sm font-medium rounded transition-all ${
+                    className={`flex-1 px-4 py-3 text-sm font-medium rounded transition-all duration-150 transform ${
                       mode === 'edit'
-                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                        : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed shadow-sm'
+                        : 'bg-gray-200 text-gray-800 hover:bg-gray-300 shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1'
                     }`}
+                    style={mode !== 'edit' ? { boxShadow: '0 6px 12px -2px rgba(0, 0, 0, 0.15), 0 4px 6px -1px rgba(0, 0, 0, 0.2)' } : {}}
                   >
                     🎲 Generate Test ID
                   </button>
@@ -498,11 +501,12 @@ const CreateEditNfcPage = () => {
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className={`px-8 py-3 text-sm font-bold rounded shadow-md transition-all ${
+                  className={`px-8 py-3 text-sm font-bold rounded transition-all duration-150 transform ${
                     isSaving
-                      ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
-                      : 'bg-gradient-to-b from-orange-500 to-orange-600 text-white hover:from-orange-600 hover:to-orange-700'
+                      ? 'bg-gray-300 text-gray-600 cursor-not-allowed shadow-sm'
+                      : 'bg-gradient-to-b from-orange-500 to-orange-600 text-white hover:from-orange-600 hover:to-orange-700 shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1'
                   }`}
+                  style={!isSaving ? { boxShadow: '0 6px 12px -2px rgba(249, 115, 22, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' } : {}}
                 >
                   {isSaving ? 'Saving...' : mode === 'edit' ? '💾 Update User' : '💾 Save User'}
                 </button>

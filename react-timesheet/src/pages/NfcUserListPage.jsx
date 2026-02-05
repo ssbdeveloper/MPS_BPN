@@ -143,7 +143,8 @@ const NfcUserListPage = () => {
         <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md flex-shrink-0">
           <button
             onClick={() => navigate('/timesheet-mainmenu')}
-            className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+            className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded shadow-lg hover:shadow-xl active:shadow-sm active:translate-y-1 transition-all duration-150 transform"
+            style={{ boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
           >
             ← Back
           </button>
@@ -196,7 +197,8 @@ const NfcUserListPage = () => {
               {/* Create New Button - Orange CTA */}
               <button
                 onClick={() => navigate('/create-edit-nfc')}
-                className="px-6 py-2 text-sm font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded shadow-md hover:from-orange-600 hover:to-orange-700 transition-all whitespace-nowrap"
+                className="px-6 py-2 text-sm font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform whitespace-nowrap"
+                style={{ boxShadow: '0 6px 12px -2px rgba(249, 115, 22, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
               >
                 + Create New User
               </button>
@@ -273,13 +275,15 @@ const NfcUserListPage = () => {
                           <div className="flex gap-2 justify-center">
                             <button
                               onClick={() => handleEditClick(user.nfcid)}
-                              className="px-3 py-1 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+                              className="px-3 py-1 text-xs font-medium bg-blue-700 text-white rounded shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
+                              style={{ boxShadow: '0 3px 6px -1px rgba(37, 99, 235, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
                             >
                               ✏️ Edit
                             </button>
                             <button
                               onClick={() => handleDeleteClick(user)}
-                              className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                              className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
+                              style={{ boxShadow: '0 3px 6px -1px rgba(220, 38, 38, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
                             >
                               🗑️ Delete
                             </button>
@@ -329,13 +333,15 @@ const NfcUserListPage = () => {
               <div className="flex gap-3">
                 <button
                   onClick={closeDeleteModal}
-                  className="flex-1 px-4 py-2 text-sm font-medium bg-gray-300 text-gray-800 rounded hover:bg-gray-400 transition-colors"
+                  className="flex-1 px-4 py-2 text-sm font-medium bg-gray-300 text-gray-800 rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform"
+                  style={{ boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.15)' }}
                 >
                   Batal
                 </button>
                 <button
                   onClick={confirmDelete}
-                  className="flex-1 px-4 py-2 text-sm font-bold bg-gradient-to-b from-red-500 to-red-600 text-white rounded shadow-md hover:from-red-600 hover:to-red-700 transition-all"
+                  className="flex-1 px-4 py-2 text-sm font-bold bg-gradient-to-b from-red-500 to-red-600 text-white rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform"
+                  style={{ boxShadow: '0 6px 12px -2px rgba(220, 38, 38, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
                 >
                   🗑️ Hapus
                 </button>
