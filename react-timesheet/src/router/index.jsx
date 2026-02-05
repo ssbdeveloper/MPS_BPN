@@ -13,6 +13,8 @@ import DashboardPage from '../pages/DashboardPage';
 import SettingPage from '../pages/SettingPage';
 import ComponentTrackingPage from '../pages/ComponentTrackingPage';
 import EditParameterPage from '../pages/EditParameterPage';
+import NfcUserListPage from '../pages/NfcUserListPage';
+import CreateEditNfcPage from '../pages/CreateEditNfcPage';
 
 /**
  * Router Configuration
@@ -74,6 +76,14 @@ const router = createBrowserRouter([
   {
     path: '/edit-parameter',
     element: <EditParameterPage />,
+  },
+  {
+    path: '/nfc-users',
+    element: <NfcUserListPage />,
+  },
+  {
+    path: '/create-edit-nfc',
+    element: <CreateEditNfcPage />,
   },
   {
     path: '*',
