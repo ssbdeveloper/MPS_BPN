@@ -1,0 +1,13 @@
+order_no,ssbr_id,operationtext,operation_no,planhours,workcenter
+1000078796,SWRP-43,Strip ID seal Seat,10,0.25,M5153VTL
+1000078796,SWRP-43,Check crack ,20,0.5,M5153QC2
+1000078796,SWRP-43,Cleaning / burning / pre heat,26,0.1,M5153BLS
+1000078796,SWRP-43,Masking,27,1.0,M5153HDR
+1000078796,SWRP-43,Blasting,28,0.5,M5153BLS
+1000078796,SWRP-43,Seting before metal spray ,29,0.5,M5153MTS
+1000078796,SWRP-43,Metal spray ID Seal Seat,30,1.5,M5153MTS
+1000078796,SWRP-43,Apply Dictol ,31,0.5,M5153HDR
+1000078796,SWRP-43,Seting before machining,39,0.5,M5153VTL
+1000078796,SWRP-43,Machining ID Seal Seat,40,1.5,M5153VTL
+1000078796,SWRP-43,Handressing,50,0.5,M5153HDR
+1000078796,SWRP-43,Final Inspect,60,0.5,M5153QC2

@@ -124,3 +124,30 @@ exports.remove = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+
+exports.updatenfc = async (req, res) => {
+  try {
+    const { nfcid } = req.params;
+    const { full_name, snssb, machineid, machinename, workcenter, roles } = req.body;
+    
+    console.log("[USERNFC UPDATE]", nfcid, JSON.stringify(req.body));
+    
+    const result = await db.query(
+      `UPDATE usernfc 
+       SET full_name = $1, snssb = $2, machineid = $3, machinename = $4, workcenter = $5, roles = $6
+       WHERE nfcid = $7 
+       RETURNING *`,
+      [full_name, snssb, machineid, machinename, workcenter, roles, nfcid]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "User tidak ditemukan" });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("[USERNFC ERROR]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+};

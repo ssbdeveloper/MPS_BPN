@@ -394,6 +394,27 @@
       font-family: 'Monaco', 'Menlo', monospace;
       font-size: 0.8rem;
     }
+
+    .op-text {
+  font-weight: 600;
+}
+
+.op-note {
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--gray-700);
+
+  background: var(--gray-100);   /* background tipis */
+  border-left: 3px solid var(--primary-color);
+  border-radius: 4px;
+
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
   </style>
 </head>
 
@@ -743,7 +764,11 @@
         <td>${item.full_name || ''}</td>
         <td>${item.production_order || ''}</td>
         <td>${item.ssbr_ident || ''}</td>
-        <td>${item.operation_text || ''}</td>
+        <td>
+  <div class="op-text">${item.operation_text || ''}</div>
+  ${item.note ? `<div class="op-note">${item.note}</div>` : ''}
+</td>
+
         <td>${item.seq || ''}</td>
         <td class="datetime-cell">${item.date_checkin || ''} ${item.hour_checkin || ''}</td>
         <td class="datetime-cell">${item.date_checkout || ''} ${item.hour_checkout || ''}</td>

@@ -194,3 +194,73 @@ FROM (
     FROM sow
 ) sub
 WHERE s.idsow = sub.idsow;
+
+--script order --
+CREATE MATERIALIZED VIEW "order" AS
+SELECT
+    order_no,
+    MIN(ssbr_id) AS ssbr_id,
+    MIN(part_number) AS part_number,
+    MIN(part_name) AS part_name,
+    MIN(model) AS model,
+    MIN(customer) AS customer,
+    MIN(location) AS location,
+    MIN(status) AS status,
+    MIN("group") AS "group",
+    MIN(systemstatus) AS systemstatus,
+    SUM(planhours) AS planhours
+FROM sow
+GROUP BY order_no;
+
+REFRESH MATERIALIZED VIEW "order";
+
+
+----- script auto delete -----
+CREATE OR REPLACE FUNCTION fn_delete_dup_sow()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM sow
+    WHERE codenumber = NEW.codenumber
+      AND order_no IS NOT NULL
+      AND idsow < NEW.idsow;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- trigger
+CREATE TRIGGER trg_delete_dup_sow
+AFTER INSERT ON sow
+FOR EACH ROW
+EXECUTE FUNCTION fn_delete_dup_sow();
+
+
+---- script snyc mps project ---
+CREATE OR REPLACE FUNCTION trg_set_sync_modified()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    old_data jsonb;
+    new_data jsonb;
+BEGIN
+    -- kalau user mengubah kolom sync → jangan lakukan apa-apa
+    IF NEW.sync IS DISTINCT FROM OLD.sync THEN
+        RETURN NEW;
+    END IF;
+
+    -- bandingkan semua kolom kecuali sync
+    old_data := to_jsonb(OLD) - 'sync';
+    new_data := to_jsonb(NEW) - 'sync';
+
+    IF old_data IS DISTINCT FROM new_data THEN
+        NEW.sync := 'modified';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+--- trigger ---
+CREATE TRIGGER before_update_set_sync
+BEFORE UPDATE ON sow
+FOR EACH ROW
+EXECUTE FUNCTION trg_set_sync_modified();

@@ -1,0 +1,37 @@
+order_no,ssbr_id,operationtext,operation_no,planhours,workcenter
+1000078791,SDFP-09,Order cap bearing 1,4,0.0,
+1000078791,SDFP-09,Premachining the cap bearing 1,7,,M5153CLT
+1000078791,SDFP-09,Cleaning handgrinding before weld,23,0.25,M5153HDR
+1000078791,SDFP-09,Pre Heat before weld,24,0.25,M5153WM3
+1000078791,SDFP-09,Weld freetings at retainer surface area,25,1.0,M5153WM3
+1000078791,SDFP-09,Peening and handgrinding after weld,26,0.25,M5153HDR
+1000078791,SDFP-09,Check Cracks,27,1.0,M5153WM3
+1000078791,SDFP-09,Skim freetings at retainer surface area,30,2.0,M5153VTL
+1000078791,SDFP-09,Install Cap Bearing 1,37,1.0,M5153ASY
+1000078791,SDFP-09,Install Cap Bearing 2,38,1.0,M5153ASY
+1000078791,SDFP-09,Setting before machine,39,1.0,M5153CLT
+1000078791,SDFP-09,Strip ID Bearing seat 1,40,1.5,M5153CLT
+1000078791,SDFP-09,Strip ID Bearing Seat 2,50,1.5,M5153CLT
+1000078791,SDFP-09,Setting before machine,59,1.0,M5153CLT
+1000078791,SDFP-09,Strip ID Bearing Seat 3,60,2.0,M5153VTL
+1000078791,SDFP-09,Strip flange face contact,61,2.0,M5153VTL
+1000078791,SDFP-09,Check crack ,66,1.0,M5153QC2
+1000078791,SDFP-09,Cleaning,67,1.0,M5153BLS
+1000078791,SDFP-09,Masking,68,1.0,M5153HDR
+1000078791,SDFP-09,Blasting,69,1.0,M5153BLS
+1000078791,SDFP-09,Metal Spray ID Bearing seat 1,70,6.0,M5153MTS
+1000078791,SDFP-09,Metal Spray ID Bearing Seat 2,80,6.0,M5153MTS
+1000078791,SDFP-09,Metal Spray Bearing Seat 3,90,4.0,M5153MTS
+1000078791,SDFP-09,Metal Spray flange face contact,91,4.0,M5153MTS
+1000078791,SDFP-09,Setting before machine,99,1.0,M5153CLT
+1000078791,SDFP-09,Machining remove excessive spray material,100,6.0,M5153CLT
+1000078791,SDFP-09,Reinstall Cap Bearing 1,107,1.0,M5153ASY
+1000078791,SDFP-09,Reinstall Cap Bearing 2,108,1.0,M5153ASY
+1000078791,SDFP-09,Setting before machine,109,1.0,M5153CLT
+1000078791,SDFP-09,Machining Bearing Seat 1,110,6.0,M5153CLT
+1000078791,SDFP-09,Machining Bearing Seat 2,120,6.0,M5153CLT
+1000078791,SDFP-09,Machining Bearing Seat 3,130,4.0,M5153CLT
+1000078791,SDFP-09,Machining flange face contact,131,4.0,M5153CLT
+1000078791,SDFP-09,Inspection Check Alignment and Perpendicular,140,4.0,M5153CLT
+1000078791,SDFP-09,Deburr after machining process,150,1.0,M5153HDR
+1000078791,SDFP-09,Final Inspection,160,1.0,M5153QC2

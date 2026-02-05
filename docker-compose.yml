@@ -12,10 +12,10 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
-      - ./database/init_database.sql:/docker-entrypoint-initdb.d/01-init.sql:ro  # ← TAMBAH INI
-      - ./database/migrate_sow_to_parts.sql:/docker-entrypoint-initdb.d/02-migrate.sql:ro  # ← TAMBAH INI (optional)
+      - ./database/init_database.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./database/migrate_sow_to_parts.sql:/docker-entrypoint-initdb.d/02-migrate.sql:ro
     ports:
-      - "5433:5432"       # ← Host:Container (5433 di Windows, 5432 di Docker)
+      - "5433:5432"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
@@ -31,8 +31,8 @@ services:
     expose:
       - "3001"
     environment:
-      - DB_HOST=db       
-      - DB_PORT=5432      
+      - DB_HOST=db
+      - DB_PORT=5432
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
@@ -67,27 +67,7 @@ services:
     networks:
       - timesheet-network
 
-  spc_dashboard:
-    build: ./spc-dashboard
-    container_name: spc-dashboard
-    expose:
-      - "8501"
-    environment:
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - TIMEZONE=${TIMEZONE}
-      - TZ=${TIMEZONE}
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - timesheet-network
-
-sow_exporter:
+  sow_exporter:          
     build:
       context: .
       dockerfile: pythonscript/Dockerfile
@@ -105,6 +85,7 @@ sow_exporter:
         condition: service_healthy
     networks:
       - timesheet-network
+
 volumes:
   postgres_data:
     driver: local

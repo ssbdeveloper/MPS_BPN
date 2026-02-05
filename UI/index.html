@@ -171,10 +171,22 @@ async function getUserByNfc(nfcid) {
   return data && Object.keys(data).length ? data : null;
 }
 
-async function stopAllByNfc(nfcid) {
-  const res = await fetch(`/usernfc/checkout/${nfcid}`);
+async function stopAllByNfc(sn) {
+  const res = await fetch(`/usernfc/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      datakaryawan: {
+        sn: sn
+      }
+    })
+  });
+
   return res.ok;
 }
+
 
 /* ===== NFC HELPERS ===== */
 function getTextRecord(e) {
