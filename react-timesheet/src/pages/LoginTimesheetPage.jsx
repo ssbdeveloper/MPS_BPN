@@ -262,9 +262,9 @@ const LoginTimesheetPage = () => {
   }, []);
 
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
-      <header className="flex justify-between items-center bg-blue-900 text-white px-3 py-2 sm:py-2.5 shadow-md flex-shrink-0">
+    <div className="h-screen w-screen bg-gradient-to-br from-blue-50 via-white to-orange-50 flex flex-col overflow-hidden">
+      {/* Header - Soft Blue Gradient */}
+      <header className="flex justify-between items-center bg-gradient-to-r from-blue-500 to-blue-600 text-white px-3 py-2 sm:py-2.5 shadow-lg flex-shrink-0">
         <h1 className="text-base sm:text-lg md:text-xl font-bold">Timesheet Login</h1>
 
         {/* Mode Switch */}
@@ -281,10 +281,10 @@ const LoginTimesheetPage = () => {
             />
             <span
               className={`
-                absolute inset-0 rounded-full transition-colors duration-300
-                ${mode === 'external' ? 'bg-green-500' : 'bg-gray-400'}
+                absolute inset-0 rounded-full transition-colors duration-300 shadow-inner
+                ${mode === 'external' ? 'bg-gradient-to-r from-blue-400 to-blue-500' : 'bg-gradient-to-r from-slate-300 to-slate-400'}
                 before:content-[''] before:absolute before:h-4 before:w-4 sm:before:h-5 sm:before:w-5
-                before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full
+                before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:shadow-md
                 before:transition-transform before:duration-300
                 ${mode === 'external' ? 'before:translate-x-5 sm:before:translate-x-6' : 'before:translate-x-0'}
               `}
@@ -296,78 +296,73 @@ const LoginTimesheetPage = () => {
       {/* Main Content - Flexible space */}
       <main className="flex-1 flex flex-col justify-center items-center px-3 py-2 overflow-hidden">
         {/* Menu Buttons - Centered */}
-        <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-2 sm:gap-3">
-          {/* Productive Button - Blue 90% opacity with 3D effect */}
+        <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-3 sm:gap-4">
+          {/* Productive Button - Soft Blue with 3D effect */}
           <button
             onClick={() => handleButtonClick('start')}
             disabled={selectedAction === 'start'}
             className={`
-              aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-              text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
+              aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
+              text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
               ${selectedAction === 'start'
-                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
-                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
+                ? 'bg-blue-300 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-br from-blue-400 to-blue-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105'
               }
             `}
-            style={selectedAction !== 'start' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' } : {}}
           >
-            <span className="text-xl sm:text-2xl">✅</span>
+            <span className="text-2xl sm:text-3xl">✅</span>
             <span>Productive</span>
           </button>
 
-          {/* Unproductive Button - Blue 90% opacity with 3D effect */}
+          {/* Unproductive Button - Soft Orange with 3D effect */}
           <button
             onClick={() => handleButtonClick('unprod')}
             disabled={selectedAction === 'unprod'}
             className={`
-              aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-              text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
+              aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
+              text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
               ${selectedAction === 'unprod'
-                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
-                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
+                ? 'bg-orange-300 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-br from-orange-400 to-orange-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105'
               }
             `}
-            style={selectedAction !== 'unprod' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' } : {}}
           >
-            <span className="text-xl sm:text-2xl">⚠️</span>
+            <span className="text-2xl sm:text-3xl">⚠️</span>
             <span>Unproductive</span>
           </button>
 
-          {/* Stop Timesheet Button - Blue 90% opacity with 3D effect */}
+          {/* Stop Timesheet Button - Soft Blue with 3D effect */}
           <button
             onClick={() => handleButtonClick('stop')}
             disabled={selectedAction === 'stop'}
             className={`
-              aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-              text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
+              aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
+              text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
               ${selectedAction === 'stop'
-                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
-                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
+                ? 'bg-blue-300 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-br from-blue-400 to-blue-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105'
               }
             `}
-            style={selectedAction !== 'stop' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' } : {}}
           >
-            <span className="text-xl sm:text-2xl">🛑</span>
+            <span className="text-2xl sm:text-3xl">🛑</span>
             <span>Stop Timesheet</span>
           </button>
 
-          {/* Tools & Consumable Button - Blue 90% opacity with 3D effect */}
+          {/* Tools & Consumable Button - Soft Blue with 3D effect */}
           <button
-            className="aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
-            text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
-            bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1
-            hover:from-blue-700 hover:to-blue-800"
-            style={{ boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' }}
+            className="aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
+            text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
+            bg-gradient-to-br from-blue-400 to-blue-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105"
             onClick={() => alert('Tools & Consumable - Coming Soon')}
           >
-            <span className="text-xl sm:text-2xl">🔧</span>
+            <span className="text-2xl sm:text-3xl">🔧</span>
             <span>Tools & Consumable</span>
           </button>
         </div>
 
         {/* External Scanner Input */}
         {mode === 'external' && (
-          <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] mt-2">
+          <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] mt-3">
             <input
               ref={inputRef}
               type="password"
@@ -377,14 +372,14 @@ const LoginTimesheetPage = () => {
               value={scanInput}
               onChange={(e) => setScanInput(e.target.value)}
               onKeyDown={handleScannerInput}
-              className="w-full px-2 py-1 sm:py-1.5 text-base sm:text-lg text-center border-2 border-gray-300 rounded bg-white outline-none focus:border-blue-500 shadow-md"
+              className="w-full px-3 py-2 sm:py-3 text-base sm:text-lg text-center border-2 border-blue-300 rounded-xl bg-white/80 backdrop-blur-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200 shadow-lg transition-all"
             />
           </div>
         )}
       </main>
 
       {/* Status Bar - Fixed height */}
-      <footer className="flex items-center justify-between bg-gray-200 px-3 py-2 text-xs md:text-sm text-gray-800 flex-shrink-0">
+      <footer className="flex items-center justify-between bg-gradient-to-r from-slate-100 to-blue-50 px-3 py-2 text-xs md:text-sm text-slate-700 flex-shrink-0 border-t border-blue-100">
         <div className="flex-1 text-left">
           Status: <span className="font-semibold">{status}</span>
         </div>

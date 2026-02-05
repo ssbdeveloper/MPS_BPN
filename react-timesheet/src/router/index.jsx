@@ -16,6 +16,7 @@ import EditParameterPage from '../pages/EditParameterPage';
 import NfcUserListPage from '../pages/NfcUserListPage';
 import CreateEditNfcPage from '../pages/CreateEditNfcPage';
 import UnproductiveMenuPage from '../pages/UnproductiveMenuPage';
+import DownloadPage from '../pages/DownloadPage';
 
 /**
  * Router Configuration
@@ -89,6 +90,10 @@ const router = createBrowserRouter([
   {
     path: '/unproductive',
     element: <UnproductiveMenuPage />,
+  },
+  {
+    path: '/download',
+    element: <DownloadPage />,
   },
   {
     path: '*',

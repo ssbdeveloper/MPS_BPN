@@ -142,7 +142,7 @@ const NfcUserListPage = () => {
         {/* Header - Dark Blue */}
         <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md flex-shrink-0">
           <button
-            onClick={() => navigate('/timesheet-mainmenu')}
+            onClick={() => navigate('/')}
             className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded shadow-lg hover:shadow-xl active:shadow-sm active:translate-y-1 transition-all duration-150 transform"
             style={{ boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
           >

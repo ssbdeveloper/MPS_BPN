@@ -19,6 +19,10 @@ const TimesheetValidationPage = () => {
   const [expandedGroups, setExpandedGroups] = useState(new Set(
     searchParams.get('expanded')?.split(',').filter(Boolean) || []
   ));
+  const [showFilters, setShowFilters] = useState(() => {
+    const saved = sessionStorage.getItem('showFilters');
+    return saved !== null ? saved === 'true' : true; // Default to true (shown)
+  });
 
   // Stats
   const [stats, setStats] = useState({
@@ -289,6 +293,13 @@ const TimesheetValidationPage = () => {
     navigate('/timesheet-mainmenu');
   };
 
+  // Toggle filter visibility
+  const toggleFilters = () => {
+    const newState = !showFilters;
+    setShowFilters(newState);
+    sessionStorage.setItem('showFilters', newState.toString());
+  };
+
   const groupedData = getGroupedTimesheets();
 
   return (
@@ -302,66 +313,78 @@ const TimesheetValidationPage = () => {
           Back
         </button>
         <h2 className="text-base sm:text-lg font-bold text-white">Timesheet Validation</h2>
-        <button
-          onClick={loadValidationData}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-        >
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={toggleFilters}
+            className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
+            title={showFilters ? 'Hide Filters' : 'Show Filters'}
+            style={{ boxShadow: '0 3px 6px -1px rgba(37, 99, 235, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
+          >
+            {showFilters ? '▲' : '▼'} Filter
+          </button>
+          <button
+            onClick={loadValidationData}
+            className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
       </header>
 
-      {/* Filter Section - Light Blue Background */}
-      <div className="bg-blue-50 border-b border-blue-200 px-3 py-2 flex-shrink-0">
-        <div className="flex flex-col gap-2">
-          {/* Search */}
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by serial, name, workcenter, order..."
-            className="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
-          />
-
-          {/* Date Range - 50% width */}
-          <div className="flex gap-2 items-center">
+      {/* Filter Section - Light Blue Background - Collapsible */}
+      {showFilters && (
+        <div className="bg-blue-50 border-b border-blue-200 px-3 py-2 flex-shrink-0">
+          <div className="flex flex-col gap-2">
+            {/* Search */}
             <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-1/4 px-2 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by serial, name, workcenter, order..."
+              className="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
             />
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-1/4 px-2 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
-            />
-          </div>
 
-          {/* Action Buttons */}
-          <div className="flex gap-2">
-            <button
-              onClick={clearFilters}
-              className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-            >
-              Clear Filters
-            </button>
-            <button
-              onClick={expandAll}
-              className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-            >
-              Expand All
-            </button>
-            <button
-              onClick={collapseAll}
-              className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-            >
-              Collapse All
-            </button>
-          </div>
+            {/* Date Range - 50% width */}
+            <div className="flex gap-2 items-center">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-1/4 px-2 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
+              />
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-1/4 px-2 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
+              />
+            </div>
 
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              <button
+                onClick={clearFilters}
+                className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+              >
+                Clear Filters
+              </button>
+              <button
+                onClick={expandAll}
+                className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+              >
+                Expand All
+              </button>
+              <button
+                onClick={collapseAll}
+                className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+              >
+                Collapse All
+              </button>
+            </div>
+
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Stats Summary Container - Separate Section */}
       <div className="bg-white border-b border-blue-200 px-3 py-3 flex-shrink-0">

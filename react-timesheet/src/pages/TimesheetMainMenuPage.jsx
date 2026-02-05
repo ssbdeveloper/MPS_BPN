@@ -233,12 +233,12 @@ const TimesheetMainMenuPage = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
-      <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0 gap-2">
+    <div className="h-screen w-screen bg-gradient-to-br from-blue-50 via-white to-orange-50 flex flex-col overflow-hidden">
+      {/* Header - Corporate Blue */}
+      <header className="flex justify-between items-center bg-gradient-to-r from-blue-600 to-blue-700 px-3 py-2.5 shadow-lg flex-shrink-0 gap-2">
         <button
           onClick={goHome}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 transition-all backdrop-blur-sm"
         >
           Back
         </button>
@@ -254,10 +254,10 @@ const TimesheetMainMenuPage = () => {
             />
             <span
               className={`
-                absolute inset-0 rounded-full transition-colors duration-300
-                ${mode === 'multiple' ? 'bg-blue-600' : 'bg-gray-400'}
+                absolute inset-0 rounded-full transition-colors duration-300 shadow-inner
+                ${mode === 'multiple' ? 'bg-gradient-to-r from-blue-400 to-blue-500' : 'bg-gradient-to-r from-slate-300 to-slate-400'}
                 before:content-[''] before:absolute before:h-4 before:w-4 sm:before:h-5 sm:before:w-5
-                before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full
+                before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:shadow-md
                 before:transition-transform before:duration-300
                 ${mode === 'multiple' ? 'before:translate-x-5 sm:before:translate-x-6' : 'before:translate-x-0'}
               `}
@@ -270,129 +270,129 @@ const TimesheetMainMenuPage = () => {
 
         <button
           onClick={handleRefresh}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 transition-all backdrop-blur-sm"
         >
           Refresh
         </button>
       </header>
 
-      {/* Main Content - White Background */}
-      <main className="flex-1 flex flex-row gap-2 p-2 overflow-hidden bg-white">
-        {/* Info Box - Left side - Light Blue */}
-        <section className="flex-1 bg-blue-50 rounded-lg shadow-md border border-blue-200 p-3 flex flex-col overflow-hidden">
+      {/* Main Content - Soft Background */}
+      <main className="flex-1 flex flex-row gap-3 p-3 overflow-hidden">
+        {/* Info Box - Left side - Soft Card */}
+        <section className="flex-1 bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/50 p-4 flex flex-col overflow-hidden">
           {/* Info Rows */}
           <div className="space-y-3 flex-1 overflow-y-auto">
             {/* Nama */}
-            <div className="flex flex-col gap-1">
-              <span className="text-xs sm:text-sm font-medium text-blue-900">Nama</span>
-              <div className="text-xs sm:text-sm font-semibold text-gray-800 bg-white p-2 rounded border border-blue-200 break-words">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs sm:text-sm font-semibold text-blue-700">Nama</span>
+              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm break-words">
                 {userData.name}
               </div>
             </div>
 
             {/* SN */}
-            <div className="flex flex-col gap-1">
-              <span className="text-xs sm:text-sm font-medium text-blue-900">SN</span>
-              <div className="text-xs sm:text-sm font-semibold text-gray-800 bg-white p-2 rounded border border-blue-200">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs sm:text-sm font-semibold text-blue-700">SN</span>
+              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm">
                 {userData.sn}
               </div>
             </div>
 
             {/* Work Center */}
-            <div className="flex flex-col gap-1">
-              <span className="text-xs sm:text-sm font-medium text-blue-900">Work Center</span>
-              <div className="text-xs sm:text-sm font-semibold text-gray-800 bg-white p-2 rounded border border-blue-200 whitespace-pre-line">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs sm:text-sm font-semibold text-blue-700">Work Center</span>
+              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm whitespace-pre-line">
                 {userData.workcenter}
               </div>
             </div>
 
             {/* Order */}
-            <div className="flex flex-col gap-1">
-              <span className="text-xs sm:text-sm font-medium text-blue-900">Order</span>
-              <div className="text-xs sm:text-sm font-semibold text-gray-800 bg-white p-2 rounded border border-blue-200">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs sm:text-sm font-semibold text-blue-700">Order</span>
+              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm">
                 {userData.order}
               </div>
             </div>
 
             {/* Activity */}
-            <div className="flex flex-col gap-1">
-              <span className="text-xs sm:text-sm font-medium text-blue-900">Activity</span>
-              <div className="text-xs sm:text-sm font-semibold text-gray-800 whitespace-pre-line h-16 sm:h-20 overflow-auto bg-white p-2 rounded border border-blue-200">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs sm:text-sm font-semibold text-blue-700">Activity</span>
+              <div className="text-xs sm:text-sm font-semibold text-slate-700 whitespace-pre-line h-16 sm:h-20 overflow-auto bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm">
                 {userData.activity}
               </div>
             </div>
           </div>
 
           {/* Bottom Actions inside info box */}
-          <div className="flex gap-2 mt-3 pt-3 border-t border-blue-200">
+          <div className="flex gap-3 mt-3 pt-3 border-t border-blue-200">
             <button
               onClick={handleRework}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded text-xs font-bold shadow-md hover:from-blue-700 hover:to-blue-800 transition-all"
+              className="flex-1 flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gradient-to-br from-orange-400 to-orange-500 text-white rounded-xl text-xs font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
             >
-              <span className="text-base">⚠️</span>
+              <span className="text-lg">⚠️</span>
               <span>Rework</span>
             </button>
             <button
               onClick={finish}
-              className="flex-1 flex flex-col items-center justify-center gap-1 py-2 px-2 bg-gradient-to-b from-green-500 to-green-600 text-white rounded text-xs font-bold shadow-md hover:from-green-600 hover:to-green-700 transition-all"
+              className="flex-1 flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-xl text-xs font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
             >
-              <span className="text-base">✅</span>
+              <span className="text-lg">✅</span>
               <span>Finish</span>
             </button>
           </div>
         </section>
 
         {/* Action Buttons - Right side */}
-        <section className="flex-1 grid grid-cols-2 grid-rows-3 gap-2 overflow-hidden">
-          {/* Start - Orange CTA */}
+        <section className="flex-1 grid grid-cols-2 grid-rows-3 gap-3 overflow-hidden">
+          {/* Start - Darker Blue */}
           <button
             onClick={postdata}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded-lg shadow-md hover:from-orange-600 hover:to-orange-700 transition-all text-sm sm:text-base font-bold min-h-0"
+            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
           >
             <span className="text-3xl sm:text-4xl md:text-5xl">▶️</span>
             <span>Start</span>
           </button>
 
-          {/* Select Job - Blue */}
+          {/* Select Job - Soft Blue */}
           <button
             onClick={gotojob}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-lg shadow-md hover:from-blue-700 hover:to-blue-800 transition-all text-sm sm:text-base font-bold min-h-0"
+            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
           >
             <span className="text-3xl sm:text-4xl md:text-5xl">📋</span>
             <span>Select Job</span>
           </button>
 
-          {/* Select Machine - Blue */}
+          {/* Select Machine - Soft Blue */}
           <button
             onClick={gotomesin}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-lg shadow-md hover:from-blue-700 hover:to-blue-800 transition-all text-sm sm:text-base font-bold min-h-0"
+            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
           >
             <span className="text-3xl sm:text-4xl md:text-5xl">🖥️</span>
             <span>Select Machine</span>
           </button>
 
-          {/* Process Control - Blue */}
+          {/* Process Control - Soft Blue */}
           <button
             onClick={gotoparameter}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-lg shadow-md hover:from-blue-700 hover:to-blue-800 transition-all text-sm sm:text-base font-bold min-h-0"
+            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
           >
             <span className="text-3xl sm:text-4xl md:text-5xl">⚙️</span>
             <span>Process Control</span>
           </button>
 
-          {/* View Timesheet - Blue */}
+          {/* View Timesheet - Soft Blue */}
           <button
             onClick={gotots}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-lg shadow-md hover:from-blue-700 hover:to-blue-800 transition-all text-sm sm:text-base font-bold min-h-0"
+            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
           >
             <span className="text-3xl sm:text-4xl md:text-5xl">🕐</span>
             <span>View Timesheet</span>
           </button>
 
-          {/* Consumable - Blue */}
+          {/* Consumable - Soft Blue */}
           <button
             onClick={handleConsumable}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-lg shadow-md hover:from-blue-700 hover:to-blue-800 transition-all text-sm sm:text-base font-bold min-h-0"
+            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
           >
             <span className="text-3xl sm:text-4xl md:text-5xl">🔧</span>
             <span>Consumable</span>
