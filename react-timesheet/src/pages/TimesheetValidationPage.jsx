@@ -24,7 +24,9 @@ const TimesheetValidationPage = () => {
   const [stats, setStats] = useState({
     totalHours: 0,
     totalRecords: 0,
-    totalEmployees: 0
+    totalEmployees: 0,
+    totalPending: 0,
+    totalValidated: 0
   });
 
   const scrollPositionRef = useRef(0);
@@ -148,10 +150,16 @@ const TimesheetValidationPage = () => {
     const uniqueEmployees = new Set(data.map(item => item.serialnumber));
     const totalEmployees = uniqueEmployees.size;
 
+    // Calculate pending and validated
+    const totalPending = data.filter(item => item.tsstatus === 'C').length;
+    const totalValidated = data.filter(item => item.tsstatus === 'V').length;
+
     setStats({
       totalHours: totalHours.toFixed(2),
       totalRecords,
-      totalEmployees
+      totalEmployees,
+      totalPending,
+      totalValidated
     });
   };
 
@@ -352,20 +360,40 @@ const TimesheetValidationPage = () => {
             </button>
           </div>
 
-          {/* Stats Bar - Blue Theme */}
-          <div className="flex gap-3 mt-1">
-            <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-2 rounded-lg shadow-sm">
-              <div className="text-xs opacity-90">Total Hours</div>
-              <div className="text-lg font-bold">{stats.totalHours}</div>
-            </div>
-            <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-2 rounded-lg shadow-sm">
-              <div className="text-xs opacity-90">Records</div>
-              <div className="text-lg font-bold">{stats.totalRecords}</div>
-            </div>
-            <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-2 rounded-lg shadow-sm">
-              <div className="text-xs opacity-90">Employees</div>
-              <div className="text-lg font-bold">{stats.totalEmployees}</div>
-            </div>
+        </div>
+      </div>
+
+      {/* Stats Summary Container - Separate Section */}
+      <div className="bg-white border-b border-blue-200 px-3 py-3 flex-shrink-0">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+          {/* Total Hours */}
+          <div className="w-full bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-md">
+            <div className="text-xs opacity-90">Total Hours</div>
+            <div className="text-xl font-bold">{stats.totalHours}</div>
+          </div>
+
+          {/* Total Records */}
+          <div className="w-full bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-md">
+            <div className="text-xs opacity-90">Records</div>
+            <div className="text-xl font-bold">{stats.totalRecords}</div>
+          </div>
+
+          {/* Total Employees */}
+          <div className="w-full bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-md">
+            <div className="text-xs opacity-90">Employees</div>
+            <div className="text-xl font-bold">{stats.totalEmployees}</div>
+          </div>
+
+          {/* Total Pending */}
+          <div className="w-full bg-gradient-to-br from-yellow-500 to-yellow-600 text-white px-4 py-3 rounded-lg shadow-md">
+            <div className="text-xs opacity-90">Pending</div>
+            <div className="text-xl font-bold">{stats.totalPending}</div>
+          </div>
+
+          {/* Total Validated */}
+          <div className="w-full bg-gradient-to-br from-green-500 to-green-600 text-white px-4 py-3 rounded-lg shadow-md">
+            <div className="text-xs opacity-90">Validated</div>
+            <div className="text-xl font-bold">{stats.totalValidated}</div>
           </div>
         </div>
       </div>

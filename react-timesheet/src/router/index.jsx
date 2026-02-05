@@ -15,6 +15,7 @@ import ComponentTrackingPage from '../pages/ComponentTrackingPage';
 import EditParameterPage from '../pages/EditParameterPage';
 import NfcUserListPage from '../pages/NfcUserListPage';
 import CreateEditNfcPage from '../pages/CreateEditNfcPage';
+import UnproductiveMenuPage from '../pages/UnproductiveMenuPage';
 
 /**
  * Router Configuration
@@ -84,6 +85,10 @@ const router = createBrowserRouter([
   {
     path: '/create-edit-nfc',
     element: <CreateEditNfcPage />,
+  },
+  {
+    path: '/unproductive',
+    element: <UnproductiveMenuPage />,
   },
   {
     path: '*',

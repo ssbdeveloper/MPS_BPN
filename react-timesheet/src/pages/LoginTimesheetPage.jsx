@@ -297,7 +297,7 @@ const LoginTimesheetPage = () => {
       <main className="flex-1 flex flex-col justify-center items-center px-3 py-2 overflow-hidden">
         {/* Menu Buttons - Centered */}
         <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-2 sm:gap-3">
-          {/* Productive Button - Orange CTA with 3D effect */}
+          {/* Productive Button - Blue 90% opacity with 3D effect */}
           <button
             onClick={() => handleButtonClick('start')}
             disabled={selectedAction === 'start'}
@@ -305,17 +305,17 @@ const LoginTimesheetPage = () => {
               aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
               text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
               ${selectedAction === 'start'
-                ? 'bg-orange-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
-                : 'bg-gradient-to-b from-orange-500 to-orange-600 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-orange-600 hover:to-orange-700'
+                ? 'bg-blue-400 shadow-inner opacity-60 translate-y-1 cursor-not-allowed'
+                : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
               }
             `}
-            style={selectedAction !== 'start' ? { boxShadow: '0 6px 16px -2px rgba(249, 115, 22, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' } : {}}
+            style={selectedAction !== 'start' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' } : {}}
           >
             <span className="text-xl sm:text-2xl">✅</span>
             <span>Productive</span>
           </button>
 
-          {/* Unproductive Button - Blue with 3D effect */}
+          {/* Unproductive Button - Blue 90% opacity with 3D effect */}
           <button
             onClick={() => handleButtonClick('unprod')}
             disabled={selectedAction === 'unprod'}
@@ -327,13 +327,13 @@ const LoginTimesheetPage = () => {
                 : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
               }
             `}
-            style={selectedAction !== 'unprod' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' } : {}}
+            style={selectedAction !== 'unprod' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' } : {}}
           >
             <span className="text-xl sm:text-2xl">⚠️</span>
             <span>Unproductive</span>
           </button>
 
-          {/* Stop Timesheet Button - Blue with 3D effect */}
+          {/* Stop Timesheet Button - Blue 90% opacity with 3D effect */}
           <button
             onClick={() => handleButtonClick('stop')}
             disabled={selectedAction === 'stop'}
@@ -345,19 +345,19 @@ const LoginTimesheetPage = () => {
                 : 'bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 hover:from-blue-700 hover:to-blue-800'
               }
             `}
-            style={selectedAction !== 'stop' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' } : {}}
+            style={selectedAction !== 'stop' ? { boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' } : {}}
           >
             <span className="text-xl sm:text-2xl">🛑</span>
             <span>Stop Timesheet</span>
           </button>
 
-          {/* Tools & Consumable Button - Blue with 3D effect */}
+          {/* Tools & Consumable Button - Blue 90% opacity with 3D effect */}
           <button
             className="aspect-square flex flex-col items-center justify-center gap-0.5 sm:gap-1
             text-[10px] sm:text-xs font-bold rounded transition-all duration-150 transform
             bg-gradient-to-b from-blue-600 to-blue-700 text-white shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1
             hover:from-blue-700 hover:to-blue-800"
-            style={{ boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)' }}
+            style={{ boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' }}
             onClick={() => alert('Tools & Consumable - Coming Soon')}
           >
             <span className="text-xl sm:text-2xl">🔧</span>
