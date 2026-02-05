@@ -1,6 +1,0 @@
-order_no,ssbr_id,operationtext,operation_no,planhours,workcenter
-100012345,SSB-01,test 1,10,1.0,M5071ASM
-100012345,SSB-01,test 2,20,2.0,M5071MS1
-100012345,SSB-01,tes 3,30,3.0,M5071CS1
-100012345,SSB-01,tes 4,40,5.0,M5071DR1
-100012345,SSB-01,test 1,50,1.0,M5071ASM
