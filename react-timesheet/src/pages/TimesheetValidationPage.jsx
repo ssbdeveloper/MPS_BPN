@@ -6,6 +6,28 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
  * Converted dari tsuye.html
  * Shows grouped timesheets by employee with expand/collapse, filters, and validation actions
  */
+
+// Helper: Format date string "dd/mm/yyyy" to "dd Mmm yy" (e.g. "05/02/2026" → "05 Feb 26")
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const formatDateShort = (dateStr) => {
+  if (!dateStr) return '-';
+  // dateStr format: "dd/mm/yyyy"
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return dateStr;
+  const day = parts[0];
+  const monthIdx = parseInt(parts[1], 10) - 1;
+  const year = parts[2].slice(-2); // last 2 digits
+  return `${day} ${MONTH_SHORT[monthIdx] || '??'} ${year}`;
+};
+
+// Helper: Format decimal duration to stacked "X jam\nY menit"
+const formatDurationStacked = (durationStr) => {
+  const totalHours = parseFloat(durationStr || 0);
+  const jam = Math.floor(totalHours);
+  const menit = Math.round((totalHours - jam) * 60);
+  return { jam, menit };
+};
+
 const TimesheetValidationPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -32,6 +54,8 @@ const TimesheetValidationPage = () => {
     totalPending: 0,
     totalValidated: 0
   });
+
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
 
   const scrollPositionRef = useRef(0);
   const containerRef = useRef(null);
@@ -154,16 +178,22 @@ const TimesheetValidationPage = () => {
     const uniqueEmployees = new Set(data.map(item => item.serialnumber));
     const totalEmployees = uniqueEmployees.size;
 
-    // Calculate pending and validated
-    const totalPending = data.filter(item => item.tsstatus === 'C').length;
-    const totalValidated = data.filter(item => item.tsstatus === 'V').length;
+    // Calculate pending and validated (pending = validation_date is null)
+    const pendingItems = data.filter(item => !item.validation_date);
+    const validatedItems = data.filter(item => !!item.validation_date);
+    const totalPending = pendingItems.length;
+    const totalValidated = validatedItems.length;
+    const pendingHours = pendingItems.reduce((sum, item) => sum + parseFloat(item.duration || 0), 0);
+    const validatedHours = validatedItems.reduce((sum, item) => sum + parseFloat(item.duration || 0), 0);
 
     setStats({
       totalHours: totalHours.toFixed(2),
       totalRecords,
       totalEmployees,
       totalPending,
-      totalValidated
+      totalValidated,
+      pendingHours: pendingHours.toFixed(2),
+      validatedHours: validatedHours.toFixed(2)
     });
   };
 
@@ -215,6 +245,52 @@ const TimesheetValidationPage = () => {
     setEndDate('');
   };
 
+  // Download Excel berdasarkan date range
+  const handleDownloadExcel = async () => {
+    if (!startDate || !endDate) {
+      alert('❌ Pilih Start Date dan End Date terlebih dahulu!');
+      return;
+    }
+    if (startDate > endDate) {
+      alert('❌ Start Date tidak boleh lebih besar dari End Date!');
+      return;
+    }
+
+    setDownloadingExcel(true);
+    try {
+      const params = new URLSearchParams({
+        start: startDate,
+        end: endDate,
+        field: 'longdate_checkout'
+      });
+
+      // PRODUCTION: Uncomment baris dibawah
+      // const res = await fetch(`/timesheet/getexcel?${params.toString()}`);
+      // if (!res.ok) throw new Error('Gagal download Excel');
+      // const blob = await res.blob();
+      // const a = document.createElement('a');
+      // const url = URL.createObjectURL(blob);
+      // a.href = url;
+      // a.download = `timesheet_${startDate}_to_${endDate}.xlsx`;
+      // document.body.appendChild(a);
+      // a.click();
+      // a.remove();
+      // URL.revokeObjectURL(url);
+      // alert('✅ Excel berhasil diunduh!');
+
+      // DEVELOPMENT: Simulate download
+      console.log('Downloading Excel with range:', startDate, 'to', endDate);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      alert(`✅ Excel berhasil diunduh: timesheet_${startDate}_to_${endDate}.xlsx`);
+
+    } catch (err) {
+      console.error('Excel download error:', err);
+      alert('❌ Gagal download Excel: ' + err.message);
+    } finally {
+      setDownloadingExcel(false);
+    }
+  };
+
   // Handle single validation
   const handleValidateSingle = async (tsnumber) => {
     try {
@@ -240,7 +316,7 @@ const TimesheetValidationPage = () => {
   // Handle group validation
   const handleValidateGroup = async (records) => {
     const tsnumbers = records
-      .filter(r => r.tsstatus === 'C')
+      .filter(r => !r.validation_date)
       .map(r => r.tsnumber);
 
     if (tsnumbers.length === 0) {
@@ -361,24 +437,43 @@ const TimesheetValidationPage = () => {
             </div>
 
             {/* Action Buttons */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center justify-between">
+              <div className="flex gap-2">
+                <button
+                  onClick={clearFilters}
+                  className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+                >
+                  Clear Filters
+                </button>
+                <button
+                  onClick={expandAll}
+                  className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+                >
+                  Expand All
+                </button>
+                <button
+                  onClick={collapseAll}
+                  className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+                >
+                  Collapse All
+                </button>
+              </div>
+
+              {/* Download Excel Button */}
               <button
-                onClick={clearFilters}
-                className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+                onClick={handleDownloadExcel}
+                disabled={downloadingExcel}
+                className="px-3 py-1.5 text-xs font-medium bg-green-600 text-white rounded hover:bg-green-500 active:bg-green-700 transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Download Excel berdasarkan date range"
               >
-                Clear Filters
-              </button>
-              <button
-                onClick={expandAll}
-                className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-              >
-                Expand All
-              </button>
-              <button
-                onClick={collapseAll}
-                className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-              >
-                Collapse All
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                  <polyline points="10 9 9 9 8 9" />
+                </svg>
+                {downloadingExcel ? 'Downloading...' : 'Download Excel'}
               </button>
             </div>
 
@@ -388,35 +483,69 @@ const TimesheetValidationPage = () => {
 
       {/* Stats Summary Container - Separate Section */}
       <div className="bg-white border-b border-blue-200 px-3 py-3 flex-shrink-0">
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+        {/* All 5 boxes in one row - sejajar */}
+        <div className="grid grid-cols-5 gap-2">
+          {/* Pending */}
+          <div className="w-full bg-amber-50 border border-amber-200 px-2 py-2 rounded-lg text-center">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mx-auto mb-1 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <div className="text-[10px] text-amber-600 font-medium">Pending</div>
+            <div className="flex items-center justify-center gap-2">
+              <span className="text-sm font-bold text-amber-800">{stats.totalPending} <span className="text-[9px] font-medium">Act</span></span>
+              <span className="text-[9px] text-amber-400">|</span>
+              <span className="text-[10px] font-bold text-amber-700">{parseFloat(stats.pendingHours || 0).toFixed(1)} <span className="text-[9px] font-medium">Hrs</span></span>
+            </div>
+          </div>
+
+          {/* Validated */}
+          <div className="w-full bg-emerald-50 border border-emerald-200 px-2 py-2 rounded-lg text-center">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mx-auto mb-1 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+            <div className="text-[10px] text-emerald-600 font-medium">Validated</div>
+            <div className="flex items-center justify-center gap-2">
+              <span className="text-sm font-bold text-emerald-800">{stats.totalValidated} <span className="text-[9px] font-medium">Act</span></span>
+              <span className="text-[9px] text-emerald-400">|</span>
+              <span className="text-[10px] font-bold text-emerald-700">{parseFloat(stats.validatedHours || 0).toFixed(1)} <span className="text-[9px] font-medium">Hrs</span></span>
+            </div>
+          </div>
+
           {/* Total Hours */}
-          <div className="w-full bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-md">
-            <div className="text-xs opacity-90">Total Hours</div>
-            <div className="text-xl font-bold">{stats.totalHours}</div>
+          <div className="w-full bg-blue-50 border border-blue-200 text-center px-2 py-2.5 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mx-auto mb-1 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            <div className="text-[10px] text-blue-600 font-medium">Total Hours</div>
+            <div className="text-lg font-bold text-blue-800">{stats.totalHours}</div>
           </div>
 
           {/* Total Records */}
-          <div className="w-full bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-md">
-            <div className="text-xs opacity-90">Records</div>
-            <div className="text-xl font-bold">{stats.totalRecords}</div>
+          <div className="w-full bg-indigo-50 border border-indigo-200 text-center px-2 py-2.5 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mx-auto mb-1 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+            </svg>
+            <div className="text-[10px] text-indigo-600 font-medium">Records</div>
+            <div className="text-lg font-bold text-indigo-800">{stats.totalRecords}</div>
           </div>
 
           {/* Total Employees */}
-          <div className="w-full bg-gradient-to-br from-blue-600 to-blue-700 text-white px-4 py-3 rounded-lg shadow-md">
-            <div className="text-xs opacity-90">Employees</div>
-            <div className="text-xl font-bold">{stats.totalEmployees}</div>
-          </div>
-
-          {/* Total Pending */}
-          <div className="w-full bg-gradient-to-br from-yellow-500 to-yellow-600 text-white px-4 py-3 rounded-lg shadow-md">
-            <div className="text-xs opacity-90">Pending</div>
-            <div className="text-xl font-bold">{stats.totalPending}</div>
-          </div>
-
-          {/* Total Validated */}
-          <div className="w-full bg-gradient-to-br from-green-500 to-green-600 text-white px-4 py-3 rounded-lg shadow-md">
-            <div className="text-xs opacity-90">Validated</div>
-            <div className="text-xl font-bold">{stats.totalValidated}</div>
+          <div className="w-full bg-cyan-50 border border-cyan-200 text-center px-2 py-2.5 rounded-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mx-auto mb-1 text-cyan-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+            <div className="text-[10px] text-cyan-600 font-medium">Employees</div>
+            <div className="text-lg font-bold text-cyan-800">{stats.totalEmployees}</div>
           </div>
         </div>
       </div>
@@ -428,19 +557,23 @@ const TimesheetValidationPage = () => {
             <p>Tidak ada data timesheet untuk divalidasi</p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {groupedData.map((group) => {
               const isExpanded = expandedGroups.has(group.serialnumber);
-              const pendingCount = group.records.filter(r => r.tsstatus === 'C').length;
-              const validatedCount = group.records.filter(r => r.tsstatus === 'V').length;
+              const pendingRecs = group.records.filter(r => !r.validation_date);
+              const validatedRecs = group.records.filter(r => !!r.validation_date);
+              const pendingCount = pendingRecs.length;
+              const validatedCount = validatedRecs.length;
               const groupHours = group.records.reduce((sum, r) => sum + parseFloat(r.duration || 0), 0);
+              const grpPendingHrs = pendingRecs.reduce((sum, r) => sum + parseFloat(r.duration || 0), 0);
+              const grpValidatedHrs = validatedRecs.reduce((sum, r) => sum + parseFloat(r.duration || 0), 0);
 
               return (
-                <div key={group.serialnumber} className="bg-white rounded-lg shadow-sm border border-blue-200">
+                <div key={group.serialnumber} className="rounded-lg shadow-md border-2 border-blue-300 overflow-hidden">
                   {/* Parent Row - Employee Header - Light Blue */}
                   <div
                     onClick={() => toggleGroup(group.serialnumber)}
-                    className="p-3 cursor-pointer hover:bg-blue-100 transition-colors border-b border-blue-200 bg-blue-50"
+                    className="px-3 py-2 cursor-pointer hover:bg-blue-100 transition-colors border-b-2 border-blue-300 bg-blue-50"
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
@@ -456,13 +589,21 @@ const TimesheetValidationPage = () => {
                           </div>
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
-                        <div className="text-xs text-blue-900 min-w-[200px]">
-                          <span className="font-semibold">{groupHours.toFixed(2)}h</span>
-                          {' • '}
-                          <span className="text-orange-600 font-semibold">{pendingCount} pending</span>
-                          {' • '}
-                          <span className="text-green-600 font-semibold">{validatedCount} validated</span>
+                      <div className="flex items-center gap-3">
+                        {/* Stacked summary table */}
+                        <div className="text-[11px] leading-[15px] font-mono">
+                          <div className="flex text-blue-900 font-bold">
+                            <span className="w-[62px]">Total</span>
+                            <span>: {group.records.length} Act [{groupHours.toFixed(1)} hrs]</span>
+                          </div>
+                          <div className="flex text-orange-700 font-bold">
+                            <span className="w-[62px]">Pending</span>
+                            <span>: {pendingCount} Act [{grpPendingHrs.toFixed(1)} hrs]</span>
+                          </div>
+                          <div className="flex text-green-700 font-bold">
+                            <span className="w-[62px]">Validated</span>
+                            <span>: {validatedCount} Act [{grpValidatedHrs.toFixed(1)} hrs]</span>
+                          </div>
                         </div>
                         <div className="w-10 h-10 flex items-center justify-center">
                           {pendingCount > 0 && (
@@ -471,10 +612,13 @@ const TimesheetValidationPage = () => {
                                 e.stopPropagation();
                                 handleValidateGroup(group.records);
                               }}
-                              className="w-10 h-10 flex items-center justify-center text-orange-600 hover:bg-orange-100 rounded-lg transition-colors"
+                              className="w-10 h-10 flex items-center justify-center text-green-600 hover:bg-green-100 rounded-lg transition-colors"
                               title="Validate Group"
                             >
-                              <span className="text-xl font-bold">✓✓</span>
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                                <path d="M9 12l2 2 4-4" />
+                              </svg>
                             </button>
                           )}
                         </div>
@@ -487,19 +631,31 @@ const TimesheetValidationPage = () => {
                     <div>
                       {/* Header Row - Light Blue */}
                       <div className="bg-blue-100 border-t border-b border-blue-300 px-3 py-2">
-                        <div className="grid gap-2" style={{ gridTemplateColumns: '1fr 1fr 2fr 1fr 1fr 60px' }}>
-                          <div className="text-xs font-bold text-blue-900">Order</div>
-                          <div className="text-xs font-bold text-blue-900 col-span-2">Operation</div>
-                          <div className="text-xs font-bold text-blue-900">Time</div>
-                          <div className="text-xs font-bold text-blue-900">Duration</div>
-                          <div className="text-xs font-bold text-blue-900 text-center">Action</div>
+                        <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Order</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Operation</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Seq</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Time</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Duration</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Plan Hrs</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Std Fman</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Workcenter</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Status</div>
+                          <div className="text-[10px] font-bold text-blue-900 text-center">Action</div>
                         </div>
                       </div>
 
                       {/* Data Rows - White Background */}
                       <div className="divide-y divide-blue-100">
                         {group.records.map((record, idx) => {
-                        const isValidated = record.tsstatus === 'V';
+                        const isValidated = !!record.validation_date;
+                        const isUnprod = !!record.activitytype;
+                        // Build operation display text
+                        const operationDisplay = isUnprod
+                          ? record.operation_text
+                          : (record.part_name
+                              ? `${record.part_name} : ${record.operation_text}`
+                              : record.operation_text);
                         return (
                           <div
                             key={idx}
@@ -510,50 +666,103 @@ const TimesheetValidationPage = () => {
                                 : 'hover:bg-blue-50 cursor-pointer bg-white'
                             }`}
                           >
-                            {/* NOTE: Jika ingin tambah kolom, ubah gridTemplateColumns dibawah ini */}
-                            {/* Contoh: '1fr 1fr 2fr 1fr 1fr 1fr 60px' untuk 7 kolom */}
-                            <div className="grid gap-2" style={{ gridTemplateColumns: '1fr 1fr 2fr 1fr 1fr 60px' }}>
-                              {/* Order */}
-                              <div className="text-xs">
-                                <div className="font-semibold text-blue-900">{record.production_order}</div>
-                                <div className="text-blue-700">{record.ssbr_ident}</div>
+                            <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
+                              {/* Order - center */}
+                              <div className="text-[11px] text-center">
+                                {isUnprod ? (
+                                  <div className="font-bold text-orange-600">Unprod</div>
+                                ) : (
+                                  <>
+                                    <div className="font-semibold text-blue-900">{record.production_order || '-'}</div>
+                                    <div className="text-blue-700 text-[10px]">{record.ssbr_ident || ''}</div>
+                                  </>
+                                )}
                               </div>
 
-                              {/* Operation */}
-                              <div className="text-xs col-span-2">
-                                <div className="font-medium text-gray-800 break-words leading-relaxed">
-                                  {record.operation_text}
+                              {/* Operation - left */}
+                              <div className="text-[11px] text-left">
+                                <div className="font-medium text-gray-800 break-words leading-snug">
+                                  {operationDisplay}
                                 </div>
                                 {record.note && (
-                                  <div className="text-xs italic text-gray-700 bg-blue-50 border-l-2 border-blue-500 px-2 py-1 rounded mt-1">
+                                  <div className="text-[10px] italic text-gray-700 bg-blue-50 border-l-2 border-blue-500 px-1.5 py-0.5 rounded mt-0.5">
                                     {record.note}
                                   </div>
                                 )}
                               </div>
 
-                              {/* Time */}
-                              <div className="text-xs">
-                                <div className="text-gray-700">
-                                  <span className="font-medium">{record.date_checkin}</span>
-                                  <span className="text-blue-700 ml-1">{record.hour_checkin}</span>
-                                </div>
-                                <div className="text-gray-700">
-                                  <span className="font-medium">{record.date_checkout}</span>
-                                  <span className="text-blue-700 ml-1">{record.hour_checkout}</span>
-                                </div>
+                              {/* Seq - center */}
+                              <div className="text-[11px] text-center">
+                                <div className="font-semibold text-gray-800">{record.seq != null ? record.seq : '-'}</div>
                               </div>
 
-                              {/* Duration & Status */}
-                              <div className="text-xs">
-                                <div className="font-bold text-blue-900">{record.duration}h</div>
-                                {isValidated ? (
-                                  <div className="text-green-600 font-semibold">✓ Validated</div>
+                              {/* Time - format dd Mmm yy - center */}
+                              <div className="text-[11px] text-center">
+                                {record.date_checkin === record.date_checkout ? (
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    <div className="font-medium text-gray-700">{formatDateShort(record.date_checkin)}</div>
+                                    <div className="flex flex-col text-blue-700 leading-tight">
+                                      <span>{record.hour_checkin}</span>
+                                      <span>{record.hour_checkout}</span>
+                                    </div>
+                                  </div>
                                 ) : (
-                                  <div className="text-orange-600 font-semibold">⏳ Pending</div>
+                                  <>
+                                    <div className="text-gray-700">
+                                      <span className="font-medium">{formatDateShort(record.date_checkin)}</span>
+                                      <span className="text-blue-700 ml-1">{record.hour_checkin}</span>
+                                    </div>
+                                    <div className="text-gray-700">
+                                      <span className="font-medium">{formatDateShort(record.date_checkout)}</span>
+                                      <span className="text-blue-700 ml-1">{record.hour_checkout}</span>
+                                    </div>
+                                  </>
                                 )}
                               </div>
 
-                              {/* Action - Single Validate Icon - Orange */}
+                              {/* Duration - stacked vertical - center */}
+                              <div className="text-[11px] text-center">
+                                {(() => {
+                                  const { jam, menit } = formatDurationStacked(record.duration);
+                                  return (
+                                    <div className="flex flex-col leading-tight items-center">
+                                      <span className="font-bold text-blue-900">{jam} jam</span>
+                                      <span className="text-blue-700">{menit} menit</span>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+
+                              {/* Plan Hours - center */}
+                              <div className="text-[11px] text-center">
+                                <div className="font-semibold text-gray-800">
+                                  {record.planhours != null ? parseFloat(record.planhours).toFixed(2) : '-'}
+                                </div>
+                              </div>
+
+                              {/* Std Fman - center */}
+                              <div className="text-[11px] text-center">
+                                <div className="font-semibold text-gray-800">
+                                  {record.std_foreman_hours != null ? parseFloat(record.std_foreman_hours).toFixed(2) : '-'}
+                                </div>
+                              </div>
+
+                              {/* Workcenter - center */}
+                              <div className="text-[11px] text-center">
+                                <div className="font-medium text-gray-800 break-words leading-snug">{record.workcenterdescription}</div>
+                                <div className="text-[10px] text-gray-500">{record.workcentercode}</div>
+                              </div>
+
+                              {/* Status - center */}
+                              <div className="text-[11px] flex items-center justify-center">
+                                {isValidated ? (
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">Validated</span>
+                                ) : (
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700">Pending</span>
+                                )}
+                              </div>
+
+                              {/* Action - center */}
                               <div className="flex items-center justify-center">
                                 {!isValidated && (
                                   <button
@@ -561,10 +770,13 @@ const TimesheetValidationPage = () => {
                                       e.stopPropagation();
                                       handleValidateSingle(record.tsnumber);
                                     }}
-                                    className="w-10 h-10 flex items-center justify-center text-orange-600 hover:bg-orange-100 rounded-lg transition-colors"
+                                    className="w-8 h-8 flex items-center justify-center text-green-600 hover:bg-green-100 rounded-lg transition-colors"
                                     title="Validate"
                                   >
-                                    <span className="text-2xl font-bold">✓</span>
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <circle cx="12" cy="12" r="10" />
+                                      <path d="M9 12l2 2 4-4" />
+                                    </svg>
                                   </button>
                                 )}
                               </div>

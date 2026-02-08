@@ -1,10 +1,51 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+
+/**
+ * Elapsed Timer Component
+ * Shows realtime HH:MM:SS counting up from checkin time
+ */
+const ElapsedTimer = ({ longdateCheckin }) => {
+  const [elapsed, setElapsed] = useState('');
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    if (!longdateCheckin) return;
+
+    const checkinTime = new Date(longdateCheckin).getTime();
+
+    const updateTimer = () => {
+      const now = Date.now();
+      const diff = Math.max(0, now - checkinTime);
+      const totalSec = Math.floor(diff / 1000);
+      const hrs = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
+      setElapsed(
+        `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+      );
+    };
+
+    updateTimer();
+    intervalRef.current = setInterval(updateTimer, 1000);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [longdateCheckin]);
+
+  return (
+    <span className="font-mono text-orange-600 font-bold animate-pulse">
+      {elapsed}
+    </span>
+  );
+};
 
 /**
  * Timesheet List Page
  * Converted dari menutimesheet.html
  * Shows all timesheet entries for current user
+ * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
  */
 const TimesheetListPage = () => {
   const navigate = useNavigate();
@@ -22,9 +63,6 @@ const TimesheetListPage = () => {
 
   // API: Load timesheet for current user
   const loadTimesheet = async () => {
-    // NOTE: Untuk development, load dummy data dulu
-    // Untuk production, uncomment code dibawah dan comment load dummy data
-
     /* PRODUCTION CODE - Uncomment untuk production
     const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
     const serialnumber = datakaryawan?.snssb;
@@ -45,13 +83,12 @@ const TimesheetListPage = () => {
 
       if (data && data.length > 0) {
         setTimesheets(data);
-        return; // Success, keluar dari function
+        return;
       } else {
         throw new Error('Data kosong dari API');
       }
     } catch (err) {
       console.error('Error loading timesheet from API:', err);
-      // Fallback to dummy data jika API gagal
     }
     */
 
@@ -62,7 +99,6 @@ const TimesheetListPage = () => {
       if (dummyResponse.ok) {
         const dummyData = await dummyResponse.json();
         setTimesheets(dummyData);
-        // alert('⚠️ Menggunakan data dummy (Development Mode)');
       } else {
         throw new Error('Dummy data tidak tersedia');
       }
@@ -176,148 +212,177 @@ const TimesheetListPage = () => {
     navigate('/timesheet-mainmenu');
   };
 
+  // Common cell style
+  const cellBase = 'px-2 py-2 text-[11px] align-middle';
+
   return (
-    <div className="h-screen w-screen bg-gray-100 flex flex-col overflow-hidden">
-      {/* Header */}
-      <header className="flex justify-between items-center bg-white px-3 py-2.5 shadow-md flex-shrink-0">
+    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
+      {/* Header - Dark Blue */}
+      <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
         <button
           onClick={goBack}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
         >
           Back
         </button>
-        <h2 className="text-base sm:text-lg font-bold text-gray-800">Timesheet</h2>
+        <h2 className="text-base sm:text-lg font-bold text-white">View Timesheet</h2>
         <button
           onClick={loadTimesheet}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
         >
           Refresh
         </button>
       </header>
 
-      {/* Table Header */}
-      <div className="px-3 py-2 bg-gray-200 border-b border-gray-300 flex-shrink-0">
-        <div className="grid gap-1 text-xs font-semibold text-gray-700" style={{ gridTemplateColumns: '1fr 1fr 2fr 1fr 1fr 1fr 120px' }}>
-          <div className="text-center">Order</div>
-          <div className="text-center">Ident</div>
-          <div className="text-center">Operation</div>
-          <div className="text-center">Check In</div>
-          <div className="text-center">Check Out</div>
-          <div className="text-center">Workcenter</div>
-          <div className="text-center">Actions</div>
-        </div>
-      </div>
+      {/* Table — native HTML table guarantees header↔body alignment */}
+      <div className="flex-1 overflow-y-auto">
+        <table className="w-full border-collapse">
+          {/* colgroup for consistent widths */}
+          <colgroup>
+            <col style={{ width: '11%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '28%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '14%' }} />
+          </colgroup>
 
-      {/* Timesheet List - Scrollable */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
-        {timesheets.length === 0 ? (
-          <div className="text-center text-gray-500 mt-10">
-            <p>Tidak ada data timesheet</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {timesheets.map((item, index) => (
-              <div
-                key={index}
-                className="bg-white rounded border border-gray-300 shadow-sm"
-              >
-                <div className="grid gap-1 p-2 items-center min-h-[60px]" style={{ gridTemplateColumns: '1fr 1fr 2fr 1fr 1fr 1fr 120px' }}>
-                  {/* Order */}
-                  <div className="text-xs text-center font-semibold text-gray-800 break-words">
-                    {item.production_order}
-                  </div>
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-blue-100 border-b-2 border-blue-300">
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Order</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Ident</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Operation</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Check In</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Check Out</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Workcenter</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Actions</th>
+            </tr>
+          </thead>
 
-                  {/* Ident */}
-                  <div className="text-xs text-center text-gray-700 break-words">
-                    {item.ssbr_ident}
-                  </div>
+          <tbody>
+            {timesheets.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="text-center text-gray-500 py-10">
+                  Tidak ada data timesheet
+                </td>
+              </tr>
+            ) : (
+              timesheets.map((item, index) => {
+                const isRunning = !item.hour_checkout;
+                const rowBg = isRunning
+                  ? 'bg-orange-50 hover:bg-orange-100'
+                  : (index % 2 === 0 ? 'bg-white hover:bg-blue-50' : 'bg-blue-50/30 hover:bg-blue-50');
 
-                  {/* Operation */}
-                  <div className="flex flex-col gap-1">
-                    <div className="text-xs text-center text-gray-700 break-words leading-relaxed font-semibold">
-                      {item.operation_text}
-                    </div>
-                    {item.note && (
-                      <div className="text-xs italic text-gray-600 bg-gray-50 border-l-2 border-blue-500 px-2 py-1 rounded">
-                        {item.note}
+                return (
+                  <tr key={index} className={`${rowBg} border-b border-blue-100 transition-colors`}>
+                    {/* Order */}
+                    <td className={`${cellBase} text-center font-semibold text-blue-900`}>
+                      {item.production_order || '-'}
+                    </td>
+
+                    {/* Ident */}
+                    <td className={`${cellBase} text-center text-blue-700`}>
+                      {item.ssbr_ident || '-'}
+                    </td>
+
+                    {/* Operation */}
+                    <td className={`${cellBase} text-left text-gray-800`}>
+                      <div className="font-medium leading-snug">{item.operation_text}</div>
+                      {item.note && (
+                        <div className="text-[10px] italic text-gray-600 bg-blue-50 border-l-2 border-blue-400 px-1.5 py-0.5 rounded mt-0.5">
+                          {item.note}
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Check In */}
+                    <td className={`${cellBase} text-center`}>
+                      <div className="font-medium text-gray-700">{item.date_checkin || '-'}</div>
+                      <div className="text-blue-700 font-semibold">{item.hour_checkin || '-'}</div>
+                    </td>
+
+                    {/* Check Out */}
+                    <td className={`${cellBase} text-center`}>
+                      {item.hour_checkout ? (
+                        <>
+                          <div className="font-medium text-gray-700">{item.date_checkout}</div>
+                          <div className="text-blue-700 font-semibold">{item.hour_checkout}</div>
+                        </>
+                      ) : (
+                        <ElapsedTimer longdateCheckin={item.longdate_checkin} />
+                      )}
+                    </td>
+
+                    {/* Workcenter */}
+                    <td className={`${cellBase} text-center text-gray-800 font-medium`}>
+                      {item.workcenterdescription || '-'}
+                    </td>
+
+                    {/* Actions */}
+                    <td className={`${cellBase} text-center`}>
+                      <div className="flex gap-1 justify-center">
+                        <button
+                          onClick={() => handleNote(item)}
+                          className="px-2 py-1 text-[10px] font-bold bg-blue-600 text-white rounded hover:bg-blue-500 active:bg-blue-700 transition-colors"
+                        >
+                          Note
+                        </button>
+                        {item.hour_checkout ? (
+                          <button
+                            onClick={() => handleRestart(item)}
+                            className="px-2 py-1 text-[10px] font-bold bg-blue-700 text-white rounded hover:bg-blue-600 active:bg-blue-800 transition-colors"
+                          >
+                            Restart
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleStop(item)}
+                            className="px-2 py-1 text-[10px] font-bold bg-orange-500 text-white rounded hover:bg-orange-400 active:bg-orange-600 transition-colors"
+                          >
+                            Stop
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-
-                  {/* Check In */}
-                  <div className="text-xs text-center text-gray-700">
-                    <div className="font-medium">{item.date_checkin || '-'}</div>
-                    <div className="text-blue-600 font-semibold">{item.hour_checkin || '-'}</div>
-                  </div>
-
-                  {/* Check Out */}
-                  <div className="text-xs text-center text-gray-700">
-                    <div className="font-medium">{item.date_checkout || '-'}</div>
-                    <div className="text-red-600 font-semibold">{item.hour_checkout || '-'}</div>
-                  </div>
-
-                  {/* Workcenter */}
-                  <div className="text-xs text-center text-gray-700 break-words">
-                    {item.workcenterdescription}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex flex-col gap-1">
-                    <button
-                      onClick={() => handleNote(item)}
-                      className="px-2 py-1 text-xs font-medium bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-                    >
-                      Note
-                    </button>
-                    {item.hour_checkout ? (
-                      <button
-                        onClick={() => handleRestart(item)}
-                        className="px-2 py-1 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-                      >
-                        Restart
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleStop(item)}
-                        className="px-2 py-1 text-xs font-medium bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
-                      >
-                        Stop
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Note Modal */}
       {showNoteModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-4">Add Note</h3>
-            <input
-              type="text"
-              value={noteInput}
-              onChange={(e) => setNoteInput(e.target.value)}
-              placeholder="Masukkan note..."
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500 mb-4"
-              autoFocus
-            />
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={handleCancelNote}
-                className="px-4 py-2 text-sm font-medium bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveNote}
-                className="px-4 py-2 text-sm font-medium bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-              >
-                Save
-              </button>
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="bg-blue-900 px-5 py-3">
+              <h3 className="text-base font-bold text-white">Add Note</h3>
+            </div>
+            <div className="p-5">
+              <input
+                type="text"
+                value={noteInput}
+                onChange={(e) => setNoteInput(e.target.value)}
+                placeholder="Masukkan note..."
+                className="w-full px-3 py-2.5 border-2 border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4 text-sm"
+                autoFocus
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={handleCancelNote}
+                  className="px-4 py-2 text-sm font-medium bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveNote}
+                  className="px-4 py-2 text-sm font-bold bg-blue-700 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                >
+                  Save
+                </button>
+              </div>
             </div>
           </div>
         </div>
