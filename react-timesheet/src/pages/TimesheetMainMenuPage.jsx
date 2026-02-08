@@ -279,62 +279,62 @@ const TimesheetMainMenuPage = () => {
       {/* Main Content - Soft Background */}
       <main className="flex-1 flex flex-row gap-3 p-3 overflow-hidden">
         {/* Info Box - Left side - Soft Card */}
-        <section className="flex-1 bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/50 p-4 flex flex-col overflow-hidden">
-          {/* Info Rows */}
-          <div className="space-y-3 flex-1 overflow-y-auto">
+        <section className="flex-1 bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/50 p-3 flex flex-col overflow-hidden min-h-0">
+          {/* Info Rows - flex-1 with min-h-0 to prevent overflow */}
+          <div className="flex-1 min-h-0 flex flex-col gap-1.5">
             {/* Nama */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs sm:text-sm font-semibold text-blue-700">Nama</span>
-              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm break-words">
+            <div className="flex flex-col gap-0.5 min-h-0">
+              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Nama</span>
+              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm break-words flex-shrink-0">
                 {userData.name}
               </div>
             </div>
 
             {/* SN */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs sm:text-sm font-semibold text-blue-700">SN</span>
-              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm">
+            <div className="flex flex-col gap-0.5 min-h-0">
+              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">SN</span>
+              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm flex-shrink-0">
                 {userData.sn}
               </div>
             </div>
 
             {/* Work Center */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs sm:text-sm font-semibold text-blue-700">Work Center</span>
-              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm whitespace-pre-line">
+            <div className="flex flex-col gap-0.5 min-h-0">
+              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Work Center</span>
+              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm whitespace-pre-line flex-shrink-0">
                 {userData.workcenter}
               </div>
             </div>
 
             {/* Order */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs sm:text-sm font-semibold text-blue-700">Order</span>
-              <div className="text-xs sm:text-sm font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm">
+            <div className="flex flex-col gap-0.5 min-h-0">
+              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Order</span>
+              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm flex-shrink-0">
                 {userData.order}
               </div>
             </div>
 
             {/* Activity */}
-            <div className="flex flex-col gap-1.5">
-              <span className="text-xs sm:text-sm font-semibold text-blue-700">Activity</span>
-              <div className="text-xs sm:text-sm font-semibold text-slate-700 whitespace-pre-line h-16 sm:h-20 overflow-auto bg-gradient-to-br from-blue-50 to-blue-100 p-3 rounded-xl border border-blue-200 shadow-sm">
+            <div className="flex flex-col gap-0.5 flex-1 min-h-0">
+              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Activity</span>
+              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 whitespace-pre-line overflow-auto bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm flex-1 min-h-0">
                 {userData.activity}
               </div>
             </div>
           </div>
 
           {/* Bottom Actions inside info box */}
-          <div className="flex gap-3 mt-3 pt-3 border-t border-blue-200">
+          <div className="flex gap-2 mt-2 pt-2 border-t border-blue-200 flex-shrink-0">
             <button
               onClick={handleRework}
-              className="flex-1 flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gradient-to-br from-orange-400 to-orange-500 text-white rounded-xl text-xs font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
+              className="flex-1 flex items-center justify-center gap-2 py-12 px-2 bg-gradient-to-br from-orange-400 to-orange-500 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
             >
               <span className="text-lg">⚠️</span>
               <span>Rework</span>
             </button>
             <button
               onClick={finish}
-              className="flex-1 flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-xl text-xs font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
+              className="flex-1 flex items-center justify-center gap-2 py-12 px-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
             >
               <span className="text-lg">✅</span>
               <span>Finish</span>

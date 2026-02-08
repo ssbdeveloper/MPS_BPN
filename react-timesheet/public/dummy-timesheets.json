@@ -27,12 +27,12 @@
     "full_name": "Ahmad Sudrajat",
     "workcentercode": "WC-HEAT-02",
     "workcenterdescription": "Heating Oven Beta",
-    "date_checkin": "05/02/2026",
-    "hour_checkin": "06:30",
-    "date_checkout": "05/02/2026",
-    "hour_checkout": "08:00",
-    "longdate_checkin": "2026-02-05T06:30:00",
-    "longdate_checkout": "2026-02-05T08:00:00",
+    "date_checkin": "08/02/2026",
+    "hour_checkin": "20:15",
+    "date_checkout": "",
+    "hour_checkout": "",
+    "longdate_checkin": "2026-02-08T20:15:00",
+    "longdate_checkout": null,
     "note": "Material temperature reached optimal level, ready for next process"
   },
   {

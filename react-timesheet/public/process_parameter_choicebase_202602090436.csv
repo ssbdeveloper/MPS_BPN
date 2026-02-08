@@ -1,0 +1,180 @@
+"id_choice","choice_name","description","id_parameter"
+1,BA101,"",17
+2,BA402,"",17
+3,BA207A,"",17
+4,BA433A,"",17
+5,Coolant,"",33
+6,Oil,"",33
+7,Tap Matic,"",33
+8,Dry,"",33
+9,On Spec,"",36
+10,Under Size,"",36
+11,Over Size,"",36
+12,Oval,"",36
+13,Tapper,"",36
+14,Misalignment,"",36
+15,Bending,"",36
+16,Crack,"",36
+17,Build Up,"",40
+18,"1","",60
+19,"2","",60
+20,"3","",60
+21,"4","",60
+22,"5","",60
+23,After Build Up Welding,"",61
+24,Normal/Rechrome,"",61
+25,Pengulangan Proses,"",61
+26,Hyundai E71T,"",37
+27,KISWEL K71TLF,"",2
+28,KISWEL E70MC,"",2
+29,KISWEL K-110TK3,"",2
+30,ESAB ER309,"",2
+31,ESAB ER316,"",2
+32,ESAB E7IT-1C,"",2
+33,ESAB ULTRA E71T-1,"",2
+34,KISWEL ER308,"",2
+35,"1,0 mm","",3
+36,"1,2 mm","",3
+37,"1,6 mm","",3
+38,"2,4 mm","",3
+39,"3,2 mm","",3
+40,"4 mm","",3
+41,Bohler EM12K,"",14
+42,Esab EM12K,"",14
+43,Lincoln M12K,"",14
+44,Lincoln L60,"",14
+45,Lincoln A96S,"",14
+46,"1,0 mm","",15
+47,"1,2 mm","",15
+48,"1,6 mm","",15
+49,"2,4 mm","",15
+50,"3,2 mm","",15
+51,"4 mm","",15
+52,Root,"",34
+53,Fill,"",34
+54,Cap,"",34
+55,HUATONG ER 70S-6,"",37
+56,KISWEL ER308,"",37
+57,KISWEL ER309,"",37
+58,KISWEL E71TLF,"",37
+59,KISWEL E70MC,"",37
+60,KISWEL K-110TK3,"",37
+61,REVOLLOY ER110S-G,"",37
+62,BOHLER ER70S-6,"",37
+63,ESAB ER309,"",37
+64,ESAB ER309,"",37
+65,ESAB ER316,"",37
+66,ER5356,"",37
+67,ESAB E7IT-1C,"",37
+68,ESAB ULTRA E71T-1,"",37
+69,FCAW,"",38
+70,GMAW,"",38
+71,SMAW,"",38
+72,GTAW,"",38
+73,"1,0 mm","",39
+74,"1,2 mm","",39
+75,"1,6 mm","",39
+76,"2,4 mm","",39
+77,"1G","",40
+78,"2G","",40
+79,"3G","",40
+80,"4G","",40
+81,"5G","",40
+82,"6G","",40
+83,"1F","",40
+84,"2F","",40
+85,"3F","",40
+86,"4F","",40
+87,PWHT,"",46
+88,Peening,"",46
+89,brushing,"",46
+90,Grinding,"",46
+91,Chipping,"",46
+92,N/A,"",46
+93,New,"",147
+94,Rework,"",147
+95,Bond,"",148
+96,Bond & Top,"",148
+97,Flat (Non Rotating),"",149
+98,Round (Rotating),"",149
+99,ID Seal Contact,"",153
+100,OD Seal Contact,"",153
+101,Metal Contact,"",153
+102,Gasket Contact,"",153
+103,ID Bearing Contact,"",153
+104,OD Bearing Contact,"",153
+105,Retainer Contact,"",153
+106,Engine block,"",153
+107,AS175,"",157
+108,DM955,"",157
+109,PMET885,"",157
+110,TAFA75B,"",157
+111,AS130,"",166
+112,PMET709,"",166
+113,AS160,"",166
+114,DM420,"",166
+115,PMET297,"",166
+116,Used,"",175
+117,Not Used,"",175
+118,Manufacture/Raw Material,"",62
+119,Arc Spray,"",62
+120,Cold Spray,"",62
+121,Welding,"",62
+122,Chrome,"",62
+123,HVOF,"",62
+124,Lincore 40-S,"",14
+125,Lincoln A96S,"",14
+126,TW-5172,"",14
+127,BÖHLER Q 71.1 RC (M),"",2
+128,DUAL SHIELD II 100D1,"",2
+129,KISWEL K91TB3,"",2
+130,DO*250,"",2
+131,DO*23,"",2
+132,TENWELD TW-112,"",37
+133,LINCOLN Merit JG-56,"",37
+134,NIHONWELD NT-5356,"",37
+135,TW-5172,"",37
+136,HTW-50 ER70S-6,"",37
+137,LINCOLN E70S-3/ E70S-6,"",37
+138,CIG WELD ER110S-G,"",37
+139,LINCOLN ER110S-G,"",37
+140,BÖHLER T UNION GM 110,"",37
+141,BÖHLER ER90S-G,"",37
+142,GEKA SG CrMo2Si,"",37
+143,TEN WELD 606,"",37
+144,ESAB OK 55.00,"",37
+145,ESAB OK 48.04,"",37
+146,KISWEL-7018N,"",37
+147,E10018-D2,"",37
+148,CIN-1,"",37
+149,CIN-2,"",37
+150,CI-A1,"",37
+151,CoC,"",53
+152,Dechrome,"",53
+153,CoS,"",53
+154,Prep CoC,"",53
+155,Bubble,"",54
+156,Hardness Underspec,"",54
+157,No Defect,"",54
+158,Oval,"",54
+159,Pitting,"",54
+160,Roughness Underspec,"",54
+161,Undersize,"",54
+162,Visual,"",54
+163,"1","",59
+164,"2","",59
+165,"3","",59
+166,"4","",59
+167,"5","",59
+168,Yes,"",91
+169,No,"",91
+170,Yes,"",92
+171,No,"",92
+172,LINCOLN A96S,"",144
+173,SKC RECORD,"",144
+174,UVC 401,"",144
+175,PREMIERWELD NF-3 & BF-1,"",144
+176,Roughing,"",16
+177,Finishing,"",16
+178,Yes,"",93
+179,No,"",93

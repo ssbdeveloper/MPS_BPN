@@ -47,6 +47,18 @@ const ElapsedTimer = ({ longdateCheckin }) => {
  * Shows all timesheet entries for current user
  * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
  */
+// Format date from "dd/mm/yyyy" to "dd mmm yy"
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const formatDateShort = (dateStr) => {
+  if (!dateStr) return '-';
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return dateStr;
+  const day = parseInt(parts[0], 10);
+  const monthIdx = parseInt(parts[1], 10) - 1;
+  const year = parts[2].slice(-2);
+  return `${day} ${MONTHS_SHORT[monthIdx] || '???'} ${year}`;
+};
+
 const TimesheetListPage = () => {
   const navigate = useNavigate();
 
@@ -298,7 +310,7 @@ const TimesheetListPage = () => {
 
                     {/* Check In */}
                     <td className={`${cellBase} text-center`}>
-                      <div className="font-medium text-gray-700">{item.date_checkin || '-'}</div>
+                      <div className="font-medium text-gray-700">{formatDateShort(item.date_checkin)}</div>
                       <div className="text-blue-700 font-semibold">{item.hour_checkin || '-'}</div>
                     </td>
 
@@ -306,7 +318,7 @@ const TimesheetListPage = () => {
                     <td className={`${cellBase} text-center`}>
                       {item.hour_checkout ? (
                         <>
-                          <div className="font-medium text-gray-700">{item.date_checkout}</div>
+                          <div className="font-medium text-gray-700">{formatDateShort(item.date_checkout)}</div>
                           <div className="text-blue-700 font-semibold">{item.hour_checkout}</div>
                         </>
                       ) : (
@@ -361,12 +373,12 @@ const TimesheetListPage = () => {
               <h3 className="text-base font-bold text-white">Add Note</h3>
             </div>
             <div className="p-5">
-              <input
-                type="text"
+              <textarea
                 value={noteInput}
                 onChange={(e) => setNoteInput(e.target.value)}
                 placeholder="Masukkan note..."
-                className="w-full px-3 py-2.5 border-2 border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4 text-sm"
+                rows={4}
+                className="w-full px-3 py-2.5 border-2 border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4 text-sm resize-y"
                 autoFocus
               />
               <div className="flex gap-2 justify-end">

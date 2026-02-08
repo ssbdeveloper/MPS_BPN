@@ -5,6 +5,7 @@ import { BrowserMultiFormatReader } from '@zxing/library';
 /**
  * Select Job Page
  * Converted dari menujob.html + script.js + scanbarcode.js
+ * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
  */
 const SelectJobPage = () => {
   const navigate = useNavigate();
@@ -20,7 +21,6 @@ const SelectJobPage = () => {
 
   // Load data on mount
   useEffect(() => {
-    // Auto load jika ada input
     const savedOrder = sessionStorage.getItem('lastSearchOrder');
     if (savedOrder) {
       setOrderInput(savedOrder);
@@ -58,7 +58,6 @@ const SelectJobPage = () => {
         const dummyResponse = await fetch('/dummy-jobs.json');
         if (dummyResponse.ok) {
           const dummyData = await dummyResponse.json();
-          // Filter dummy data by order
           const filtered = dummyData.filter(job =>
             job.order_no.includes(orderValue)
           );
@@ -68,7 +67,7 @@ const SelectJobPage = () => {
             sessionStorage.setItem('lastSearchOrder', orderValue);
             alert('⚠️ Menggunakan data dummy (API tidak tersedia)');
           } else {
-            setJobs(dummyData); // Show all dummy data if no match
+            setJobs(dummyData);
             alert('⚠️ Order tidak ditemukan, menampilkan semua data dummy');
           }
         } else {
@@ -96,7 +95,6 @@ const SelectJobPage = () => {
     setSelectedJob(rowData);
     sessionStorage.setItem('selectedactivity', JSON.stringify(rowData));
 
-    // Navigate back to main menu
     setTimeout(() => {
       navigate('/timesheet-mainmenu');
     }, 300);
@@ -105,12 +103,9 @@ const SelectJobPage = () => {
   // Handle barcode scan
   const handleBarcodeScan = async () => {
     try {
-      // Request camera permission first
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' }
       });
-
-      // Stop the permission stream (ZXing will create its own)
       stream.getTracks().forEach(track => track.stop());
 
       setShowScanner(true);
@@ -119,7 +114,6 @@ const SelectJobPage = () => {
         codeReaderRef.current = new BrowserMultiFormatReader();
       }
 
-      // Get video devices after permission granted
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter(d => d.kind === 'videoinput');
 
@@ -129,7 +123,6 @@ const SelectJobPage = () => {
         return;
       }
 
-      // Prefer back camera for mobile, default to first camera
       const backCamera = videoDevices.find(d =>
         d.label.toLowerCase().includes('back') ||
         d.label.toLowerCase().includes('rear')
@@ -202,106 +195,129 @@ const SelectJobPage = () => {
     }
   };
 
+  // Common cell style
+  const cellBase = 'px-2 py-2 text-[11px] align-middle';
+
   return (
-    <div className="h-screen w-screen bg-gray-100 flex flex-col overflow-hidden">
-      {/* Header */}
-      <header className="flex justify-between items-center bg-white px-3 py-2.5 shadow-md flex-shrink-0">
+    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
+      {/* Header - Dark Blue */}
+      <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
         <button
           onClick={goBack}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
         >
           Back
         </button>
-        <h2 className="text-base sm:text-lg font-bold text-gray-800">Job Selection</h2>
+        <h2 className="text-base sm:text-lg font-bold text-white">Job Selection</h2>
         <button
           onClick={() => loaddatapgall()}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
         >
           Refresh
         </button>
       </header>
 
       {/* Search Row */}
-      <div className="flex gap-2 px-3 py-2 bg-white border-b border-gray-200 flex-shrink-0">
-        <input
-          type="text"
-          value={orderInput}
-          onChange={(e) => setOrderInput(e.target.value)}
-          onKeyPress={handleKeyPress}
-          placeholder="Search Order..."
-          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:border-blue-500"
-        />
+      <div className="flex gap-2 px-3 py-2 bg-blue-50 border-b border-blue-200 flex-shrink-0">
+        <div className="flex-1 relative">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            value={orderInput}
+            onChange={(e) => setOrderInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Search Order..."
+            className="w-full pl-9 pr-3 py-2 text-sm border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+          />
+        </div>
         <button
           onClick={() => loaddatapgall()}
-          className="px-4 py-2 text-xs sm:text-sm font-medium bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+          className="px-4 py-2 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded-lg hover:bg-blue-600 transition-colors"
         >
           Search
         </button>
         <button
           onClick={handleBarcodeScan}
-          className="px-4 py-2 text-xs sm:text-sm font-medium bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+          className="px-4 py-2 text-xs sm:text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-400 active:bg-orange-600 transition-colors"
         >
           Barcode
         </button>
       </div>
 
-      {/* Table Header */}
-      <div className="px-3 py-2 bg-gray-200 border-b border-gray-300 flex-shrink-0">
-        <div className="grid gap-1 text-xs font-semibold text-gray-700" style={{ gridTemplateColumns: '1fr 1fr 2fr 60px 60px 1fr' }}>
-          <div className="text-center">Order</div>
-          <div className="text-center">Ident</div>
-          <div className="text-center">Activity</div>
-          <div className="text-center">Seq</div>
-          <div className="text-center">Hours</div>
-          <div className="text-center">Workcenter</div>
-        </div>
-      </div>
+      {/* Table — native HTML table for perfect alignment */}
+      <div className="flex-1 overflow-y-auto">
+        <table className="w-full border-collapse">
+          <colgroup>
+            <col style={{ width: '13%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '35%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '20%' }} />
+          </colgroup>
 
-      {/* Job List - Scrollable */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
-        {jobs.length === 0 ? (
-          <div className="text-center text-gray-500 mt-10">
-            <p>Tidak ada data. Silakan search order.</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {jobs.map((job, index) => (
-              <div
-                key={index}
-                onClick={() => handleSelectJob(job)}
-                className={`
-                  bg-white rounded border border-gray-300
-                  cursor-pointer transition-all hover:bg-blue-50 hover:border-blue-400
-                  ${selectedJob?.order === job.order_no && selectedJob?.operation_no === job.operation_no
-                    ? 'bg-blue-100 border-blue-500'
-                    : ''
-                  }
-                `}
-              >
-                <div className="grid gap-1 p-2 items-center min-h-[60px]" style={{ gridTemplateColumns: '1fr 1fr 2fr 60px 60px 1fr' }}>
-                  <div className="text-xs text-center font-semibold text-gray-800 break-words">
-                    {job.order_no}
+          <thead className="sticky top-0 z-10">
+            <tr className="bg-blue-100 border-b-2 border-blue-300">
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Order</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Ident</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Activity</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Seq</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Hours</th>
+              <th className={`${cellBase} text-center font-bold text-blue-900`}>Workcenter</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {jobs.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="text-center text-gray-400 py-10">
+                  <div className="flex flex-col items-center gap-2">
+                    <svg className="w-10 h-10 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span className="text-sm">Tidak ada data. Silakan search order.</span>
                   </div>
-                  <div className="text-xs text-center text-gray-700 break-words">
-                    {job.ssbr_id}
-                  </div>
-                  <div className="text-xs text-center text-gray-700 break-words leading-relaxed">
-                    {job.operationtext}
-                  </div>
-                  <div className="text-xs text-center text-gray-700">
-                    {job.operation_no}
-                  </div>
-                  <div className="text-xs text-center text-gray-700">
-                    {job.planhours}
-                  </div>
-                  <div className="text-xs text-center text-gray-700 break-words">
-                    {job.workcenter}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+                </td>
+              </tr>
+            ) : (
+              jobs.map((job, index) => {
+                const isSelected = selectedJob?.order === job.order_no && selectedJob?.operation_no === job.operation_no;
+                const rowBg = isSelected
+                  ? 'bg-blue-100 hover:bg-blue-150'
+                  : (index % 2 === 0 ? 'bg-white hover:bg-blue-50' : 'bg-blue-50/30 hover:bg-blue-50');
+
+                return (
+                  <tr
+                    key={index}
+                    onClick={() => handleSelectJob(job)}
+                    className={`${rowBg} border-b border-blue-100 transition-colors cursor-pointer active:bg-orange-50`}
+                  >
+                    <td className={`${cellBase} text-center font-semibold text-blue-900`}>
+                      {job.order_no}
+                    </td>
+                    <td className={`${cellBase} text-center text-blue-700`}>
+                      {job.ssbr_id}
+                    </td>
+                    <td className={`${cellBase} text-left text-gray-800`}>
+                      <div className="font-medium leading-snug">{job.operationtext}</div>
+                    </td>
+                    <td className={`${cellBase} text-center text-gray-700`}>
+                      {job.operation_no}
+                    </td>
+                    <td className={`${cellBase} text-center text-gray-700`}>
+                      {job.planhours}
+                    </td>
+                    <td className={`${cellBase} text-center text-gray-800 font-medium`}>
+                      {job.workcenter}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
       {/* Barcode Scanner Overlay */}
@@ -310,24 +326,26 @@ const SelectJobPage = () => {
           className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50"
           onClick={closeScanner}
         >
-          <div className="bg-white rounded-lg p-4 max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-gray-800">Scan Barcode</h3>
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-blue-900 px-5 py-3 flex justify-between items-center">
+              <h3 className="text-base font-bold text-white">Scan Barcode</h3>
               <button
                 onClick={closeScanner}
-                className="text-2xl text-gray-600 hover:text-gray-800"
+                className="text-2xl text-blue-200 hover:text-white transition-colors"
               >
                 ×
               </button>
             </div>
-            <video
-              ref={videoRef}
-              autoPlay
-              className="w-full h-64 bg-black rounded"
-            />
-            <p className="text-xs text-gray-500 text-center mt-2">
-              Arahkan kamera ke barcode order
-            </p>
+            <div className="p-4">
+              <video
+                ref={videoRef}
+                autoPlay
+                className="w-full h-64 bg-black rounded-lg"
+              />
+              <p className="text-xs text-gray-500 text-center mt-2">
+                Arahkan kamera ke barcode order
+              </p>
+            </div>
           </div>
         </div>
       )}

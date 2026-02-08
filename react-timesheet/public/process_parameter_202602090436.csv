@@ -1,0 +1,176 @@
+"id_parameter","parameter_name","description","parameter_no","uom","ischoice","isnumber","id_process"
+1,Pass No,"",1,Number,false,true,1
+2,Filler Material,"",2,"",true,false,1
+3,Wire Diameter,"",3,"",true,false,1
+4,Control Speed,"",10,Hz,false,true,1
+5,Diameter Before Welding,"",5,mm,false,true,1
+6,Pre heat,"",6,deg C,false,true,1
+7,Gas Flowrate,"",7,lpm,false,true,1
+8,Amperage,"",8,A,false,true,1
+9,Voltage,"",9,V,false,true,1
+10,Temperature After Welding,"",11,deg C,false,true,1
+11,Diameter After Welding,"",12,mm,false,true,1
+12,Lenght Welding,"",13,mm,false,true,1
+13,Operator Note,"",14,"",false,false,1
+14,Filler Material,"",1,"",true,false,2
+15,Wire Diameter,"",3,"",true,false,2
+16,Process Machining,"",1,"",true,false,3
+17,Consumable Insert,Kode Consumable atau Type Insert,3,"",true,false,3
+18,Speed Frekuensi,"",9,Hz,false,false,2
+19,Dimension Before Machining,"",5,mm,false,true,3
+20,Length Machining,"",4,mm,false,true,3
+21,Diameter Before Welding,"",5,mm,false,true,2
+22,Pre heat,"",6,deg C,false,true,2
+23,Amperage,"",7,A,false,true,2
+24,Voltage,"",8,V,false,true,2
+25,Temperature After Welding,"",11,deg C,false,true,2
+26,RPM (Spindle Speed),"",7,Rpm,false,true,3
+27,Diameter After Welding Area 1,"",12,mm,false,true,2
+28,Diameter After Welding Area 2,"",13,mm,false,true,2
+29,Lenght Welding,"",14,mm,false,true,2
+30,Feeding,"",8,mm/rev,false,true,3
+31,Operator Note,"",15,"",false,false,2
+32,Depth of Cut,Ketebalan Pemakanan,9,mm,false,true,3
+33,Lubrication,"",10,"",true,false,3
+34,Welding Process,"",1,"",true,false,4
+35,Dimension After Machining,"",6,mm,false,true,3
+36,Condition Material After Machining,"",12,"",true,false,3
+37,Filler Material,"",2,"",true,false,4
+38,Electrode Type,"",3,"",true,false,4
+39,Wire Diameter,"",4,"",true,false,4
+40,Position Welding,"",7,"",true,false,4
+41,Pre heat,"",8,deg C,false,true,4
+42,Gas Flowrate,"",9,lpm,false,true,4
+43,Amperage,"",10,A,false,true,4
+44,Voltage,"",11,V,false,true,4
+45,Temperature After Welding,"",12,deg C,false,true,4
+46,Treatment After Welding,"",13,"",true,false,4
+47,Operator Note,"",14,"",false,false,4
+48,Material Thickness,"",6,"",false,true,4
+49,Operator Note,"",13,"",false,false,3
+50,Plating Time (hours),"",1,Hours,false,true,6
+51,Temperatur Plating (C),"",2,Celcius,false,true,6
+52,Arus Plating (A),"",3,Ampere,false,true,6
+53,Solving,"",8,"",true,false,6
+54,Defect,"",7,"",true,false,6
+55,Lenght (mm),"",1,mm,false,true,5
+56,Top Spec (mm),"",2,mm,false,true,5
+57,Spec Dia (mm),"",3,mm,false,true,5
+58,Bottom Spec (mm),"",4,mm,false,true,5
+59,Number Tank,"",5,"",true,false,6
+60,Jumlah Process Chrome (Kali),"",6,"",true,false,6
+61,Condition,"",5,"",true,false,5
+62,Material Type,"",2,"",true,false,3
+63,Hardness Before 1 (HRC),"",11,HRC,false,true,5
+64,Hardness Before 2 (HRC),"",12,HRC,false,true,5
+65,Hardness Before 3 (HRC),"",13,HRC,false,true,5
+66,Hardness Before 4 (HRC),"",14,HRC,false,true,5
+67,Hardness Before 5 (HRC),"",15,HRC,false,true,5
+68,Start OD 1 (mm),"",16,mm,false,true,5
+69,Start OD 2 (mm),"",17,mm,false,true,5
+70,Start OD 3 (mm),"",18,mm,false,true,5
+71,Start OD 4 (mm),"",19,mm,false,true,5
+72,Start OD 5 (mm),"",20,mm,false,true,5
+73,Start OD 6 (mm),"",21,mm,false,true,5
+74,Start OD 7 (mm),"",22,mm,false,true,5
+75,Start OD 8 (mm),"",23,mm,false,true,5
+76,Start OD 9 (mm),"",24,mm,false,true,5
+77,Start OD 10 (mm),"",25,mm,false,true,5
+78,Prep OD 1 (mm),"",26,mm,false,true,5
+79,Prep OD 2 (mm),"",27,mm,false,true,5
+80,Prep OD 3 (mm),"",28,mm,false,true,5
+81,Prep OD 4 (mm),"",29,mm,false,true,5
+82,Prep OD 5 (mm),"",30,mm,false,true,5
+83,Prep OD 6 (mm),"",31,mm,false,true,5
+84,Prep OD 7 (mm),"",32,mm,false,true,5
+85,Prep OD 8 (mm),"",33,mm,false,true,5
+86,Prep OD 9 (mm),"",34,mm,false,true,5
+87,Prep OD 10 (mm),"",35,mm,false,true,5
+88,Voltage (V),"",2,Volt,false,true,8
+89,Amperage (A),"",3,Ampere,false,true,8
+90,Time (Hour),"",1,Hour,false,true,8
+91,Dot Welds,"",36,"",true,false,5
+92,Tig Welds,"",37,"",true,false,5
+93,Dot Welds,"",1,"",true,false,7
+94,Cold/After Platting OD 1 (mm),"",2,mm,false,true,7
+95,Cold/After Platting OD 2 (mm),"",3,mm,false,true,7
+96,Cold/After Platting OD 3 (mm),"",4,mm,false,true,7
+97,Cold/After Platting OD 4 (mm),"",5,mm,false,true,7
+98,Cold/After Platting OD 5 (mm),"",6,mm,false,true,7
+99,Cold/After Platting OD 6 (mm),"",7,mm,false,true,7
+100,Cold/After Platting OD 7 (mm),"",8,mm,false,true,7
+101,Cold/After Platting OD 8 (mm),"",9,mm,false,true,7
+102,Cold/After Platting OD 9 (mm),"",10,mm,false,true,7
+103,Cold/After Platting OD 10 (mm),"",11,mm,false,true,7
+104,Finish OD 1 (mm),"",12,mm,false,true,7
+105,Finish OD 2 (mm),"",13,mm,false,true,7
+106,Finish OD 3 (mm),"",14,mm,false,true,7
+107,Finish OD 4 (mm),"",15,mm,false,true,7
+108,Finish OD 5 (mm),"",16,mm,false,true,7
+109,Finish OD 6 (mm),"",17,mm,false,true,7
+110,Finish OD 7 (mm),"",18,mm,false,true,7
+111,Finish OD 8 (mm),"",19,mm,false,true,7
+112,Finish OD 9 (mm),"",20,mm,false,true,7
+113,Finish OD 10 (mm),"",21,mm,false,true,7
+114,Finish Hardness 1 (HRC),"",22,HRC,false,true,7
+115,Finish Hardness 2 (HRC),"",23,HRC,false,true,7
+116,Finish Hardness 3 (HRC),"",24,HRC,false,true,7
+117,Finish Hardness 4 (HRC),"",25,HRC,false,true,7
+118,Finish Hardness 5 (HRC),"",26,HRC,false,true,7
+119,Finish Thickness 1 (Micron),"",27,Micron,false,true,7
+120,Finish Thickness 2 (Micron),"",28,Micron,false,true,7
+121,Finish Thickness 3 (Micron),"",29,Micron,false,true,7
+122,Finish Thickness 4 (Micron),"",30,Micron,false,true,7
+123,Finish Thickness 5 (Micron),"",31,Micron,false,true,7
+124,Finish Roughness Ra 1 (Micro),"",32,Micron,false,true,7
+125,Finish Roughness Ra 2 (Micro),"",33,Micron,false,true,7
+126,Finish Roughness Ra 3 (Micro),"",34,Micron,false,true,7
+127,Finish Roughness Ra 4 (Micro),"",35,Micron,false,true,7
+128,Finish Roughness Ra 5 (Micro),"",36,Micron,false,true,7
+129,Finish Roughness Rz 1 (Micro),"",37,Micron,false,true,7
+130,Finish Roughness Rz 2 (Micro),"",38,Micron,false,true,7
+131,Finish Roughness Rz 3 (Micro),"",39,Micron,false,true,7
+132,Finish Roughness Rz 4 (Micro),"",40,Micron,false,true,7
+133,Finish Roughness Rz 5 (Micro),"",41,Micron,false,true,7
+134,Voltage (V),"",4,Volt,false,true,6
+135,Note Prep,"",38,"",false,false,5
+136,Note Plating,"",9,"",false,false,6
+137,Note Finish,"",42,"",false,false,7
+138,Note Stripping,"",9,"",false,false,8
+139,Thickness Before 1 (Micron),"",4,Micron,false,true,8
+140,Thickness Before 2 (Micron),"",5,Micron,false,true,8
+141,Thickness Before 3 (Micron),"",6,Micron,false,true,8
+142,Thickness Before 4 (Micron),"",7,Micron,false,true,8
+143,Thickness Before 5 (Micron),"",8,Micron,false,true,8
+144,Flux,masukan tipe flux,2,"",true,true,2
+145,Part Name,"",,"",false,false,9
+146,Model,"",,"",false,true,9
+147,Condition,"",,"",true,false,9
+148,Coating,"",,"",true,false,9
+149,Surface Area,"",,"",true,false,9
+150,Rougness Blasting/Ra,"",,"",false,true,9
+151,Spec Diameter (Round)/Panjang (Flat),"",,"",false,true,9
+152,Spec Lenght (Round) / Lebar (Flat),"",,"",false,true,9
+153,Area Repair,"",,"",true,false,9
+154,Diameter After Blast,"",,"",false,true,9
+155,Diameter After Bond,"",,"",false,true,9
+156,Diameter After Top,"",,"",false,true,9
+157,Material Bond Coat,"",,"",true,false,9
+158,Wire 1 Lot # Bond Coat,"",,"",false,false,9
+159,Wire 2 Lot # Bond Coat,"",,"",false,false,9
+160,Primary Air Pressure (Psi) Bond Coat,"",,"",false,true,9
+161,Arc Voltage (V) Bond Coat,"",,"",false,true,9
+162,Arc Current (Amps) Bond Coat,"",,"",false,true,9
+163,Rotation Speed of Part (rpm) Bond Coat,"",,"",false,true,9
+164,Traverse Rate of Gun (mm/s) Bond Coat,"",,"",false,true,9
+165,Bondcoat Robot cycle (Pass),"",,"",false,true,9
+166,Material Top Coat,"",,"",true,false,9
+167,Wire 1 Lot # Top Coat,"",,"",false,false,9
+168,Wire 2 Lot # Top Coat,"",,"",false,false,9
+169,Primary Air Pressure (Psi) Top Coat,"",,"",false,true,9
+170,Arc Voltage (V) Top Coat,"",,"",false,true,9
+171,Arc Current (Amps) Top Coat,"",,"",false,true,9
+172,Rotation Speed of Part (rpm) Top Coat,"",,"",false,true,9
+173,Traverse Rate of Gun (mm/s) Top Coat,"",,"",false,true,9
+174,Top coat Robot cycle (Pass),"",,"",false,true,9
+175,Dictol,"",,"",true,false,9
