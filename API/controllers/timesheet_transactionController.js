@@ -682,4 +682,149 @@ exports.partialUpdate = async (req, res) => {
   }
 };
 
+// ============================================
+// OPTIMIZED VALIDATION ENDPOINT
+// Server-side: stats, grouped employee list, paginated records per group
+// ============================================
+
+/**
+ * GET /timesheet/validation-stats
+ * Returns stats + grouped employee summary (no individual records)
+ * Query params: start, end, search (optional)
+ */
+exports.validationStats = async (req, res) => {
+  try {
+    let { start, end, search } = req.query;
+
+    // Default: last 30 days
+    if (!start || !end) {
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      start = thirtyDaysAgo.toISOString().split('T')[0];
+      end = now.toISOString().split('T')[0];
+    }
+
+    // Build WHERE clause
+    let whereClauses = ['DATE(longdate_checkin) BETWEEN $1 AND $2'];
+    let params = [start, end];
+    let paramIdx = 3;
+
+    if (search && search.trim()) {
+      const searchLike = `%${search.trim().toLowerCase()}%`;
+      whereClauses.push(`(
+        LOWER(serialnumber) LIKE $${paramIdx}
+        OR LOWER(full_name) LIKE $${paramIdx}
+        OR LOWER(workcenterdescription) LIKE $${paramIdx}
+        OR LOWER(production_order) LIKE $${paramIdx}
+      )`);
+      params.push(searchLike);
+      paramIdx++;
+    }
+
+    const whereSQL = whereClauses.join(' AND ');
+
+    // 1) Global stats
+    const statsQuery = `
+      SELECT
+        COUNT(*) AS total_records,
+        COALESCE(SUM(duration), 0) AS total_hours,
+        COUNT(DISTINCT serialnumber) AS total_employees,
+        COUNT(*) FILTER (WHERE validation_date IS NULL) AS total_pending,
+        COUNT(*) FILTER (WHERE validation_date IS NOT NULL) AS total_validated,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL), 0) AS pending_hours,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL), 0) AS validated_hours
+      FROM timesheet_transaction
+      WHERE ${whereSQL}
+    `;
+    const statsResult = await db.query(statsQuery, params);
+    const statsRow = statsResult.rows[0];
+
+    // 2) Grouped employee summary (serialnumber, full_name, counts, hours)
+    const groupsQuery = `
+      SELECT
+        serialnumber,
+        MAX(full_name) AS full_name,
+        COUNT(*) AS record_count,
+        COALESCE(SUM(duration), 0) AS total_hours,
+        COUNT(*) FILTER (WHERE validation_date IS NULL) AS pending_count,
+        COUNT(*) FILTER (WHERE validation_date IS NOT NULL) AS validated_count,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL), 0) AS pending_hours,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL), 0) AS validated_hours
+      FROM timesheet_transaction
+      WHERE ${whereSQL}
+      GROUP BY serialnumber
+      ORDER BY MAX(full_name) ASC
+    `;
+    const groupsResult = await db.query(groupsQuery, params);
+
+    res.json({
+      stats: {
+        totalRecords: parseInt(statsRow.total_records),
+        totalHours: parseFloat(statsRow.total_hours).toFixed(2),
+        totalEmployees: parseInt(statsRow.total_employees),
+        totalPending: parseInt(statsRow.total_pending),
+        totalValidated: parseInt(statsRow.total_validated),
+        pendingHours: parseFloat(statsRow.pending_hours).toFixed(2),
+        validatedHours: parseFloat(statsRow.validated_hours).toFixed(2)
+      },
+      groups: groupsResult.rows
+    });
+  } catch (err) {
+    console.error('validationStats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /timesheet/validation-group/:serialnumber
+ * Returns records for one employee within date range
+ * Query params: start, end
+ */
+exports.validationGroupRecords = async (req, res) => {
+  try {
+    const { serialnumber } = req.params;
+    let { start, end } = req.query;
+
+    if (!start || !end) {
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      start = thirtyDaysAgo.toISOString().split('T')[0];
+      end = now.toISOString().split('T')[0];
+    }
+
+    const query = `
+      SELECT
+        t.tsnumber, t.serialnumber, t.full_name, t.production_order,
+        t.ssbr_ident, t.operation_text, t.seq, t.workcentercode,
+        t.workcenterdescription, t.date_checkin, t.hour_checkin,
+        t.date_checkout, t.hour_checkout, t.duration, t.note,
+        t.planhours, t.std_foreman_hours, t.state_flag,
+        t.validation_date, t.activitytype, t.part_name,
+        s.planhours AS sow_planhours
+      FROM timesheet_transaction t
+      LEFT JOIN sow s ON s.codenumber = (t.production_order || t.seq::text)
+      WHERE t.serialnumber = $1
+        AND DATE(t.longdate_checkin) BETWEEN $2 AND $3
+      ORDER BY t.longdate_checkin DESC
+    `;
+    const result = await db.query(query, [serialnumber, start, end]);
+
+    // Merge sow_planhours into planhours if planhours is empty
+    const records = result.rows.map(r => {
+      if (r.sow_planhours != null && (r.planhours == null || r.planhours === '')) {
+        r.planhours = r.sow_planhours;
+      }
+      delete r.sow_planhours;
+      return r;
+    });
+
+    res.json(records);
+  } catch (err) {
+    console.error('validationGroupRecords error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 

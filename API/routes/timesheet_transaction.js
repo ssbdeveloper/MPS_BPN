@@ -4,6 +4,8 @@ const controller = require("../controllers/timesheet_transactionController");
 
 router.get("/", controller.getAll);
 router.get("/search", controller.search);
+router.get("/validation-stats", controller.validationStats);
+router.get("/validation-group/:serialnumber", controller.validationGroupRecords);
 router.get("/getsn/:snkaryawan", controller.getbysn);
 router.get("/getid/:id", controller.getbyid);
 router.get("/nama/:nama", controller.getbyname);
