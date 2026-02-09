@@ -182,6 +182,15 @@ ALTER TABLE public.processcontroldata_item ADD CONSTRAINT fk_item_parameter FORE
 ALTER TABLE public.processcontroldata_item DROP CONSTRAINT IF EXISTS fk_item_processcontroldata;
 ALTER TABLE public.processcontroldata_item ADD CONSTRAINT fk_item_processcontroldata FOREIGN KEY (id_processcontroldata) REFERENCES public.processcontroldata(id_processcontroldata) ON DELETE CASCADE;
 
+-- Timesheet transaction indexes for validation page performance
+CREATE INDEX IF NOT EXISTS idx_ts_longdate_checkin ON timesheet_transaction(longdate_checkin);
+CREATE INDEX IF NOT EXISTS idx_ts_serialnumber ON timesheet_transaction(serialnumber);
+CREATE INDEX IF NOT EXISTS idx_ts_validation_date ON timesheet_transaction(validation_date);
+CREATE INDEX IF NOT EXISTS idx_ts_production_order ON timesheet_transaction(production_order);
+CREATE INDEX IF NOT EXISTS idx_ts_serial_checkin ON timesheet_transaction(serialnumber, longdate_checkin);
+-- SOW codenumber index for planhours join
+CREATE INDEX IF NOT EXISTS idx_sow_codenumber ON sow(codenumber);
+
 CREATE INDEX IF NOT EXISTS idx_parts_partnumber ON parts(partnumber);
 CREATE INDEX IF NOT EXISTS idx_parts_partname ON parts(partname);
 CREATE INDEX IF NOT EXISTS idx_parts_model ON parts(model);

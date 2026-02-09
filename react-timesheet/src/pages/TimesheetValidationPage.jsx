@@ -1,28 +1,29 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 /**
- * Timesheet Validation Page
- * Converted dari tsuye.html
- * Shows grouped timesheets by employee with expand/collapse, filters, and validation actions
+ * Timesheet Validation Page — OPTIMIZED
+ * - Server-side stats & grouped employee summary (no bulk record fetch)
+ * - Lazy load records per employee on expand
+ * - Debounced search (server-side)
+ * - Memoized rendering
  */
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-// Helper: Format date string "dd/mm/yyyy" to "dd Mmm yy" (e.g. "05/02/2026" → "05 Feb 26")
+// Helper: Format date string "dd/mm/yyyy" to "dd Mmm yy"
 const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const formatDateShort = (dateStr) => {
   if (!dateStr) return '-';
-  // dateStr format: "dd/mm/yyyy"
   const parts = dateStr.split('/');
   if (parts.length !== 3) return dateStr;
   const day = parts[0];
   const monthIdx = parseInt(parts[1], 10) - 1;
-  const year = parts[2].slice(-2); // last 2 digits
+  const year = parts[2].slice(-2);
   return `${day} ${MONTH_SHORT[monthIdx] || '??'} ${year}`;
 };
 
-// Helper: Format decimal duration to stacked "X jam\nY menit"
+// Helper: Format decimal duration to stacked "X jam Y menit"
 const formatDurationStacked = (durationStr) => {
   const totalHours = parseFloat(durationStr || 0);
   const jam = Math.floor(totalHours);
@@ -30,14 +31,267 @@ const formatDurationStacked = (durationStr) => {
   return { jam, menit };
 };
 
+// ========== Memoized child row component ==========
+const RecordRow = React.memo(({ record, onEdit, onValidateSingle }) => {
+  const isValidated = !!record.validation_date;
+  const isDeleted = String(record.state_flag) === '5';
+  const isUnprod = !!record.activitytype;
+  const operationDisplay = isUnprod
+    ? record.operation_text
+    : (record.part_name
+        ? `${record.part_name} : ${record.operation_text}`
+        : record.operation_text);
+
+  const { jam, menit } = formatDurationStacked(record.duration);
+
+  return (
+    <div
+      onClick={() => onEdit(record.tsnumber)}
+      className={`p-3 transition-colors cursor-pointer ${
+        isDeleted
+          ? 'bg-red-50 hover:bg-red-100'
+          : isValidated
+            ? 'bg-green-50 bg-opacity-60 hover:bg-green-100 opacity-70'
+            : 'hover:bg-blue-50 bg-white'
+      }`}
+    >
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
+        {/* Order */}
+        <div className="text-[11px] text-center">
+          {isUnprod ? (
+            <div className="font-bold text-orange-600">Unprod</div>
+          ) : (
+            <>
+              <div className="font-semibold text-blue-900">{record.production_order || '-'}</div>
+              <div className="text-blue-700 text-[10px]">{record.ssbr_ident || ''}</div>
+            </>
+          )}
+        </div>
+
+        {/* Operation */}
+        <div className="text-[11px] text-left">
+          <div className="font-medium text-gray-800 break-words leading-snug">{operationDisplay}</div>
+          {record.note && (
+            <div className="text-[10px] italic text-gray-700 bg-blue-50 border-l-2 border-blue-500 px-1.5 py-0.5 rounded mt-0.5">
+              {record.note}
+            </div>
+          )}
+        </div>
+
+        {/* Seq */}
+        <div className="text-[11px] text-center">
+          <div className="font-semibold text-gray-800">{record.seq != null ? record.seq : '-'}</div>
+        </div>
+
+        {/* Time */}
+        <div className="text-[11px] text-center">
+          {record.date_checkin === record.date_checkout ? (
+            <div className="flex items-center justify-center gap-1.5">
+              <div className="font-medium text-gray-700">{formatDateShort(record.date_checkin)}</div>
+              <div className="flex flex-col text-blue-700 leading-tight">
+                <span>{record.hour_checkin}</span>
+                <span>{record.hour_checkout}</span>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="text-gray-700">
+                <span className="font-medium">{formatDateShort(record.date_checkin)}</span>
+                <span className="text-blue-700 ml-1">{record.hour_checkin}</span>
+              </div>
+              <div className="text-gray-700">
+                <span className="font-medium">{formatDateShort(record.date_checkout)}</span>
+                <span className="text-blue-700 ml-1">{record.hour_checkout}</span>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Duration */}
+        <div className="text-[11px] text-center">
+          <div className="flex flex-col leading-tight items-center">
+            <span className="font-bold text-blue-900">{jam} jam</span>
+            <span className="text-blue-700">{menit} menit</span>
+          </div>
+        </div>
+
+        {/* Plan Hours */}
+        <div className="text-[11px] text-center">
+          <div className="font-semibold text-gray-800">
+            {record.planhours != null && record.planhours !== '' ? parseFloat(record.planhours).toFixed(2) : '-'}
+          </div>
+        </div>
+
+        {/* Std Fman */}
+        <div className="text-[11px] text-center">
+          <div className="font-semibold text-gray-800">
+            {record.std_foreman_hours != null && record.std_foreman_hours !== '' ? parseFloat(record.std_foreman_hours).toFixed(2) : '-'}
+          </div>
+        </div>
+
+        {/* Workcenter */}
+        <div className="text-[11px] text-center">
+          <div className="font-medium text-gray-800 break-words leading-snug">{record.workcenterdescription}</div>
+          <div className="text-[10px] text-gray-500">{record.workcentercode}</div>
+        </div>
+
+        {/* Status */}
+        <div className="text-[11px] flex items-center justify-center">
+          {isDeleted ? (
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">Deleted</span>
+          ) : isValidated ? (
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">Validated</span>
+          ) : (
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700">Pending</span>
+          )}
+        </div>
+
+        {/* Action */}
+        <div className="flex items-center justify-center">
+          {!isValidated && !isDeleted && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onValidateSingle(record.tsnumber);
+              }}
+              className="w-8 h-8 flex items-center justify-center text-green-600 hover:bg-green-100 rounded-lg transition-colors"
+              title="Validate"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+// ========== Memoized employee group component ==========
+const EmployeeGroup = React.memo(({
+  group, isExpanded, records, loadingRecords,
+  onToggle, onEdit, onValidateSingle, onValidateGroup
+}) => {
+  const pendingCount = parseInt(group.pending_count);
+  const validatedCount = parseInt(group.validated_count);
+  const groupHours = parseFloat(group.total_hours || 0);
+  const grpPendingHrs = parseFloat(group.pending_hours || 0);
+  const grpValidatedHrs = parseFloat(group.validated_hours || 0);
+
+  return (
+    <div className="rounded-lg shadow-md border-2 border-blue-300 overflow-hidden">
+      {/* Parent Row - Employee Header */}
+      <div
+        onClick={() => onToggle(group.serialnumber)}
+        className="px-3 py-2 cursor-pointer hover:bg-blue-100 transition-colors border-b-2 border-blue-300 bg-blue-50"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-bold text-blue-900">
+              {isExpanded ? '\u25BC' : '\u25B6'}
+            </span>
+            <div>
+              <div className="text-sm font-bold text-blue-900">{group.full_name}</div>
+              <div className="text-xs text-blue-700">{group.serialnumber}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="text-[11px] leading-[15px] font-mono">
+              <div className="flex text-blue-900 font-bold">
+                <span className="w-[62px]">Total</span>
+                <span>: {group.record_count} Act [{groupHours.toFixed(1)} hrs]</span>
+              </div>
+              <div className="flex text-orange-700 font-bold">
+                <span className="w-[62px]">Pending</span>
+                <span>: {pendingCount} Act [{grpPendingHrs.toFixed(1)} hrs]</span>
+              </div>
+              <div className="flex text-green-700 font-bold">
+                <span className="w-[62px]">Validated</span>
+                <span>: {validatedCount} Act [{grpValidatedHrs.toFixed(1)} hrs]</span>
+              </div>
+            </div>
+            <div className="w-10 h-10 flex items-center justify-center">
+              {pendingCount > 0 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onValidateGroup(group.serialnumber, records);
+                  }}
+                  className="w-10 h-10 flex items-center justify-center text-green-600 hover:bg-green-100 rounded-lg transition-colors"
+                  title="Validate Group"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    <path d="M9 12l2 2 4-4" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Child Rows - loaded on demand */}
+      {isExpanded && (
+        <div>
+          {/* Header Row */}
+          <div className="bg-blue-100 border-t border-b border-blue-300 px-3 py-2">
+            <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Order</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Operation</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Seq</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Time</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Duration</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Plan Hrs</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Std Fman</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Workcenter</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Status</div>
+              <div className="text-[10px] font-bold text-blue-900 text-center">Action</div>
+            </div>
+          </div>
+
+          {/* Data Rows */}
+          <div className="divide-y divide-blue-100">
+            {loadingRecords ? (
+              <div className="p-4 text-center text-sm text-blue-600">
+                <div className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mr-2"></div>
+                Loading records...
+              </div>
+            ) : records && records.length > 0 ? (
+              records.map((record) => (
+                <RecordRow
+                  key={record.tsnumber}
+                  record={record}
+                  onEdit={onEdit}
+                  onValidateSingle={onValidateSingle}
+                />
+              ))
+            ) : (
+              <div className="p-4 text-center text-sm text-gray-500">No records found</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ========== Main Page ==========
 const TimesheetValidationPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // States
-  const [timesheets, setTimesheets] = useState([]);
-  const [filteredTimesheets, setFilteredTimesheets] = useState([]);
+  const [groups, setGroups] = useState([]);
+  const [stats, setStats] = useState({
+    totalHours: '0.00', totalRecords: 0, totalEmployees: 0,
+    totalPending: 0, totalValidated: 0,
+    pendingHours: '0.00', validatedHours: '0.00'
+  });
   const [searchQuery, setSearchQuery] = useState(searchParams.get('search') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
   const [startDate, setStartDate] = useState(searchParams.get('startDate') || '');
   const [endDate, setEndDate] = useState(searchParams.get('endDate') || '');
   const [expandedGroups, setExpandedGroups] = useState(new Set(
@@ -45,32 +299,34 @@ const TimesheetValidationPage = () => {
   ));
   const [showFilters, setShowFilters] = useState(() => {
     const saved = sessionStorage.getItem('showFilters');
-    return saved !== null ? saved === 'true' : true; // Default to true (shown)
+    return saved !== null ? saved === 'true' : true;
   });
 
-  // Stats
-  const [stats, setStats] = useState({
-    totalHours: 0,
-    totalRecords: 0,
-    totalEmployees: 0,
-    totalPending: 0,
-    totalValidated: 0
-  });
+  // Per-group records cache: { serialnumber: { records: [...], loading: bool } }
+  const [groupRecords, setGroupRecords] = useState({});
 
+  const [loading, setLoading] = useState(false);
   const [downloadingExcel, setDownloadingExcel] = useState(false);
 
   const scrollPositionRef = useRef(0);
   const containerRef = useRef(null);
+  const searchTimerRef = useRef(null);
 
-  // Load data on mount and when date range changes
+  // Debounce search input — 400ms
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 400);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [searchQuery]);
+
+  // Load data when date range or debounced search changes
   useEffect(() => {
     loadValidationData();
-  }, [startDate, endDate]);
-
-  // Apply client-side filters (search query only, dates handled by API)
-  useEffect(() => {
-    applyFilters();
-  }, [timesheets, searchQuery]);
+  }, [startDate, endDate, debouncedSearch]);
 
   // Save filter state to URL
   useEffect(() => {
@@ -92,184 +348,128 @@ const TimesheetValidationPage = () => {
         containerRef.current.scrollTop = parseInt(savedScroll);
       }, 100);
     }
-  }, [filteredTimesheets]);
+  }, [groups]);
 
-  // API: Load validation data from real API
-  const loadValidationData = async () => {
+  // Build date params helper
+  const getDateParams = useCallback(() => {
+    if (startDate && endDate) {
+      return { start: startDate, end: endDate };
+    }
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const fmt = (d) => d.toISOString().split('T')[0];
+    return { start: fmt(thirtyDaysAgo), end: fmt(now) };
+  }, [startDate, endDate]);
+
+  // API: Load stats + groups (lightweight, no individual records)
+  const loadValidationData = useCallback(async () => {
+    setLoading(true);
     try {
-      // Build query params for search by date range if filters are set
-      let url = `${API_BASE}/timesheet/search?field=longdate_checkin`;
-
-      if (startDate && endDate) {
-        url += `&start=${startDate}&end=${endDate}`;
-      } else {
-        // Default: last 30 days
-        const now = new Date();
-        const thirtyDaysAgo = new Date(now);
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const formatISO = (d) => d.toISOString().split('T')[0];
-        url += `&start=${formatISO(thirtyDaysAgo)}&end=${formatISO(now)}`;
+      const { start, end } = getDateParams();
+      let url = `${API_BASE}/timesheet/validation-stats?start=${start}&end=${end}`;
+      if (debouncedSearch.trim()) {
+        url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
       }
 
       const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error('Gagal load data validasi dari API');
-      }
+      if (!res.ok) throw new Error('Gagal load data validasi');
       const data = await res.json();
-      const records = Array.isArray(data) ? data : [];
 
-      // Enrich with planhours from SOW (bulk lookup)
-      const codenumbers = records
-        .filter(r => r.production_order && r.seq != null)
-        .map(r => String(r.production_order) + String(r.seq));
-      const uniqueCodes = [...new Set(codenumbers)];
-
-      let planhoursMap = {};
-      if (uniqueCodes.length > 0) {
-        try {
-          const sowRes = await fetch(`${API_BASE}/sow/planhours/multi`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ codenumbers: uniqueCodes })
-          });
-          if (sowRes.ok) {
-            planhoursMap = await sowRes.json();
-          }
-        } catch (err) {
-          console.error('Error fetching bulk planhours from SOW:', err);
-        }
-      }
-
-      // Merge SOW planhours into each record
-      const enriched = records.map(r => {
-        if (r.production_order && r.seq != null) {
-          const code = String(r.production_order) + String(r.seq);
-          if (planhoursMap[code] != null) {
-            return { ...r, planhours: planhoursMap[code] };
-          }
-        }
-        return r;
-      });
-
-      setTimesheets(enriched);
+      setStats(data.stats);
+      setGroups(data.groups || []);
+      // Clear cached records since date/search changed
+      setGroupRecords({});
     } catch (err) {
       console.error('Error loading validation data:', err);
-      setTimesheets([]);
+      setGroups([]);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [getDateParams, debouncedSearch]);
 
-  // Apply client-side filters (search query only, date range handled by API)
-  const applyFilters = () => {
-    let filtered = [...timesheets];
+  // API: Load records for one employee group (on expand)
+  const loadGroupRecords = useCallback(async (serialnumber) => {
+    setGroupRecords(prev => ({
+      ...prev,
+      [serialnumber]: { records: prev[serialnumber]?.records || [], loading: true }
+    }));
 
-    // Filter by search query (serial, name, workcenter, order)
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(item =>
-        item.serialnumber?.toLowerCase().includes(query) ||
-        item.full_name?.toLowerCase().includes(query) ||
-        item.workcenterdescription?.toLowerCase().includes(query) ||
-        item.production_order?.toLowerCase().includes(query)
-      );
+    try {
+      const { start, end } = getDateParams();
+      const url = `${API_BASE}/timesheet/validation-group/${encodeURIComponent(serialnumber)}?start=${start}&end=${end}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Gagal load records');
+      const records = await res.json();
+
+      setGroupRecords(prev => ({
+        ...prev,
+        [serialnumber]: { records, loading: false }
+      }));
+    } catch (err) {
+      console.error('Error loading group records:', err);
+      setGroupRecords(prev => ({
+        ...prev,
+        [serialnumber]: { records: [], loading: false }
+      }));
     }
+  }, [getDateParams]);
 
-    setFilteredTimesheets(filtered);
-    calculateStats(filtered);
-  };
-
-  // Calculate statistics
-  const calculateStats = (data) => {
-    const totalHours = data.reduce((sum, item) => sum + parseFloat(item.duration || 0), 0);
-    const totalRecords = data.length;
-    const uniqueEmployees = new Set(data.map(item => item.serialnumber));
-    const totalEmployees = uniqueEmployees.size;
-
-    // Calculate pending and validated (pending = validation_date is null)
-    const pendingItems = data.filter(item => !item.validation_date);
-    const validatedItems = data.filter(item => !!item.validation_date);
-    const totalPending = pendingItems.length;
-    const totalValidated = validatedItems.length;
-    const pendingHours = pendingItems.reduce((sum, item) => sum + parseFloat(item.duration || 0), 0);
-    const validatedHours = validatedItems.reduce((sum, item) => sum + parseFloat(item.duration || 0), 0);
-
-    setStats({
-      totalHours: totalHours.toFixed(2),
-      totalRecords,
-      totalEmployees,
-      totalPending,
-      totalValidated,
-      pendingHours: pendingHours.toFixed(2),
-      validatedHours: validatedHours.toFixed(2)
-    });
-  };
-
-  // Group timesheets by employee
-  const getGroupedTimesheets = () => {
-    const groups = {};
-
-    filteredTimesheets.forEach(item => {
-      const key = item.serialnumber;
-      if (!groups[key]) {
-        groups[key] = {
-          serialnumber: item.serialnumber,
-          full_name: item.full_name,
-          records: []
-        };
+  // Toggle group expansion — lazy load records
+  const toggleGroup = useCallback((serialnumber) => {
+    setExpandedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(serialnumber)) {
+        newSet.delete(serialnumber);
+      } else {
+        newSet.add(serialnumber);
+        // Load records if not cached
+        if (!groupRecords[serialnumber]?.records?.length) {
+          loadGroupRecords(serialnumber);
+        }
       }
-      groups[key].records.push(item);
+      return newSet;
     });
+  }, [groupRecords, loadGroupRecords]);
 
-    return Object.values(groups);
-  };
-
-  // Toggle group expansion
-  const toggleGroup = (serialnumber) => {
-    const newExpanded = new Set(expandedGroups);
-    if (newExpanded.has(serialnumber)) {
-      newExpanded.delete(serialnumber);
-    } else {
-      newExpanded.add(serialnumber);
-    }
-    setExpandedGroups(newExpanded);
-  };
-
-  // Expand all groups
-  const expandAll = () => {
-    const allSerials = getGroupedTimesheets().map(g => g.serialnumber);
+  // Expand all — load all groups' records
+  const expandAll = useCallback(() => {
+    const allSerials = groups.map(g => g.serialnumber);
     setExpandedGroups(new Set(allSerials));
-  };
+    // Load records for groups not yet cached
+    for (const sn of allSerials) {
+      if (!groupRecords[sn]?.records?.length) {
+        loadGroupRecords(sn);
+      }
+    }
+  }, [groups, groupRecords, loadGroupRecords]);
 
-  // Collapse all groups
-  const collapseAll = () => {
+  const collapseAll = useCallback(() => {
     setExpandedGroups(new Set());
-  };
+  }, []);
 
-  // Clear filters
-  const clearFilters = () => {
+  const clearFilters = useCallback(() => {
     setSearchQuery('');
     setStartDate('');
     setEndDate('');
-  };
+  }, []);
 
-  // Download Excel berdasarkan date range
-  const handleDownloadExcel = async () => {
+  // Download Excel
+  const handleDownloadExcel = useCallback(async () => {
     if (!startDate || !endDate) {
-      alert('❌ Pilih Start Date dan End Date terlebih dahulu!');
+      alert('Pilih Start Date dan End Date terlebih dahulu!');
       return;
     }
     if (startDate > endDate) {
-      alert('❌ Start Date tidak boleh lebih besar dari End Date!');
+      alert('Start Date tidak boleh lebih besar dari End Date!');
       return;
     }
 
     setDownloadingExcel(true);
     try {
       const params = new URLSearchParams({
-        start: startDate,
-        end: endDate,
-        field: 'longdate_checkout'
+        start: startDate, end: endDate, field: 'longdate_checkout'
       });
-
       const res = await fetch(`${API_BASE}/timesheet/getexcel?${params.toString()}`);
       if (!res.ok) throw new Error('Gagal download Excel');
       const blob = await res.blob();
@@ -281,19 +481,18 @@ const TimesheetValidationPage = () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-
     } catch (err) {
       console.error('Excel download error:', err);
       alert('Gagal download Excel: ' + err.message);
     } finally {
       setDownloadingExcel(false);
     }
-  };
+  }, [startDate, endDate]);
 
-  // Handle single validation (uses bulk endpoint with single tsnumber)
-  const handleValidateSingle = async (tsnumber) => {
-    const confirm = window.confirm('Validasi timesheet ini?');
-    if (!confirm) return;
+  // Validate single
+  const handleValidateSingle = useCallback(async (tsnumber) => {
+    const ok = window.confirm('Validasi timesheet ini?');
+    if (!ok) return;
 
     try {
       const res = await fetch(`${API_BASE}/timesheet/validation`, {
@@ -301,22 +500,19 @@ const TimesheetValidationPage = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tsnumbers: [tsnumber] })
       });
-
-      if (!res.ok) {
-        throw new Error('Gagal validasi timesheet');
-      }
-
+      if (!res.ok) throw new Error('Gagal validasi');
       await res.json();
       loadValidationData();
     } catch (err) {
-      console.error('Error validate timesheet:', err);
+      console.error('Error validate:', err);
       alert('Gagal validasi timesheet');
     }
-  };
+  }, [loadValidationData]);
 
-  // Handle group validation
-  const handleValidateGroup = async (records) => {
-    const tsnumbers = records
+  // Validate group
+  const handleValidateGroup = useCallback(async (serialnumber, records) => {
+    const recs = records || groupRecords[serialnumber]?.records || [];
+    const tsnumbers = recs
       .filter(r => !r.validation_date && String(r.state_flag) !== '5')
       .map(r => r.tsnumber);
 
@@ -325,11 +521,8 @@ const TimesheetValidationPage = () => {
       return;
     }
 
-    const confirm = window.confirm(
-      `Validasi ${tsnumbers.length} timesheet untuk karyawan ini?`
-    );
-
-    if (!confirm) return;
+    const ok = window.confirm(`Validasi ${tsnumbers.length} timesheet untuk karyawan ini?`);
+    if (!ok) return;
 
     try {
       const res = await fetch(`${API_BASE}/timesheet/validation`, {
@@ -337,50 +530,39 @@ const TimesheetValidationPage = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tsnumbers })
       });
-
-      if (!res.ok) {
-        throw new Error('Gagal validasi batch');
-      }
-
+      if (!res.ok) throw new Error('Gagal validasi batch');
       await res.json();
       loadValidationData();
     } catch (err) {
       console.error('Error validate batch:', err);
       alert('Gagal validasi batch');
     }
-  };
+  }, [groupRecords, loadValidationData]);
 
-  // Navigate to edit page with state preservation
-  const handleEdit = (tsnumber) => {
-    // Save scroll position
+  // Navigate to edit
+  const handleEdit = useCallback((tsnumber) => {
     if (containerRef.current) {
       scrollPositionRef.current = containerRef.current.scrollTop;
       const currentParams = new URLSearchParams(searchParams);
       currentParams.set('scrollY', scrollPositionRef.current);
       setSearchParams(currentParams, { replace: true });
     }
-
-    // Navigate to edit page
     navigate(`/timesheet-edit/${tsnumber}?returnUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`);
-  };
+  }, [navigate, searchParams, setSearchParams]);
 
-  // Back to main menu
-  const goBack = () => {
-    navigate('/');
-  };
+  const goBack = useCallback(() => navigate('/'), [navigate]);
 
-  // Toggle filter visibility
-  const toggleFilters = () => {
-    const newState = !showFilters;
-    setShowFilters(newState);
-    sessionStorage.setItem('showFilters', newState.toString());
-  };
-
-  const groupedData = getGroupedTimesheets();
+  const toggleFilters = useCallback(() => {
+    setShowFilters(prev => {
+      const newState = !prev;
+      sessionStorage.setItem('showFilters', newState.toString());
+      return newState;
+    });
+  }, []);
 
   return (
     <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
+      {/* Header */}
       <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
         <button
           onClick={goBack}
@@ -396,7 +578,7 @@ const TimesheetValidationPage = () => {
             title={showFilters ? 'Hide Filters' : 'Show Filters'}
             style={{ boxShadow: '0 3px 6px -1px rgba(37, 99, 235, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
           >
-            {showFilters ? '▲' : '▼'} Filter
+            {showFilters ? '\u25B2' : '\u25BC'} Filter
           </button>
           <button
             onClick={loadValidationData}
@@ -407,11 +589,10 @@ const TimesheetValidationPage = () => {
         </div>
       </header>
 
-      {/* Filter Section - Light Blue Background - Collapsible */}
+      {/* Filter Section */}
       {showFilters && (
         <div className="bg-blue-50 border-b border-blue-200 px-3 py-2 flex-shrink-0">
           <div className="flex flex-col gap-2">
-            {/* Search */}
             <input
               type="text"
               value={searchQuery}
@@ -419,8 +600,6 @@ const TimesheetValidationPage = () => {
               placeholder="Search by serial, name, workcenter, order..."
               className="w-full px-3 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
             />
-
-            {/* Date Range - 50% width */}
             <div className="flex gap-2 items-center">
               <input
                 type="date"
@@ -435,31 +614,12 @@ const TimesheetValidationPage = () => {
                 className="w-1/4 px-2 py-2 text-sm text-gray-800 bg-white border border-blue-300 rounded focus:outline-none focus:border-blue-600"
               />
             </div>
-
-            {/* Action Buttons */}
             <div className="flex gap-2 items-center justify-between">
               <div className="flex gap-2">
-                <button
-                  onClick={clearFilters}
-                  className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-                >
-                  Clear Filters
-                </button>
-                <button
-                  onClick={expandAll}
-                  className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-                >
-                  Expand All
-                </button>
-                <button
-                  onClick={collapseAll}
-                  className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-                >
-                  Collapse All
-                </button>
+                <button onClick={clearFilters} className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors">Clear Filters</button>
+                <button onClick={expandAll} className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors">Expand All</button>
+                <button onClick={collapseAll} className="px-3 py-1.5 text-xs font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors">Collapse All</button>
               </div>
-
-              {/* Download Excel Button */}
               <button
                 onClick={handleDownloadExcel}
                 disabled={downloadingExcel}
@@ -476,14 +636,12 @@ const TimesheetValidationPage = () => {
                 {downloadingExcel ? 'Downloading...' : 'Download Excel'}
               </button>
             </div>
-
           </div>
         </div>
       )}
 
-      {/* Stats Summary Container - Separate Section */}
+      {/* Stats Summary */}
       <div className="bg-white border-b border-blue-200 px-3 py-3 flex-shrink-0">
-        {/* All 5 boxes in one row - sejajar */}
         <div className="grid grid-cols-5 gap-2">
           {/* Pending */}
           <div className="w-full bg-amber-50 border border-amber-200 px-2 py-2 rounded-lg text-center">
@@ -550,249 +708,34 @@ const TimesheetValidationPage = () => {
         </div>
       </div>
 
-      {/* Grouped List - Scrollable - White Background */}
+      {/* Grouped List - Scrollable */}
       <div ref={containerRef} className="flex-1 overflow-y-auto px-3 py-2 bg-white">
-        {groupedData.length === 0 ? (
+        {loading ? (
+          <div className="text-center text-blue-600 mt-10">
+            <div className="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mr-2"></div>
+            <span className="text-sm font-medium">Loading data...</span>
+          </div>
+        ) : groups.length === 0 ? (
           <div className="text-center text-gray-600 mt-10">
             <p>Tidak ada data timesheet untuk divalidasi</p>
           </div>
         ) : (
           <div className="space-y-4">
-            {groupedData.map((group) => {
+            {groups.map((group) => {
               const isExpanded = expandedGroups.has(group.serialnumber);
-              const pendingRecs = group.records.filter(r => !r.validation_date);
-              const validatedRecs = group.records.filter(r => !!r.validation_date);
-              const pendingCount = pendingRecs.length;
-              const validatedCount = validatedRecs.length;
-              const groupHours = group.records.reduce((sum, r) => sum + parseFloat(r.duration || 0), 0);
-              const grpPendingHrs = pendingRecs.reduce((sum, r) => sum + parseFloat(r.duration || 0), 0);
-              const grpValidatedHrs = validatedRecs.reduce((sum, r) => sum + parseFloat(r.duration || 0), 0);
-
+              const grpCache = groupRecords[group.serialnumber];
               return (
-                <div key={group.serialnumber} className="rounded-lg shadow-md border-2 border-blue-300 overflow-hidden">
-                  {/* Parent Row - Employee Header - Light Blue */}
-                  <div
-                    onClick={() => toggleGroup(group.serialnumber)}
-                    className="px-3 py-2 cursor-pointer hover:bg-blue-100 transition-colors border-b-2 border-blue-300 bg-blue-50"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="text-lg font-bold text-blue-900">
-                          {isExpanded ? '▼' : '▶'}
-                        </span>
-                        <div>
-                          <div className="text-sm font-bold text-blue-900">
-                            {group.full_name}
-                          </div>
-                          <div className="text-xs text-blue-700">
-                            {group.serialnumber}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {/* Stacked summary table */}
-                        <div className="text-[11px] leading-[15px] font-mono">
-                          <div className="flex text-blue-900 font-bold">
-                            <span className="w-[62px]">Total</span>
-                            <span>: {group.records.length} Act [{groupHours.toFixed(1)} hrs]</span>
-                          </div>
-                          <div className="flex text-orange-700 font-bold">
-                            <span className="w-[62px]">Pending</span>
-                            <span>: {pendingCount} Act [{grpPendingHrs.toFixed(1)} hrs]</span>
-                          </div>
-                          <div className="flex text-green-700 font-bold">
-                            <span className="w-[62px]">Validated</span>
-                            <span>: {validatedCount} Act [{grpValidatedHrs.toFixed(1)} hrs]</span>
-                          </div>
-                        </div>
-                        <div className="w-10 h-10 flex items-center justify-center">
-                          {pendingCount > 0 && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleValidateGroup(group.records);
-                              }}
-                              className="w-10 h-10 flex items-center justify-center text-green-600 hover:bg-green-100 rounded-lg transition-colors"
-                              title="Validate Group"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                                <path d="M9 12l2 2 4-4" />
-                              </svg>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Child Rows - Timesheet Records */}
-                  {isExpanded && (
-                    <div>
-                      {/* Header Row - Light Blue */}
-                      <div className="bg-blue-100 border-t border-b border-blue-300 px-3 py-2">
-                        <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Order</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Operation</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Seq</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Time</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Duration</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Plan Hrs</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Std Fman</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Workcenter</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Status</div>
-                          <div className="text-[10px] font-bold text-blue-900 text-center">Action</div>
-                        </div>
-                      </div>
-
-                      {/* Data Rows - White Background */}
-                      <div className="divide-y divide-blue-100">
-                        {group.records.map((record, idx) => {
-                        const isValidated = !!record.validation_date;
-                        const isDeleted = String(record.state_flag) === '5';
-                        const isUnprod = !!record.activitytype;
-                        // Build operation display text
-                        const operationDisplay = isUnprod
-                          ? record.operation_text
-                          : (record.part_name
-                              ? `${record.part_name} : ${record.operation_text}`
-                              : record.operation_text);
-                        return (
-                          <div
-                            key={idx}
-                            onClick={() => handleEdit(record.tsnumber)}
-                            className={`p-3 transition-colors cursor-pointer ${
-                              isDeleted
-                                ? 'bg-red-50 hover:bg-red-100'
-                                : isValidated
-                                  ? 'bg-green-50 bg-opacity-60 hover:bg-green-100 opacity-70'
-                                  : 'hover:bg-blue-50 bg-white'
-                            }`}
-                          >
-                            <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
-                              {/* Order - center */}
-                              <div className="text-[11px] text-center">
-                                {isUnprod ? (
-                                  <div className="font-bold text-orange-600">Unprod</div>
-                                ) : (
-                                  <>
-                                    <div className="font-semibold text-blue-900">{record.production_order || '-'}</div>
-                                    <div className="text-blue-700 text-[10px]">{record.ssbr_ident || ''}</div>
-                                  </>
-                                )}
-                              </div>
-
-                              {/* Operation - left */}
-                              <div className="text-[11px] text-left">
-                                <div className="font-medium text-gray-800 break-words leading-snug">
-                                  {operationDisplay}
-                                </div>
-                                {record.note && (
-                                  <div className="text-[10px] italic text-gray-700 bg-blue-50 border-l-2 border-blue-500 px-1.5 py-0.5 rounded mt-0.5">
-                                    {record.note}
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Seq - center */}
-                              <div className="text-[11px] text-center">
-                                <div className="font-semibold text-gray-800">{record.seq != null ? record.seq : '-'}</div>
-                              </div>
-
-                              {/* Time - format dd Mmm yy - center */}
-                              <div className="text-[11px] text-center">
-                                {record.date_checkin === record.date_checkout ? (
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    <div className="font-medium text-gray-700">{formatDateShort(record.date_checkin)}</div>
-                                    <div className="flex flex-col text-blue-700 leading-tight">
-                                      <span>{record.hour_checkin}</span>
-                                      <span>{record.hour_checkout}</span>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <>
-                                    <div className="text-gray-700">
-                                      <span className="font-medium">{formatDateShort(record.date_checkin)}</span>
-                                      <span className="text-blue-700 ml-1">{record.hour_checkin}</span>
-                                    </div>
-                                    <div className="text-gray-700">
-                                      <span className="font-medium">{formatDateShort(record.date_checkout)}</span>
-                                      <span className="text-blue-700 ml-1">{record.hour_checkout}</span>
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-
-                              {/* Duration - stacked vertical - center */}
-                              <div className="text-[11px] text-center">
-                                {(() => {
-                                  const { jam, menit } = formatDurationStacked(record.duration);
-                                  return (
-                                    <div className="flex flex-col leading-tight items-center">
-                                      <span className="font-bold text-blue-900">{jam} jam</span>
-                                      <span className="text-blue-700">{menit} menit</span>
-                                    </div>
-                                  );
-                                })()}
-                              </div>
-
-                              {/* Plan Hours - center */}
-                              <div className="text-[11px] text-center">
-                                <div className="font-semibold text-gray-800">
-                                  {record.planhours != null ? parseFloat(record.planhours).toFixed(2) : '-'}
-                                </div>
-                              </div>
-
-                              {/* Std Fman - center */}
-                              <div className="text-[11px] text-center">
-                                <div className="font-semibold text-gray-800">
-                                  {record.std_foreman_hours != null ? parseFloat(record.std_foreman_hours).toFixed(2) : '-'}
-                                </div>
-                              </div>
-
-                              {/* Workcenter - center */}
-                              <div className="text-[11px] text-center">
-                                <div className="font-medium text-gray-800 break-words leading-snug">{record.workcenterdescription}</div>
-                                <div className="text-[10px] text-gray-500">{record.workcentercode}</div>
-                              </div>
-
-                              {/* Status - center */}
-                              <div className="text-[11px] flex items-center justify-center">
-                                {isDeleted ? (
-                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">Deleted</span>
-                                ) : isValidated ? (
-                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">Validated</span>
-                                ) : (
-                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700">Pending</span>
-                                )}
-                              </div>
-
-                              {/* Action - center */}
-                              <div className="flex items-center justify-center">
-                                {!isValidated && !isDeleted && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleValidateSingle(record.tsnumber);
-                                    }}
-                                    className="w-8 h-8 flex items-center justify-center text-green-600 hover:bg-green-100 rounded-lg transition-colors"
-                                    title="Validate"
-                                  >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                                      <circle cx="12" cy="12" r="10" />
-                                      <path d="M9 12l2 2 4-4" />
-                                    </svg>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <EmployeeGroup
+                  key={group.serialnumber}
+                  group={group}
+                  isExpanded={isExpanded}
+                  records={grpCache?.records || []}
+                  loadingRecords={grpCache?.loading || false}
+                  onToggle={toggleGroup}
+                  onEdit={handleEdit}
+                  onValidateSingle={handleValidateSingle}
+                  onValidateGroup={handleValidateGroup}
+                />
               );
             })}
           </div>
