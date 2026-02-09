@@ -35,6 +35,12 @@ router.get("/stats", controller.getStatistics);
 router.get("/reports/drawing-usage", controller.getDrawingUsageReport);
 
 // ============================================
+// PLANHOURS LOOKUP
+// ============================================
+router.get("/planhours", controller.getPlanhours);
+router.post("/planhours/multi", controller.getPlanhoursMulti);
+
+// ============================================
 // LEGACY ROUTES
 // ============================================
 router.get("/", controller.getAll);

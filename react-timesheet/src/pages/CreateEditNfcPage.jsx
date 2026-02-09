@@ -13,6 +13,8 @@ import PasswordPrompt from '../components/auth/PasswordPrompt';
  * - Duplicate NFC ID detection
  * - Color scheme: White 65%, Blue 25%, Orange 10%
  */
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const CreateEditNfcPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -35,26 +37,95 @@ const CreateEditNfcPage = () => {
   const [statusMessage, setStatusMessage] = useState({ type: '', text: '' });
   const [isSaving, setIsSaving] = useState(false);
 
+  // Workcenter dropdown states
+  const [allWorkcenters, setAllWorkcenters] = useState([]);
+  const [wcSearch, setWcSearch] = useState('');
+  const [showWcDropdown, setShowWcDropdown] = useState(false);
+  const wcDropdownRef = React.useRef(null);
+
   // Load existing user data in edit mode
   useEffect(() => {
     if (mode === 'edit' && editNfcId) {
       loadUserData(editNfcId);
     }
+    loadWorkcenters();
   }, [mode, editNfcId]);
+
+  // Close workcenter dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (wcDropdownRef.current && !wcDropdownRef.current.contains(event.target)) {
+        setShowWcDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Load workcenters from API
+  const loadWorkcenters = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/workcenter`);
+      const data = await res.json();
+      setAllWorkcenters(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error loading workcenters:', err);
+    }
+  };
+
+  // Build flat workcenter options (Normal + OT)
+  const workcenterOptions = React.useMemo(() => {
+    const options = [];
+    for (const wc of allWorkcenters) {
+      if (wc.workcenternew) {
+        options.push({
+          code: wc.workcenternew,
+          description: wc.workcenter_description || '',
+          machineid: wc.machineid || '',
+          type: 'Normal'
+        });
+      }
+      if (wc.workcenterot) {
+        options.push({
+          code: wc.workcenterot,
+          description: wc.workcenter_description || '',
+          machineid: wc.machineid || '',
+          type: 'OT'
+        });
+      }
+    }
+    return options;
+  }, [allWorkcenters]);
+
+  // Filtered workcenters
+  const filteredWcOptions = React.useMemo(() => {
+    if (wcSearch.trim() === '') return workcenterOptions;
+    const q = wcSearch.toLowerCase();
+    return workcenterOptions.filter(wc =>
+      wc.code.toLowerCase().includes(q) ||
+      wc.description.toLowerCase().includes(q)
+    );
+  }, [wcSearch, workcenterOptions]);
+
+  // Select workcenter → auto-fill machineid, machinename (description), workcenter (code)
+  const selectWorkcenter = (wc) => {
+    setFormData(prev => ({
+      ...prev,
+      machineid: wc.machineid,
+      machinename: wc.description,
+      workcenter: wc.code
+    }));
+    setWcSearch(`${wc.description} — ${wc.code}`);
+    setShowWcDropdown(false);
+  };
 
   // Load user data for editing
   const loadUserData = async (nfcIdToLoad) => {
     setLoading(true);
     try {
-      // PRODUCTION: Uncomment this
-      // const response = await fetch(`/usernfc/${nfcIdToLoad}`);
-      // if (!response.ok) throw new Error('User not found');
-      // const data = await response.json();
-
-      // DEVELOPMENT: Load from dummy data
-      const response = await fetch('/dummy-nfc-users.json');
-      const allUsers = await response.json();
-      const data = allUsers.find(user => user.nfcid === nfcIdToLoad);
+      const response = await fetch(`${API_BASE}/usernfc/nfcid/${nfcIdToLoad}`);
+      if (!response.ok) throw new Error('User not found');
+      const data = await response.json();
 
       if (!data) {
         showStatus('error', '❌ User tidak ditemukan');
@@ -198,14 +269,8 @@ const CreateEditNfcPage = () => {
   // Check if NFC ID already exists
   const checkNfcExists = async (nfcIdToCheck) => {
     try {
-      // PRODUCTION: Uncomment this
-      // const response = await fetch(`/usernfc/nfcid/${nfcIdToCheck}`);
-      // return response.ok;
-
-      // DEVELOPMENT: Check in dummy data
-      const response = await fetch('/dummy-nfc-users.json');
-      const allUsers = await response.json();
-      return allUsers.some(user => user.nfcid === nfcIdToCheck);
+      const response = await fetch(`${API_BASE}/usernfc/nfcid/${nfcIdToCheck}`);
+      return response.ok;
     } catch (err) {
       console.error('Error checking NFC ID:', err);
       return false;
@@ -239,40 +304,34 @@ const CreateEditNfcPage = () => {
 
         if (exists) {
           // NFC exists, update instead
-          // PRODUCTION: Uncomment this
-          // const response = await fetch(`/usernfc/nfcedit/${nfcid.trim()}`, {
-          //   method: 'PUT',
-          //   headers: { 'Content-Type': 'application/json' },
-          //   body: JSON.stringify(payload)
-          // });
-          // if (!response.ok) throw new Error('Failed to update');
+          const response = await fetch(`${API_BASE}/usernfc/nfcedit/${nfcid.trim()}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) throw new Error('Failed to update');
 
-          console.log('Updating existing user:', payload);
           showStatus('success', '✅ User sudah ada, data berhasil diupdate');
         } else {
           // NFC doesn't exist, create new
-          // PRODUCTION: Uncomment this
-          // const response = await fetch('/usernfc', {
-          //   method: 'POST',
-          //   headers: { 'Content-Type': 'application/json' },
-          //   body: JSON.stringify(payload)
-          // });
-          // if (!response.ok) throw new Error('Failed to create');
+          const response = await fetch(`${API_BASE}/usernfc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!response.ok) throw new Error('Failed to create');
 
-          console.log('Creating new user:', payload);
           showStatus('success', '✅ User berhasil dibuat');
         }
       } else {
         // Edit mode - update existing user
-        // PRODUCTION: Uncomment this
-        // const response = await fetch(`/usernfc/nfcedit/${nfcid.trim()}`, {
-        //   method: 'PUT',
-        //   headers: { 'Content-Type': 'application/json' },
-        //   body: JSON.stringify(payload)
-        // });
-        // if (!response.ok) throw new Error('Failed to update');
+        const response = await fetch(`${API_BASE}/usernfc/nfcedit/${nfcid.trim()}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('Failed to update');
 
-        console.log('Updating user:', payload);
         showStatus('success', '✅ User berhasil diupdate');
       }
 
@@ -433,47 +492,81 @@ const CreateEditNfcPage = () => {
               <section className="bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4">
                 <h2 className="text-base font-bold text-blue-900 mb-3">🏭 Machine Assignment (Optional)</h2>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Machine ID */}
-                  <div>
+                <div className="space-y-3">
+                  {/* Workcenter Dropdown — pilih satu, auto-fill 3 field */}
+                  <div ref={wcDropdownRef}>
                     <label className="block text-sm font-medium text-blue-900 mb-1">
-                      Machine ID
+                      Pilih Workcenter
                     </label>
-                    <input
-                      type="text"
-                      value={formData.machineid}
-                      onChange={(e) => handleInputChange('machineid', e.target.value)}
-                      className="w-full px-4 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g., M-101"
-                    />
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={wcSearch || (formData.workcenter ? `${formData.machinename} — ${formData.workcenter}` : '')}
+                        onChange={(e) => {
+                          setWcSearch(e.target.value);
+                          setShowWcDropdown(true);
+                        }}
+                        onFocus={() => setShowWcDropdown(true)}
+                        placeholder="Search workcenter..."
+                        className="w-full px-4 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      {showWcDropdown && (
+                        <div className="absolute z-10 w-full mt-1 bg-white border border-blue-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                          {filteredWcOptions.length === 0 ? (
+                            <div className="px-3 py-2 text-sm text-gray-500">No workcenter found</div>
+                          ) : (
+                            filteredWcOptions.map((wc, idx) => (
+                              <div
+                                key={idx}
+                                onClick={() => selectWorkcenter(wc)}
+                                className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer border-b border-blue-100 last:border-b-0"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold text-blue-900">{wc.description}</span>
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                    wc.type === 'OT' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                                  }`}>
+                                    {wc.type}
+                                  </span>
+                                </div>
+                                <div className="text-xs text-gray-600">{wc.code}</div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Machine Name */}
-                  <div>
-                    <label className="block text-sm font-medium text-blue-900 mb-1">
-                      Machine Name
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.machinename}
-                      onChange={(e) => handleInputChange('machinename', e.target.value)}
-                      className="w-full px-4 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g., Injection Machine A"
-                    />
-                  </div>
-
-                  {/* Work Center */}
-                  <div>
-                    <label className="block text-sm font-medium text-blue-900 mb-1">
-                      Work Center
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.workcenter}
-                      onChange={(e) => handleInputChange('workcenter', e.target.value)}
-                      className="w-full px-4 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g., WC-MOLDING"
-                    />
+                  {/* Auto-filled fields (read-only) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-blue-900 mb-1">Machine ID</label>
+                      <input
+                        type="text"
+                        value={formData.machineid}
+                        disabled
+                        className="w-full px-3 py-2 text-sm bg-gray-50 border border-blue-200 rounded text-gray-700 cursor-not-allowed"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-blue-900 mb-1">Description</label>
+                      <input
+                        type="text"
+                        value={formData.machinename}
+                        disabled
+                        className="w-full px-3 py-2 text-sm bg-gray-50 border border-blue-200 rounded text-gray-700 cursor-not-allowed"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-blue-900 mb-1">Workcenter Code</label>
+                      <input
+                        type="text"
+                        value={formData.workcenter}
+                        disabled
+                        className="w-full px-3 py-2 text-sm bg-gray-50 border border-blue-200 rounded text-gray-700 cursor-not-allowed"
+                      />
+                    </div>
                   </div>
 
                   {/* Role */}
@@ -487,10 +580,10 @@ const CreateEditNfcPage = () => {
                       className="w-full px-4 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">-- Select Role --</option>
-                      <option value="Operator">Operator</option>
-                      <option value="Supervisor">Supervisor</option>
-                      <option value="Admin">Admin</option>
-                      <option value="Technician">Technician</option>
+                      <option value="USER">User</option>
+                      <option value="FOREMAN">Foreman</option>
+                      <option value="ADMINISTRATOR">Administrator</option>
+                      <option value="SUPERUSER">SuperUser</option>
                     </select>
                   </div>
                 </div>

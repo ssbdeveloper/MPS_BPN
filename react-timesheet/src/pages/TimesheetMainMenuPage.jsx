@@ -5,6 +5,8 @@ import { useNavigate } from 'react-router-dom';
  * Timesheet Main Menu Page
  * Converted dari mainmenu.html + previewdata.js + script.js + postdata.js
  */
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const TimesheetMainMenuPage = () => {
   const navigate = useNavigate();
 
@@ -100,7 +102,7 @@ const TimesheetMainMenuPage = () => {
 
       if (mode === 'single') {
         // CHECKOUT menggunakan endpoint unified (serialnumber)
-        const checkoutRes = await fetch('/timesheet/checkout', {
+        const checkoutRes = await fetch(`${API_BASE}/timesheet/checkout`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -112,7 +114,7 @@ const TimesheetMainMenuPage = () => {
         console.log('Checkout sukses:', checkedOut);
 
         // CREATE timesheet baru
-        const postRes = await fetch('/timesheet/', {
+        const postRes = await fetch(`${API_BASE}/timesheet/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -142,7 +144,7 @@ const TimesheetMainMenuPage = () => {
 
       } else {
         // MODE MULTIPLE - hanya create tanpa checkout
-        const postRes = await fetch('/timesheet/', {
+        const postRes = await fetch(`${API_BASE}/timesheet/`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -187,7 +189,7 @@ const TimesheetMainMenuPage = () => {
     }
 
     try {
-      const postRes = await fetch('/sow/finish/', {
+      const postRes = await fetch(`${API_BASE}/sow/finish/`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -14,6 +14,8 @@ const UNPROD_QUICK_MODES = {
   housekeeping: { code: '1530', label: 'HOUSEKEEPING' },
 };
 
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const LoginTimesheetPage = () => {
   const navigate = useNavigate();
 
@@ -56,7 +58,7 @@ const LoginTimesheetPage = () => {
   // API: Get user by NFC ID
   const getUserByNfc = async (nfcid) => {
     try {
-      const res = await fetch(`/usernfc/nfcid/${nfcid}`);
+      const res = await fetch(`${API_BASE}/usernfc/nfcid/${nfcid}`);
       if (!res.ok) return null;
       const data = await res.json().catch(() => null);
       return data && Object.keys(data).length ? data : null;
@@ -69,8 +71,8 @@ const LoginTimesheetPage = () => {
   // API: Stop all timesheet by NFC
   const stopAllByNfc = async (sn) => {
     try {
-      const res = await fetch('/usernfc/checkout', {
-        method: 'POST',
+      const res = await fetch(`${API_BASE}/timesheet/checkout`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           datakaryawan: { sn }
@@ -87,7 +89,7 @@ const LoginTimesheetPage = () => {
   const createUnprodActivity = async (user, unprodCode, unprodLabel) => {
     try {
       // 1. Checkout current timesheet
-      await fetch('/timesheet/checkout', {
+      await fetch(`${API_BASE}/timesheet/checkout`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -97,7 +99,7 @@ const LoginTimesheetPage = () => {
 
       // 2. Create unprod entry
       const operation_text = `${unprodCode} ${unprodLabel}`;
-      const res = await fetch('/timesheet/', {
+      const res = await fetch(`${API_BASE}/timesheet/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -114,6 +116,41 @@ const LoginTimesheetPage = () => {
     } catch (err) {
       console.error('Error creating unprod activity:', err);
       return false;
+    }
+  };
+
+  // API: Fetch last activity from timesheet_transaction and update sessionStorage
+  const loadLastActivity = async (serialnumber) => {
+    // Clear dulu supaya tidak pakai data karyawan sebelumnya
+    sessionStorage.removeItem('selectedactivity');
+    sessionStorage.removeItem('lastSearchOrder');
+
+    try {
+      const res = await fetch(`${API_BASE}/timesheet/getsn/${serialnumber}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) return;
+
+      // Last transaction (first item, sorted DESC by longdate_checkin)
+      const last = data[0];
+
+      // Update selectedactivity from last transaction
+      sessionStorage.setItem('selectedactivity', JSON.stringify({
+        order: last.production_order || '',
+        ssbr_id: last.ssbr_ident || '',
+        operationtext: last.operation_text || '',
+        operation_no: last.seq || '',
+        planhours: last.planhours || '',
+        workcenter: last.workcentercode || '',
+      }));
+
+      // Update lastSearchOrder — cari transaction terakhir yang punya production_order (skip null)
+      const lastWithOrder = data.find(t => t.production_order);
+      if (lastWithOrder) {
+        sessionStorage.setItem('lastSearchOrder', lastWithOrder.production_order);
+      }
+    } catch (err) {
+      console.error('Error loading last activity:', err);
     }
   };
 
@@ -167,13 +204,17 @@ const LoginTimesheetPage = () => {
     // Normal flow
     if (action === 'start') {
       sessionStorage.setItem('datakaryawan', JSON.stringify(user));
+      setStatus('Login berhasil, loading last activity...');
+      await loadLastActivity(user.snssb);
       setStatus('Login berhasil, redirect...');
-      setTimeout(() => navigate('/timesheet-mainmenu'), 500);
+      setTimeout(() => navigate('/timesheet-mainmenu'), 300);
     } else if (action === 'stop') {
-      const success = await stopAllByNfc(user.snssb || user.nfcid);
+      // Save user data to sessionStorage first
+      sessionStorage.setItem('datakaryawan', JSON.stringify(user));
+      const success = await stopAllByNfc(user.snssb);
       if (success) {
         setStatus('Timesheet dihentikan');
-        alert('Timesheet berhasil dihentikan!');
+        showSuccessToast(`${user.full_name || 'User'} - Timesheet dihentikan!`);
       } else {
         setStatus('Gagal menghentikan timesheet');
         alert('Gagal menghentikan timesheet!');

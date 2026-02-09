@@ -6,6 +6,8 @@ import { useNavigate } from 'react-router-dom';
  * Converted dari menuworkcenter.html
  * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
  */
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const SelectMachinePage = () => {
   const navigate = useNavigate();
 
@@ -39,39 +41,21 @@ const SelectMachinePage = () => {
   // API: Load machines
   const loadMachines = async () => {
     try {
-      const res = await fetch('/workcenter/');
-      if (!res.ok) {
-        throw new Error('Gagal load mesin dari API');
-      }
+      const res = await fetch(`${API_BASE}/workcenter/`);
+      if (!res.ok) throw new Error('Gagal load mesin');
       const data = await res.json();
 
       if (data && data.length > 0) {
         setMachines(data);
         setFilteredMachines(data);
       } else {
-        throw new Error('Data kosong dari API');
-      }
-    } catch (err) {
-      console.error('Error loading machines from API:', err);
-
-      // Fallback to dummy data
-      try {
-        console.log('Loading dummy machines data...');
-        const dummyResponse = await fetch('/dummy-machines.json');
-        if (dummyResponse.ok) {
-          const dummyData = await dummyResponse.json();
-          setMachines(dummyData);
-          setFilteredMachines(dummyData);
-          alert('⚠️ Menggunakan data dummy (API tidak tersedia)');
-        } else {
-          throw new Error('Dummy data tidak tersedia');
-        }
-      } catch (dummyError) {
-        console.error('Error loading dummy data:', dummyError);
-        alert('❌ Gagal load data dari API dan dummy file');
         setMachines([]);
         setFilteredMachines([]);
       }
+    } catch (err) {
+      console.error('Error loading machines:', err);
+      setMachines([]);
+      setFilteredMachines([]);
     }
   };
 
@@ -104,7 +88,7 @@ const SelectMachinePage = () => {
       }
 
       // Update user's machine selection
-      const response = await fetch('/usernfc/update/', {
+      const response = await fetch(`${API_BASE}/usernfc/update/`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,7 +104,7 @@ const SelectMachinePage = () => {
       }
 
       // Reload updated user data
-      const res = await fetch(`/usernfc/nfcid/${nfcid}`);
+      const res = await fetch(`${API_BASE}/usernfc/nfcid/${nfcid}`);
       if (res.ok) {
         const updatedUser = await res.json();
         sessionStorage.setItem('datakaryawan', JSON.stringify(updatedUser));

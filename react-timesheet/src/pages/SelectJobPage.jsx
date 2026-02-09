@@ -7,6 +7,8 @@ import { BrowserMultiFormatReader } from '@zxing/library';
  * Converted dari menujob.html + script.js + scanbarcode.js
  * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
  */
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const SelectJobPage = () => {
   const navigate = useNavigate();
 
@@ -37,47 +39,19 @@ const SelectJobPage = () => {
     }
 
     try {
-      const response = await fetch(`/sow/${orderValue}`);
-      if (!response.ok) {
-        throw new Error('Gagal load data dari API');
-      }
+      const response = await fetch(`${API_BASE}/sow/datajson?search=${encodeURIComponent(orderValue)}`);
+      if (!response.ok) throw new Error('Gagal load data');
       const data = await response.json();
 
       if (data && data.length > 0) {
         setJobs(data);
         sessionStorage.setItem('lastSearchOrder', orderValue);
       } else {
-        throw new Error('Data kosong dari API');
-      }
-    } catch (error) {
-      console.error('Error loading jobs from API:', error);
-
-      // Fallback to dummy data
-      try {
-        console.log('Loading dummy data...');
-        const dummyResponse = await fetch('/dummy-jobs.json');
-        if (dummyResponse.ok) {
-          const dummyData = await dummyResponse.json();
-          const filtered = dummyData.filter(job =>
-            job.order_no.includes(orderValue)
-          );
-
-          if (filtered.length > 0) {
-            setJobs(filtered);
-            sessionStorage.setItem('lastSearchOrder', orderValue);
-            alert('⚠️ Menggunakan data dummy (API tidak tersedia)');
-          } else {
-            setJobs(dummyData);
-            alert('⚠️ Order tidak ditemukan, menampilkan semua data dummy');
-          }
-        } else {
-          throw new Error('Dummy data tidak tersedia');
-        }
-      } catch (dummyError) {
-        console.error('Error loading dummy data:', dummyError);
-        alert('❌ Gagal load data dari API dan dummy file');
         setJobs([]);
       }
+    } catch (error) {
+      console.error('Error loading jobs:', error);
+      setJobs([]);
     }
   };
 

@@ -13,6 +13,8 @@ import PasswordPrompt from '../components/auth/PasswordPrompt';
  * - Loading states and error handling
  * - Color scheme: White 65%, Blue 25%, Orange 10%
  */
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const NfcUserListPage = () => {
   const navigate = useNavigate();
 
@@ -58,15 +60,8 @@ const NfcUserListPage = () => {
   const loadNfcUsers = async () => {
     setLoading(true);
     try {
-      // PRODUCTION: Uncomment this
-      // const response = await fetch('/usernfc');
-      // if (!response.ok) throw new Error('Failed to fetch');
-      // const data = await response.json();
-      // setAllData(data);
-      // setFilteredData(data);
-
-      // DEVELOPMENT: Dummy data
-      const response = await fetch('/dummy-nfc-users.json');
+      const response = await fetch(`${API_BASE}/usernfc`);
+      if (!response.ok) throw new Error('Failed to fetch');
       const data = await response.json();
       setAllData(data);
       setFilteredData(data);
@@ -109,14 +104,10 @@ const NfcUserListPage = () => {
   // Confirm delete
   const confirmDelete = async () => {
     try {
-      // PRODUCTION: Uncomment this
-      // const response = await fetch(`/usernfc/${deleteModal.nfcid}`, {
-      //   method: 'DELETE'
-      // });
-      // if (!response.ok) throw new Error('Failed to delete');
-
-      // DEVELOPMENT: Simulate success
-      console.log('Deleting user:', deleteModal.nfcid);
+      const response = await fetch(`${API_BASE}/usernfc/${deleteModal.nfcid}`, {
+        method: 'DELETE'
+      });
+      if (!response.ok) throw new Error('Failed to delete');
 
       // Remove from local state
       const updatedData = allData.filter(user => user.nfcid !== deleteModal.nfcid);

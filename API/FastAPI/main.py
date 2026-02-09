@@ -36,7 +36,7 @@ class SowPlanUpdate(BaseModel):
     operation_no: str
     plan_start: str
     plan_finish: str
-    resource_name: Optional[str] = None
+    workcenter: Optional[str] = None
     note: Optional[str] = None
 
 
@@ -58,12 +58,14 @@ def update_sow_plan(data: SowPlanUpdate):
             UPDATE sow
             SET
                 plan_start = %s,
-                plan_finish = %s
+                plan_finish = %s,
+                workcenter = %s    
             WHERE order_no = %s
               AND operation_no = %s
         """, (
             data.plan_start,
             data.plan_finish,
+            data.workcenter,
             data.order_no,
             data.operation_no
         ))
@@ -136,6 +138,64 @@ def get_actual(data: KeyRequest):
         cur.close()
         conn.close()
 
+# ====================================================
+# SCHEMA REQUEST GET MISSING
+# ====================================================
+class MissingRequest(BaseModel):
+    order_no: str
+    codenumber: list[str]
+
+# ====================================================
+# ENDPOINT GET MISSING OPERATIONS
+# ====================================================
+@app.post("/sow/get-missing")
+def get_missing(data: MissingRequest):
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        # Ambil semua operasi berdasarkan order_no
+        cur.execute("""
+            SELECT
+                order_no,
+                operation_no,
+                workcenter,
+                planhours,
+                operationtext,
+                (order_no || operation_no) AS codenumber
+            FROM sow
+            WHERE order_no = %s
+            ORDER BY operation_no
+        """, (data.order_no,))
+
+        rows = cur.fetchall()
+
+        results = []
+
+        for row in rows:
+            db_codenumber = row[5]
+
+            # ➤ FILTER: kirim hanya yang TIDAK ADA di list dari VBA
+            if db_codenumber not in data.codenumber:
+                results.append({
+                    "order_no": row[0],
+                    "operation_no": row[1],
+                    "workcenter": row[2],
+                    "planhours": float(row[3] or 0),
+                    "operationtext": row[4]
+                })
+
+        return {
+            "order_no": data.order_no,
+            "requested_count": len(data.codenumber),
+            "missing_count": len(results),
+            "data": results
+        }
+
+    finally:
+        cur.close()
+        conn.close()
 
 # ====================================================
 # RUN MANUAL

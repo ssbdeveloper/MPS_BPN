@@ -17,6 +17,7 @@ import NfcUserListPage from '../pages/NfcUserListPage';
 import CreateEditNfcPage from '../pages/CreateEditNfcPage';
 import UnproductiveMenuPage from '../pages/UnproductiveMenuPage';
 import DownloadPage from '../pages/DownloadPage';
+import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
  * Router Configuration
@@ -44,9 +45,14 @@ const router = createBrowserRouter([
     element: <TimesheetListPage />,
   },
   {
-    path: '/timesheet-validation',
-    element: <TimesheetValidationPage />,
-  },
+  path: '/timesheet-validation',
+  element: (
+    <ProtectedRoute>
+      <TimesheetValidationPage />
+    </ProtectedRoute>
+  ),
+},
+
   {
     path: '/timesheet-edit/:tsnumber',
     element: <TimesheetEditPage />,

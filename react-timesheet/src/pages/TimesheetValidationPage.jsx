@@ -7,6 +7,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
  * Shows grouped timesheets by employee with expand/collapse, filters, and validation actions
  */
 
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 // Helper: Format date string "dd/mm/yyyy" to "dd Mmm yy" (e.g. "05/02/2026" → "05 Feb 26")
 const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const formatDateShort = (dateStr) => {
@@ -60,15 +62,15 @@ const TimesheetValidationPage = () => {
   const scrollPositionRef = useRef(0);
   const containerRef = useRef(null);
 
-  // Load data on mount
+  // Load data on mount and when date range changes
   useEffect(() => {
     loadValidationData();
-  }, []);
+  }, [startDate, endDate]);
 
-  // Apply filters whenever dependencies change
+  // Apply client-side filters (search query only, dates handled by API)
   useEffect(() => {
     applyFilters();
-  }, [timesheets, searchQuery, startDate, endDate]);
+  }, [timesheets, searchQuery]);
 
   // Save filter state to URL
   useEffect(() => {
@@ -92,49 +94,71 @@ const TimesheetValidationPage = () => {
     }
   }, [filteredTimesheets]);
 
-  // API: Load validation data
+  // API: Load validation data from real API
   const loadValidationData = async () => {
-    // NOTE: Untuk development, load dummy data dulu
-    // Untuk production, uncomment code dibawah dan comment load dummy data
-
-    /* PRODUCTION CODE - Uncomment untuk production
     try {
-      const res = await fetch('/timesheet/validation');
+      // Build query params for search by date range if filters are set
+      let url = `${API_BASE}/timesheet/search?field=longdate_checkin`;
+
+      if (startDate && endDate) {
+        url += `&start=${startDate}&end=${endDate}`;
+      } else {
+        // Default: last 30 days
+        const now = new Date();
+        const thirtyDaysAgo = new Date(now);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const formatISO = (d) => d.toISOString().split('T')[0];
+        url += `&start=${formatISO(thirtyDaysAgo)}&end=${formatISO(now)}`;
+      }
+
+      const res = await fetch(url);
       if (!res.ok) {
         throw new Error('Gagal load data validasi dari API');
       }
       const data = await res.json();
+      const records = Array.isArray(data) ? data : [];
 
-      if (data && data.length > 0) {
-        setTimesheets(data);
-        return;
-      } else {
-        throw new Error('Data kosong dari API');
+      // Enrich with planhours from SOW (bulk lookup)
+      const codenumbers = records
+        .filter(r => r.production_order && r.seq != null)
+        .map(r => String(r.production_order) + String(r.seq));
+      const uniqueCodes = [...new Set(codenumbers)];
+
+      let planhoursMap = {};
+      if (uniqueCodes.length > 0) {
+        try {
+          const sowRes = await fetch(`${API_BASE}/sow/planhours/multi`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ codenumbers: uniqueCodes })
+          });
+          if (sowRes.ok) {
+            planhoursMap = await sowRes.json();
+          }
+        } catch (err) {
+          console.error('Error fetching bulk planhours from SOW:', err);
+        }
       }
+
+      // Merge SOW planhours into each record
+      const enriched = records.map(r => {
+        if (r.production_order && r.seq != null) {
+          const code = String(r.production_order) + String(r.seq);
+          if (planhoursMap[code] != null) {
+            return { ...r, planhours: planhoursMap[code] };
+          }
+        }
+        return r;
+      });
+
+      setTimesheets(enriched);
     } catch (err) {
-      console.error('Error loading validation data from API:', err);
-      // Fallback to dummy data jika API gagal
-    }
-    */
-
-    // DEVELOPMENT MODE - Load dummy data langsung
-    try {
-      console.log('Loading dummy validation data...');
-      const dummyResponse = await fetch('/dummy-validation-timesheets.json');
-      if (dummyResponse.ok) {
-        const dummyData = await dummyResponse.json();
-        setTimesheets(dummyData);
-      } else {
-        throw new Error('Dummy data tidak tersedia');
-      }
-    } catch (dummyError) {
-      console.error('Error loading dummy data:', dummyError);
-      alert('❌ Gagal load dummy data');
+      console.error('Error loading validation data:', err);
       setTimesheets([]);
     }
   };
 
-  // Apply filters to timesheets
+  // Apply client-side filters (search query only, date range handled by API)
   const applyFilters = () => {
     let filtered = [...timesheets];
 
@@ -147,24 +171,6 @@ const TimesheetValidationPage = () => {
         item.workcenterdescription?.toLowerCase().includes(query) ||
         item.production_order?.toLowerCase().includes(query)
       );
-    }
-
-    // Filter by date range
-    if (startDate) {
-      filtered = filtered.filter(item => {
-        const itemDate = new Date(item.longdate_checkin);
-        const filterDate = new Date(startDate);
-        return itemDate >= filterDate;
-      });
-    }
-
-    if (endDate) {
-      filtered = filtered.filter(item => {
-        const itemDate = new Date(item.longdate_checkin);
-        const filterDate = new Date(endDate);
-        filterDate.setHours(23, 59, 59, 999); // End of day
-        return itemDate <= filterDate;
-      });
     }
 
     setFilteredTimesheets(filtered);
@@ -264,40 +270,36 @@ const TimesheetValidationPage = () => {
         field: 'longdate_checkout'
       });
 
-      // PRODUCTION: Uncomment baris dibawah
-      // const res = await fetch(`/timesheet/getexcel?${params.toString()}`);
-      // if (!res.ok) throw new Error('Gagal download Excel');
-      // const blob = await res.blob();
-      // const a = document.createElement('a');
-      // const url = URL.createObjectURL(blob);
-      // a.href = url;
-      // a.download = `timesheet_${startDate}_to_${endDate}.xlsx`;
-      // document.body.appendChild(a);
-      // a.click();
-      // a.remove();
-      // URL.revokeObjectURL(url);
-      // alert('✅ Excel berhasil diunduh!');
-
-      // DEVELOPMENT: Simulate download
-      console.log('Downloading Excel with range:', startDate, 'to', endDate);
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      alert(`✅ Excel berhasil diunduh: timesheet_${startDate}_to_${endDate}.xlsx`);
+      const res = await fetch(`${API_BASE}/timesheet/getexcel?${params.toString()}`);
+      if (!res.ok) throw new Error('Gagal download Excel');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = `timesheet_${startDate}_to_${endDate}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
 
     } catch (err) {
       console.error('Excel download error:', err);
-      alert('❌ Gagal download Excel: ' + err.message);
+      alert('Gagal download Excel: ' + err.message);
     } finally {
       setDownloadingExcel(false);
     }
   };
 
-  // Handle single validation
+  // Handle single validation (uses bulk endpoint with single tsnumber)
   const handleValidateSingle = async (tsnumber) => {
+    const confirm = window.confirm('Validasi timesheet ini?');
+    if (!confirm) return;
+
     try {
-      const res = await fetch('/timesheet/validate', {
-        method: 'POST',
+      const res = await fetch(`${API_BASE}/timesheet/validation`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tsnumber })
+        body: JSON.stringify({ tsnumbers: [tsnumber] })
       });
 
       if (!res.ok) {
@@ -305,18 +307,17 @@ const TimesheetValidationPage = () => {
       }
 
       await res.json();
-      alert('✅ Timesheet berhasil divalidasi');
       loadValidationData();
     } catch (err) {
       console.error('Error validate timesheet:', err);
-      alert('❌ Gagal validasi timesheet');
+      alert('Gagal validasi timesheet');
     }
   };
 
   // Handle group validation
   const handleValidateGroup = async (records) => {
     const tsnumbers = records
-      .filter(r => !r.validation_date)
+      .filter(r => !r.validation_date && String(r.state_flag) !== '5')
       .map(r => r.tsnumber);
 
     if (tsnumbers.length === 0) {
@@ -331,8 +332,8 @@ const TimesheetValidationPage = () => {
     if (!confirm) return;
 
     try {
-      const res = await fetch('/timesheet/validate-batch', {
-        method: 'POST',
+      const res = await fetch(`${API_BASE}/timesheet/validation`, {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tsnumbers })
       });
@@ -342,11 +343,10 @@ const TimesheetValidationPage = () => {
       }
 
       await res.json();
-      alert('✅ Timesheet berhasil divalidasi');
       loadValidationData();
     } catch (err) {
       console.error('Error validate batch:', err);
-      alert('❌ Gagal validasi batch');
+      alert('Gagal validasi batch');
     }
   };
 
@@ -366,7 +366,7 @@ const TimesheetValidationPage = () => {
 
   // Back to main menu
   const goBack = () => {
-    navigate('/timesheet-mainmenu');
+    navigate('/');
   };
 
   // Toggle filter visibility
@@ -649,6 +649,7 @@ const TimesheetValidationPage = () => {
                       <div className="divide-y divide-blue-100">
                         {group.records.map((record, idx) => {
                         const isValidated = !!record.validation_date;
+                        const isDeleted = String(record.state_flag) === '5';
                         const isUnprod = !!record.activitytype;
                         // Build operation display text
                         const operationDisplay = isUnprod
@@ -659,11 +660,13 @@ const TimesheetValidationPage = () => {
                         return (
                           <div
                             key={idx}
-                            onClick={() => !isValidated && handleEdit(record.tsnumber)}
-                            className={`p-3 transition-colors ${
-                              isValidated
-                                ? 'bg-green-50 bg-opacity-60 cursor-not-allowed opacity-70'
-                                : 'hover:bg-blue-50 cursor-pointer bg-white'
+                            onClick={() => handleEdit(record.tsnumber)}
+                            className={`p-3 transition-colors cursor-pointer ${
+                              isDeleted
+                                ? 'bg-red-50 hover:bg-red-100'
+                                : isValidated
+                                  ? 'bg-green-50 bg-opacity-60 hover:bg-green-100 opacity-70'
+                                  : 'hover:bg-blue-50 bg-white'
                             }`}
                           >
                             <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
@@ -755,7 +758,9 @@ const TimesheetValidationPage = () => {
 
                               {/* Status - center */}
                               <div className="text-[11px] flex items-center justify-center">
-                                {isValidated ? (
+                                {isDeleted ? (
+                                  <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">Deleted</span>
+                                ) : isValidated ? (
                                   <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">Validated</span>
                                 ) : (
                                   <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-100 text-orange-700">Pending</span>
@@ -764,7 +769,7 @@ const TimesheetValidationPage = () => {
 
                               {/* Action - center */}
                               <div className="flex items-center justify-center">
-                                {!isValidated && (
+                                {!isValidated && !isDeleted && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();

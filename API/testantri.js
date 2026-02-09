@@ -10,7 +10,7 @@ const basicAuth = "Basic " + Buffer.from(`${USERNAME}:${PASSWORD}`).toString("ba
 
 const payloads = [
   {
-    "ZTIMESHEETID": "556",
+    "ZTIMESHEETID": "566",
     "PERNR": "00016502",
     "RUECK": "",
     "ZCONF_TYPE": "",
@@ -25,7 +25,7 @@ const payloads = [
     "ZBARCODEID": "1575343"
   },
   {
-    "ZTIMESHEETID": "557",
+    "ZTIMESHEETID": "567",
     "PERNR": "00016502",
     "RUECK": "",
     "ZCONF_TYPE": "",
@@ -40,7 +40,7 @@ const payloads = [
     "ZBARCODEID": "1575344"
   },
   {
-    "ZTIMESHEETID": "558",
+    "ZTIMESHEETID": "568",
     "PERNR": "00016502",
     "RUECK": "",
     "ZCONF_TYPE": "",
@@ -55,7 +55,7 @@ const payloads = [
     "ZBARCODEID": "1575345"
   },
   {
-    "ZTIMESHEETID": "559",
+    "ZTIMESHEETID": "569",
     "PERNR": "00016502",
     "RUECK": "",
     "ZCONF_TYPE": "",
@@ -70,7 +70,7 @@ const payloads = [
     "ZBARCODEID": "1575346"
   },
   {
-    "ZTIMESHEETID": "560",
+    "ZTIMESHEETID": "570",
     "PERNR": "00016502",
     "RUECK": "",
     "ZCONF_TYPE": "",
@@ -116,8 +116,8 @@ async function sendData() {
     }
 
     if (i < payloads.length - 1) {
-      console.log("Waiting 8 seconds...");
-      await delay(8000); 
+      console.log("Waiting ...");
+      await delay(100); 
     }
   }
 

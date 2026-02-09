@@ -1,40 +1,44 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 /**
- * Edit Parameter Page
- * Converted from editparameter.html with improvements
- * Features:
- * - Left side: Table with BySN/ByWCT filter buttons
- * - Right side: Edit form for process control items
- * - Role-based validation (Accept/Reject for FOREMAN)
- * - Validation before save
- * - Color scheme: White 65%, Blue 25%, Orange 10% (CTA only)
+ * Edit Parameter Page — sesuai editparameter.html
+ * - Left: Table processcontroldata (BySN / ByWCT)
+ * - Right: Parameter items dari record yang dipilih
+ *   - ischoice → dropdown + Other (panggil choicebase per parameter)
+ *   - isnumber → input number
+ *   - else → input text
+ * - Role FOREMAN → Accept / Reject
  */
 const EditParameterPage = () => {
   const navigate = useNavigate();
 
   // States
-  const [filterMode, setFilterMode] = useState('SN'); // 'SN' or 'WCT'
+  const [filterMode, setFilterMode] = useState('SN');
   const [processData, setProcessData] = useState([]);
   const [selectedProcess, setSelectedProcess] = useState(null);
-  const [formData, setFormData] = useState({
-    item: '',
-    value: '',
-    uom: '',
-    validation_status: '',
-    validation_by: ''
-  });
+  const [parameterItems, setParameterItems] = useState([]); // items + choices
+  const [editedValues, setEditedValues] = useState({});     // { id_item: value }
+  const [otherMode, setOtherMode] = useState({});           // { id_item: true/false }
+  const [otherText, setOtherText] = useState({});           // { id_item: 'manual text' }
   const [isForeman, setIsForeman] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingItems, setLoadingItems] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
-  // Load user role from sessionStorage
+  // Load user role
   useEffect(() => {
     const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
-    if (datakaryawan && datakaryawan.role === 'FOREMAN') {
+    if (datakaryawan && datakaryawan.roles === 'FOREMAN') {
       setIsForeman(true);
     }
+  }, []);
+
+  // Initial load
+  useEffect(() => {
+    loadProcessControlData('SN');
   }, []);
 
   // Load process control data by filter
@@ -42,91 +46,77 @@ const EditParameterPage = () => {
     setLoading(true);
     setFilterMode(mode);
     setSelectedProcess(null);
-    setFormData({
-      item: '',
-      value: '',
-      uom: '',
-      validation_status: '',
-      validation_by: ''
-    });
+    setParameterItems([]);
+    setEditedValues({});
+    setOtherMode({});
+    setOtherText({});
+    setHasChanges(false);
 
     try {
-      // PRODUCTION: Uncomment this
-      // const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
-      // const endpoint = mode === 'SN'
-      //   ? `/process-control/by-sn/${datakaryawan.snssb}`
-      //   : `/process-control/by-workcenter/${datakaryawan.workcenter}`;
-      // const response = await fetch(endpoint);
-      // const data = await response.json();
-      // setProcessData(data);
-
-      // DEVELOPMENT: Dummy data
-      const dummyData = mode === 'SN' ? [
-        {
-          id: 1,
-          tsnumber: 'TS-2024-001',
-          production_order: 'PO-12345',
-          item: 'Temperature',
-          value: '185',
-          uom: '°C',
-          validation_status: 'PENDING',
-          validation_by: ''
-        },
-        {
-          id: 2,
-          tsnumber: 'TS-2024-001',
-          production_order: 'PO-12345',
-          item: 'Pressure',
-          value: '45',
-          uom: 'PSI',
-          validation_status: 'ACCEPTED',
-          validation_by: 'John Supervisor'
-        },
-        {
-          id: 3,
-          tsnumber: 'TS-2024-002',
-          production_order: 'PO-12346',
-          item: 'Speed',
-          value: '1200',
-          uom: 'RPM',
-          validation_status: 'PENDING',
-          validation_by: ''
-        }
-      ] : [
-        {
-          id: 4,
-          tsnumber: 'TS-2024-003',
-          production_order: 'PO-12347',
-          item: 'Temperature',
-          value: '190',
-          uom: '°C',
-          validation_status: 'REJECTED',
-          validation_by: 'Jane Manager'
-        },
-        {
-          id: 5,
-          tsnumber: 'TS-2024-004',
-          production_order: 'PO-12348',
-          item: 'Humidity',
-          value: '65',
-          uom: '%',
-          validation_status: 'PENDING',
-          validation_by: ''
-        }
-      ];
-      setProcessData(dummyData);
+      const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
+      let endpoint;
+      if (mode === 'SN') {
+        endpoint = `${API_BASE}/process-control/by-sn/${datakaryawan?.snssb}`;
+      } else {
+        endpoint = `${API_BASE}/process-control/by-wct/${datakaryawan?.workcenter}`;
+      }
+      const response = await fetch(endpoint);
+      const data = await response.json();
+      setProcessData(data);
     } catch (err) {
       console.error('Error loading data:', err);
-      alert('❌ Gagal memuat data');
+      alert('Gagal memuat data');
     } finally {
       setLoading(false);
     }
   };
 
-  // Initial load with SN filter
-  useEffect(() => {
-    loadProcessControlData('SN');
-  }, []);
+  // Load parameter items + choices untuk record yang dipilih
+  const loadParameterItems = async (processControlId) => {
+    setLoadingItems(true);
+    try {
+      const response = await fetch(`${API_BASE}/process-control-item/${processControlId}`);
+      const items = await response.json();
+
+      const initialValues = {};
+      const initialOtherMode = {};
+      const initialOtherText = {};
+
+      // Untuk setiap item yang ischoice, fetch choicebase
+      for (const item of items) {
+        initialValues[item.id_processcontroldata_item] = item.value || '';
+
+        if (item.ischoice) {
+          const chRes = await fetch(`${API_BASE}/process-parameter-choicebase?parameter=${item.id_parameter}`);
+          const choices = await chRes.json();
+          item.choices = choices;
+
+          // Cek apakah current value ada di choices
+          const isInChoices = choices.some(c => c.choice_name === item.value);
+          if (item.value && !isInChoices) {
+            // Value tidak cocok → otomatis "Other"
+            initialOtherMode[item.id_processcontroldata_item] = true;
+            initialOtherText[item.id_processcontroldata_item] = item.value;
+            initialValues[item.id_processcontroldata_item] = 'Other';
+          } else {
+            initialOtherMode[item.id_processcontroldata_item] = false;
+            initialOtherText[item.id_processcontroldata_item] = '';
+          }
+        }
+      }
+
+      setParameterItems(items);
+      setEditedValues(initialValues);
+      setOtherMode(initialOtherMode);
+      setOtherText(initialOtherText);
+      setHasChanges(false);
+    } catch (err) {
+      console.error('Error loading parameter items:', err);
+      alert('Gagal memuat parameter items');
+    } finally {
+      setLoadingItems(false);
+    }
+  };
 
   // Handle row selection
   const handleSelectRow = (process) => {
@@ -136,162 +126,207 @@ const EditParameterPage = () => {
       }
     }
     setSelectedProcess(process);
-    setFormData({
-      item: process.item,
-      value: process.value,
-      uom: process.uom,
-      validation_status: process.validation_status,
-      validation_by: process.validation_by
-    });
     setHasChanges(false);
+    loadParameterItems(process.id_processcontroldata);
   };
 
-  // Handle form input change
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  // Handle dropdown change
+  const handleSelectChange = (itemId, value) => {
+    if (value === 'Other') {
+      setOtherMode(prev => ({ ...prev, [itemId]: true }));
+      setEditedValues(prev => ({ ...prev, [itemId]: 'Other' }));
+    } else {
+      setOtherMode(prev => ({ ...prev, [itemId]: false }));
+      setOtherText(prev => ({ ...prev, [itemId]: '' }));
+      setEditedValues(prev => ({ ...prev, [itemId]: value }));
+    }
     setHasChanges(true);
   };
 
-  // Validate form before save
-  const validateForm = () => {
-    if (!formData.item.trim()) {
-      alert('⚠️ Item tidak boleh kosong');
-      return false;
-    }
-    if (!formData.value.trim()) {
-      alert('⚠️ Value tidak boleh kosong');
-      return false;
-    }
-    if (!formData.uom.trim()) {
-      alert('⚠️ UOM tidak boleh kosong');
-      return false;
-    }
-    return true;
+  // Handle other text input change
+  const handleOtherTextChange = (itemId, value) => {
+    setOtherText(prev => ({ ...prev, [itemId]: value }));
+    setHasChanges(true);
   };
 
-  // Save changes
+  // Handle normal input change (number/text)
+  const handleInputChange = (itemId, value) => {
+    setEditedValues(prev => ({ ...prev, [itemId]: value }));
+    setHasChanges(true);
+  };
+
+  // Get final value: jika Other mode, pakai otherText; else pakai editedValues
+  const getFinalValue = (itemId) => {
+    if (otherMode[itemId]) {
+      return otherText[itemId] || '';
+    }
+    return editedValues[itemId] || '';
+  };
+
+  // Save all changed items
   const handleSave = async () => {
     if (!selectedProcess) {
-      alert('⚠️ Pilih data process control terlebih dahulu');
-      return;
-    }
-
-    if (!validateForm()) {
+      alert('Pilih data process control terlebih dahulu');
       return;
     }
 
     try {
-      // PRODUCTION: Uncomment this
-      // const response = await fetch(`/process-control/${selectedProcess.id}`, {
-      //   method: 'PUT',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     item: formData.item,
-      //     value: formData.value,
-      //     uom: formData.uom
-      //   })
-      // });
-      // if (!response.ok) throw new Error('Gagal update');
+      for (const item of parameterItems) {
+        const finalValue = getFinalValue(item.id_processcontroldata_item);
 
-      // DEVELOPMENT: Simulate success
-      console.log('Saving:', formData);
+        // Only update if value changed from original
+        if (finalValue !== (item.value || '')) {
+          await fetch(`${API_BASE}/process-control-item/${item.id_processcontroldata_item}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              value: finalValue,
+              status: item.status || '',
+              note: item.note || ''
+            })
+          });
+        }
+      }
 
-      // Update local state
-      setProcessData(prev => prev.map(p =>
-        p.id === selectedProcess.id
-          ? { ...p, item: formData.item, value: formData.value, uom: formData.uom }
-          : p
-      ));
-
-      alert('✅ Data berhasil diupdate');
+      alert('Items updated');
       setHasChanges(false);
+      // Reload items
+      loadParameterItems(selectedProcess.id_processcontroldata);
     } catch (err) {
       console.error('Error saving:', err);
-      alert('❌ Gagal menyimpan data');
+      alert('Gagal menyimpan data');
     }
   };
 
   // Handle validation (Accept/Reject)
   const handleValidation = async (status) => {
     if (!selectedProcess) {
-      alert('⚠️ Pilih data process control terlebih dahulu');
-      return;
-    }
-
-    if (!isForeman) {
-      alert('⚠️ Hanya FOREMAN yang dapat melakukan validasi');
+      alert('Pilih data process control dulu');
       return;
     }
 
     try {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
 
-      // PRODUCTION: Uncomment this
-      // const response = await fetch(`/process-control/validate/${selectedProcess.id}`, {
-      //   method: 'PATCH',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     validation_by: datakaryawan.full_name,
-      //     validation_status: status
-      //   })
-      // });
-      // if (!response.ok) throw new Error('Gagal validasi');
+      const response = await fetch(`${API_BASE}/process-control/validate/${selectedProcess.id_processcontroldata}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          validation_by: datakaryawan?.full_name || '',
+          validation_status: status
+        })
+      });
 
-      // DEVELOPMENT: Simulate success
-      console.log('Validating:', status);
+      if (!response.ok) throw new Error('Gagal validasi');
 
       // Update local state
       setProcessData(prev => prev.map(p =>
-        p.id === selectedProcess.id
-          ? { ...p, validation_status: status, validation_by: datakaryawan?.full_name || 'Foreman' }
+        p.id_processcontroldata === selectedProcess.id_processcontroldata
+          ? { ...p, validation_status: status, validation_by: datakaryawan?.full_name }
           : p
       ));
-
-      setFormData(prev => ({
+      setSelectedProcess(prev => ({
         ...prev,
         validation_status: status,
-        validation_by: datakaryawan?.full_name || 'Foreman'
+        validation_by: datakaryawan?.full_name
       }));
 
-      alert(`✅ Process control ${status}`);
+      alert(`Process control ${status}`);
     } catch (err) {
       console.error('Error validating:', err);
-      alert('❌ Gagal validasi data');
+      alert('Gagal validasi data');
     }
   };
 
-  // Get status color
+  // Status color
   const getStatusColor = (status) => {
     switch (status) {
-      case 'ACCEPTED': return 'bg-green-100 text-green-800';
-      case 'REJECTED': return 'bg-red-100 text-red-800';
+      case 'ACCEPTED': case 'Accept': return 'bg-green-100 text-green-800';
+      case 'REJECTED': case 'Reject': return 'bg-red-100 text-red-800';
       case 'PENDING': return 'bg-yellow-100 text-yellow-800';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
 
+  // ====== RENDER INPUT PER ITEM (sesuai editparameter.html) ======
+  const renderItemInput = (item) => {
+    const itemId = item.id_processcontroldata_item;
+    const isOther = otherMode[itemId];
+
+    // ischoice → dropdown + Other
+    if (item.ischoice) {
+      return (
+        <div className="space-y-1">
+          <select
+            value={isOther ? 'Other' : (editedValues[itemId] || '')}
+            onChange={(e) => handleSelectChange(itemId, e.target.value)}
+            className="w-full px-2 py-1.5 text-xs bg-white border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="">-- Pilih --</option>
+            {item.choices?.map((c, i) => (
+              <option key={i} value={c.choice_name}>{c.choice_name}</option>
+            ))}
+            <option value="Other">Other</option>
+          </select>
+          {isOther && (
+            <input
+              type="text"
+              value={otherText[itemId] || ''}
+              onChange={(e) => handleOtherTextChange(itemId, e.target.value)}
+              className="w-full px-2 py-1.5 text-xs bg-white border border-orange-400 rounded focus:outline-none focus:ring-1 focus:ring-orange-500"
+              placeholder="Other..."
+            />
+          )}
+        </div>
+      );
+    }
+
+    // isnumber → input number
+    if (item.isnumber) {
+      return (
+        <input
+          type="number"
+          value={editedValues[itemId] ?? ''}
+          onChange={(e) => handleInputChange(itemId, e.target.value)}
+          className="w-full px-2 py-1.5 text-xs bg-white border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+          step="any"
+          placeholder="0"
+        />
+      );
+    }
+
+    // else → input text
+    return (
+      <input
+        type="text"
+        value={editedValues[itemId] ?? ''}
+        onChange={(e) => handleInputChange(itemId, e.target.value)}
+        className="w-full px-2 py-1.5 text-xs bg-white border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+        placeholder="-"
+      />
+    );
+  };
+
   return (
     <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
+      {/* Header */}
       <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md flex-shrink-0">
         <button
-          onClick={() => navigate('/timesheet-mainmenu')}
+          onClick={() => navigate('/process-control')}
           className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
         >
           ← Back
         </button>
         <h1 className="text-lg font-bold text-white">Edit Parameter</h1>
-        <div className="w-20"></div> {/* Spacer for centering */}
+        <div className="w-20"></div>
       </header>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col lg:flex-row gap-3 p-3 overflow-hidden">
-        {/* Left Side - Table */}
+        {/* LEFT: Process Control Data Table */}
         <section className="flex-1 bg-blue-50 rounded-lg shadow-md border border-blue-200 p-3 flex flex-col overflow-hidden">
           <div className="flex-shrink-0 mb-3">
             <h2 className="text-base font-bold text-blue-900 mb-2">Process Control Data</h2>
-
-            {/* Filter Buttons */}
             <div className="flex gap-2">
               <button
                 onClick={() => loadProcessControlData('SN')}
@@ -301,7 +336,7 @@ const EditParameterPage = () => {
                     : 'bg-white text-blue-900 border border-blue-300 hover:bg-blue-100'
                 }`}
               >
-                By Serial Number
+                BySN
               </button>
               <button
                 onClick={() => loadProcessControlData('WCT')}
@@ -311,54 +346,53 @@ const EditParameterPage = () => {
                     : 'bg-white text-blue-900 border border-blue-300 hover:bg-blue-100'
                 }`}
               >
-                By Workcenter
+                ByWCT
               </button>
             </div>
           </div>
 
-          {/* Table */}
           <div className="flex-1 overflow-auto">
             {loading ? (
               <div className="flex items-center justify-center h-full">
-                <p className="text-blue-900">Loading...</p>
+                <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
               </div>
             ) : processData.length === 0 ? (
               <div className="flex items-center justify-center h-full">
-                <p className="text-gray-600">Tidak ada data</p>
+                <p className="text-gray-500 text-sm">Tidak ada data</p>
               </div>
             ) : (
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-blue-700 text-white">
                   <tr>
-                    <th className="px-2 py-2 text-left">TS Number</th>
-                    <th className="px-2 py-2 text-left">Order</th>
-                    <th className="px-2 py-2 text-left">Item</th>
-                    <th className="px-2 py-2 text-left">Value</th>
-                    <th className="px-2 py-2 text-left">UOM</th>
+                    <th className="px-2 py-2 text-left">ID</th>
+                    <th className="px-2 py-2 text-left">Name</th>
+                    <th className="px-2 py-2 text-left">Production Order</th>
+                    <th className="px-2 py-2 text-left">Ident</th>
+                    <th className="px-2 py-2 text-left">Workcenter</th>
                     <th className="px-2 py-2 text-left">Status</th>
-                    <th className="px-2 py-2 text-left">Validated By</th>
+                    <th className="px-2 py-2 text-left">Validator</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white">
-                  {processData.map((process) => (
+                  {processData.map((p) => (
                     <tr
-                      key={process.id}
-                      onClick={() => handleSelectRow(process)}
+                      key={p.id_processcontroldata}
+                      onClick={() => handleSelectRow(p)}
                       className={`border-b border-blue-200 cursor-pointer hover:bg-blue-100 transition-colors ${
-                        selectedProcess?.id === process.id ? 'bg-blue-200' : ''
+                        selectedProcess?.id_processcontroldata === p.id_processcontroldata ? 'bg-blue-200' : ''
                       }`}
                     >
-                      <td className="px-2 py-2">{process.tsnumber}</td>
-                      <td className="px-2 py-2">{process.production_order}</td>
-                      <td className="px-2 py-2">{process.item}</td>
-                      <td className="px-2 py-2">{process.value}</td>
-                      <td className="px-2 py-2">{process.uom}</td>
+                      <td className="px-2 py-2">{p.id_processcontroldata}</td>
+                      <td className="px-2 py-2">{p.full_name}</td>
+                      <td className="px-2 py-2">{p.production_order}</td>
+                      <td className="px-2 py-2">{p.ssbr_id}</td>
+                      <td className="px-2 py-2">{p.workcenter}</td>
                       <td className="px-2 py-2">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(process.validation_status)}`}>
-                          {process.validation_status}
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${getStatusColor(p.validation_status)}`}>
+                          {p.validation_status || ''}
                         </span>
                       </td>
-                      <td className="px-2 py-2">{process.validation_by || '-'}</td>
+                      <td className="px-2 py-2">{p.validation_by || ''}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -367,114 +401,71 @@ const EditParameterPage = () => {
           </div>
         </section>
 
-        {/* Right Side - Edit Form */}
-        <section className="flex-1 bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4 flex flex-col overflow-auto">
-          <h2 className="text-base font-bold text-blue-900 mb-3">Edit Process Control</h2>
+        {/* RIGHT: Parameter Items Form */}
+        <section className="flex-1 bg-blue-50 rounded-lg shadow-md border border-blue-200 p-3 flex flex-col overflow-hidden" style={{ minWidth: '50%' }}>
+          {/* Foreman header with Accept/Reject */}
+          {isForeman && selectedProcess && (
+            <div className="flex gap-2 mb-3 flex-shrink-0">
+              <button
+                onClick={() => handleValidation('Accept')}
+                className="flex-1 px-4 py-2 text-sm font-bold bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              >
+                Accept
+              </button>
+              <button
+                onClick={() => handleValidation('Reject')}
+                className="flex-1 px-4 py-2 text-sm font-bold bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+              >
+                Reject
+              </button>
+            </div>
+          )}
 
           {!selectedProcess ? (
             <div className="flex-1 flex items-center justify-center">
-              <p className="text-gray-600 text-center">
-                Pilih data dari tabel untuk mengedit
+              <p className="text-gray-500 text-sm text-center">
+                Pilih data dari tabel untuk melihat dan mengedit parameter
               </p>
             </div>
+          ) : loadingItems ? (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" />
+            </div>
           ) : (
-            <div className="space-y-4">
-              {/* Item */}
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-blue-900">Item</label>
-                <input
-                  type="text"
-                  value={formData.item}
-                  onChange={(e) => handleInputChange('item', e.target.value)}
-                  className="px-3 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., Temperature"
-                />
-              </div>
-
-              {/* Value */}
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-blue-900">Value</label>
-                <input
-                  type="text"
-                  value={formData.value}
-                  onChange={(e) => handleInputChange('value', e.target.value)}
-                  className="px-3 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., 185"
-                />
-              </div>
-
-              {/* UOM */}
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-blue-900">UOM (Unit of Measure)</label>
-                <input
-                  type="text"
-                  value={formData.uom}
-                  onChange={(e) => handleInputChange('uom', e.target.value)}
-                  className="px-3 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., °C"
-                />
-              </div>
-
-              {/* Validation Status (Read-only) */}
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-blue-900">Validation Status</label>
-                <div className="px-3 py-2 text-sm bg-gray-100 border border-blue-300 rounded">
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusColor(formData.validation_status)}`}>
-                    {formData.validation_status}
-                  </span>
-                </div>
-              </div>
-
-              {/* Validated By (Read-only) */}
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium text-blue-900">Validated By</label>
-                <div className="px-3 py-2 text-sm bg-gray-100 border border-blue-300 rounded">
-                  {formData.validation_by || '-'}
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-col gap-2 pt-4 border-t border-blue-200">
-                {/* Save Button - Orange CTA */}
-                <button
-                  onClick={handleSave}
-                  disabled={!hasChanges}
-                  className={`w-full px-4 py-3 text-sm font-bold rounded shadow-md transition-all ${
-                    hasChanges
-                      ? 'bg-gradient-to-b from-orange-500 to-orange-600 text-white hover:from-orange-600 hover:to-orange-700'
-                      : 'bg-gray-300 text-gray-600 cursor-not-allowed'
-                  }`}
-                >
-                  💾 Save Changes
-                </button>
-
-                {/* Validation Buttons - Only for FOREMAN */}
-                {isForeman && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleValidation('ACCEPTED')}
-                      className="flex-1 px-4 py-2 text-sm font-bold bg-gradient-to-b from-green-500 to-green-600 text-white rounded shadow-md hover:from-green-600 hover:to-green-700 transition-all"
-                    >
-                      ✅ Accept
-                    </button>
-                    <button
-                      onClick={() => handleValidation('REJECTED')}
-                      className="flex-1 px-4 py-2 text-sm font-bold bg-gradient-to-b from-red-500 to-red-600 text-white rounded shadow-md hover:from-red-600 hover:to-red-700 transition-all"
-                    >
-                      ❌ Reject
-                    </button>
-                  </div>
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Parameter items list */}
+              <div className="flex-1 overflow-auto space-y-2.5">
+                {parameterItems.length === 0 ? (
+                  <p className="text-gray-500 text-center py-4 text-sm">Tidak ada parameter items</p>
+                ) : (
+                  parameterItems.map(item => (
+                    <div key={item.id_processcontroldata_item} className="bg-white border border-gray-200 rounded-lg p-2.5">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-semibold text-gray-800">{item.parameter_name}</span>
+                        {item.uom && (
+                          <span className="text-[10px] text-blue-500 font-medium">({item.uom})</span>
+                        )}
+                      </div>
+                      {renderItemInput(item)}
+                    </div>
+                  ))
                 )}
               </div>
 
-              {/* Info for non-Foreman users */}
-              {!isForeman && (
-                <div className="mt-2 p-3 bg-blue-100 rounded border border-blue-300">
-                  <p className="text-xs text-blue-900">
-                    ℹ️ Hanya FOREMAN yang dapat melakukan validasi Accept/Reject
-                  </p>
-                </div>
-              )}
+              {/* Update Items Button */}
+              <div className="pt-3 mt-3 border-t border-blue-200 flex-shrink-0">
+                <button
+                  onClick={handleSave}
+                  disabled={!hasChanges}
+                  className={`w-full px-4 py-3 text-sm font-bold rounded transition-all ${
+                    hasChanges
+                      ? 'bg-gradient-to-b from-orange-500 to-orange-600 text-white hover:from-orange-600 hover:to-orange-700 shadow-md'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  Update Items
+                </button>
+              </div>
             </div>
           )}
         </section>

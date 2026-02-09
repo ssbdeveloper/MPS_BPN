@@ -1394,6 +1394,50 @@ exports.getDrawingUsageReport = async (req, res) => {
   }
 };
 
+// GET planhours by codenumber (production_order + seq)
+exports.getPlanhours = async (req, res) => {
+  try {
+    const { production_order, seq } = req.query;
+    if (!production_order || !seq) {
+      return res.status(400).json({ error: "production_order and seq are required" });
+    }
+    const codenumber = production_order + seq;
+    const result = await db.query(
+      'SELECT planhours FROM sow WHERE codenumber = $1 LIMIT 1',
+      [codenumber]
+    );
+    if (result.rows.length === 0) {
+      return res.json({ planhours: null });
+    }
+    res.json({ planhours: result.rows[0].planhours });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST bulk planhours lookup by array of codenumbers
+exports.getPlanhoursMulti = async (req, res) => {
+  try {
+    const { codenumbers } = req.body;
+    if (!Array.isArray(codenumbers) || codenumbers.length === 0) {
+      return res.json({});
+    }
+    // Deduplicate
+    const unique = [...new Set(codenumbers)];
+    const result = await db.query(
+      'SELECT codenumber, planhours FROM sow WHERE codenumber = ANY($1::text[])',
+      [unique]
+    );
+    const map = {};
+    for (const row of result.rows) {
+      map[row.codenumber] = row.planhours;
+    }
+    res.json(map);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // ============================================
 // LEGACY COMPATIBILITY (dari table sow lama)
 // ============================================

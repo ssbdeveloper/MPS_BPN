@@ -3,9 +3,12 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 /**
  * Timesheet Edit Page
- * Converted dari tsuyeedit.html
  * Edit timesheet record dengan searchable workcenter dropdown
+ * Connected to real API
  */
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const TimesheetEditPage = () => {
   const navigate = useNavigate();
   const { tsnumber } = useParams();
@@ -29,7 +32,9 @@ const TimesheetEditPage = () => {
     hour_checkout: '',
     duration: '',
     note: '',
-    tsstatus: '',
+    planhours: '',
+    std_foreman_hours: '',
+    state_flag: '',
     validation_date: ''
   });
 
@@ -63,19 +68,45 @@ const TimesheetEditPage = () => {
     calculateDuration();
   }, [formData.date_checkin, formData.hour_checkin, formData.date_checkout, formData.hour_checkout]);
 
+  // Build flat list of selectable workcenters (Normal + OT) from workcenter table
+  // workcenter table has: workcenternew (normal code), workcenterot (OT code),
+  // workcenter_description, machineid
+  const workcenterOptions = React.useMemo(() => {
+    const options = [];
+    for (const wc of workcenters) {
+      if (wc.workcenternew) {
+        options.push({
+          code: wc.workcenternew,
+          description: wc.workcenter_description || '',
+          machineid: wc.machineid || '',
+          type: 'Normal'
+        });
+      }
+      if (wc.workcenterot) {
+        options.push({
+          code: wc.workcenterot,
+          description: wc.workcenter_description || '',
+          machineid: wc.machineid || '',
+          type: 'OT'
+        });
+      }
+    }
+    return options;
+  }, [workcenters]);
+
   // Filter workcenters based on search
   useEffect(() => {
     if (workcenterSearch.trim() === '') {
-      setFilteredWorkcenters(workcenters);
+      setFilteredWorkcenters(workcenterOptions);
     } else {
       const query = workcenterSearch.toLowerCase();
-      const filtered = workcenters.filter(wc =>
-        wc.workcentercode.toLowerCase().includes(query) ||
-        wc.workcenterdescription.toLowerCase().includes(query)
+      const filtered = workcenterOptions.filter(wc =>
+        wc.code.toLowerCase().includes(query) ||
+        wc.description.toLowerCase().includes(query)
       );
       setFilteredWorkcenters(filtered);
     }
-  }, [workcenterSearch, workcenters]);
+  }, [workcenterSearch, workcenterOptions]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -102,62 +133,67 @@ const TimesheetEditPage = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasChanges]);
 
-  // API: Load timesheet data
+  // API: Load timesheet data by tsnumber
   const loadTimesheetData = async () => {
     setLoading(true);
-
-    // NOTE: Untuk development, load dari dummy data dulu
-    // Untuk production, uncomment code dibawah dan comment load dummy data
-
-    /* PRODUCTION CODE - Uncomment untuk production
     try {
-      const res = await fetch(`/timesheet/${tsnumber}`);
-      if (!res.ok) {
-        throw new Error('Gagal load timesheet data dari API');
-      }
-      const data = await res.json();
+      const res = await fetch(`${API_BASE}/timesheet/getid/${tsnumber}`);
+      if (!res.ok) throw new Error('Gagal load timesheet data');
+      const record = await res.json();
 
-      if (data) {
-        setFormData(data);
-        setOriginalData(data);
-        setLoading(false);
+      if (!record) {
+        alert('Timesheet tidak ditemukan');
+        navigate(returnUrl);
         return;
-      } else {
-        throw new Error('Data kosong dari API');
       }
-    } catch (err) {
-      console.error('Error loading timesheet from API:', err);
-      // Fallback to dummy data jika API gagal
-    }
-    */
 
-    // DEVELOPMENT MODE - Load dummy data langsung
-    try {
-      console.log('Loading dummy timesheet data for edit...');
-      const dummyResponse = await fetch('/dummy-validation-timesheets.json');
-      if (dummyResponse.ok) {
-        const dummyData = await dummyResponse.json();
-        const record = dummyData.find(item => item.tsnumber === tsnumber);
-
-        if (record) {
-          setFormData(record);
-          setOriginalData(record);
-
-          // Initialize date/time pickers with converted values
-          setCheckinDatePicker(ddmmyyyyToYyyymmdd(record.date_checkin));
-          setCheckinTimePicker(formatTime(record.hour_checkin));
-          setCheckoutDatePicker(ddmmyyyyToYyyymmdd(record.date_checkout));
-          setCheckoutTimePicker(formatTime(record.hour_checkout));
-        } else {
-          alert('❌ Timesheet tidak ditemukan');
-          navigate(returnUrl);
+      // Fetch planhours from SOW based on production_order + seq = codenumber
+      let sowPlanhours = record.planhours || null;
+      if (record.production_order && record.seq) {
+        try {
+          const sowRes = await fetch(`${API_BASE}/sow/planhours?production_order=${encodeURIComponent(record.production_order)}&seq=${encodeURIComponent(record.seq)}`);
+          if (sowRes.ok) {
+            const sowData = await sowRes.json();
+            if (sowData.planhours != null) {
+              sowPlanhours = sowData.planhours;
+            }
+          }
+        } catch (err) {
+          console.error('Error fetching planhours from SOW:', err);
         }
-      } else {
-        throw new Error('Dummy data tidak tersedia');
       }
-    } catch (dummyError) {
-      console.error('Error loading dummy data:', dummyError);
-      alert('❌ Gagal load data');
+
+      setFormData({
+        tsnumber: record.tsnumber || '',
+        serialnumber: record.serialnumber || '',
+        full_name: record.full_name || '',
+        production_order: record.production_order || '',
+        ssbr_ident: record.ssbr_ident || '',
+        operation_text: record.operation_text || '',
+        seq: record.seq || '',
+        workcenterdescription: record.workcenterdescription || '',
+        workcentercode: record.workcentercode || '',
+        date_checkin: record.date_checkin || '',
+        hour_checkin: record.hour_checkin || '',
+        date_checkout: record.date_checkout || '',
+        hour_checkout: record.hour_checkout || '',
+        duration: record.duration != null ? String(record.duration) : '',
+        note: record.note || '',
+        planhours: sowPlanhours != null ? String(sowPlanhours) : '',
+        std_foreman_hours: record.std_foreman_hours != null ? String(record.std_foreman_hours) : '',
+        state_flag: record.state_flag || '',
+        validation_date: record.validation_date || ''
+      });
+      setOriginalData({ ...record, planhours: sowPlanhours });
+
+      // Initialize date/time pickers
+      setCheckinDatePicker(ddmmyyyyToYyyymmdd(record.date_checkin));
+      setCheckinTimePicker(normalizeTime(record.hour_checkin));
+      setCheckoutDatePicker(ddmmyyyyToYyyymmdd(record.date_checkout));
+      setCheckoutTimePicker(normalizeTime(record.hour_checkout));
+    } catch (err) {
+      console.error('Error loading timesheet:', err);
+      alert('Gagal load data timesheet');
       navigate(returnUrl);
     } finally {
       setLoading(false);
@@ -166,42 +202,14 @@ const TimesheetEditPage = () => {
 
   // API: Load workcenters for dropdown
   const loadWorkcenters = async () => {
-    // NOTE: Untuk development, load dari dummy data dulu
-    // Untuk production, uncomment code dibawah dan comment load dummy data
-
-    /* PRODUCTION CODE - Uncomment untuk production
     try {
-      const res = await fetch('/workcenterkk');
-      if (!res.ok) {
-        throw new Error('Gagal load workcenter dari API');
-      }
+      const res = await fetch(`${API_BASE}/workcenter`);
+      if (!res.ok) throw new Error('Gagal load workcenter');
       const data = await res.json();
-
-      if (data && data.length > 0) {
-        setWorkcenters(data);
-        setFilteredWorkcenters(data);
-        return;
-      } else {
-        throw new Error('Data workcenter kosong dari API');
-      }
+      setWorkcenters(Array.isArray(data) ? data : []);
+      setFilteredWorkcenters(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error('Error loading workcenters from API:', err);
-      // Fallback to dummy data jika API gagal
-    }
-    */
-
-    // DEVELOPMENT MODE - Load dummy data langsung
-    try {
-      const dummyResponse = await fetch('/dummy-workcenters.json');
-      if (dummyResponse.ok) {
-        const dummyData = await dummyResponse.json();
-        setWorkcenters(dummyData);
-        setFilteredWorkcenters(dummyData);
-      } else {
-        throw new Error('Dummy workcenter data tidak tersedia');
-      }
-    } catch (dummyError) {
-      console.error('Error loading dummy workcenters:', dummyError);
+      console.error('Error loading workcenters:', err);
       setWorkcenters([]);
       setFilteredWorkcenters([]);
     }
@@ -221,10 +229,10 @@ const TimesheetEditPage = () => {
     return `${day}/${month}/${year}`;
   };
 
-  // Helper: Convert HH:mm to hh:mm (already same format)
-  const formatTime = (time) => {
+  // Helper: Normalize time format (handle both "." and ":" separators)
+  const normalizeTime = (time) => {
     if (!time) return '';
-    return time; // HH:mm format is same
+    return time.replace('.', ':');
   };
 
   // Calculate duration from check-in and check-out
@@ -236,16 +244,14 @@ const TimesheetEditPage = () => {
     }
 
     try {
-      // Parse dates
       const [dayIn, monthIn, yearIn] = date_checkin.split('/');
-      const [hourIn, minIn] = hour_checkin.split(':');
+      const [hourIn, minIn] = hour_checkin.replace('.', ':').split(':');
       const checkinDate = new Date(yearIn, monthIn - 1, dayIn, hourIn, minIn);
 
       const [dayOut, monthOut, yearOut] = date_checkout.split('/');
-      const [hourOut, minOut] = hour_checkout.split(':');
+      const [hourOut, minOut] = hour_checkout.replace('.', ':').split(':');
       const checkoutDate = new Date(yearOut, monthOut - 1, dayOut, hourOut, minOut);
 
-      // Calculate difference in hours
       const diffMs = checkoutDate - checkinDate;
       const diffHours = diffMs / (1000 * 60 * 60);
 
@@ -271,7 +277,6 @@ const TimesheetEditPage = () => {
 
   // Handle date picker change
   const handleDatePickerChange = (field, value) => {
-    // Convert yyyy-MM-dd to dd/mm/yyyy
     const ddmmyyyy = yyyymmddToDdmmyyyy(value);
 
     if (field === 'checkin') {
@@ -292,7 +297,6 @@ const TimesheetEditPage = () => {
 
   // Handle time picker change
   const handleTimePickerChange = (field, value) => {
-    // HH:mm format is same
     if (field === 'checkin') {
       setCheckinTimePicker(value);
       setFormData(prev => ({
@@ -309,73 +313,131 @@ const TimesheetEditPage = () => {
     setHasChanges(true);
   };
 
-  // Select workcenter from dropdown
-  const selectWorkcenter = (workcenter) => {
+  // Select workcenter from dropdown — auto-fills code + description
+  const selectWorkcenter = (wc) => {
     setFormData(prev => ({
       ...prev,
-      workcentercode: workcenter.workcentercode,
-      workcenterdescription: workcenter.workcenterdescription
+      workcentercode: wc.code,
+      workcenterdescription: wc.description
     }));
-    setWorkcenterSearch(workcenter.workcenterdescription);
+    setWorkcenterSearch(`${wc.description} — ${wc.code}`);
     setShowWorkcenterDropdown(false);
     setHasChanges(true);
   };
 
-  // Save changes
+  // Build longdate string dari dd/mm/yyyy + HH:mm
+  // Kirim sebagai string "YYYY-MM-DD HH:MM:00" tanpa timezone conversion
+  // supaya PostgreSQL interpret sesuai session timezone (Asia/Makassar)
+  const buildLongdate = (dateStr, timeStr) => {
+    if (!dateStr || !timeStr) return null;
+    const [day, month, year] = dateStr.split('/');
+    const [hour, min] = timeStr.replace('.', ':').split(':');
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${hour.padStart(2, '0')}:${min.padStart(2, '0')}:00`;
+  };
+
+  // Save changes via API
   const handleSave = async () => {
-    // Validation
     if (!formData.date_checkin || !formData.hour_checkin) {
-      alert('⚠️ Check-in date dan time wajib diisi');
+      alert('Check-in date dan time wajib diisi');
       return;
     }
 
     if (!formData.date_checkout || !formData.hour_checkout) {
-      alert('⚠️ Check-out date dan time wajib diisi');
+      alert('Check-out date dan time wajib diisi');
       return;
     }
 
     if (!formData.workcentercode) {
-      alert('⚠️ Workcenter wajib dipilih');
+      alert('Workcenter wajib dipilih');
       return;
     }
 
-    const confirmSave = window.confirm('Simpan perubahan timesheet ini?');
-    if (!confirmSave) return;
+    // Check if duration = 0 → will set state_flag = 5 (Deleted)
+    const duration = parseFloat(formData.duration || 0);
+    if (duration === 0) {
+      const confirmDelete = window.confirm(
+        'Duration = 0 (Check-in dan Check-out sama).\nTimesheet ini akan ditandai sebagai "Deleted" (state_flag = 5).\n\nLanjutkan?'
+      );
+      if (!confirmDelete) return;
+    } else {
+      const confirmSave = window.confirm('Simpan perubahan timesheet ini?');
+      if (!confirmSave) return;
+    }
 
     setSaving(true);
 
-    /* PRODUCTION CODE - Uncomment untuk production
     try {
-      const res = await fetch(`/timesheet/${tsnumber}`, {
+      // Build longdate timestamps
+      const longdate_checkin = buildLongdate(formData.date_checkin, formData.hour_checkin);
+      const longdate_checkout = buildLongdate(formData.date_checkout, formData.hour_checkout);
+
+      // Use updateTimesheetadmin for full update
+      const body = {
+        serialnumber: formData.serialnumber,
+        full_name: formData.full_name,
+        production_order: formData.production_order,
+        ssbr_ident: formData.ssbr_ident,
+        operation_text: formData.operation_text,
+        seq: formData.seq,
+        workcentercode: formData.workcentercode,
+        workcenterdescription: formData.workcenterdescription,
+        longdate_checkin,
+        longdate_checkout
+      };
+
+      const res = await fetch(`${API_BASE}/timesheet/updateadmin/${tsnumber}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(body)
       });
 
-      if (!res.ok) {
-        throw new Error('Gagal save timesheet');
+      if (!res.ok) throw new Error('Gagal save timesheet');
+
+      // Now use partialUpdate for fields not in updateadmin (std_foreman_hours, note, state_flag)
+      const patchBody = {};
+
+      if (formData.note !== (originalData?.note || '')) {
+        patchBody.note = formData.note;
       }
 
-      await res.json();
-      alert('✅ Timesheet berhasil disimpan');
+      const newStdForeman = formData.std_foreman_hours !== '' ? parseFloat(formData.std_foreman_hours) : null;
+      const origStdForeman = originalData?.std_foreman_hours != null ? parseFloat(originalData.std_foreman_hours) : null;
+      if (newStdForeman !== origStdForeman) {
+        patchBody.std_foreman_hours = newStdForeman;
+      }
+
+      // Persist planhours from SOW into timesheet_transaction
+      if (formData.planhours !== '' && formData.planhours !== (originalData?.planhours != null ? String(originalData.planhours) : '')) {
+        patchBody.planhours = formData.planhours;
+      } else if (formData.planhours !== '' && !originalData?.planhours) {
+        patchBody.planhours = formData.planhours;
+      }
+
+      // Set state_flag = 5 when duration = 0
+      if (duration === 0) {
+        patchBody.state_flag = '5';
+      }
+
+      if (Object.keys(patchBody).length > 0) {
+        const patchRes = await fetch(`${API_BASE}/timesheet/${tsnumber}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patchBody)
+        });
+
+        if (!patchRes.ok) {
+          console.error('Partial update failed');
+        }
+      }
+
       setHasChanges(false);
       navigate(returnUrl);
     } catch (err) {
       console.error('Error saving timesheet:', err);
-      alert('❌ Gagal menyimpan timesheet');
+      alert('Gagal menyimpan timesheet: ' + err.message);
     } finally {
       setSaving(false);
     }
-    */
-
-    // DEVELOPMENT MODE - Simulate save
-    setTimeout(() => {
-      console.log('Simulated save:', formData);
-      alert('✅ Timesheet berhasil disimpan (DUMMY MODE)');
-      setHasChanges(false);
-      setSaving(false);
-      navigate(returnUrl);
-    }, 1000);
   };
 
   // Cancel and go back
@@ -424,8 +486,21 @@ const TimesheetEditPage = () => {
       {/* Form Content - Scrollable - White Background */}
       <div className="flex-1 overflow-y-auto px-3 py-4 bg-white">
         <div className="max-w-2xl mx-auto space-y-4">
+          {/* State Flag = 5 Warning */}
+          {formData.state_flag === '5' && (
+            <div className="bg-red-50 border border-red-300 rounded-lg p-3">
+              <div className="flex items-center gap-2">
+                <span className="text-red-600 text-xl font-bold">X</span>
+                <div>
+                  <div className="text-sm font-semibold text-red-800">Deleted</div>
+                  <div className="text-xs text-red-600">Timesheet ini ditandai sebagai Deleted (state_flag = 5)</div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Validation Status */}
-          {formData.tsstatus === 'V' && (
+          {formData.validation_date && (
             <div className="bg-green-50 border border-green-300 rounded-lg p-3">
               <div className="flex items-center gap-2">
                 <span className="text-green-600 text-xl font-bold">✓</span>
@@ -439,7 +514,7 @@ const TimesheetEditPage = () => {
             </div>
           )}
 
-          {/* General Information Section - Light Blue Background */}
+          {/* General Information Section */}
           <div className="bg-blue-50 rounded-lg shadow-sm border border-blue-200 p-4">
             <h3 className="text-sm font-bold text-blue-900 mb-3">General Information</h3>
 
@@ -554,12 +629,15 @@ const TimesheetEditPage = () => {
                             onClick={() => selectWorkcenter(wc)}
                             className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer border-b border-blue-100 last:border-b-0"
                           >
-                            <div className="font-semibold text-blue-900">
-                              {wc.workcentercode}
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-blue-900">{wc.description}</span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                wc.type === 'OT' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {wc.type}
+                              </span>
                             </div>
-                            <div className="text-xs text-gray-600">
-                              {wc.workcenterdescription}
-                            </div>
+                            <div className="text-xs text-gray-600">{wc.code}</div>
                           </div>
                         ))
                       )}
@@ -568,14 +646,14 @@ const TimesheetEditPage = () => {
                 </div>
                 {formData.workcentercode && (
                   <div className="text-xs text-blue-700 mt-1">
-                    Selected: {formData.workcentercode}
+                    Selected: {formData.workcenterdescription} — {formData.workcentercode}
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Time Tracking Section - Light Blue Background */}
+          {/* Time Tracking Section */}
           <div className="bg-blue-50 rounded-lg shadow-sm border border-blue-200 p-4">
             <h3 className="text-sm font-bold text-blue-900 mb-3">Time Tracking</h3>
 
@@ -632,17 +710,67 @@ const TimesheetEditPage = () => {
                 </div>
               </div>
 
-              {/* Duration (Auto-calculated) */}
-              <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">
-                  Duration (hours)
-                </label>
-                <input
-                  type="text"
-                  value={formData.duration}
-                  disabled
-                  className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white cursor-not-allowed font-bold text-blue-700"
-                />
+              {/* Duration + Plan Hours + Std Foreman Hours */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-blue-900 mb-1">
+                    Duration (hours)
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.duration}
+                    disabled
+                    className={`w-full px-3 py-2 text-sm border rounded cursor-not-allowed font-bold ${
+                      parseFloat(formData.duration || 0) === 0
+                        ? 'border-red-300 bg-red-50 text-red-700'
+                        : 'border-blue-200 bg-white text-blue-700'
+                    }`}
+                  />
+                  {parseFloat(formData.duration || 0) === 0 && formData.date_checkout && (
+                    <div className="text-[10px] text-red-600 mt-0.5 font-medium">
+                      Duration = 0, akan ditandai sebagai Deleted
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-blue-900 mb-1">
+                    Plan Hours <span className="text-[10px] font-normal text-gray-500">(SOW)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.planhours}
+                    disabled
+                    className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-blue-900 mb-1">
+                    Std Foreman Hours
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    value={formData.std_foreman_hours}
+                    onChange={(e) => handleInputChange('std_foreman_hours', e.target.value)}
+                    onKeyDown={(e) => {
+                      // Block non-numeric keys except control keys
+                      if (
+                        !/[0-9.]/.test(e.key) &&
+                        !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)
+                      ) {
+                        e.preventDefault();
+                      }
+                      // Prevent multiple dots
+                      if (e.key === '.' && e.target.value.includes('.')) {
+                        e.preventDefault();
+                      }
+                    }}
+                    placeholder="0.00"
+                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
+                  />
+                </div>
               </div>
 
               {/* Note */}
@@ -661,11 +789,11 @@ const TimesheetEditPage = () => {
             </div>
           </div>
 
-          {/* Change Indicator - Orange Accent */}
+          {/* Change Indicator */}
           {hasChanges && (
             <div className="bg-orange-50 border border-orange-300 rounded-lg p-3">
               <div className="flex items-center gap-2">
-                <span className="text-orange-600 text-lg">⚠️</span>
+                <span className="text-orange-600 text-lg">!</span>
                 <div className="text-xs text-orange-800 font-semibold">
                   You have unsaved changes
                 </div>

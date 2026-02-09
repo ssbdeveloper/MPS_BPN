@@ -7,8 +7,8 @@ const ExcelJS = require('exceljs');
 
 
 // Configuration from environment variables
-const PLANT_SSB = process.env.PLANT_SSB || '5153';  // ✅ Nama var sesuai .env
-const TIMEZONE = process.env.TIMEZONE || 'Asia/Makassar';  // ✅ Fallback default
+const PLANT_SSB = process.env.PLANT_SSB;  // ✅ Nama var sesuai .env
+const TIMEZONE = process.env.TIMEZONE;  // ✅ Fallback default
 console.log('⚙️ Timesheet Controller Config:');
 console.log('   Plant:', PLANT_SSB);
 console.log('   Timezone:', TIMEZONE);
@@ -34,16 +34,17 @@ const formatDate = (date) => {
 };
 
 /**
- * Format time as HH:MM or HH.MM based on useDot parameter
+ * Format time as HH:MM
+ * Note: locale id-ID returns "." separator, so we always normalize to ":"
  */
-const formatTime = (date, useDot = false) => {
+const formatTime = (date) => {
   const time = date.toLocaleTimeString('id-ID', {
     timeZone: TIMEZONE,
     hour: '2-digit',
     minute: '2-digit',
     hour12: false
   });
-  return useDot ? time.replace(':', '.') : time;
+  return time.replace('.', ':');
 };
 
 /**
@@ -147,14 +148,14 @@ exports.search = async (req, res) => {
     let params;
 
     if (start && end) {
-      query = `SELECT * FROM timesheet_transaction 
-               WHERE ${field} BETWEEN $1 AND $2 
-               ORDER BY tsnumber DESC`;
+      query = `SELECT * FROM timesheet_transaction
+               WHERE DATE(${field}) BETWEEN $1 AND $2
+               ORDER BY longdate_checkin ASC`;
       params = [start, end];
     } else if (value) {
-      query = `SELECT * FROM timesheet_transaction 
-               WHERE ${field} = $1 
-               ORDER BY tsnumber DESC`;
+      query = `SELECT * FROM timesheet_transaction
+               WHERE DATE(${field}) = $1
+               ORDER BY longdate_checkin ASC`;
       params = [value];
     } else {
       return res.status(400).json({ error: "Missing value or range (start/end)" });
@@ -227,6 +228,7 @@ exports.getbyid = async (req, res) => {
 
 /**
  * CREATE new timesheet entry (check-in)
+ * Semua timestamp & format dihitung 100% di PostgreSQL pakai NOW() supaya konsisten
  */
 exports.create = async (req, res) => {
   try {
@@ -247,17 +249,17 @@ exports.create = async (req, res) => {
       return res.status(400).json({ error: 'serialnumber and full_name are required' });
     }
 
-    const longdate_checkin = getCurrentDateTime();
-    const date_checkin = formatDate(longdate_checkin);
-    const hour_checkin = formatTime(longdate_checkin);
     const PLANT_SSB = process.env.PLANT_SSB;
 
     const result = await db.query(
-      `INSERT INTO timesheet_transaction 
+      `INSERT INTO timesheet_transaction
         (production_order, ssbr_ident, serialnumber, full_name, seq, operation_text,
-         workcentercode, workcenterdescription, date_checkin, longdate_checkin,
-         hour_checkin, plant, activitytype)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
+         workcentercode, workcenterdescription, longdate_checkin,
+         date_checkin, hour_checkin, plant, activitytype)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(),
+         to_char(NOW(), 'DD/MM/YYYY'),
+         to_char(NOW(), 'HH24:MI'),
+         $9, $10)
        RETURNING *`,
       [
         production_order,
@@ -268,9 +270,6 @@ exports.create = async (req, res) => {
         operation_text,
         workcentercode,
         workcenterdescription,
-        date_checkin,
-        longdate_checkin,
-        hour_checkin,
         PLANT_SSB,
         id_unprod
       ]
@@ -288,31 +287,28 @@ exports.create = async (req, res) => {
  */
 exports.checkout = async (req, res) => {
   console.log("API CHECKOUT KE-TRIGGER");
-  console.log("req.body:", req.body);   // <-- taruh di sini
+  console.log("req.body:", req.body);
   try {
     const { datakaryawan } = req.body;
-    
+
     if (!datakaryawan?.sn) {
       return res.status(400).json({ error: 'datakaryawan.sn is required' });
     }
 
     const serialnumber = datakaryawan.sn;
-    const longdate_checkout = getCurrentDateTime();
-    const date_checkout = formatDate(longdate_checkout);
-    const hour_checkout = formatTime(longdate_checkout);
 
     const result = await db.query(
       `UPDATE timesheet_transaction
-       SET longdate_checkout = $1,
-           date_checkout = $2,
-           hour_checkout = $3,
+       SET longdate_checkout = NOW(),
+           date_checkout = to_char(NOW(), 'DD/MM/YYYY'),
+           hour_checkout = to_char(NOW(), 'HH24:MI'),
            duration = ROUND(
-             EXTRACT(EPOCH FROM ($1 - longdate_checkin)) / 3600.0, 2
+             EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2
            )
-       WHERE serialnumber = $4
+       WHERE serialnumber = $1
          AND date_checkout IS NULL
        RETURNING *`,
-      [longdate_checkout, date_checkout, hour_checkout, serialnumber]
+      [serialnumber]
     );
 
     if (result.rows.length === 0) {
@@ -332,27 +328,23 @@ exports.checkout = async (req, res) => {
 exports.checkoutid = async (req, res) => {
   try {
     const { tsnumber } = req.body;
-    
+
     if (!tsnumber) {
       return res.status(400).json({ error: 'tsnumber is required' });
     }
 
-    const longdate_checkout = getCurrentDateTime();
-    const date_checkout = formatDate(longdate_checkout);
-    const hour_checkout = formatTime(longdate_checkout, true); // Using dot separator
-
     const result = await db.query(
       `UPDATE timesheet_transaction
-       SET longdate_checkout = $1,
-           date_checkout = $2,
-           hour_checkout = $3,
+       SET longdate_checkout = NOW(),
+           date_checkout = to_char(NOW(), 'DD/MM/YYYY'),
+           hour_checkout = to_char(NOW(), 'HH24:MI'),
            duration = ROUND(
-             EXTRACT(EPOCH FROM ($1 - longdate_checkin)) / 3600.0, 2
+             EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2
            )
-       WHERE tsnumber = $4
+       WHERE tsnumber = $1
          AND date_checkout IS NULL
        RETURNING *`,
-      [longdate_checkout, date_checkout, hour_checkout, tsnumber]
+      [tsnumber]
     );
 
     if (result.rows.length === 0) {
@@ -423,6 +415,7 @@ exports.updateTimesheetadmin = async (req, res) => {
       operation_text,
       seq,
       workcentercode,
+      workcenterdescription,
       longdate_checkin,
       longdate_checkout
     } = req.body;
@@ -444,50 +437,54 @@ exports.updateTimesheetadmin = async (req, res) => {
         operation_text = $5,
         seq = $6,
         workcentercode = $7,
-        longdate_checkin = $8::timestamptz,
-        date_checkin = CASE 
-          WHEN $8 IS NOT NULL 
-          THEN to_char($8::timestamptz AT TIME ZONE $11, 'DD/MM/YYYY') 
-          ELSE NULL 
+        workcenterdescription = $8,
+        longdate_checkin = $9::timestamptz,
+        date_checkin = CASE
+          WHEN $9 IS NOT NULL
+          THEN to_char($9::timestamptz, 'DD/MM/YYYY')
+          ELSE NULL
         END,
-        hour_checkin = CASE 
-          WHEN $8 IS NOT NULL 
-          THEN to_char($8::timestamptz AT TIME ZONE $11, 'HH24.MI') 
-          ELSE NULL 
+        hour_checkin = CASE
+          WHEN $9 IS NOT NULL
+          THEN to_char($9::timestamptz, 'HH24:MI')
+          ELSE NULL
         END,
-        longdate_checkout = $9::timestamptz,
-        date_checkout = CASE 
-          WHEN $9 IS NOT NULL 
-          THEN to_char($9::timestamptz AT TIME ZONE $11, 'DD/MM/YYYY') 
-          ELSE NULL 
+        longdate_checkout = $10::timestamptz,
+        date_checkout = CASE
+          WHEN $10 IS NOT NULL
+          THEN to_char($10::timestamptz, 'DD/MM/YYYY')
+          ELSE NULL
         END,
-        hour_checkout = CASE 
-          WHEN $9 IS NOT NULL 
-          THEN to_char($9::timestamptz AT TIME ZONE $11, 'HH24.MI') 
-          ELSE NULL 
+        hour_checkout = CASE
+          WHEN $10 IS NOT NULL
+          THEN to_char($10::timestamptz, 'HH24:MI')
+          ELSE NULL
         END,
         duration = CASE
-          WHEN $9 IS NOT NULL AND $8 IS NOT NULL
-          THEN ROUND(EXTRACT(EPOCH FROM ($9::timestamptz - $8::timestamptz)) / 3600.0, 2)
+          WHEN $10 IS NOT NULL AND $9 IS NOT NULL
+          THEN ROUND(EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz)) / 3600.0, 2)
           ELSE NULL
         END
-      WHERE tsnumber = $10
+      WHERE tsnumber = $11
       RETURNING *;
     `;
 
+    const s = (v) => (v ?? "").toString().trim() || null;
+
     const values = [
-      serialnumber?.trim() || null,
-      full_name?.trim() || null,
-      production_order?.trim() || null,
-      ssbr_ident?.trim() || null,
-      operation_text?.trim() || null,
-      seq?.trim() || null,
-      workcentercode?.trim() || null,
+      s(serialnumber),
+      s(full_name),
+      s(production_order),
+      s(ssbr_ident),
+      s(operation_text),
+      s(seq),
+      s(workcentercode),
+      s(workcenterdescription),
       longdate_checkin || null,
       longdate_checkout || null,
-      id,
-      TIMEZONE
+      id
     ];
+
 
     const result = await db.query(query, values);
     
@@ -619,7 +616,7 @@ exports.getcsv = (req, res) => generateExport(req, res, 'csv');
 /**
  * Export timesheet data as XLSX
  */
-
+exports.getxlsx = (req, res) => generateExport(req, res, 'xlsx');
 
 /* UPDATE FLEXIBLE*/
 exports.partialUpdate = async (req, res) => {
@@ -636,7 +633,7 @@ exports.partialUpdate = async (req, res) => {
     "hour_checkout",
     "date_checkin",
     "date_checkout",
-    "status_flag",
+    "state_flag",
     "std_foreman_hours",
     "planhours",
     "workcentercode",

@@ -8,22 +8,20 @@ const cors = require('cors');
 // ENVIRONMENT SETUP
 // ========================================
 // Load .env dari parent directory (development)
-if (process.env.NODE_ENV !== 'production') {
-  const envPath = path.join(__dirname, '../.env');
-  const result = dotenv.config({ path: envPath });
-  
-  if (result.error) {
-    console.warn('⚠️  No .env file found, using environment variables');
-  } else {
-    console.log('✅ .env loaded from:', envPath);
-  }
+const envPath = path.join(__dirname, '../.env');
+const result = dotenv.config({ path: envPath });
+
+if (result.error) {
+  console.warn('⚠️  No .env file found, using environment variables');
+} else {
+  console.log('✅ .env loaded from:', envPath);
 }
 
 // Set timezone
 process.env.TZ = process.env.TIMEZONE || 'Asia/Makassar';
 
 console.log('================================');
-console.log('🚀 Server Configuration');
+console.log('Server Configuration');
 console.log('================================');
 console.log('Environment:', process.env.NODE_ENV || 'development');
 console.log('Timezone:', process.env.TIMEZONE);
@@ -34,7 +32,24 @@ console.log('================================');
 // ========================================
 // DATABASE SETUP
 // ========================================
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Force pg to return timestamptz as raw string (no JS Date conversion)
+// Ini mencegah pg driver convert timezone pakai Node.js local TZ yang bisa beda
+// OID 1114 = timestamp, 1184 = timestamptz
+types.setTypeParser(1114, (str) => str); // timestamp → string
+types.setTypeParser(1184, (str) => str); // timestamptz → string
+
+console.log("===== DEBUG ENV DB =====");
+console.log({
+  host: process.env.DB_HOST,
+  port: process.env.DB_PORT,
+  user: process.env.DB_USER,
+  db: process.env.DB_NAME,
+  nodeEnv: process.env.NODE_ENV
+});
+console.log("========================");
+
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -74,11 +89,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN === '*' ? true : process.env.CORS_ORIGIN,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: false,
   })
 );
+
 
 // Static files (hanya untuk development, bukan untuk Docker)
 if (process.env.NODE_ENV !== 'production') {
@@ -156,24 +174,24 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('⚠️  SIGTERM received, closing server gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    pool.end(() => {
-      console.log('✅ Database pool closed');
-      process.exit(0);
-    });
-  });
-});
+// process.on('SIGTERM', () => {
+//   console.log('⚠️  SIGTERM received, closing server gracefully...');
+//   server.close(() => {
+//     console.log('✅ Server closed');
+//     pool.end(() => {
+//       console.log('✅ Database pool closed');
+//       process.exit(0);
+//     });
+//   });
+// });
 
-process.on('SIGINT', () => {
-  console.log('\n⚠️  SIGINT received, closing server gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    pool.end(() => {
-      console.log('✅ Database pool closed');
-      process.exit(0);
-    });
-  });
-});
+// process.on('SIGINT', () => {
+//   console.log('\n⚠️  SIGINT received, closing server gracefully...');
+//   server.close(() => {
+//     console.log('✅ Server closed');
+//     pool.end(() => {
+//       console.log('✅ Database pool closed');
+//       process.exit(0);
+//     });
+//   });
+// });

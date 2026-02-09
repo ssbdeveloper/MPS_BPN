@@ -59,6 +59,8 @@ const formatDateShort = (dateStr) => {
   return `${day} ${MONTHS_SHORT[monthIdx] || '???'} ${year}`;
 };
 
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
 const TimesheetListPage = () => {
   const navigate = useNavigate();
 
@@ -75,48 +77,27 @@ const TimesheetListPage = () => {
 
   // API: Load timesheet for current user
   const loadTimesheet = async () => {
-    /* PRODUCTION CODE - Uncomment untuk production
     const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
     const serialnumber = datakaryawan?.snssb;
 
     if (!serialnumber) {
       console.error('SN karyawan tidak ditemukan');
-      alert('Data karyawan tidak ditemukan. Silakan login kembali.');
       navigate('/login-timesheet');
       return;
     }
 
     try {
-      const res = await fetch(`/timesheet/getsn/${serialnumber}`);
-      if (!res.ok) {
-        throw new Error('Gagal load timesheet dari API');
-      }
+      const res = await fetch(`${API_BASE}/timesheet/getsn/${serialnumber}`);
+      if (!res.ok) throw new Error('Gagal load timesheet');
       const data = await res.json();
 
       if (data && data.length > 0) {
         setTimesheets(data);
-        return;
       } else {
-        throw new Error('Data kosong dari API');
+        setTimesheets([]);
       }
     } catch (err) {
-      console.error('Error loading timesheet from API:', err);
-    }
-    */
-
-    // DEVELOPMENT MODE - Load dummy data langsung
-    try {
-      console.log('Loading dummy timesheet data...');
-      const dummyResponse = await fetch('/dummy-timesheets.json');
-      if (dummyResponse.ok) {
-        const dummyData = await dummyResponse.json();
-        setTimesheets(dummyData);
-      } else {
-        throw new Error('Dummy data tidak tersedia');
-      }
-    } catch (dummyError) {
-      console.error('Error loading dummy data:', dummyError);
-      alert('❌ Gagal load dummy data');
+      console.error('Error loading timesheet:', err);
       setTimesheets([]);
     }
   };
@@ -131,7 +112,7 @@ const TimesheetListPage = () => {
   // Handle Stop button (checkout)
   const handleStop = async (item) => {
     try {
-      const res = await fetch('/timesheet/checkoutid/', {
+      const res = await fetch(`${API_BASE}/timesheet/checkoutid/`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tsnumber: item.tsnumber })
@@ -153,7 +134,7 @@ const TimesheetListPage = () => {
   // Handle Restart button
   const handleRestart = async (item) => {
     try {
-      const res = await fetch('/timesheet/', {
+      const res = await fetch(`${API_BASE}/timesheet/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -187,13 +168,10 @@ const TimesheetListPage = () => {
     if (!activeRow) return;
 
     try {
-      const res = await fetch('/timesheet/note', {
-        method: 'POST',
+      const res = await fetch(`${API_BASE}/timesheet/${activeRow.tsnumber}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tsnumber: activeRow.tsnumber,
-          note: noteInput
-        })
+        body: JSON.stringify({ note: noteInput })
       });
 
       if (!res.ok) {

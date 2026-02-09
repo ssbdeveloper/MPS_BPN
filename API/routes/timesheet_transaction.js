@@ -8,7 +8,7 @@ router.get("/getsn/:snkaryawan", controller.getbysn);
 router.get("/getid/:id", controller.getbyid);
 router.get("/nama/:nama", controller.getbyname);
 router.get("/getcsv", controller.getcsv);
-//router.get("/getexcel", controller.getxlsx);
+router.get("/getexcel", controller.getxlsx);
 router.post("/", controller.create);
 router.put("/validation", controller.bulkValidation);
 router.put("/updateadmin/:id", controller.updateTimesheetadmin);
