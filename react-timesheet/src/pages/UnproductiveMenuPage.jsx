@@ -5,8 +5,11 @@ import { useNavigate } from 'react-router-dom';
  * Unproductive Menu Page
  * Converted from unprodmenu.html
  * Shows list of unproductive activity codes for timesheet
+ * Connected to real API: checkout → create unprod entry
  * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10%
  */
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 // Icon mapping for each unprod code
 const UNPROD_ICONS = {
@@ -123,7 +126,7 @@ const UnproductiveMenuPage = () => {
     { code: '1680', label: 'OTHERS' },
   ];
 
-  // Handle unprod code selection
+  // Handle unprod code selection — real API calls
   const handleUnprodSelect = async (code, label) => {
     if (loading) return;
 
@@ -134,56 +137,49 @@ const UnproductiveMenuPage = () => {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
 
       if (!datakaryawan || !datakaryawan.snssb || !datakaryawan.full_name) {
-        alert('❌ Data karyawan tidak lengkap!');
+        alert('Data karyawan tidak lengkap!');
         setLoading(false);
         return;
       }
 
-      // 1. Checkout current timesheet
-      // PRODUCTION: Uncomment this
-      // const checkoutRes = await fetch('/timesheet/checkout', {
-      //   method: 'PUT',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     datakaryawan: { sn: datakaryawan.snssb }
-      //   })
-      // });
-      // if (!checkoutRes.ok) throw new Error('Gagal checkout');
-
-      // DEVELOPMENT: Simulate checkout
-      console.log('Checkout current timesheet for:', datakaryawan.snssb);
+      // 1. Checkout current timesheet (if any open)
+      await fetch(`${API_BASE}/timesheet/checkout`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          datakaryawan: { sn: datakaryawan.snssb }
+        })
+      });
+      // Checkout may return 404 if no open timesheet — that's fine, continue
 
       // 2. Create new unprod timesheet entry
       const operation_text = `${code} ${label}`;
 
-      // PRODUCTION: Uncomment this
-      // const unprodRes = await fetch('/timesheet/', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     id_unprod: code,
-      //     serialnumber: datakaryawan.snssb,
-      //     full_name: datakaryawan.full_name,
-      //     operation_text: operation_text,
-      //     workcentercode: datakaryawan.workcenter || '',
-      //     workcenterdescription: datakaryawan.machinename || ''
-      //   })
-      // });
-      // if (!unprodRes.ok) throw new Error('Gagal input unprod');
-
-      // DEVELOPMENT: Simulate success
-      console.log('Creating unprod entry:', {
-        id_unprod: code,
-        operation_text: operation_text,
-        serialnumber: datakaryawan.snssb
+      const res = await fetch(`${API_BASE}/timesheet/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id_unprod: code,
+          serialnumber: datakaryawan.snssb,
+          full_name: datakaryawan.full_name,
+          operation_text: operation_text,
+          workcentercode: datakaryawan.workcenter || '',
+          workcenterdescription: datakaryawan.machinename || ''
+        })
       });
 
-      alert('✅ TIMESHEET berhasil!');
-      navigate('/login-timesheet');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Gagal membuat unproductive entry');
+      }
+
+      alert('TIMESHEET berhasil!');
+      navigate('/timesheet-mainmenu');
 
     } catch (err) {
       console.error('Error creating unprod entry:', err);
-      alert(`❌ Terjadi kesalahan: ${err.message}`);
+      alert(`Terjadi kesalahan: ${err.message}`);
+    } finally {
       setLoading(false);
     }
   };
