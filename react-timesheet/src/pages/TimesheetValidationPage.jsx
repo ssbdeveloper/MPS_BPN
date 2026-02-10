@@ -308,9 +308,9 @@ const TimesheetValidationPage = () => {
   const [loading, setLoading] = useState(false);
   const [downloadingExcel, setDownloadingExcel] = useState(false);
 
-  const scrollPositionRef = useRef(0);
   const containerRef = useRef(null);
   const searchTimerRef = useRef(null);
+  const restoreScrollRef = useRef(null); // null = no restore needed
 
   // Debounce search input — 400ms
   useEffect(() => {
@@ -340,15 +340,33 @@ const TimesheetValidationPage = () => {
     setSearchParams(params, { replace: true });
   }, [searchQuery, startDate, endDate, expandedGroups, setSearchParams]);
 
-  // Restore scroll position after render
+  // When groups load, auto-fetch records for any already-expanded groups
+  // (e.g. returning from edit page with expanded state in URL)
   useEffect(() => {
-    const savedScroll = searchParams.get('scrollY');
-    if (savedScroll && containerRef.current) {
-      setTimeout(() => {
-        containerRef.current.scrollTop = parseInt(savedScroll);
-      }, 100);
+    if (groups.length > 0 && expandedGroups.size > 0) {
+      // Set target restore dari sessionStorage (untuk kasus kembali dari edit)
+      const saved = sessionStorage.getItem('timesheet_scroll');
+      if (saved && parseInt(saved, 10) > 0) {
+        restoreScrollRef.current = parseInt(saved, 10);
+        sessionStorage.removeItem('timesheet_scroll');
+      }
+      for (const sn of expandedGroups) {
+        if (!groupRecords[sn]?.records?.length && !groupRecords[sn]?.loading) {
+          loadGroupRecords(sn);
+        }
+      }
     }
-  }, [groups]);
+  }, [groups]); // only when groups list changes (initial load / refresh)
+
+  // Simpan scroll saat user scroll
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => { restoreScrollRef.current = null; }; // user scrolled manually, cancel pending restore
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
 
   // Build date params helper
   const getDateParams = useCallback(() => {
@@ -361,32 +379,6 @@ const TimesheetValidationPage = () => {
     const fmt = (d) => d.toISOString().split('T')[0];
     return { start: fmt(thirtyDaysAgo), end: fmt(now) };
   }, [startDate, endDate]);
-
-  // API: Load stats + groups (lightweight, no individual records)
-  const loadValidationData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { start, end } = getDateParams();
-      let url = `${API_BASE}/timesheet/validation-stats?start=${start}&end=${end}`;
-      if (debouncedSearch.trim()) {
-        url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
-      }
-
-      const res = await fetch(url);
-      if (!res.ok) throw new Error('Gagal load data validasi');
-      const data = await res.json();
-
-      setStats(data.stats);
-      setGroups(data.groups || []);
-      // Clear cached records since date/search changed
-      setGroupRecords({});
-    } catch (err) {
-      console.error('Error loading validation data:', err);
-      setGroups([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [getDateParams, debouncedSearch]);
 
   // API: Load records for one employee group (on expand)
   const loadGroupRecords = useCallback(async (serialnumber) => {
@@ -402,10 +394,24 @@ const TimesheetValidationPage = () => {
       if (!res.ok) throw new Error('Gagal load records');
       const records = await res.json();
 
-      setGroupRecords(prev => ({
-        ...prev,
-        [serialnumber]: { records, loading: false }
-      }));
+      setGroupRecords(prev => {
+        const next = { ...prev, [serialnumber]: { records, loading: false } };
+
+        // Setelah state update ini selesai render, cek apakah masih ada yg loading
+        // Gunakan setTimeout 0 agar jalan setelah paint
+        setTimeout(() => {
+          const stillLoading = Object.values(next).some(v => v.loading);
+          if (!stillLoading && restoreScrollRef.current !== null && containerRef.current) {
+            const target = restoreScrollRef.current;
+            restoreScrollRef.current = null;
+            requestAnimationFrame(() => {
+              if (containerRef.current) containerRef.current.scrollTop = target;
+            });
+          }
+        }, 0);
+
+        return next;
+      });
     } catch (err) {
       console.error('Error loading group records:', err);
       setGroupRecords(prev => ({
@@ -414,6 +420,54 @@ const TimesheetValidationPage = () => {
       }));
     }
   }, [getDateParams]);
+
+  // API: Load stats + groups (lightweight, no individual records)
+  // keepExpanded=true → preserve groupRecords cache & reload expanded groups
+  const loadValidationData = useCallback(async (keepExpanded = false) => {
+    // Simpan scroll sebelum loading (hanya saat keepExpanded)
+    const scrollBefore = keepExpanded && containerRef.current
+      ? containerRef.current.scrollTop
+      : null;
+
+    setLoading(true);
+    try {
+      const { start, end } = getDateParams();
+      let url = `${API_BASE}/timesheet/validation-stats?start=${start}&end=${end}`;
+      if (debouncedSearch.trim()) {
+        url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Gagal load data validasi');
+      const data = await res.json();
+
+      setStats(data.stats);
+      setGroups(data.groups || []);
+
+      if (keepExpanded) {
+        // Re-fetch records for currently expanded groups (data may have changed)
+        setExpandedGroups(prev => {
+          for (const sn of prev) {
+            loadGroupRecords(sn);
+          }
+          return prev;
+        });
+        // Simpan target restore, akan dipakai oleh handleValidate setelah ini
+        if (scrollBefore !== null) {
+          restoreScrollRef.current = scrollBefore;
+        }
+      } else {
+        // Full reload: clear cached records since date/search changed
+        setGroupRecords({});
+        restoreScrollRef.current = null;
+      }
+    } catch (err) {
+      console.error('Error loading validation data:', err);
+      setGroups([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [getDateParams, debouncedSearch, loadGroupRecords]);
 
   // Toggle group expansion — lazy load records
   const toggleGroup = useCallback((serialnumber) => {
@@ -489,11 +543,8 @@ const TimesheetValidationPage = () => {
     }
   }, [startDate, endDate]);
 
-  // Validate single
+  // Validate single — keep expanded groups open & refresh their records
   const handleValidateSingle = useCallback(async (tsnumber) => {
-    const ok = window.confirm('Validasi timesheet ini?');
-    if (!ok) return;
-
     try {
       const res = await fetch(`${API_BASE}/timesheet/validation`, {
         method: 'PUT',
@@ -502,27 +553,22 @@ const TimesheetValidationPage = () => {
       });
       if (!res.ok) throw new Error('Gagal validasi');
       await res.json();
-      loadValidationData();
+      loadValidationData(true);
     } catch (err) {
       console.error('Error validate:', err);
       alert('Gagal validasi timesheet');
     }
   }, [loadValidationData]);
 
-  // Validate group
+
+  // Validate group — keep expanded groups open & refresh their records
   const handleValidateGroup = useCallback(async (serialnumber, records) => {
     const recs = records || groupRecords[serialnumber]?.records || [];
     const tsnumbers = recs
       .filter(r => !r.validation_date && String(r.state_flag) !== '5')
       .map(r => r.tsnumber);
 
-    if (tsnumbers.length === 0) {
-      alert('Tidak ada timesheet yang perlu divalidasi');
-      return;
-    }
-
-    const ok = window.confirm(`Validasi ${tsnumbers.length} timesheet untuk karyawan ini?`);
-    if (!ok) return;
+    if (tsnumbers.length === 0) return;
 
     try {
       const res = await fetch(`${API_BASE}/timesheet/validation`, {
@@ -532,23 +578,26 @@ const TimesheetValidationPage = () => {
       });
       if (!res.ok) throw new Error('Gagal validasi batch');
       await res.json();
-      loadValidationData();
+      loadValidationData(true);
     } catch (err) {
       console.error('Error validate batch:', err);
       alert('Gagal validasi batch');
     }
   }, [groupRecords, loadValidationData]);
 
+
   // Navigate to edit
   const handleEdit = useCallback((tsnumber) => {
     if (containerRef.current) {
-      scrollPositionRef.current = containerRef.current.scrollTop;
-      const currentParams = new URLSearchParams(searchParams);
-      currentParams.set('scrollY', scrollPositionRef.current);
-      setSearchParams(currentParams, { replace: true });
+      sessionStorage.setItem('timesheet_scroll', containerRef.current.scrollTop);
     }
-    navigate(`/timesheet-edit/${tsnumber}?returnUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`);
-  }, [navigate, searchParams, setSearchParams]);
+    navigate(
+      `/timesheet-edit/${tsnumber}?returnUrl=${encodeURIComponent(
+        window.location.pathname + window.location.search
+      )}`
+    );
+  }, [navigate, searchParams]);
+
 
   const goBack = useCallback(() => navigate('/'), [navigate]);
 

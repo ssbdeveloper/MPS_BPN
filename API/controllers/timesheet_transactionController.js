@@ -715,6 +715,7 @@ exports.validationStats = async (req, res) => {
       whereClauses.push(`(
         LOWER(serialnumber) LIKE $${paramIdx}
         OR LOWER(full_name) LIKE $${paramIdx}
+        OR LOWER(workcentercode) LIKE $${paramIdx}
         OR LOWER(workcenterdescription) LIKE $${paramIdx}
         OR LOWER(production_order) LIKE $${paramIdx}
       )`);
