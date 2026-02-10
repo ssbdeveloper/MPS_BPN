@@ -40,8 +40,8 @@ const NfcUserListPage = () => {
   // Filter data when search inputs change
   useEffect(() => {
     const filtered = allData.filter(user => {
-      const nameMatch = user.full_name.toLowerCase().includes(searchName.toLowerCase().trim());
-      const snssMatch = user.snssb.toLowerCase().includes(searchSnssb.toLowerCase().trim());
+      const nameMatch = (user.full_name || '').toLowerCase().includes(searchName.toLowerCase().trim());
+      const snssMatch = (user.snssb || '').toLowerCase().includes(searchSnssb.toLowerCase().trim());
 
       // OR logic: match if either name or SNSSB matches
       if (searchName.trim() && searchSnssb.trim()) {
