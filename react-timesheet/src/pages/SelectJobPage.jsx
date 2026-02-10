@@ -18,6 +18,9 @@ const SelectJobPage = () => {
   const [selectedJob, setSelectedJob] = useState(null);
   const [showScanner, setShowScanner] = useState(false);
 
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [currentDeviceIndex, setCurrentDeviceIndex] = useState(0);
+
   const videoRef = useRef(null);
   const codeReaderRef = useRef(null);
 
@@ -74,48 +77,67 @@ const SelectJobPage = () => {
     }, 300);
   };
 
-  // Handle barcode scan
+  // Start scanning with a specific device index
+  const startScanWithDevice = async (devices, deviceIndex) => {
+    if (!codeReaderRef.current) {
+      codeReaderRef.current = new BrowserMultiFormatReader();
+    } else {
+      codeReaderRef.current.reset();
+    }
+
+    const deviceId = devices[deviceIndex].deviceId;
+
+    await codeReaderRef.current.decodeFromVideoDevice(
+      deviceId,
+      videoRef.current,
+      (result, err) => {
+        if (result) {
+          const scannedText = result.getText();
+          setOrderInput(scannedText);
+          codeReaderRef.current.reset();
+          setShowScanner(false);
+          loaddatapgall(scannedText);
+        }
+      }
+    );
+  };
+
+  // Handle barcode scan — default kamera depan (user)
   const handleBarcodeScan = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
-      });
+      // Request permission dulu
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       stream.getTracks().forEach(track => track.stop());
 
-      setShowScanner(true);
-
-      if (!codeReaderRef.current) {
-        codeReaderRef.current = new BrowserMultiFormatReader();
-      }
-
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      const vDevices = devices.filter(d => d.kind === 'videoinput');
 
-      if (videoDevices.length === 0) {
+      if (vDevices.length === 0) {
         alert('Tidak ada kamera ditemukan');
-        setShowScanner(false);
         return;
       }
 
-      const backCamera = videoDevices.find(d =>
-        d.label.toLowerCase().includes('back') ||
-        d.label.toLowerCase().includes('rear')
+      // Default: cari kamera depan (front/user), fallback ke index 0
+      const frontIndex = vDevices.findIndex(d =>
+        d.label.toLowerCase().includes('front') ||
+        d.label.toLowerCase().includes('user') ||
+        d.label.toLowerCase().includes('facing front')
       );
-      const deviceId = backCamera ? backCamera.deviceId : videoDevices[0].deviceId;
+      const startIndex = frontIndex >= 0 ? frontIndex : 0;
 
-      await codeReaderRef.current.decodeFromVideoDevice(
-        deviceId,
-        videoRef.current,
-        (result, err) => {
-          if (result) {
-            const scannedText = result.getText();
-            setOrderInput(scannedText);
-            codeReaderRef.current.reset();
-            setShowScanner(false);
-            loaddatapgall(scannedText);
-          }
+      setVideoDevices(vDevices);
+      setCurrentDeviceIndex(startIndex);
+      setShowScanner(true);
+
+      // Tunggu sebentar agar video element sudah mount
+      setTimeout(async () => {
+        try {
+          await startScanWithDevice(vDevices, startIndex);
+        } catch (err) {
+          console.error('Start scan error:', err);
         }
-      );
+      }, 100);
+
     } catch (err) {
       console.error('Barcode scan error:', err);
       setShowScanner(false);
@@ -132,6 +154,18 @@ const SelectJobPage = () => {
     }
   };
 
+  // Switch ke kamera berikutnya
+  const switchCamera = async () => {
+    if (videoDevices.length <= 1) return;
+    const nextIndex = (currentDeviceIndex + 1) % videoDevices.length;
+    setCurrentDeviceIndex(nextIndex);
+    try {
+      await startScanWithDevice(videoDevices, nextIndex);
+    } catch (err) {
+      console.error('Switch camera error:', err);
+    }
+  };
+
   // Close scanner overlay
   const closeScanner = () => {
     if (codeReaderRef.current) {
@@ -142,6 +176,8 @@ const SelectJobPage = () => {
       }
     }
     setShowScanner(false);
+    setVideoDevices([]);
+    setCurrentDeviceIndex(0);
   };
 
   // Cleanup on unmount
@@ -311,13 +347,36 @@ const SelectJobPage = () => {
               </button>
             </div>
             <div className="p-4">
-              <video
-                ref={videoRef}
-                autoPlay
-                className="w-full h-64 bg-black rounded-lg"
-              />
+              <div className="relative">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  className="w-full h-64 bg-black rounded-lg"
+                />
+                {/* Tombol flip kamera — hanya tampil jika ada lebih dari 1 kamera */}
+                {videoDevices.length > 1 && (
+                  <button
+                    onClick={switchCamera}
+                    className="absolute bottom-2 right-2 w-10 h-10 flex items-center justify-center bg-black bg-opacity-50 hover:bg-opacity-70 text-white rounded-full transition-colors"
+                    title="Putar kamera"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M11 19H6.931A1.922 1.922 0 0 1 5 17.087V8h18v2" />
+                      <path d="M18 8V5a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h5" />
+                      <circle cx="18" cy="18" r="3" />
+                      <path d="m22 22-1.5-1.5" />
+                      <path d="M18 15v1.586a1 1 0 0 0 .293.707L20 19" />
+                    </svg>
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-gray-500 text-center mt-2">
                 Arahkan kamera ke barcode order
+                {videoDevices.length > 1 && (
+                  <span className="text-blue-500 ml-1">
+                    · Kamera {currentDeviceIndex + 1}/{videoDevices.length}
+                  </span>
+                )}
               </p>
             </div>
           </div>
