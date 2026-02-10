@@ -487,8 +487,6 @@ exports.upsert = async (req, res) => {
       const op = operations[idx];
       console.log(`Processing operation ${idx + 1}/${operations.length}:`, op.operation_no);
       
-      // Check apakah data sudah ada berdasarkan ssbr_id + group + operation_no
-      // PERBAIKAN: Pakai "group" dengan double quotes karena reserved keyword
       const checkQuery = `
         SELECT idsow FROM sow 
         WHERE order_no = $1  AND operation_no = $2
@@ -503,27 +501,29 @@ exports.upsert = async (req, res) => {
       if (existing.rows.length > 0) {
         console.log("UPDATE mode for operation:", op.operation_no);
         // UPDATE jika sudah ada
-        // PERBAIKAN: Semua kolom reserved keyword pakai double quotes
         const updateQuery = `
-          UPDATE sow SET 
-            order_no = $1,
-            part_number = $2,
-            part_name = $3,
-            model = $4,
-            customer = $5,
-            location = $6,
-            wct_group = $7,
-            workcenter = $8,
-            operationtext = $9,
-            planhours = $10,
-            remark = $11,
-            weight = $12,
-            created_by = $13,
-            "type" = $14,
-            category = $15
-          WHERE order_no = $16 AND operation_no = $17
-          RETURNING *, 'updated' as action
-        `;
+  UPDATE sow SET 
+    order_no = $1,
+    part_number = $2,
+    part_name = $3,
+    model = $4,
+    customer = $5,
+    location = $6,
+    wct_group = $7,
+    workcenter = $8,
+    operationtext = $9,
+    planhours = $10,
+    remark = $11,
+    weight = $12,
+    created_by = $13,
+    "type" = $14,
+    category = $15,
+    ssbr_id = $16,
+    "group" = $17
+  WHERE order_no = $1 AND operation_no = $18
+  RETURNING *, 'updated' as action
+`;
+
         
         result = await db.query(updateQuery, [
           order_no,
@@ -549,7 +549,6 @@ exports.upsert = async (req, res) => {
       } else {
         console.log("INSERT mode for operation:", op.operation_no);
         // CREATE jika belum ada
-        // PERBAIKAN: Kolom "group" dan "type" pakai double quotes
         const insertQuery = `
           INSERT INTO sow (
             ssbr_id, "group", operation_no, order_no, part_number, 
