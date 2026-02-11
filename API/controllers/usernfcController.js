@@ -56,16 +56,31 @@ exports.getname= async (req, res) => {
 // CREATE - insert nfcid, full_name, snssb
 exports.create = async (req, res) => {
   try {
-    const { nfcid, full_name, snssb } = req.body;
+    const { 
+      nfcid, 
+      full_name, 
+      snssb,
+      machineid,
+      machinename,
+      workcenter,
+      roles
+    } = req.body;
+
     const result = await db.query(
-      "INSERT INTO usernfc (nfcid, full_name, snssb) VALUES ($1, $2, $3) RETURNING *",
-      [nfcid, full_name, snssb]
+      `INSERT INTO usernfc 
+        (nfcid, full_name, snssb, machineid, machinename, workcenter, roles)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [nfcid, full_name, snssb, machineid, machinename, workcenter, roles]
     );
+
     res.json(result.rows[0]);
   } catch (err) {
+    console.error("CREATE USER ERROR:", err.message);
     res.status(500).json({ error: err.message });
   }
 };
+
 
 // UPDATE - update nfcid dan full_name berdasarkan snssb
 exports.update = async (req, res) => {

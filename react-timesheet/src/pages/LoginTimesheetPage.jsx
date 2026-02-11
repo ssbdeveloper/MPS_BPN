@@ -28,11 +28,38 @@ const LoginTimesheetPage = () => {
 
   // Unprod panel & quick-mode states
   const [showUnprodPanel, setShowUnprodPanel] = useState(false);
-  const [unprodQuickMode, setUnprodQuickMode] = useState(null); // null | 'briefing' | 'break' | 'housekeeping'
-  const [successToast, setSuccessToast] = useState(null); // null | string message
+  const [unprodQuickMode, setUnprodQuickMode] = useState(null);
+  const [successToast, setSuccessToast] = useState(null);
   const unprodPanelRef = useRef(null);
 
   const inputRef = useRef(null);
+  
+  // NEW: Refs untuk kontrol NFC
+  const nfcReaderRef = useRef(null);
+  const isProcessingRef = useRef(false);
+  const lastProcessedNfcIdRef = useRef('');
+  const processingTimeoutRef = useRef(null);
+
+  // Cleanup function
+  const cleanupNFC = () => {
+    if (nfcReaderRef.current) {
+      try {
+        nfcReaderRef.current.onreading = null;
+        nfcReaderRef.current.onerror = null;
+        if (nfcReaderRef.current.stop) {
+          nfcReaderRef.current.stop();
+        }
+      } catch (err) {
+        console.warn('Error cleaning up NFC:', err);
+      }
+      nfcReaderRef.current = null;
+    }
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = null;
+    }
+    isProcessingRef.current = false;
+  };
 
   // Focus management untuk external scanner
   const focusInput = () => {
@@ -47,11 +74,13 @@ const LoginTimesheetPage = () => {
     setMode(newMode);
     sessionStorage.setItem('scanMode', newMode);
 
-    if (newMode === 'internal') {
-      setStatus('Mode Internal (NFC)');
-    } else {
+    // Cleanup NFC jika beralih ke external mode
+    if (newMode === 'external') {
+      cleanupNFC();
       setStatus('Mode Eksternal (Scanner)');
       focusInput();
+    } else {
+      setStatus('Mode Internal (NFC)');
     }
   };
 
@@ -183,6 +212,22 @@ const LoginTimesheetPage = () => {
 
   // Process user after identification (NFC or external)
   const processUser = async (user, action) => {
+    // NEW: Cek apakah sedang dalam proses
+    if (isProcessingRef.current) {
+      console.log('Skip processing, already in progress');
+      return;
+    }
+    
+    // NEW: Cek apakah NFC ID ini baru diproses
+    const currentNfcId = user.snssb || user.nfcid || '';
+    if (lastProcessedNfcIdRef.current === currentNfcId && action === selectedAction) {
+      console.log('Skip processing, same NFC ID and action');
+      return;
+    }
+    
+    isProcessingRef.current = true;
+    lastProcessedNfcIdRef.current = currentNfcId;
+
     // Check if unprod quick-mode is active
     if (unprodQuickMode && UNPROD_QUICK_MODES[unprodQuickMode]) {
       const { code, label } = UNPROD_QUICK_MODES[unprodQuickMode];
@@ -198,7 +243,12 @@ const LoginTimesheetPage = () => {
         // Dev mode fallback: still show success
         showSuccessToast(`${user.full_name || 'User'} - ${label} berhasil!`);
       }
-      return; // Stay on page, mode tetap aktif
+      
+      // NEW: Reset processing state setelah delay
+      setTimeout(() => {
+        isProcessingRef.current = false;
+      }, 1000);
+      return;
     }
 
     // Normal flow
@@ -207,7 +257,12 @@ const LoginTimesheetPage = () => {
       setStatus('Login berhasil, loading last activity...');
       await loadLastActivity(user.snssb);
       setStatus('Login berhasil, redirect...');
-      setTimeout(() => navigate('/timesheet-mainmenu'), 300);
+      
+      // NEW: Tunggu sebentar sebelum redirect
+      setTimeout(() => {
+        isProcessingRef.current = false;
+        navigate('/timesheet-mainmenu');
+      }, 300);
     } else if (action === 'stop') {
       // Save user data to sessionStorage first
       sessionStorage.setItem('datakaryawan', JSON.stringify(user));
@@ -219,16 +274,32 @@ const LoginTimesheetPage = () => {
         setStatus('Gagal menghentikan timesheet');
         alert('Gagal menghentikan timesheet!');
       }
+      
+      // NEW: Reset processing state
+      setTimeout(() => {
+        isProcessingRef.current = false;
+      }, 1000);
     } else if (action === 'unprod') {
       sessionStorage.setItem('datakaryawan', JSON.stringify(user));
       setStatus('Login berhasil, redirect...');
-      setTimeout(() => navigate('/unproductive'), 500);
+      
+      // NEW: Tunggu sebentar sebelum redirect
+      setTimeout(() => {
+        isProcessingRef.current = false;
+        navigate('/unproductive');
+      }, 500);
     }
   };
 
   // Handle NFC Scan
   const handleNfcScan = async (action) => {
     if (mode !== 'internal') return;
+
+    // NEW: Cek apakah sudah dalam proses
+    if (isProcessingRef.current) {
+      console.log('NFC scan skipped, already processing');
+      return;
+    }
 
     // Check NFC support
     if (!('NDEFReader' in window)) {
@@ -238,15 +309,38 @@ const LoginTimesheetPage = () => {
     }
 
     try {
+      // NEW: Cleanup reader sebelumnya
+      cleanupNFC();
+      
       setStatus('Meminta izin NFC...');
 
       const reader = new NDEFReader();
+      nfcReaderRef.current = reader;
 
       // Request NFC permission and start scanning
       await reader.scan();
       setStatus('Scanning NFC... Dekatkan kartu NFC');
 
+      // NEW: Debounce handler
+      let lastReadTime = 0;
+      const debounceDelay = 1000; // 1 detik
+
       reader.onreading = async (event) => {
+        const now = Date.now();
+        
+        // Debounce: cegah pembacaan terlalu cepat
+        if (now - lastReadTime < debounceDelay) {
+          console.log('NFC read debounced');
+          return;
+        }
+        lastReadTime = now;
+        
+        // NEW: Cek apakah sedang memproses
+        if (isProcessingRef.current) {
+          console.log('NFC read skipped, already processing');
+          return;
+        }
+
         const nfcid = extractNfcId(event);
         setNfcId(nfcid || '-');
         setStatus('NFC terbaca: ' + (nfcid || 'Invalid'));
@@ -272,10 +366,12 @@ const LoginTimesheetPage = () => {
         console.error('NFC Read Error:', event);
         setStatus('Error saat membaca NFC');
         alert('Error membaca NFC. Coba lagi.');
+        isProcessingRef.current = false;
       };
 
     } catch (err) {
       console.error('NFC Scan Error:', err);
+      isProcessingRef.current = false;
 
       // Handle different error types
       if (err.name === 'NotAllowedError') {
@@ -305,6 +401,10 @@ const LoginTimesheetPage = () => {
       return;
     }
 
+    // NEW: Reset NFC ID dan processing state
+    lastProcessedNfcIdRef.current = '';
+    isProcessingRef.current = false;
+    
     setUnprodQuickMode(null); // Clear quick mode when selecting non-unprod action
     setSelectedAction(action);
     sessionStorage.setItem('scanAction', action);
@@ -314,6 +414,10 @@ const LoginTimesheetPage = () => {
   // Handle unprod panel selection
   const handleUnprodPanelSelect = (panelMode) => {
     setShowUnprodPanel(false);
+
+    // NEW: Reset NFC ID dan processing state
+    lastProcessedNfcIdRef.current = '';
+    isProcessingRef.current = false;
 
     if (panelMode === 'single') {
       // Normal unprod flow - same as before
@@ -342,6 +446,12 @@ const LoginTimesheetPage = () => {
     focusInput(); // Re-focus
 
     if (!id) return;
+
+    // NEW: Cek apakah ID ini baru diproses
+    if (lastProcessedNfcIdRef.current === id && selectedAction === selectedAction) {
+      console.log('Skip processing, same ID and action');
+      return;
+    }
 
     setNfcId(id);
     setStatus('Memproses ID...');
@@ -398,6 +508,11 @@ const LoginTimesheetPage = () => {
       setStatus('Mode Eksternal (Scanner)');
       focusInput();
     }
+    
+    // Cleanup NFC saat unmount
+    return () => {
+      cleanupNFC();
+    };
   }, []);
 
   // Active quick-mode label for display
@@ -448,6 +563,7 @@ const LoginTimesheetPage = () => {
               setSelectedAction('start');
               sessionStorage.setItem('scanAction', 'start');
               setStatus('Quick mode dinonaktifkan');
+              lastProcessedNfcIdRef.current = '';
             }}
             className="text-[10px] font-medium text-white bg-white/20 px-2 py-0.5 rounded hover:bg-white/30 transition-colors"
           >
