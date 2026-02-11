@@ -279,6 +279,7 @@ const EmployeeGroup = React.memo(({
 });
 
 // ========== Main Page ==========
+// ========== Main Page ==========
 const TimesheetValidationPage = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -304,6 +305,7 @@ const TimesheetValidationPage = () => {
 
   // Per-group records cache: { serialnumber: { records: [...], loading: bool } }
   const [groupRecords, setGroupRecords] = useState({});
+  const [lastSearchForGroups, setLastSearchForGroups] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [downloadingExcel, setDownloadingExcel] = useState(false);
@@ -341,32 +343,51 @@ const TimesheetValidationPage = () => {
   }, [searchQuery, startDate, endDate, expandedGroups, setSearchParams]);
 
   // When groups load, auto-fetch records for any already-expanded groups
-  // (e.g. returning from edit page with expanded state in URL)
   useEffect(() => {
     if (groups.length > 0 && expandedGroups.size > 0) {
-      // Set target restore dari sessionStorage (untuk kasus kembali dari edit)
       const saved = sessionStorage.getItem('timesheet_scroll');
       if (saved && parseInt(saved, 10) > 0) {
         restoreScrollRef.current = parseInt(saved, 10);
         sessionStorage.removeItem('timesheet_scroll');
       }
+      
+      // Load records untuk semua expanded groups DENGAN search term terkini
       for (const sn of expandedGroups) {
-        if (!groupRecords[sn]?.records?.length && !groupRecords[sn]?.loading) {
-          loadGroupRecords(sn);
-        }
+        // Selalu load ulang (bukan cache) karena search term mungkin berubah
+        loadGroupRecords(sn);
       }
     }
-  }, [groups]); // only when groups list changes (initial load / refresh)
+  }, [groups]); // PERHATIAN: Hanya depend on groups, loadGroupRecords akan di-handle oleh effect lain
 
   // Simpan scroll saat user scroll
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const onScroll = () => { restoreScrollRef.current = null; }; // user scrolled manually, cancel pending restore
+    const onScroll = () => { 
+      restoreScrollRef.current = null; // user scrolled manually, cancel pending restore
+    };
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
+  // Effect untuk clear cache saat search berubah
+  useEffect(() => {
+    if (debouncedSearch !== lastSearchForGroups) {
+      // Search term berubah, clear semua cache records
+      setGroupRecords({});
+      setLastSearchForGroups(debouncedSearch);
+      
+      // Jika ada grup yang expanded, reload dengan search baru
+      if (expandedGroups.size > 0) {
+        const currentExpanded = new Set(expandedGroups);
+        setTimeout(() => {
+          for (const sn of currentExpanded) {
+            loadGroupRecords(sn);
+          }
+        }, 100);
+      }
+    }
+  }, [debouncedSearch, expandedGroups]); // Hapus loadGroupRecords dari dependencies untuk mencegah infinite loop
 
   // Build date params helper
   const getDateParams = useCallback(() => {
@@ -380,7 +401,7 @@ const TimesheetValidationPage = () => {
     return { start: fmt(thirtyDaysAgo), end: fmt(now) };
   }, [startDate, endDate]);
 
-  // API: Load records for one employee group (on expand)
+  // API: Load records for one employee group (on expand) - DIPERBAIKI
   const loadGroupRecords = useCallback(async (serialnumber) => {
     setGroupRecords(prev => ({
       ...prev,
@@ -389,7 +410,15 @@ const TimesheetValidationPage = () => {
 
     try {
       const { start, end } = getDateParams();
-      const url = `${API_BASE}/timesheet/validation-group/${encodeURIComponent(serialnumber)}?start=${start}&end=${end}`;
+      
+      // TAMBAH parameter search di URL
+      let url = `${API_BASE}/timesheet/validation-group/${encodeURIComponent(serialnumber)}?start=${start}&end=${end}`;
+      
+      // TAMBAH ini: kirim search term ke endpoint group
+      if (debouncedSearch.trim()) {
+        url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
+      }
+
       const res = await fetch(url);
       if (!res.ok) throw new Error('Gagal load records');
       const records = await res.json();
@@ -398,7 +427,6 @@ const TimesheetValidationPage = () => {
         const next = { ...prev, [serialnumber]: { records, loading: false } };
 
         // Setelah state update ini selesai render, cek apakah masih ada yg loading
-        // Gunakan setTimeout 0 agar jalan setelah paint
         setTimeout(() => {
           const stillLoading = Object.values(next).some(v => v.loading);
           if (!stillLoading && restoreScrollRef.current !== null && containerRef.current) {
@@ -419,10 +447,9 @@ const TimesheetValidationPage = () => {
         [serialnumber]: { records: [], loading: false }
       }));
     }
-  }, [getDateParams]);
+  }, [getDateParams, debouncedSearch]);
 
   // API: Load stats + groups (lightweight, no individual records)
-  // keepExpanded=true → preserve groupRecords cache & reload expanded groups
   const loadValidationData = useCallback(async (keepExpanded = false) => {
     // Simpan scroll sebelum loading (hanya saat keepExpanded)
     const scrollBefore = keepExpanded && containerRef.current
@@ -445,13 +472,12 @@ const TimesheetValidationPage = () => {
       setGroups(data.groups || []);
 
       if (keepExpanded) {
-        // Re-fetch records for currently expanded groups (data may have changed)
-        setExpandedGroups(prev => {
-          for (const sn of prev) {
-            loadGroupRecords(sn);
-          }
-          return prev;
-        });
+        // PERBAIKAN: Re-fetch records for currently expanded groups DENGAN search term yang sama
+        const expandedArray = Array.from(expandedGroups);
+        for (const sn of expandedArray) {
+          // Re-load dengan search term terkini
+          loadGroupRecords(sn);
+        }
         // Simpan target restore, akan dipakai oleh handleValidate setelah ini
         if (scrollBefore !== null) {
           restoreScrollRef.current = scrollBefore;
@@ -467,7 +493,7 @@ const TimesheetValidationPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [getDateParams, debouncedSearch, loadGroupRecords]);
+  }, [getDateParams, debouncedSearch, expandedGroups, loadGroupRecords]);
 
   // Toggle group expansion — lazy load records
   const toggleGroup = useCallback((serialnumber) => {
@@ -560,7 +586,6 @@ const TimesheetValidationPage = () => {
     }
   }, [loadValidationData]);
 
-
   // Validate group — keep expanded groups open & refresh their records
   const handleValidateGroup = useCallback(async (serialnumber, records) => {
     const recs = records || groupRecords[serialnumber]?.records || [];
@@ -585,7 +610,6 @@ const TimesheetValidationPage = () => {
     }
   }, [groupRecords, loadValidationData]);
 
-
   // Navigate to edit
   const handleEdit = useCallback((tsnumber) => {
     if (containerRef.current) {
@@ -596,8 +620,7 @@ const TimesheetValidationPage = () => {
         window.location.pathname + window.location.search
       )}`
     );
-  }, [navigate, searchParams]);
-
+  }, [navigate]);
 
   const goBack = useCallback(() => navigate('/'), [navigate]);
 
@@ -608,6 +631,8 @@ const TimesheetValidationPage = () => {
       return newState;
     });
   }, []);
+
+  
 
   return (
     <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">

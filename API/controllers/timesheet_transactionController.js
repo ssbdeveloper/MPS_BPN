@@ -785,7 +785,7 @@ exports.validationStats = async (req, res) => {
 exports.validationGroupRecords = async (req, res) => {
   try {
     const { serialnumber } = req.params;
-    let { start, end } = req.query;
+    let { start, end, search } = req.query;
 
     if (!start || !end) {
       const now = new Date();
@@ -794,6 +794,32 @@ exports.validationGroupRecords = async (req, res) => {
       start = thirtyDaysAgo.toISOString().split('T')[0];
       end = now.toISOString().split('T')[0];
     }
+
+    // Build WHERE conditions dengan optional search
+    let whereConditions = [
+      't.serialnumber = $1',
+      'DATE(t.longdate_checkin) BETWEEN $2 AND $3'
+    ];
+    let params = [serialnumber, start, end];
+    let paramIdx = 4;
+
+    // TAMBAH: Filter berdasarkan search term
+    if (search && search.trim()) {
+      const searchLike = `%${search.trim().toLowerCase()}%`;
+      whereConditions.push(`(
+        LOWER(t.production_order) LIKE $${paramIdx}
+        OR LOWER(t.ssbr_ident) LIKE $${paramIdx}
+        OR LOWER(t.operation_text) LIKE $${paramIdx}
+        OR LOWER(t.workcentercode) LIKE $${paramIdx}
+        OR LOWER(t.workcenterdescription) LIKE $${paramIdx}
+        OR LOWER(t.note) LIKE $${paramIdx}
+        OR LOWER(t.part_name) LIKE $${paramIdx}
+      )`);
+      params.push(searchLike);
+      paramIdx++;
+    }
+
+    const whereSQL = whereConditions.join(' AND ');
 
     const query = `
       SELECT
@@ -806,11 +832,11 @@ exports.validationGroupRecords = async (req, res) => {
         s.planhours AS sow_planhours
       FROM timesheet_transaction t
       LEFT JOIN sow s ON s.codenumber = (t.production_order || t.seq::text)
-      WHERE t.serialnumber = $1
-        AND DATE(t.longdate_checkin) BETWEEN $2 AND $3
+      WHERE ${whereSQL}
       ORDER BY t.longdate_checkin ASC
     `;
-    const result = await db.query(query, [serialnumber, start, end]);
+    
+    const result = await db.query(query, params);
 
     // Merge sow_planhours into planhours if planhours is empty
     const records = result.rows.map(r => {
@@ -827,5 +853,3 @@ exports.validationGroupRecords = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
-
