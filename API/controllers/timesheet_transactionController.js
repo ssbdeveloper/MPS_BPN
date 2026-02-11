@@ -808,7 +808,7 @@ exports.validationGroupRecords = async (req, res) => {
       LEFT JOIN sow s ON s.codenumber = (t.production_order || t.seq::text)
       WHERE t.serialnumber = $1
         AND DATE(t.longdate_checkin) BETWEEN $2 AND $3
-      ORDER BY t.longdate_checkin DESC
+      ORDER BY t.longdate_checkin ASC
     `;
     const result = await db.query(query, [serialnumber, start, end]);
 

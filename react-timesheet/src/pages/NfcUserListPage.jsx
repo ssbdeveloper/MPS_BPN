@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PasswordPrompt from '../components/auth/PasswordPrompt';
 
@@ -8,7 +8,7 @@ import PasswordPrompt from '../components/auth/PasswordPrompt';
  * Features:
  * - Password protection (12345)
  * - List all NFC users in table
- * - Real-time search by name or SNSSB
+ * - Single search box for name OR SNSSB
  * - Delete with modal confirmation
  * - Loading states and error handling
  * - Color scheme: White 65%, Blue 25%, Orange 10%
@@ -20,9 +20,7 @@ const NfcUserListPage = () => {
 
   // States
   const [allData, setAllData] = useState([]);
-  const [filteredData, setFilteredData] = useState([]);
-  const [searchName, setSearchName] = useState('');
-  const [searchSnssb, setSearchSnssb] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
   const [deleteModal, setDeleteModal] = useState({
     show: false,
@@ -37,24 +35,30 @@ const NfcUserListPage = () => {
     loadNfcUsers();
   }, []);
 
-  // Filter data when search inputs change
-  useEffect(() => {
-    const filtered = allData.filter(user => {
-      const nameMatch = (user.full_name || '').toLowerCase().includes(searchName.toLowerCase().trim());
-      const snssMatch = (user.snssb || '').toLowerCase().includes(searchSnssb.toLowerCase().trim());
-
-      // OR logic: match if either name or SNSSB matches
-      if (searchName.trim() && searchSnssb.trim()) {
-        return nameMatch || snssMatch;
-      } else if (searchName.trim()) {
-        return nameMatch;
-      } else if (searchSnssb.trim()) {
-        return snssMatch;
-      }
-      return true; // No search filters
+  // Memoized filtered data - lebih efisien
+  const filteredData = useMemo(() => {
+    if (!searchTerm.trim()) {
+      return allData;
+    }
+    
+    const term = searchTerm.toLowerCase().trim();
+    return allData.filter(user => {
+      // Cari di nama lengkap
+      const nameMatch = (user.full_name || '').toLowerCase().includes(term);
+      
+      // Cari di SNSSB
+      const snssbMatch = (user.snssb || '').toLowerCase().includes(term);
+      
+      // Cari di NFC ID (opsional)
+      const nfcidMatch = (user.nfcid || '').toLowerCase().includes(term);
+      
+      // Cari di machine name (opsional)
+      const machineMatch = (user.machinename || '').toLowerCase().includes(term);
+      
+      // Return true jika ada yang match (OR logic)
+      return nameMatch || snssbMatch || nfcidMatch || machineMatch;
     });
-    setFilteredData(filtered);
-  }, [searchName, searchSnssb, allData]);
+  }, [allData, searchTerm]);
 
   // Load NFC users from API
   const loadNfcUsers = async () => {
@@ -64,7 +68,6 @@ const NfcUserListPage = () => {
       if (!response.ok) throw new Error('Failed to fetch');
       const data = await response.json();
       setAllData(data);
-      setFilteredData(data);
     } catch (err) {
       console.error('Error loading NFC users:', err);
       showStatus('error', '❌ Gagal memuat data NFC users');
@@ -112,7 +115,6 @@ const NfcUserListPage = () => {
       // Remove from local state
       const updatedData = allData.filter(user => user.nfcid !== deleteModal.nfcid);
       setAllData(updatedData);
-      setFilteredData(updatedData);
 
       showStatus('success', '✅ User berhasil dihapus');
       closeDeleteModal();
@@ -157,38 +159,45 @@ const NfcUserListPage = () => {
           {/* Search and Create Section */}
           <section className="bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4 flex-shrink-0">
             <div className="flex flex-col lg:flex-row gap-3 items-end">
-              {/* Search Inputs */}
-              <div className="flex-1 flex flex-col sm:flex-row gap-3">
-                <div className="flex-1">
-                  <label className="block text-sm font-medium text-blue-900 mb-1">
-                    Search by Name
-                  </label>
+              {/* Single Search Input */}
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-blue-900 mb-1">
+                  Search Users
+                </label>
+                <div className="relative">
+                  <svg
+                    className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
                   <input
                     type="text"
-                    value={searchName}
-                    onChange={(e) => setSearchName(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., Budi Santoso"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 text-sm bg-white border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                    placeholder="Search by name, SNSSB, NFC ID, or machine..."
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
-                <div className="flex-1">
-                  <label className="block text-sm font-medium text-blue-900 mb-1">
-                    Search by SNSSB
-                  </label>
-                  <input
-                    type="text"
-                    value={searchSnssb}
-                    onChange={(e) => setSearchSnssb(e.target.value)}
-                    className="w-full px-3 py-2 text-sm bg-white border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., EMP001"
-                  />
+                <div className="mt-1.5 text-xs text-gray-600">
+                  🔍 Search in: Full Name, SNSSB, NFC ID, Machine Name
                 </div>
               </div>
 
               {/* Create New Button - Orange CTA */}
               <button
                 onClick={() => navigate('/create-edit-nfc')}
-                className="px-6 py-2 text-sm font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform whitespace-nowrap"
+                className="px-6 py-2.5 text-sm font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded-lg shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform whitespace-nowrap"
                 style={{ boxShadow: '0 6px 12px -2px rgba(249, 115, 22, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
               >
                 + Create New User
@@ -197,8 +206,15 @@ const NfcUserListPage = () => {
 
             {/* Results Count */}
             {!loading && (
-              <div className="mt-2 text-xs text-blue-900">
-                Showing <span className="font-bold">{filteredData.length}</span> of <span className="font-bold">{allData.length}</span> users
+              <div className="mt-3 text-xs text-blue-900 flex items-center justify-between">
+                <div>
+                  Showing <span className="font-bold">{filteredData.length}</span> of <span className="font-bold">{allData.length}</span> users
+                </div>
+                {searchTerm && (
+                  <div className="text-gray-500">
+                    Search: "<span className="font-medium">{searchTerm}</span>"
+                  </div>
+                )}
               </div>
             )}
           </section>
@@ -218,9 +234,14 @@ const NfcUserListPage = () => {
                   <svg className="w-16 h-16 text-gray-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
                   </svg>
-                  <p className="text-gray-600 font-medium">
+                  <p className="text-gray-600 font-medium mb-1">
                     {allData.length === 0 ? 'Tidak ada data NFC user' : 'Tidak ada hasil untuk pencarian ini'}
                   </p>
+                  {allData.length > 0 && searchTerm && (
+                    <p className="text-sm text-gray-500">
+                      Tidak ditemukan untuk: "{searchTerm}"
+                    </p>
+                  )}
                 </div>
               </div>
             ) : (
@@ -242,15 +263,23 @@ const NfcUserListPage = () => {
                     {filteredData.map((user, index) => (
                       <tr
                         key={user.nfcid}
-                        className={`border-b border-blue-200 hover:bg-blue-100 transition-colors ${
-                          index % 2 === 0 ? 'bg-white' : 'bg-blue-50'
+                        className={`border-b border-blue-200 hover:bg-blue-50 transition-colors ${
+                          index % 2 === 0 ? 'bg-white' : 'bg-blue-50/30'
                         }`}
                       >
-                        <td className="px-3 py-2 font-mono font-semibold text-blue-900">{user.nfcid}</td>
-                        <td className="px-3 py-2">{user.full_name}</td>
-                        <td className="px-3 py-2 font-medium">{user.snssb}</td>
+                        <td className="px-3 py-2 font-mono font-semibold text-blue-900">
+                          {user.nfcid}
+                        </td>
+                        <td className="px-3 py-2">
+                          {highlightMatch(user.full_name || '', searchTerm)}
+                        </td>
+                        <td className="px-3 py-2 font-medium">
+                          {highlightMatch(user.snssb || '', searchTerm)}
+                        </td>
                         <td className="px-3 py-2">{user.machineid || '-'}</td>
-                        <td className="px-3 py-2">{user.machinename || '-'}</td>
+                        <td className="px-3 py-2">
+                          {highlightMatch(user.machinename || '', searchTerm)}
+                        </td>
                         <td className="px-3 py-2">{user.workcenter || '-'}</td>
                         <td className="px-3 py-2">
                           <span className={`px-2 py-1 rounded text-xs font-medium ${
@@ -266,14 +295,14 @@ const NfcUserListPage = () => {
                           <div className="flex gap-2 justify-center">
                             <button
                               onClick={() => handleEditClick(user.nfcid)}
-                              className="px-3 py-1 text-xs font-medium bg-blue-700 text-white rounded shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
+                              className="px-3 py-1 text-xs font-medium bg-blue-700 text-white rounded-lg shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
                               style={{ boxShadow: '0 3px 6px -1px rgba(37, 99, 235, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
                             >
                               ✏️ Edit
                             </button>
                             <button
                               onClick={() => handleDeleteClick(user)}
-                              className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
+                              className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded-lg shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
                               style={{ boxShadow: '0 3px 6px -1px rgba(220, 38, 38, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
                             >
                               🗑️ Delete
@@ -342,6 +371,32 @@ const NfcUserListPage = () => {
         )}
       </div>
     </PasswordPrompt>
+  );
+};
+
+// Helper function untuk highlight search result
+const highlightMatch = (text, searchTerm) => {
+  if (!searchTerm.trim() || !text) return text;
+  
+  const term = searchTerm.toLowerCase();
+  const lowerText = text.toLowerCase();
+  
+  if (!lowerText.includes(term)) return text;
+  
+  const parts = text.split(new RegExp(`(${term})`, 'gi'));
+  
+  return (
+    <span>
+      {parts.map((part, index) =>
+        part.toLowerCase() === term ? (
+          <mark key={index} className="bg-yellow-200 font-semibold px-0.5 rounded">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </span>
   );
 };
 
