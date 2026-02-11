@@ -814,6 +814,7 @@ exports.validationGroupRecords = async (req, res) => {
         OR LOWER(t.workcenterdescription) LIKE $${paramIdx}
         OR LOWER(t.note) LIKE $${paramIdx}
         OR LOWER(t.part_name) LIKE $${paramIdx}
+        OR LOWER(t.full_name) LIKE $${paramIdx}        -- TAMBAHKAN FULL_NAME
       )`);
       params.push(searchLike);
       paramIdx++;
