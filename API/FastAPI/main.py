@@ -9,7 +9,8 @@ from pathlib import Path
 # ====================================================
 # LOAD ENV DARI MPS2/.env
 # ====================================================
-BASE_DIR = Path(__file__).resolve().parents[2]
+BASE_DIR = Path(__file__).resolve().parent
+
 load_dotenv(BASE_DIR / ".env")
 
 # ====================================================

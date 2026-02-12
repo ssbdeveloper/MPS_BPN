@@ -2,15 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# copy dulu requirements kalau ada
-COPY requirements.txt ./
-
+COPY FastAPI/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy semua source fastapi
-COPY . .
+COPY FastAPI .
 
 EXPOSE 8000
 
-# sama persis seperti kamu jalanin manual
-CMD ["python3", "main.py"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
