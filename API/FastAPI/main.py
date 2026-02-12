@@ -16,12 +16,13 @@ load_dotenv(BASE_DIR / ".env")
 # CONFIG DARI ENV
 # ====================================================
 DB_CONFIG = {
-    "host": "localhost",
+    "host": os.getenv("DB_HOST", "db"),   # ← PENTING
     "dbname": os.getenv("DB_NAME"),
     "user": os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
     "port": int(os.getenv("DB_PORT"))
 }
+
 
 PORT = int(os.getenv("PORTFLASK", "8000"))
 

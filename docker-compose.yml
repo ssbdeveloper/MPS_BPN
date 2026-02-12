@@ -98,11 +98,24 @@ services:
       - timesheet-network
 
   fastapi:
-    build: .
-    ports:
-      - "8000:8000"  
+    build:
+      context: ./API/FastAPI
+      dockerfile: Dockerfile
+    container_name: fastapi
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - PORTFLASK=8000
     networks:
       - timesheet-network
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
 
 
 volumes:
