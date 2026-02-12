@@ -97,6 +97,14 @@ services:
     networks:
       - timesheet-network
 
+  fastapi:
+    build: .
+    ports:
+      - "8000:8000"  
+    networks:
+      - timesheet-network
+
+
 volumes:
   postgres_data:
     driver: local
