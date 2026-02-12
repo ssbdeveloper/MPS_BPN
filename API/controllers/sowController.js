@@ -20,6 +20,38 @@ exports.getById = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+exports.getByIdent = async (req, res) => {
+  try {
+    const { ssbr_id, group } = req.params;
+
+    // Validasi input
+    if (!ssbr_id || !group) {
+      return res.status(400).json({
+        error: "ssbr_id dan group wajib diisi"
+      });
+    }
+
+    const query = `
+      SELECT * 
+      FROM sow 
+      WHERE "ssbr_id" = $1 
+        AND "group" = $2 
+      ORDER BY operation_no ASC
+    `;
+
+    const result = await db.query(query, [ssbr_id, group]);
+
+    return res.json(result.rows);
+
+  } catch (err) {
+    console.error('getByIdent error:', err);
+
+    return res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
+};
+
 
 exports.get2data = async (req, res) => {
   try {

@@ -45,6 +45,7 @@ router.post("/planhours/multi", controller.getPlanhoursMulti);
 // ============================================
 router.get("/", controller.getAll);
 router.get("/data", controller.get2data);
+router.get("/ssbr/:ssbr_id/:group", controller.getByIdent);
 router.get("/datajson", controller.getDataJSON);
 router.get("/mesin/:order", controller.getbymesinid);
 router.get("/csv/", controller.getcsv);
