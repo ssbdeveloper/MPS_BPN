@@ -30,6 +30,7 @@ const LoginTimesheetPage = () => {
   const [showUnprodPanel, setShowUnprodPanel] = useState(false);
   const [unprodQuickMode, setUnprodQuickMode] = useState(null);
   const [successToast, setSuccessToast] = useState(null);
+  const [currentTime, setCurrentTime] = useState('');
   const unprodPanelRef = useRef(null);
 
   const inputRef = useRef(null);
@@ -491,6 +492,18 @@ const LoginTimesheetPage = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Real-time clock
+  useEffect(() => {
+    const pad = (n) => String(n).padStart(2, '0');
+    const tick = () => {
+      const d = new Date();
+      setCurrentTime(`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // Active quick-mode label for display
   const activeQuickModeLabel = unprodQuickMode ? UNPROD_QUICK_MODES[unprodQuickMode]?.label : null;
 
@@ -553,21 +566,28 @@ const LoginTimesheetPage = () => {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col justify-center items-center px-3 py-2 overflow-hidden relative">
+        {/* Real-time Clock */}
+        <div className="text-center portrait:mb-5 landscape:mb-3">
+          <span className="font-mono portrait:text-6xl landscape:text-8xl font-bold text-orange-300 tracking-widest tabular-nums drop-shadow-sm [-webkit-text-stroke:2px_#f97316]">
+            {currentTime}
+          </span>
+        </div>
+
         {/* Menu Buttons */}
-        <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-3 sm:gap-4">
+        <div className="w-full max-w-[360px] portrait:max-w-[360px] landscape:max-w-[680px] grid grid-cols-2 portrait:grid-cols-2 landscape:grid-cols-4 gap-3 sm:gap-4">
           {/* Productive Button */}
           <button
             onClick={() => handleButtonClick('start')}
             className={`
-              aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
-              text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
+              aspect-square flex flex-col items-center justify-center gap-2 sm:gap-3
+              text-lg sm:text-lg font-bold rounded-2xl transition-all duration-200 transform
               ${selectedAction === 'start' && !unprodQuickMode
                 ? 'bg-blue-300 shadow-inner opacity-60 translate-y-1 ring-2 ring-blue-400'
                 : 'bg-gradient-to-br from-blue-400 to-blue-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105'
               }
             `}
           >
-            <span className="text-2xl sm:text-3xl">✅</span>
+            <span className="text-4xl sm:text-5xl">✅</span>
             <span>Productive</span>
           </button>
 
@@ -575,8 +595,8 @@ const LoginTimesheetPage = () => {
           <button
             onClick={() => handleButtonClick('unprod')}
             className={`
-              aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
-              text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
+              aspect-square flex flex-col items-center justify-center gap-2 sm:gap-3
+              text-lg sm:text-lg font-bold rounded-2xl transition-all duration-200 transform
               ${unprodQuickMode
                 ? 'bg-emerald-400 shadow-inner opacity-80 ring-2 ring-emerald-300'
                 : selectedAction === 'unprod' && !unprodQuickMode
@@ -585,7 +605,7 @@ const LoginTimesheetPage = () => {
               }
             `}
           >
-            <span className="text-2xl sm:text-3xl">⚠️</span>
+            <span className="text-4xl sm:text-5xl">⚠️</span>
             <span>Unproductive</span>
           </button>
 
@@ -593,33 +613,33 @@ const LoginTimesheetPage = () => {
           <button
             onClick={() => handleButtonClick('stop')}
             className={`
-              aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
-              text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
+              aspect-square flex flex-col items-center justify-center gap-2 sm:gap-3
+              text-lg sm:text-lg font-bold rounded-2xl transition-all duration-200 transform
               ${selectedAction === 'stop' && !unprodQuickMode
                 ? 'bg-blue-300 shadow-inner opacity-60 translate-y-1 ring-2 ring-blue-400'
                 : 'bg-gradient-to-br from-blue-400 to-blue-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105'
               }
             `}
           >
-            <span className="text-2xl sm:text-3xl">🛑</span>
+            <span className="text-4xl sm:text-5xl">🛑</span>
             <span>Stop Timesheet</span>
           </button>
 
           {/* Tools & Consumable Button */}
           <button
-            className="aspect-square flex flex-col items-center justify-center gap-1 sm:gap-1.5
-            text-[10px] sm:text-xs font-bold rounded-2xl transition-all duration-200 transform
+            className="aspect-square flex flex-col items-center justify-center gap-2 sm:gap-3
+            text-lg sm:text-lg font-bold rounded-2xl transition-all duration-200 transform
             bg-gradient-to-br from-blue-400 to-blue-500 text-white shadow-xl hover:shadow-2xl active:shadow-md active:translate-y-1 hover:scale-105"
             onClick={() => alert('Tools & Consumable - Coming Soon')}
           >
-            <span className="text-2xl sm:text-3xl">🔧</span>
+            <span className="text-4xl sm:text-5xl">🔧</span>
             <span>Tools & Consumable</span>
           </button>
         </div>
 
         {/* External Scanner Input */}
         {mode === 'external' && (
-          <div className="w-full max-w-[280px] portrait:max-w-[280px] landscape:max-w-[600px] mt-3">
+          <div className="w-full max-w-[360px] portrait:max-w-[360px] landscape:max-w-[680px] mt-3">
             <input
               ref={inputRef}
               type="password"
@@ -659,7 +679,7 @@ const LoginTimesheetPage = () => {
                   <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
                   </svg>
-                  <span className="text-[10px] font-bold leading-tight">Single</span>
+                  <span className="text-[10px] font-bold leading-tight">List Unprod</span>
                 </button>
 
                 {/* Briefing */}
@@ -747,7 +767,7 @@ const LoginTimesheetPage = () => {
           Status: <span className="font-semibold">{status}</span>
         </div>
         <div className="flex-1 text-center">
-          Ver: <span className="font-semibold">2.0.0</span>
+          Ver: <span className="font-semibold">2.1.0</span>
         </div>
         <div className="flex-1 text-right">
           ID: <span className="font-semibold">{nfcId}</span>

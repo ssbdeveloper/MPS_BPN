@@ -493,7 +493,7 @@
         let filteredParts = [];
 
         // API Base URL - ganti sesuai backend kamu
-        const API_BASE_URL = 'http://localhost:3001/sow';
+        const API_BASE_URL = 'https://localhost/sow';
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
@@ -519,20 +519,25 @@
 async function loadParts() {
     try {
         const response = await fetch(`${API_BASE_URL}/parts`);
-        parts = await response.json();
-        
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        console.log("API Result:", result);
+
+        // 🔥 FIX DI SINI
+        parts = Array.isArray(result) 
+            ? result 
+            : result.data || [];
+
         filteredParts = parts;
+
         renderParts();
+
     } catch (error) {
         console.error('Error loading parts:', error);
-        // Handle error - tampilkan pesan error ke user
-        const container = document.getElementById('partsList');
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">⚠️</div>
-                <div class="empty-state-text">Failed to load parts. Please check your connection.</div>
-            </div>
-        `;
     }
 }
 

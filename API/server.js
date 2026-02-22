@@ -64,14 +64,7 @@ const pool = new Pool({
 });
 
 // Test connection
-pool.connect((err, client, release) => {
-  if (err) {
-    console.error('❌ Database connection failed:', err.stack);
-  } else {
-    console.log('✅ Database connected successfully');
-    release();
-  }
-});
+
 
 // Export pool untuk dipakai di controllers
 global.pool = pool;
@@ -165,13 +158,32 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ========================================
 const PORT = process.env.PORT || 3001;
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log('================================');
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📅 Local time: ${new Date().toLocaleString('id-ID', { timeZone: process.env.TIMEZONE })}`);
-  console.log(`🌐 Access: http://localhost:${PORT}`);
-  console.log('================================');
-});
+const HOST = process.env.HOST || '0.0.0.0';
+async function startServer() {
+  let connected = false;
+
+  while (!connected) {
+    try {
+      const client = await pool.connect();
+      console.log('✅ Database connected successfully');
+      client.release();
+      connected = true;
+    } catch (err) {
+      console.error('❌ Database not ready, retrying in 3s...');
+      await new Promise(res => setTimeout(res, 3000));
+    }
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log('================================');
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📅 Local time: ${new Date().toLocaleString('id-ID', { timeZone: process.env.TIMEZONE })}`);
+    console.log(`🌐 Access: http://${HOST}:${PORT}`);
+    console.log('================================');
+  });
+}
+
+startServer();
 
 // Graceful shutdown
 // process.on('SIGTERM', () => {

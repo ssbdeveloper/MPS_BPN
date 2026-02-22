@@ -25,8 +25,12 @@ import ProtectedRoute from "../components/auth/ProtectedRoute";
  */
 const router = createBrowserRouter([
   {
-    path: '/',
+    path: '/LandingPage',
     element: <LandingPage />,
+  },
+  {
+    path: '/',
+    element: <LoginTimesheetPage />,
   },
   {
     path: '/login-timesheet',
