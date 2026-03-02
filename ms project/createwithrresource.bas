@@ -1,4 +1,3 @@
-Attribute VB_Name = "createwithrresource"
 Option Explicit
 Const CSV_FOLDER As String = "D:\csv project\"
 Const OUTPUT_FOLDER As String = "D:\mpp\"

@@ -1,4 +1,4 @@
-Attribute VB_Name = "getdata"
+
 Sub SyncActualFromAPI()
 
     Dim t As Task
@@ -39,7 +39,7 @@ Sub SyncActualFromAPI()
     ' ============================================
     '10.16.1.103
     '
-    response = HttpPostBulks("https://100.80.101.53/fastapi/sow/get-actual", json)
+    response = HttpPostBulks("https://10.169.1.12/fastapi/sow/get-actual", json)
 
     ' ============================================
     ' 3. PARSE JSON

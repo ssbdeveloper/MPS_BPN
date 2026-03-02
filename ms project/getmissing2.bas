@@ -2,7 +2,7 @@ Attribute VB_Name = "getmissing2"
 Option Explicit
 
 ' Konstanta API
-Private Const API_URL As String = "https://100.80.101.53/fastapi/sow/get-missing"
+Private Const API_URL As String = "https://10.169.1.12/fastapi/sow/get-missing"
 
 ' ============================================================================
 ' MAIN PROCEDURE
@@ -490,7 +490,7 @@ Private Function FindInsertPosition(selectedTask As Task, orderNo As String) As 
     Debug.Print ""
     
     ' Strategi: Cari task terakhir dengan order_no yang sama
-    ' di sekitar area task yang dipilih (±50 tasks)
+    ' di sekitar area task yang dipilih (ï¿½50 tasks)
     searchStartID = selectedTask.ID - 50
     If searchStartID < 1 Then searchStartID = 1
     

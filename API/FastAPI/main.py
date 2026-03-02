@@ -255,6 +255,69 @@ def update_sow_plan_bulk(data: SowPlanUpdateBulk):
         cur.close()
         release_conn(conn)
 
+# ====================================================
+# GET NEW (sync = 'new')
+# ====================================================
+class GetNewRequest(BaseModel):
+    order_no: Optional[str] = None  # Optional filter by order_no
+
+@app.post("/sow/get-new")
+def get_new_operations(data: GetNewRequest):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        if data.order_no:
+            cur.execute("""
+                SELECT order_no,
+                       operation_no,
+                       workcenter,
+                       planhours,
+                       operationtext,
+                       plan_start,
+                       plan_finish
+                FROM sow
+                WHERE sync = 'new'
+                  AND order_no = %s
+                ORDER BY order_no, operation_no
+            """, (data.order_no,))
+        else:
+            cur.execute("""
+                SELECT order_no,
+                       operation_no,
+                       workcenter,
+                       planhours,
+                       operationtext,
+                       plan_start,
+                       plan_finish
+                FROM sow
+                WHERE sync = 'new'
+                ORDER BY order_no, operation_no
+            """)
+
+        rows = cur.fetchall()
+
+        results = [
+            {
+                "order_no": r[0],
+                "operation_no": r[1],
+                "workcenter": r[2],
+                "planhours": float(r[3] or 0),
+                "operationtext": r[4],
+                "plan_start": str(r[5]) if r[5] else None,
+                "plan_finish": str(r[6]) if r[6] else None
+            }
+            for r in rows
+        ]
+
+        return {
+            "count": len(results),
+            "data": results
+        }
+
+    finally:
+        cur.close()
+        release_conn(conn)
 
 # ====================================================
 # RUN MANUAL (DEV ONLY)

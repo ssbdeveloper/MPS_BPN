@@ -1,4 +1,3 @@
-Attribute VB_Name = "senddatabulk"
 Sub SendPlanToAPI_Bulk()
 
     Dim t As Task
@@ -44,7 +43,7 @@ Sub SendPlanToAPI_Bulk()
     body = "{""items"":[" & jsonItems & "]}"
     
     Debug.Print body
-    Call HttpPostBulk("https://100.80.101.53/fastapi/sow/update-plan-bulk", body)
+    Call HttpPostBulk("https://10.169.1.12/fastapi/sow/update-plan-bulk", body)
 
     MsgBox "Bulk Send Plan Selesai!", vbInformation
 

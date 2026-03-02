@@ -264,3 +264,14 @@ CREATE TRIGGER before_update_set_sync
 BEFORE UPDATE ON sow
 FOR EACH ROW
 EXECUTE FUNCTION trg_set_sync_modified();
+
+
+-- Benerin ID yang ngaco
+SELECT setval(
+  pg_get_serial_sequence('processcontroldata', 'id_processcontroldata'),
+  (SELECT COALESCE(MAX(id_processcontroldata), 1) FROM processcontroldata)
+);
+SELECT setval(
+  pg_get_serial_sequence('processcontroldata_item', 'id_processcontroldata_item'),
+  (SELECT COALESCE(MAX(id_processcontroldata_item), 1) FROM processcontroldata_item)
+);
