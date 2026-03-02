@@ -267,53 +267,75 @@ def get_new_operations(data: GetNewRequest):
     cur = conn.cursor()
 
     try:
+        query = """
+            SELECT order_no,
+                   operation_no,
+                   workcenter,
+                   planhours,
+                   operationtext,
+                   plan_start,
+                   plan_finish,
+                   ssbr_id,
+                   part_name
+            FROM sow
+            WHERE sync = 'modified'
+        """
+        params = []
         if data.order_no:
-            cur.execute("""
-                SELECT order_no,
-                       operation_no,
-                       workcenter,
-                       planhours,
-                       operationtext,
-                       plan_start,
-                       plan_finish
-                FROM sow
-                WHERE sync = 'new'
-                  AND order_no = %s
-                ORDER BY order_no, operation_no
-            """, (data.order_no,))
-        else:
-            cur.execute("""
-                SELECT order_no,
-                       operation_no,
-                       workcenter,
-                       planhours,
-                       operationtext,
-                       plan_start,
-                       plan_finish
-                FROM sow
-                WHERE sync = 'new'
-                ORDER BY order_no, operation_no
-            """)
+            query += " AND order_no = %s"
+            params.append(data.order_no)
 
+        query += " ORDER BY order_no, operation_no"
+
+        cur.execute(query, params if params else None)
         rows = cur.fetchall()
 
         results = [
             {
-                "order_no": r[0],
-                "operation_no": r[1],
-                "workcenter": r[2],
-                "planhours": float(r[3] or 0),
+                "order_no":      r[0],
+                "operation_no":  r[1],
+                "workcenter":    r[2],
+                "planhours":     float(r[3] or 0),
                 "operationtext": r[4],
-                "plan_start": str(r[5]) if r[5] else None,
-                "plan_finish": str(r[6]) if r[6] else None
+                "plan_start":    str(r[5]) if r[5] else None,
+                "plan_finish":   str(r[6]) if r[6] else None,
+                "ssbr_id":       r[7],
+                "part_name":     r[8]
             }
             for r in rows
         ]
 
-        return {
-            "count": len(results),
-            "data": results
-        }
+        return {"count": len(results), "data": results}
+
+    finally:
+        cur.close()
+        release_conn(conn)
+
+# ====================================================
+# POST UPDATE sync SCHEDULED
+# ====================================================
+class SyncUpdateRequest(BaseModel):
+    order_nos: List[str]
+    sync_status: str = "scheduled"
+
+@app.post("/sow/update-sync")
+def update_sync_status(data: SyncUpdateRequest):
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        cur.execute("""
+            UPDATE sow
+            SET sync = %s
+            WHERE order_no = ANY(%s::text[])
+        """, (data.sync_status, data.order_nos))
+
+        conn.commit()
+        return {"status": "success", "updated": cur.rowcount}
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
     finally:
         cur.close()
