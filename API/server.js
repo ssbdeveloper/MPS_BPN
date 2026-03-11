@@ -99,6 +99,9 @@ if (process.env.NODE_ENV !== 'production') {
   console.log('📁 Serving static files from:', path.join(__dirname, '../UI'));
 }
 
+// Uploaded progress photos — served in all environments
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // ========================================
 // HEALTH CHECK
 // ========================================

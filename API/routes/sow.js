@@ -3,6 +3,18 @@ const router = express.Router();
 const controller = require("../controllers/sowController");
 
 // ============================================
+// GROUPED ORDERS VIEW (for OrderListPage)
+// ============================================
+router.get("/grouped", controller.getGrouped);
+router.get("/getrow/:id", controller.getRowById);
+
+// ============================================
+// PROGRESS UPDATE HISTORY
+// ============================================
+router.get("/progress-history/:idsow", controller.getProgressHistory);
+router.post("/progress-history", controller.addProgressUpdate);
+
+// ============================================
 // PARTS ROUTES (PINDAH KE ATAS!)
 // ============================================
 router.get("/parts", controller.getAllParts);

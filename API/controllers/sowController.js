@@ -1,5 +1,151 @@
 const db = global.pool || require("../db");
 
+// GET grouped orders from view — paginated (for OrderListPage)
+exports.getGrouped = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit) || 50));
+    const offset = (page - 1) * limit;
+
+    const params = [];
+    let where = '';
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      where = ` WHERE (order_no    ILIKE $1
+                    OR ssbr_id     ILIKE $1
+                    OR part_number ILIKE $1
+                    OR part_name   ILIKE $1)`;
+    }
+
+    // Total count (cheap — view already grouped)
+    const countResult = await db.query(
+      `SELECT COUNT(*) FROM vw_sow_orders${where}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    // Paginated data
+    params.push(limit, offset);
+    const dataResult = await db.query(
+      `SELECT * FROM vw_sow_orders${where} ORDER BY order_no ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({
+      data:       dataResult.rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET single sow row by idsow
+exports.getRowById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query('SELECT * FROM sow WHERE idsow = $1', [id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET progress update history for one operation
+exports.getProgressHistory = async (req, res) => {
+  try {
+    const { idsow } = req.params;
+    const result = await db.query(
+      `SELECT id, operation_id, order_no, progress, issue_description,
+              image_path, created_at, created_by
+         FROM progress_update_history
+        WHERE operation_id = $1
+        ORDER BY created_at DESC`,
+      [idsow]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST new progress update
+// Client sends image as base64 in image_data field.
+// Server decodes → writes JPEG file → stores relative path in image_path column.
+// After insert: updates sow.progress for the operation row.
+exports.addProgressUpdate = async (req, res) => {
+  const fs   = require('fs');
+  const path = require('path');
+
+  try {
+    const { operation_id, order_no, progress, issue_description, image_data, created_by } = req.body;
+
+    const prog = parseInt(progress, 10);
+    if (isNaN(prog) || prog < 1 || prog > 100) {
+      return res.status(400).json({ error: 'Progress harus antara 1–100' });
+    }
+
+    // Prevent regression
+    const lastResult = await db.query(
+      `SELECT progress FROM progress_update_history
+        WHERE operation_id = $1
+        ORDER BY created_at DESC LIMIT 1`,
+      [operation_id]
+    );
+    if (lastResult.rows.length > 0 && prog < lastResult.rows[0].progress) {
+      return res.status(400).json({
+        error: `Progress tidak boleh kurang dari progress terakhir (${lastResult.rows[0].progress}%)`,
+      });
+    }
+
+    // ── Save image to filesystem ────────────────────────────────────────────
+    let image_path = null;
+    if (image_data) {
+      // Get operation_no for folder structure
+      const opRow = await db.query(
+        'SELECT operation_no FROM sow WHERE idsow = $1', [operation_id]
+      );
+      const opNo    = opRow.rows[0]?.operation_no || '00';
+      const safeOrd = (order_no || 'unknown').replace(/[^\w\-]/g, '_');
+      const safeOp  = String(opNo).replace(/[^\w\-]/g, '_');
+
+      const uploadsRoot = path.join(__dirname, '../uploads');
+      const dir         = path.join(uploadsRoot, 'progress', safeOrd, safeOp);
+      fs.mkdirSync(dir, { recursive: true });
+
+      const filename = `${Date.now()}.jpg`;
+      const base64   = image_data.replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(path.join(dir, filename), Buffer.from(base64, 'base64'));
+
+      image_path = `uploads/progress/${safeOrd}/${safeOp}/${filename}`;
+    }
+
+    // ── Insert history record ───────────────────────────────────────────────
+    const result = await db.query(
+      `INSERT INTO progress_update_history
+         (operation_id, order_no, progress, issue_description, image_path, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [operation_id, order_no || null, prog, issue_description || null, image_path, created_by || null]
+    );
+
+    // ── Update sow.progress for this operation ──────────────────────────────
+    await db.query(
+      'UPDATE sow SET progress = $1 WHERE idsow = $2',
+      [prog, operation_id]
+    );
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // GET all
 exports.getAll = async (req, res) => {
   try {

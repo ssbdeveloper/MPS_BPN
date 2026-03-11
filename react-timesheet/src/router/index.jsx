@@ -17,6 +17,8 @@ import NfcUserListPage from '../pages/NfcUserListPage';
 import CreateEditNfcPage from '../pages/CreateEditNfcPage';
 import UnproductiveMenuPage from '../pages/UnproductiveMenuPage';
 import DownloadPage from '../pages/DownloadPage';
+import OrderListPage from '../pages/OrderListPage';
+import SowEditPage from '../pages/SowEditPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -104,6 +106,14 @@ const router = createBrowserRouter([
   {
     path: '/download',
     element: <DownloadPage />,
+  },
+  {
+    path: '/sow-orders',
+    element: <OrderListPage />,
+  },
+  {
+    path: '/sow-edit/:id',
+    element: <SowEditPage />,
   },
   {
     path: '*',

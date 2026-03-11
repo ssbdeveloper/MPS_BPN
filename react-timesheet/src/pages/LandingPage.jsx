@@ -109,6 +109,13 @@ useEffect(() => {
       path: '/component-tracking',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
+    },
+    {
+      title: 'ORDER LIST',
+      icon: '\u{1F4CB}',
+      path: '/sow-orders',
+      color: 'from-orange-400 to-orange-500',
+      bgHover: 'hover:from-orange-500 hover:to-orange-600'
     }
   ];
 
