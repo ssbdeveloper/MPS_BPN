@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
 /**
@@ -35,6 +36,7 @@ const formatDurationStacked = (durationStr) => {
 const RecordRow = React.memo(({ record, onEdit, onValidateSingle }) => {
   const isValidated = !!record.validation_date;
   const isDeleted = String(record.state_flag) === '5';
+  const isSapReject = String(record.state_flag) === '3';
   const isUnprod = !!record.activitytype;
   const operationDisplay = isUnprod
     ? record.operation_text
@@ -50,9 +52,11 @@ const RecordRow = React.memo(({ record, onEdit, onValidateSingle }) => {
       className={`p-3 transition-colors cursor-pointer ${
         isDeleted
           ? 'bg-red-50 hover:bg-red-100'
-          : isValidated
-            ? 'bg-green-50 bg-opacity-60 hover:bg-green-100 opacity-70'
-            : 'hover:bg-blue-50 bg-white'
+          : isSapReject
+            ? 'bg-purple-50 hover:bg-purple-100'
+            : isValidated
+              ? 'bg-green-50 bg-opacity-60 hover:bg-green-100 opacity-70'
+              : 'hover:bg-blue-50 bg-white'
       }`}
     >
       <div className="grid gap-1.5" style={{ gridTemplateColumns: '1fr 1.5fr 0.6fr 1fr 0.7fr 0.7fr 0.7fr 1fr 0.7fr 50px' }}>
@@ -139,6 +143,8 @@ const RecordRow = React.memo(({ record, onEdit, onValidateSingle }) => {
         <div className="text-[11px] flex items-center justify-center">
           {isDeleted ? (
             <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">Deleted</span>
+          ) : isSapReject ? (
+            <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-100 text-purple-700">SAP Reject</span>
           ) : isValidated ? (
             <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">Validated</span>
           ) : (
@@ -148,7 +154,7 @@ const RecordRow = React.memo(({ record, onEdit, onValidateSingle }) => {
 
         {/* Action */}
         <div className="flex items-center justify-center">
-          {!isValidated && !isDeleted && (
+          {!isValidated && !isDeleted && !isSapReject && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -309,6 +315,7 @@ const TimesheetValidationPage = () => {
 
   const [loading, setLoading] = useState(false);
   const [downloadingExcel, setDownloadingExcel] = useState(false);
+  const [sapStatus, setSapStatus] = useState(null); // { posting: bool, successCount, failCount, results[] }
 
   const containerRef = useRef(null);
   const searchTimerRef = useRef(null);
@@ -537,11 +544,11 @@ const TimesheetValidationPage = () => {
   // Download Excel
   const handleDownloadExcel = useCallback(async () => {
     if (!startDate || !endDate) {
-      alert('Pilih Start Date dan End Date terlebih dahulu!');
+      toast.warning('Pilih Start Date dan End Date terlebih dahulu!');
       return;
     }
     if (startDate > endDate) {
-      alert('Start Date tidak boleh lebih besar dari End Date!');
+      toast.warning('Start Date tidak boleh lebih besar dari End Date!');
       return;
     }
 
@@ -563,11 +570,44 @@ const TimesheetValidationPage = () => {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Excel download error:', err);
-      alert('Gagal download Excel: ' + err.message);
+      toast.error('Gagal download Excel', { description: err.message });
     } finally {
       setDownloadingExcel(false);
     }
   }, [startDate, endDate]);
+
+  // Post validated tsnumbers to SAP (called after validation succeeds)
+  const sendToSap = useCallback(async (tsnumbers) => {
+    setSapStatus({ posting: true, successCount: 0, failCount: 0, results: [] });
+    try {
+      const res = await fetch(`${API_BASE}/timesheet/post-to-sap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tsnumbers })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSapStatus({ posting: false, successCount: 0, failCount: tsnumbers.length, results: [], error: data.error || 'SAP error' });
+        return;
+      }
+      setSapStatus({ posting: false, successCount: data.successCount, failCount: data.failCount, results: data.results });
+
+      // Show toast for rejected items
+      const rejected = (data.results || []).filter(r => !r.ok);
+      if (rejected.length > 0) {
+        rejected.forEach(r => {
+          toast.error(`SAP Reject — Tsnumber ${r.tsnumber}`, {
+            description: r.sapMessage || 'Tidak ada pesan dari SAP',
+            duration: 5000,
+          });
+        });
+        loadValidationData(true); // refresh to show SAP Reject badge
+      }
+    } catch (err) {
+      console.error('SAP post error:', err);
+      setSapStatus({ posting: false, successCount: 0, failCount: tsnumbers.length, results: [], error: err.message });
+    }
+  }, [loadValidationData]);
 
   // Validate single — keep expanded groups open & refresh their records
   const handleValidateSingle = useCallback(async (tsnumber) => {
@@ -578,13 +618,15 @@ const TimesheetValidationPage = () => {
         body: JSON.stringify({ tsnumbers: [tsnumber] })
       });
       if (!res.ok) throw new Error('Gagal validasi');
-      await res.json();
+      const data = await res.json();
+      const validated = (data.updated_rows || []).map(r => r.tsnumber);
       loadValidationData(true);
+      if (validated.length > 0) sendToSap(validated);
     } catch (err) {
       console.error('Error validate:', err);
-      alert('Gagal validasi timesheet');
+      toast.error('Gagal validasi timesheet', { description: err.message });
     }
-  }, [loadValidationData]);
+  }, [loadValidationData, sendToSap]);
 
   // Validate group — keep expanded groups open & refresh their records
   const handleValidateGroup = useCallback(async (serialnumber, records) => {
@@ -602,13 +644,15 @@ const TimesheetValidationPage = () => {
         body: JSON.stringify({ tsnumbers })
       });
       if (!res.ok) throw new Error('Gagal validasi batch');
-      await res.json();
+      const data = await res.json();
+      const validated = (data.updated_rows || []).map(r => r.tsnumber);
       loadValidationData(true);
+      if (validated.length > 0) sendToSap(validated);
     } catch (err) {
       console.error('Error validate batch:', err);
-      alert('Gagal validasi batch');
+      toast.error('Gagal validasi batch', { description: err.message });
     }
-  }, [groupRecords, loadValidationData]);
+  }, [groupRecords, loadValidationData, sendToSap]);
 
   // Navigate to edit
   const handleEdit = useCallback((tsnumber) => {
@@ -781,6 +825,43 @@ const TimesheetValidationPage = () => {
           </div>
         </div>
       </div>
+
+      {/* SAP Post Status Banner */}
+      {sapStatus && (
+        <div className={`flex-shrink-0 px-3 py-2 flex items-center justify-between text-sm border-b ${
+          sapStatus.posting
+            ? 'bg-blue-50 border-blue-200 text-blue-700'
+            : sapStatus.failCount > 0 && sapStatus.successCount === 0
+              ? 'bg-red-50 border-red-200 text-red-700'
+              : sapStatus.failCount > 0
+                ? 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                : 'bg-green-50 border-green-200 text-green-700'
+        }`}>
+          <div className="flex items-center gap-2">
+            {sapStatus.posting ? (
+              <>
+                <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                <span className="font-medium">Mengirim data ke SAP...</span>
+              </>
+            ) : sapStatus.error ? (
+              <span className="font-medium">SAP Error: {sapStatus.error}</span>
+            ) : (
+              <span className="font-medium">
+                SAP: {sapStatus.successCount} berhasil
+                {sapStatus.failCount > 0 && `, ${sapStatus.failCount} gagal`}
+              </span>
+            )}
+          </div>
+          {!sapStatus.posting && (
+            <button
+              onClick={() => setSapStatus(null)}
+              className="text-xs px-2 py-0.5 rounded hover:bg-black/10 transition-colors"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Grouped List - Scrollable */}
       <div ref={containerRef} className="flex-1 overflow-y-auto px-3 py-2 bg-white">

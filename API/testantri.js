@@ -10,80 +10,47 @@ const basicAuth = "Basic " + Buffer.from(`${USERNAME}:${PASSWORD}`).toString("ba
 
 const payloads = [
   {
-    "ZTIMESHEETID": "566",
-    "PERNR": "00016502",
+    "ZTIMESHEETID": "566",  // Timesheet ID
+    "PERNR": "00016502",    // SN SSB
+    "RUECK": "0004727824",  // Confirmation Number
+    "AUFNR":"001000073558",             // Production Order
+    "VORNR":"0020",             // Operation Number
+    "FLGAT":"1",             // Sequence Category
+    "PLNFL":"000001",             // Sequence Number
+    "VORNR_B":"0020",           // Branch Operation
+    "VORNR_R":"0030",           // Return Operation
+    "ZCONF_TYPE": "",       // Confirmation Type
+    "ARBPL": "M5051WLS",    // Work Center
+    "LSTAR": "",        // Activity Type
+    "ISDD": "20260118",     // Start Date
+    "ISDZ": "153800",       // Start Time
+    "IEDD": "20260118",     // Finish Date
+    "IEDZ": "205900",       // Finish Time
+    "WERKS": "5051",        // Plant
+    "AUERU": "",            // Final Confirmation
+    "ZBARCODEID": "1575343" // BarcodeID
+  },
+  {
+    "ZTIMESHEETID": "9400000002",
+    "AUFNR": "",
+    "VORNR": "",
+    "FLGAT": "",
+    "PLNFL": "",
+    "VORNR_B": "",
+    "VORNR_R": "",
+    "PERNR": "16502",
     "RUECK": "",
     "ZCONF_TYPE": "",
-    "ARBPL": "M5153ASY",
-    "LSTAR": "1770",
-    "ISDD": "20250918",
+    "ARBPL": "M5100ASM",
+    "LSTAR": "1640",
+    "ISDD": "20260308",
     "ISDZ": "153800",
-    "IEDD": "20250918",
-    "IEDZ": "205900",
-    "WERKS": "5153",
+    "IEDD": "20260308",
+    "IEDZ": "235900",
+    "WERKS": "5100",
     "AUERU": "",
-    "ZBARCODEID": "1575343"
-  },
-  {
-    "ZTIMESHEETID": "567",
-    "PERNR": "00016502",
-    "RUECK": "",
-    "ZCONF_TYPE": "",
-    "ARBPL": "M5153ASY",
-    "LSTAR": "1770",
-    "ISDD": "20250919",
-    "ISDZ": "080000",
-    "IEDD": "20250919",
-    "IEDZ": "120000",
-    "WERKS": "5153",
-    "AUERU": "",
-    "ZBARCODEID": "1575344"
-  },
-  {
-    "ZTIMESHEETID": "568",
-    "PERNR": "00016502",
-    "RUECK": "",
-    "ZCONF_TYPE": "",
-    "ARBPL": "M5153ASY",
-    "LSTAR": "1770",
-    "ISDD": "20250920",
-    "ISDZ": "083000",
-    "IEDD": "20250920",
-    "IEDZ": "113000",
-    "WERKS": "5153",
-    "AUERU": "",
-    "ZBARCODEID": "1575345"
-  },
-  {
-    "ZTIMESHEETID": "569",
-    "PERNR": "00016502",
-    "RUECK": "",
-    "ZCONF_TYPE": "",
-    "ARBPL": "M5153ASY",
-    "LSTAR": "1770",
-    "ISDD": "20250921",
-    "ISDZ": "090000",
-    "IEDD": "20250921",
-    "IEDZ": "130000",
-    "WERKS": "5153",
-    "AUERU": "",
-    "ZBARCODEID": "1575346"
-  },
-  {
-    "ZTIMESHEETID": "570",
-    "PERNR": "00016502",
-    "RUECK": "",
-    "ZCONF_TYPE": "",
-    "ARBPL": "M5153ASY",
-    "LSTAR": "1770",
-    "ISDD": "20250922",
-    "ISDZ": "100000",
-    "IEDD": "20250922",
-    "IEDZ": "140000",
-    "WERKS": "5153",
-    "AUERU": "",
-    "ZBARCODEID": "1575347"
-  }
+    "ZBARCODEID": "1480803"
+}
 ];
 
 

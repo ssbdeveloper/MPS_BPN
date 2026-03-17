@@ -13,6 +13,7 @@ router.get("/getcsv", controller.getcsv);
 router.get("/getexcel", controller.getxlsx);
 router.post("/", controller.create);
 router.put("/validation", controller.bulkValidation);
+router.post("/post-to-sap", controller.postToSap);
 router.put("/updateadmin/:id", controller.updateTimesheetadmin);
 router.put("/checkout", controller.checkout);
 router.put("/checkoutid/", controller.checkoutid);

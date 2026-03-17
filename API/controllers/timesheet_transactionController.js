@@ -854,3 +854,169 @@ exports.validationGroupRecords = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+/**
+ * POST /timesheet/post-to-sap
+ * Build SAP payloads for given tsnumbers and POST each one sequentially to SAP.
+ * Requires body: { tsnumbers: string[] }
+ * Returns per-item results so caller can show success/failure per record.
+ */
+exports.postToSap = async (req, res) => {
+  const SAP_URL      = process.env.SAP_INBOUND_URL;
+  const SAP_USER     = process.env.SAP_INBOUND_USERNAME;
+  const SAP_PASSWORD = process.env.SAP_INBOUND_PASSWORD;
+
+  if (!SAP_URL || !SAP_USER || !SAP_PASSWORD) {
+    return res.status(500).json({ error: 'SAP credentials not configured in .env' });
+  }
+
+  const { tsnumbers } = req.body;
+  if (!Array.isArray(tsnumbers) || tsnumbers.length === 0) {
+    return res.status(400).json({ error: 'tsnumbers must be a non-empty array' });
+  }
+
+  // Fetch full timesheet data + production_operations lookup in one query
+  const query = `
+    SELECT
+      t.tsnumber,
+      t.serialnumber,
+      t.production_order,
+      t.seq,
+      t.workcentercode,
+      t.activitytype,
+      t.plant,
+      TO_CHAR(t.longdate_checkin  AT TIME ZONE 'UTC', 'YYYYMMDD') AS isdd,
+      TO_CHAR(t.longdate_checkin  AT TIME ZONE 'UTC', 'HH24MISS') AS isdz,
+      TO_CHAR(t.longdate_checkout AT TIME ZONE 'UTC', 'YYYYMMDD') AS iedd,
+      TO_CHAR(t.longdate_checkout AT TIME ZONE 'UTC', 'HH24MISS') AS iedz,
+      po.confirmation       AS confirmation,
+      po.sequence_category  AS sequence_category,
+      po.sequence_number    AS sequence_number,
+      po.branch_operation   AS branch_operation,
+      po.return_operation   AS return_operation
+    FROM timesheet_transaction t
+    LEFT JOIN production_operations po
+      ON po.order_number = t.production_order
+     AND po.operation_number = t.seq::text
+    WHERE t.tsnumber = ANY($1)
+  `;
+
+  let rows;
+  try {
+    const result = await db.query(query, [tsnumbers]);
+    rows = result.rows;
+  } catch (err) {
+    console.error('postToSap DB error:', err);
+    return res.status(500).json({ error: 'DB query failed: ' + err.message });
+  }
+
+  // Build Basic Auth header (server-side — credentials never exposed to browser)
+  const basicAuth = 'Basic ' + Buffer.from(`${SAP_USER}:${SAP_PASSWORD}`).toString('base64');
+
+  const results = [];
+
+  for (const row of rows) {
+    const payload = {
+      ZTIMESHEETID: String(row.tsnumber  || ''),
+      PERNR:        String(row.serialnumber || ''),
+      RUECK:        String(row.confirmation  || ''),
+      AUFNR:        String(row.production_order || '').padStart(12, '0'),
+      VORNR:        String(row.seq || '').padStart(4, '0'),
+      FLGAT:        String(row.sequence_category  || ''),
+      PLNFL:        String(row.sequence_number    || ''),
+      VORNR_B:      String(row.branch_operation   || ''),
+      VORNR_R:      String(row.return_operation   || ''),
+      ZCONF_TYPE:   String(row.workcentercode || '').endsWith('OT') ? 'OV'
+                  : parseInt(row.seq, 10) > 5000                   ? 'RW'
+                  : 'RG',
+      ARBPL:        String(row.workcentercode || ''),
+      LSTAR:        String(row.activitytype   || ''),
+      ISDD:         String(row.isdd || ''),
+      ISDZ:         String(row.isdz || ''),
+      IEDD:         String(row.iedd || ''),
+      IEDZ:         String(row.iedz || ''),
+      WERKS:        String(row.plant || ''),
+      AUERU:        '',
+      ZBARCODEID:   ''
+    };
+
+    console.log(`[SAP] Sending tsnumber=${row.tsnumber}`, JSON.stringify(payload, null, 2));
+
+    try {
+      const sapRes = await fetch(SAP_URL, {
+        method:  'POST',
+        headers: {
+          'Authorization': basicAuth,
+          'Content-Type':  'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const text = await sapRes.text();
+      console.log(`[SAP] tsnumber=${row.tsnumber} → HTTP ${sapRes.status}: ${text}`);
+
+      // Parse SAP response to extract MESSAGE
+      let sapMessage = '';
+      try {
+        const parsed = JSON.parse(text);
+        sapMessage = (parsed['n0:ABM_CPP_223_MT_Timesheet_Res'] || {}).MESSAGE || '';
+      } catch (_) {
+        sapMessage = text;
+      }
+
+      const isConfirmed = /^Confirmation of order .+ saved$/i.test(sapMessage.trim());
+
+      if (isConfirmed) {
+        // SAP accepted — validation flag=2 stays as-is
+        console.log(`[SAP] tsnumber=${row.tsnumber} → SUCCESS: ${sapMessage}`);
+        results.push({
+          tsnumber:   row.tsnumber,
+          status:     sapRes.status,
+          ok:         true,
+          sapMessage,
+          response:   text
+        });
+      } else {
+        // SAP rejected — revert to flag='3' (SAP Reject), clear validation_date
+        console.warn(`[SAP] tsnumber=${row.tsnumber} → REJECTED: ${sapMessage}`);
+        await db.query(
+          `UPDATE timesheet_transaction
+             SET state_flag = '3', validation_date = NULL
+           WHERE tsnumber = $1`,
+          [row.tsnumber]
+        );
+        results.push({
+          tsnumber:   row.tsnumber,
+          status:     sapRes.status,
+          ok:         false,
+          sapMessage,
+          response:   text
+        });
+      }
+    } catch (err) {
+      console.error(`[SAP] tsnumber=${row.tsnumber} → ERROR: ${err.message}`);
+      // Network/parse error — also revert to SAP Reject
+      await db.query(
+        `UPDATE timesheet_transaction
+           SET state_flag = '3', validation_date = NULL
+         WHERE tsnumber = $1`,
+        [row.tsnumber]
+      ).catch(() => {});
+      results.push({
+        tsnumber:   row.tsnumber,
+        status:     0,
+        ok:         false,
+        sapMessage: err.message,
+        response:   err.message
+      });
+    }
+
+    // Small delay between calls (mirrors testantri.js pattern)
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  const successCount = results.filter(r => r.ok).length;
+  const failCount    = results.length - successCount;
+
+  res.json({ successCount, failCount, results });
+};

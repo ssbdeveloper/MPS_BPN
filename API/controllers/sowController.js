@@ -122,7 +122,7 @@ exports.addProgressUpdate = async (req, res) => {
       const base64   = image_data.replace(/^data:image\/\w+;base64,/, '');
       fs.writeFileSync(path.join(dir, filename), Buffer.from(base64, 'base64'));
 
-      image_path = `uploads/progress/${safeOrd}/${safeOp}/${filename}`;
+      image_path = `/uploads/progress/${safeOrd}/${safeOp}/${filename}`;
     }
 
     // ── Insert history record ───────────────────────────────────────────────

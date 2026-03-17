@@ -130,6 +130,7 @@ app.use('/sow', require('./routes/sow'));
 app.use('/usernfc', require('./routes/usernfc'));
 app.use('/workcenter', require('./routes/workcenter'));
 app.use('/timesheet', require('./routes/timesheet_transaction'));
+app.use('/production-operations', require('./routes/production_operations'));
 app.use('/process-category', require('./routes/processCategoryRoutes'));
 app.use('/process-parameter', require('./routes/processParameterRoutes'));
 app.use('/process-parameter-choicebase', require('./routes/processParameterChoicebaseRoutes'));

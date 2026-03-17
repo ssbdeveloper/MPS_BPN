@@ -166,4 +166,25 @@ CREATE TABLE IF NOT EXISTS public.processcontroldata_item (
     createddate timestamptz DEFAULT now()
 );
 
+CREATE TABLE production_operations (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    order_number TEXT,
+    operation_number TEXT,
+    short_text TEXT,
+    estimate_hour TEXT,
+    confirmation TEXT,
+    branch_operation TEXT,
+    return_operation TEXT,
+    sequence_category TEXT,
+    sequence_number TEXT,
+    material_code TEXT,
+    material_description TEXT,
+    operation_status TEXT,
+    order_type TEXT,
+    plant TEXT,
+    uom TEXT,
+    work_center TEXT,
+    cost_center TEXT,
+    order_system_status TEXT
+);
 COMMIT;
