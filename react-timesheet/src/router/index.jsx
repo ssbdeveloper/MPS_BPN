@@ -5,6 +5,9 @@ import TimesheetPage from '../pages/TimesheetPage';
 import TimesheetMainMenuPage from '../pages/TimesheetMainMenuPage';
 import TimesheetListPage from '../pages/TimesheetListPage';
 import TimesheetValidationPage from '../pages/TimesheetValidationPage';
+import TimesheetValidationPageV2 from '../pages/TimesheetValidationPageV2';
+
+
 import TimesheetEditPage from '../pages/TimesheetEditPage';
 import ProcessControlPage from '../pages/ProcessControlPage';
 import SelectJobPage from '../pages/SelectJobPage';
@@ -115,6 +118,15 @@ const router = createBrowserRouter([
     path: '/sow-edit/:id',
     element: <SowEditPage />,
   },
+{
+  path: '/timesheet-validation-v2',
+  element: (
+    <ProtectedRoute>
+      <TimesheetValidationPageV2 />
+    </ProtectedRoute>
+  ),
+},
+
   {
     path: '*',
     element: (
