@@ -314,7 +314,7 @@ exports.create = async (req, res) => {
       location,
       wct_group,
       workcenter,
-      operationtext,
+      operation_text,
       workcenterdescription,
       planhours,
       confirmation,
@@ -341,7 +341,7 @@ exports.create = async (req, res) => {
         location,
         wct_group,
         workcenter,
-        operationtext,
+        operation_text,
         workcenterdescription,
         planhours,
         confirmation,
@@ -364,7 +364,7 @@ exports.create = async (req, res) => {
         location,
         wct_group,
         workcenter,
-        operationtext,
+        operation_text,
         workcenterdescription,
         planhours,
         confirmation,
@@ -411,7 +411,7 @@ exports.update = async (req, res) => {
 exports.finish = async (req, res) => {
   try {
     const { selectedactivity } = req.body;
-    const { production_order, operation_no } = selectedactivity;
+    const { order_no, operation_no } = selectedactivity;
     const status = "FINISH";
     const longdate_checkout = new Date();
 
@@ -421,7 +421,7 @@ exports.finish = async (req, res) => {
              finish_date = $2
        WHERE order_no = $3 AND operation_no = $4
        RETURNING *`,
-      [status, longdate_checkout, production_order, operation_no]
+      [status, longdate_checkout, order_no, operation_no]
     );
 
     res.json(result.rows[0]);
@@ -474,7 +474,7 @@ exports.createexcel = async (req, res) => {
       location,
       wct_group,
       workcenter,
-      operationtext,
+      operation_text,
       workcenterdescription,
       planhours,
       confirmation
@@ -492,7 +492,7 @@ exports.createexcel = async (req, res) => {
         location,
         wct_group,
         workcenter,
-        operationtext,
+        operation_text,
         workcenterdescription,
         planhours,
         confirmation
@@ -513,7 +513,7 @@ exports.createexcel = async (req, res) => {
         location,
         wct_group,
         workcenter,
-        operationtext,
+        operation_text,
         workcenterdescription,
         planhours,
         confirmation
@@ -548,7 +548,7 @@ exports.updateexcel = async (req, res) => {
       location,
       wct_group,
       workcenter,
-      operationtext,
+      operation_text,
       workcenterdescription,
       planhours,
       confirmation,
@@ -578,7 +578,7 @@ exports.updateexcel = async (req, res) => {
         location = $8,
         wct_group = $9,
         workcenter = $10,
-        operationtext = $11,
+        operation_text = $11,
         workcenterdescription = $12,
         planhours = $13,
         confirmation = $14,
@@ -601,7 +601,7 @@ exports.updateexcel = async (req, res) => {
         location,
         wct_group,
         workcenter,
-        operationtext,
+        operation_text,
         workcenterdescription,
         planhours,
         confirmation,
@@ -689,7 +689,7 @@ exports.upsert = async (req, res) => {
     location = $6,
     wct_group = $7,
     workcenter = $8,
-    operationtext = $9,
+    operation_text = $9,
     planhours = $10,
     remark = $11,
     weight = $12,
@@ -712,7 +712,7 @@ exports.upsert = async (req, res) => {
           location,
           op.wct_group,
           op.workcenter,
-          op.operationtext,
+          op.operation_text,
           op.planhours,
           op.remark,
           op.weight,
@@ -729,9 +729,9 @@ exports.upsert = async (req, res) => {
         // CREATE jika belum ada
         const insertQuery = `
           INSERT INTO sow (
-            ssbr_id, "group", operation_no, order_no, part_number, 
-            part_name, model, customer, location, wct_group, 
-            workcenter, operationtext, planhours, remark, weight,
+            ssbr_id, "group", operation_no, order_no, part_number,
+            part_name, model, customer, location, wct_group,
+            workcenter, operation_text, planhours, remark, weight,
             created_by, "type", category
           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
           RETURNING *, 'created' as action
@@ -749,7 +749,7 @@ exports.upsert = async (req, res) => {
           location,
           op.wct_group,
           op.workcenter,
-          op.operationtext,
+          op.operation_text,
           op.planhours,
           op.remark,
           op.weight,
@@ -809,13 +809,13 @@ exports.getBySSBRAndGroup = async (req, res) => {
         "group",
         category,
         operation_no,
-        operationtext,
+        operation_text,
         wct_group,
         workcenter,
         planhours,
         remark,
         weight
-      FROM sow 
+      FROM sow
       WHERE order_no = $1 AND operation_no = $2
       ORDER BY operation_no ASC
     `;
@@ -848,7 +848,7 @@ exports.getBySSBRAndGroup = async (req, res) => {
     // Ambil semua operations
     const operations = result.rows.map(row => ({
       operation_no: row.operation_no,
-      operationtext: row.operationtext,
+      operation_text: row.operation_text,
       wct_group: row.wct_group,
       workcenter: row.workcenter,
       planhours: row.planhours,
@@ -1170,7 +1170,7 @@ exports.getOperationsByPartId = async (req, res) => {
       SELECT *
       FROM operations
       WHERE part_id = $1
-      ORDER BY opr_no
+      ORDER BY operation_no
     `, [part_id]);
     
     res.json(result.rows);
@@ -1203,33 +1203,33 @@ exports.getOperationById = async (req, res) => {
 // CREATE new operation
 exports.createOperation = async (req, res) => {
   try {
-    const { 
-      part_id, 
-      opr_no, 
-      operationtext, 
-      wct_group, 
-      workcenter, 
-      planhours, 
-      drawing_path, 
-      remark 
+    const {
+      part_id,
+      operation_no,
+      operation_text,
+      wct_group,
+      workcenter,
+      planhours,
+      drawing_path,
+      remark
     } = req.body;
-    
+
     // Validation
-    if (!part_id || !opr_no || !operationtext) {
-      return res.status(400).json({ 
-        error: "part_id, opr_no, and operationtext are required" 
+    if (!part_id || !operation_no || !operation_text) {
+      return res.status(400).json({
+        error: "part_id, operation_no, and operation_text are required"
       });
     }
 
     const result = await db.query(`
-      INSERT INTO operations 
-      (part_id, opr_no, operationtext, wct_group, workcenter, planhours, drawing_path, remark)
+      INSERT INTO operations
+      (part_id, operation_no, operation_text, wct_group, workcenter, planhours, drawing_path, remark)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
     `, [
-      part_id, 
-      opr_no, 
-      operationtext, 
+      part_id,
+      operation_no,
+      operation_text,
       wct_group || null, 
       workcenter || null, 
       planhours || null, 
@@ -1239,10 +1239,10 @@ exports.createOperation = async (req, res) => {
     
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    // Handle duplicate opr_no for same part
+    // Handle duplicate operation_no for same part
     if (err.code === '23505') {
-      return res.status(409).json({ 
-        error: "Operation number already exists for this part" 
+      return res.status(409).json({
+        error: "Operation number already exists for this part"
       });
     }
     // Handle foreign key violation
@@ -1259,27 +1259,27 @@ exports.createOperation = async (req, res) => {
 exports.updateOperation = async (req, res) => {
   try {
     const { id } = req.params;
-    const { 
-      opr_no, 
-      operationtext, 
-      wct_group, 
-      workcenter, 
-      planhours, 
-      drawing_path, 
-      remark 
+    const {
+      operation_no,
+      operation_text,
+      wct_group,
+      workcenter,
+      planhours,
+      drawing_path,
+      remark
     } = req.body;
-    
+
     // Validation
-    if (!opr_no || !operationtext) {
-      return res.status(400).json({ 
-        error: "opr_no and operationtext are required" 
+    if (!operation_no || !operation_text) {
+      return res.status(400).json({
+        error: "operation_no and operation_text are required"
       });
     }
 
     const result = await db.query(`
       UPDATE operations
-      SET opr_no = $1,
-          operationtext = $2,
+      SET operation_no = $1,
+          operation_text = $2,
           wct_group = $3,
           workcenter = $4,
           planhours = $5,
@@ -1289,12 +1289,12 @@ exports.updateOperation = async (req, res) => {
       WHERE operation_id = $8
       RETURNING *
     `, [
-      opr_no, 
-      operationtext, 
-      wct_group || null, 
-      workcenter || null, 
-      planhours || null, 
-      drawing_path || null, 
+      operation_no,
+      operation_text,
+      wct_group || null,
+      workcenter || null,
+      planhours || null,
+      drawing_path || null,
       remark || null,
       id
     ]);
@@ -1305,10 +1305,10 @@ exports.updateOperation = async (req, res) => {
     
     res.json(result.rows[0]);
   } catch (err) {
-    // Handle duplicate opr_no for same part
+    // Handle duplicate operation_no for same part
     if (err.code === '23505') {
-      return res.status(409).json({ 
-        error: "Operation number already exists for this part" 
+      return res.status(409).json({
+        error: "Operation number already exists for this part"
       });
     }
     res.status(500).json({ error: err.message });
@@ -1374,14 +1374,14 @@ exports.createPartWithOperations = async (req, res) => {
     if (operations && operations.length > 0) {
       for (const op of operations) {
         const opResult = await db.query(`
-          INSERT INTO operations 
-          (part_id, opr_no, operationtext, wct_group, workcenter, planhours, drawing_path, remark)
+          INSERT INTO operations
+          (part_id, operation_no, operation_text, wct_group, workcenter, planhours, drawing_path, remark)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           RETURNING *
         `, [
           newPart.part_id,
-          op.opr_no,
-          op.operationtext,
+          op.operation_no,
+          op.operation_text,
           op.wct_group || null,
           op.workcenter || null,
           op.planhours || null,
@@ -1455,14 +1455,14 @@ exports.updatePartWithOperations = async (req, res) => {
     if (operations && operations.length > 0) {
       for (const op of operations) {
         const opResult = await db.query(`
-          INSERT INTO operations 
-          (part_id, opr_no, operationtext, wct_group, workcenter, planhours, drawing_path, remark)
+          INSERT INTO operations
+          (part_id, operation_no, operation_text, wct_group, workcenter, planhours, drawing_path, remark)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           RETURNING *
         `, [
           id,
-          op.opr_no,
-          op.operationtext,
+          op.operation_no,
+          op.operation_text,
           op.wct_group || null,
           op.workcenter || null,
           op.planhours || null,
@@ -1509,9 +1509,9 @@ exports.getCompleteSOW = async (req, res) => {
 
     // Get operations
     const opsResult = await db.query(`
-      SELECT * FROM operations 
-      WHERE part_id = $1 
-      ORDER BY opr_no
+      SELECT * FROM operations
+      WHERE part_id = $1
+      ORDER BY operation_no
     `, [id]);
 
     res.json({
@@ -1556,7 +1556,7 @@ exports.getDrawingUsageReport = async (req, res) => {
         p.partname,
         o.drawing_path,
         COUNT(*) as usage_count,
-        STRING_AGG(o.opr_no::TEXT || ': ' || o.operationtext, ' | ' ORDER BY o.opr_no) as operations
+        STRING_AGG(o.operation_no::TEXT || ': ' || o.operation_text, ' | ' ORDER BY o.operation_no) as operations
       FROM operations o
       JOIN parts p ON o.part_id = p.part_id
       WHERE o.drawing_path IS NOT NULL
@@ -1571,14 +1571,14 @@ exports.getDrawingUsageReport = async (req, res) => {
   }
 };
 
-// GET planhours by codenumber (production_order + seq)
+// GET planhours by codenumber (order_no + operation_no)
 exports.getPlanhours = async (req, res) => {
   try {
-    const { production_order, seq } = req.query;
-    if (!production_order || !seq) {
-      return res.status(400).json({ error: "production_order and seq are required" });
+    const { order_no, operation_no } = req.query;
+    if (!order_no || !operation_no) {
+      return res.status(400).json({ error: "order_no and operation_no are required" });
     }
-    const codenumber = production_order + seq;
+    const codenumber = order_no + operation_no;
     const result = await db.query(
       'SELECT planhours FROM sow WHERE codenumber = $1 LIMIT 1',
       [codenumber]

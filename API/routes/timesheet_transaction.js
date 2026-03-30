@@ -9,6 +9,7 @@ router.get("/validation-group/:serialnumber", controller.validationGroupRecords)
 router.get("/getsn/:snkaryawan", controller.getbysn);
 router.get("/getid/:id", controller.getbyid);
 router.get("/nama/:nama", controller.getbyname);
+router.get("/log-sap", controller.getLogSap);
 router.get("/getcsv", controller.getcsv);
 router.get("/getexcel", controller.getxlsx);
 router.post("/", controller.create);

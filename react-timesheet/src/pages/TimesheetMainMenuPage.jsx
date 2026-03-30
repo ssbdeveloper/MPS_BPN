@@ -1,200 +1,228 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
-/**
- * Timesheet Main Menu Page
- * Converted dari mainmenu.html + previewdata.js + script.js + postdata.js
- */
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const AvatarCircle = ({ name, className = 'w-10 h-10 text-base' }) => {
+  const initial = name && name !== '-' ? name.trim().charAt(0).toUpperCase() : '?';
+  return (
+    <div
+      className={`${className} rounded-full flex-shrink-0 flex items-center justify-center
+                  font-extrabold text-white select-none`}
+      style={{ background: 'linear-gradient(135deg, #023e8a 0%, #0077b6 100%)' }}
+    >
+      {initial}
+    </div>
+  );
+};
+
+const InfoField = ({ label, value, mono = false }) => (
+  <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+       style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+    <span className="text-[11px] font-semibold text-slate-500 leading-none">{label}</span>
+    <div className={`text-[11px] font-bold text-slate-800 leading-tight ${mono ? 'font-mono' : ''}`}>
+      {value}
+    </div>
+  </div>
+);
+
+// Portrait: stretches to fill available height, wraps text, clips overflow
+const ActivityChip = ({ activityText, activitySeq, partName, className = '' }) => {
+  const hasData = activityText && activityText !== '-';
+  return (
+    <div className={`px-2.5 py-2 rounded-lg border overflow-hidden
+                     ${hasData
+                       ? 'bg-emerald-50 border-emerald-200'
+                       : 'bg-slate-50 border-slate-200 text-slate-400 italic text-[11px] font-semibold'}
+                     ${className}`}>
+      {hasData ? (
+        <div className="flex flex-col gap-0.5">
+          <div className="flex gap-1 text-[11px] leading-snug">
+            <span className="font-semibold text-emerald-600 flex-shrink-0">Activity:</span>
+            <span className="font-semibold text-emerald-700">{activityText}</span>
+          </div>
+          {partName && partName !== '-' && (
+            <div className="flex gap-1 text-[11px] leading-snug">
+              <span className="font-semibold text-emerald-600 flex-shrink-0">Part Name:</span>
+              <span className="font-semibold text-emerald-700">{partName}</span>
+            </div>
+          )}
+          {activitySeq && activitySeq !== '-' && (
+            <div className="flex gap-1 text-[11px] leading-snug">
+              <span className="font-semibold text-emerald-600 flex-shrink-0">Seq:</span>
+              <span className="font-semibold text-emerald-700">{activitySeq}</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <span>— No activity selected —</span>
+      )}
+    </div>
+  );
+};
+
+// Landscape: capped height, overflow hidden
+const ActivityBox = ({ activityText, activitySeq, partName }) => {
+  const hasData = activityText && activityText !== '-';
+  return (
+    <div className={`px-2.5 py-2 rounded-lg border
+                     ${hasData
+                       ? 'bg-emerald-50 border-emerald-200'
+                       : 'bg-slate-50 border-slate-200 text-slate-400 italic text-[11px] font-semibold'}`}>
+      {hasData ? (
+        <div className="flex flex-col gap-0.5">
+          <div className="flex gap-1 text-[11px] leading-snug">
+            <span className="font-semibold text-emerald-600 flex-shrink-0">Activity:</span>
+            <span className="font-semibold text-emerald-700">{activityText}</span>
+          </div>
+          {partName && partName !== '-' && (
+            <div className="flex gap-1 text-[11px] leading-snug">
+              <span className="font-semibold text-emerald-600 flex-shrink-0">Part Name:</span>
+              <span className="font-semibold text-emerald-700">{partName}</span>
+            </div>
+          )}
+          {activitySeq && activitySeq !== '-' && (
+            <div className="flex gap-1 text-[11px] leading-snug">
+              <span className="font-semibold text-emerald-600 flex-shrink-0">Seq:</span>
+              <span className="font-semibold text-emerald-700">{activitySeq}</span>
+            </div>
+          )}
+        </div>
+      ) : '— No activity selected —'}
+    </div>
+  );
+};
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 const TimesheetMainMenuPage = () => {
   const navigate = useNavigate();
 
-  // States - Load mode from sessionStorage
-  const [mode, setMode] = useState(() => {
-    return sessionStorage.getItem('timesheetMode') || 'single';
-  }); // 'single' or 'multiple'
+  const [mode, setMode] = useState(() => sessionStorage.getItem('timesheetMode') || 'single');
   const [userData, setUserData] = useState({
-    name: '-',
-    sn: '-',
-    workcenter: '-',
-    order: '-',
-    activity: '-'
+    name: '-', sn: '-',
+    workcenterCode: '-', machineName: '-',
+    order: '-', ident: '-', partName: '-',
+    activityText: '-', activitySeq: '-',
   });
 
-  // Load data from sessionStorage
+  // Load display data from sessionStorage
   useEffect(() => {
     const selectedactivity = JSON.parse(sessionStorage.getItem('selectedactivity'));
-    const selectedmesinku = JSON.parse(sessionStorage.getItem('selectedmesinku'));
-    const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
+    const datakaryawan     = JSON.parse(sessionStorage.getItem('datakaryawan'));
 
     const newData = {
-      name: '-',
-      sn: '-',
-      workcenter: '-',
-      order: '-',
-      activity: '-'
+      name: '-', sn: '-',
+      workcenterCode: '-', machineName: '-',
+      order: '-', ident: '-', partName: '-',
+      activityText: '-', activitySeq: '-',
     };
 
-    // Set nama dan SN
     if (datakaryawan) {
-      newData.name = datakaryawan.full_name || '-';
-      newData.sn = datakaryawan.snssb || '-';
-      newData.workcenter = datakaryawan.workcenter && datakaryawan.machinename
-        ? `${datakaryawan.workcenter}\n${datakaryawan.machinename}`
-        : '-';
+      newData.name           = datakaryawan.full_name   || '-';
+      newData.sn             = datakaryawan.snssb       || '-';
+      newData.workcenterCode = datakaryawan.workcenter  || '-';
+      newData.machineName    = datakaryawan.machinename || '-';
     }
 
-    // Set order dan activity
     if (selectedactivity) {
-      newData.order = selectedactivity.order || '-';
-      newData.activity = selectedactivity.operationtext && selectedactivity.operation_no
-        ? `${selectedactivity.operationtext}\nSequence : ${selectedactivity.operation_no}`
-        : '-';
+      newData.order        = selectedactivity.order                                    || '-';
+      newData.ident        = selectedactivity.ssbr_id || '-';
+      newData.partName     = selectedactivity.part_name  || selectedactivity.partname  || '-';
+      newData.activityText = selectedactivity.operationtext || '-';
+      newData.activitySeq  = selectedactivity.operation_no  || '-';
     }
 
     setUserData(newData);
   }, []);
 
-  // Handle mode switch
+  // ── Handlers (logic unchanged) ─────────────────────────────────────────────
   const handleModeChange = (checked) => {
     const newMode = checked ? 'multiple' : 'single';
     setMode(newMode);
     sessionStorage.setItem('timesheetMode', newMode);
   };
 
-  // Navigation functions
-  const goHome = () => {
-    navigate('/login-timesheet');
-  };
+  const goHome           = () => navigate('/login-timesheet');
+  const gotojob          = () => navigate('/select-job');
+  const gotomesin        = () => navigate('/select-machine');
+  const gotoparameter    = () => navigate('/process-control');
+  const gotots           = () => navigate('/view-timesheet');
+  const handleRefresh    = () => window.location.reload();
+  const handleRework     = () => toast.info('Rework feature - Coming Soon');
+  const handleConsumable = () => toast.info('Consumable feature - Coming Soon');
 
-  const gotojob = () => {
-    navigate('/select-job');
-  };
-
-  const gotomesin = () => {
-    navigate('/select-machine');
-  };
-
-  const gotoparameter = () => {
-    navigate('/process-control');
-  };
-
-  const gotots = () => {
-    navigate('/view-timesheet');
-  };
-
-  // Refresh page
-  const handleRefresh = () => {
-    window.location.reload();
-  };
-
-  // Start button - Create timesheet
   const postdata = async () => {
     try {
       const selectedactivity = JSON.parse(sessionStorage.getItem('selectedactivity'));
-      const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
+      const datakaryawan     = JSON.parse(sessionStorage.getItem('datakaryawan'));
 
       if (!selectedactivity || !datakaryawan) {
-        alert('❌ Data tidak lengkap. Silakan pilih activity dan karyawan.');
+        toast.error('Data tidak lengkap. Silakan pilih activity dan karyawan.');
         return;
       }
 
       if (mode === 'single') {
-        // CHECKOUT menggunakan endpoint unified (serialnumber)
         const checkoutRes = await fetch(`${API_BASE}/timesheet/checkout`, {
-          method: 'PUT',
+          method:  'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            datakaryawan: { sn: datakaryawan.snssb }
-          }),
+          body:    JSON.stringify({ datakaryawan: { sn: datakaryawan.snssb } }),
         });
-
         const checkedOut = await checkoutRes.json();
         console.log('Checkout sukses:', checkedOut);
-
-        // CREATE timesheet baru
-        const postRes = await fetch(`${API_BASE}/timesheet/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            production_order: selectedactivity.order,
-            ssbr_ident: selectedactivity.ssbr_id,
-            serialnumber: datakaryawan.snssb,
-            full_name: datakaryawan.full_name,
-            operation_no: selectedactivity.operation_no,
-            operation_text: selectedactivity.operationtext,
-            workcentercode: datakaryawan.workcenter,
-            workcenterdescription: datakaryawan.machinename,
-          }),
-        });
-
-        if (!postRes.ok) {
-          const error = await postRes.json();
-          console.error('Gagal POST:', error);
-          alert(`❌ Buat timesheet gagal: ${error.error || 'Unknown error'}`);
-          return;
-        }
-
-        const created = await postRes.json();
-        console.log('Timesheet created:', created);
-
-        alert('✅ TIMESHEET berhasil dibuat!');
-        navigate('/login-timesheet');
-
-      } else {
-        // MODE MULTIPLE - hanya create tanpa checkout
-        const postRes = await fetch(`${API_BASE}/timesheet/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            production_order: selectedactivity.order,
-            ssbr_ident: selectedactivity.ssbr_id,
-            serialnumber: datakaryawan.snssb,
-            full_name: datakaryawan.full_name,
-            operation_no: selectedactivity.operation_no,
-            operation_text: selectedactivity.operationtext,
-            workcentercode: datakaryawan.workcenter,
-            workcenterdescription: datakaryawan.machinename,
-          }),
-        });
-
-        if (!postRes.ok) {
-          const error = await postRes.json();
-          console.error('Gagal POST:', error);
-          alert(`❌ Buat timesheet gagal: ${error.error || 'Unknown error'}`);
-          return;
-        }
-
-        const created = await postRes.json();
-        console.log('Timesheet created:', created);
-
-        alert('✅ TIMESHEET berhasil dibuat!');
-        // Tidak redirect, biarkan user create multiple
       }
+
+      const postRes = await fetch(`${API_BASE}/timesheet/`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          order_no:              selectedactivity.order,
+          ssbr_id:               selectedactivity.ssbr_id,
+          part_name:             selectedactivity.part_name || selectedactivity.partname || '',
+          serialnumber:          datakaryawan.snssb,
+          full_name:             datakaryawan.full_name,
+          operation_no:          selectedactivity.operation_no,
+          operation_text:        selectedactivity.operationtext,
+          workcentercode:        datakaryawan.workcenter,
+          workcenterdescription: datakaryawan.machinename,
+          planhours:             selectedactivity.planhours || null,
+        }),
+      });
+
+      if (!postRes.ok) {
+        const error = await postRes.json();
+        console.error('Gagal POST:', error);
+        toast.error('Buat timesheet gagal', { description: error.error || 'Unknown error' });
+        return;
+      }
+
+      const created = await postRes.json();
+      console.log('Timesheet created:', created);
+      toast.success('TIMESHEET berhasil dibuat!');
+      if (mode === 'single') navigate('/login-timesheet');
 
     } catch (err) {
       console.error('Error postdata:', err);
-      alert(`❌ Terjadi kesalahan: ${err.message}`);
+      toast.error('Terjadi kesalahan', { description: err.message });
     }
   };
 
-  // Finish button - Update activity status
   const finish = async () => {
     const selectedactivity = JSON.parse(sessionStorage.getItem('selectedactivity'));
-
     if (!selectedactivity) {
-      alert('❌ Tidak ada activity yang dipilih');
+      toast.error('Tidak ada activity yang dipilih');
       return;
     }
 
     try {
       const postRes = await fetch(`${API_BASE}/sow/finish/`, {
-        method: 'PUT',
+        method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           selectedactivity: {
-            production_order: selectedactivity.order,
+            order_no:     selectedactivity.order,
             operation_no: selectedactivity.operation_no,
           },
         }),
@@ -207,200 +235,256 @@ const TimesheetMainMenuPage = () => {
 
       const updated = await postRes.json();
       console.log('Update sukses:', updated);
+      toast.success('Update FINISH berhasil!');
 
-      alert('✅ Update FINISH berhasil!');
-
-      // Clear UI
       sessionStorage.removeItem('selectedactivity');
-      setUserData(prev => ({
-        ...prev,
-        order: '-',
-        activity: '-'
-      }));
+      setUserData(prev => ({ ...prev, order: '-', ident: '-', partName: '-', activityText: '-', activitySeq: '-' }));
 
     } catch (err) {
       console.error('Error finish:', err);
-      alert(`❌ ${err.message}`);
+      toast.error(err.message);
     }
   };
 
-  // Rework button
-  const handleRework = () => {
-    alert('Rework feature - Coming Soon');
-  };
+  // ── Style tokens ───────────────────────────────────────────────────────────
+  const btnBase    = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 active:scale-95 min-h-[44px]';
+  const btnOutline = `${btnBase} bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300`;
 
-  // Consumable button
-  const handleConsumable = () => {
-    alert('Consumable feature - Coming Soon');
-  };
+  // Menu action buttons — hover scale + active press
+  const actionBtn = `flex flex-col items-center justify-center gap-1 sm:gap-2
+    bg-[#0096c7] hover:bg-[#0077b6] text-white font-bold rounded-2xl text-sm
+    transition-all duration-150 hover:scale-105 active:scale-95 min-h-0`;
+
+  // Shared class bases for Rework / Finish
+  const reworkCls = `flex items-center justify-center gap-1.5 text-sm font-bold text-white
+    bg-amber-500 hover:bg-amber-400 rounded-xl transition-all duration-150
+    active:scale-95 hover:scale-105`;
+  const finishCls = `flex items-center justify-center gap-1.5 text-sm font-bold text-white
+    bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-all duration-150
+    active:scale-95 hover:scale-105`;
+
+  const MENU_ITEMS = [
+    { emoji: '▶️', label: 'Start',           onClick: postdata        },
+    { emoji: '📋', label: 'Select Job',       onClick: gotojob         },
+    { emoji: '🖥️', label: 'Select Machine',   onClick: gotomesin       },
+    { emoji: '⚙️', label: 'Process Control',  onClick: gotoparameter   },
+    { emoji: '🕐', label: 'View Timesheet',   onClick: gotots          },
+    { emoji: '🔧', label: 'Consumable',       onClick: handleConsumable },
+  ];
 
   return (
-    <div className="h-screen w-screen bg-gradient-to-br from-blue-50 via-white to-orange-50 flex flex-col overflow-hidden">
-      {/* Header - Corporate Blue */}
-      <header className="flex justify-between items-center bg-gradient-to-r from-blue-600 to-blue-700 px-3 py-2.5 shadow-lg flex-shrink-0 gap-2">
-        <button
-          onClick={goHome}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 transition-all backdrop-blur-sm"
-        >
-          Back
-        </button>
+    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
 
-        {/* Mode Switch */}
+      {/* ── Header ── */}
+      <header className="flex-shrink-0 flex items-center justify-between
+                         px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
+
+        <button onClick={goHome} className={btnOutline}>Back</button>
+
+        {/* Mode toggle — centered, no page title */}
         <div className="flex items-center gap-2">
-          <label className="relative inline-block w-10 h-5 sm:w-12 sm:h-6 cursor-pointer">
+          <span className={`text-xs font-semibold transition-colors duration-200
+                            ${mode === 'single' ? 'text-[#0096c7]' : 'text-slate-400'}`}>
+            Single
+          </span>
+          <label className="relative inline-block w-11 h-6 cursor-pointer">
             <input
               type="checkbox"
               checked={mode === 'multiple'}
               onChange={(e) => handleModeChange(e.target.checked)}
-              className="hidden"
+              className="sr-only"
             />
             <span
               className={`
-                absolute inset-0 rounded-full transition-colors duration-300 shadow-inner
-                ${mode === 'multiple' ? 'bg-gradient-to-r from-blue-400 to-blue-500' : 'bg-gradient-to-r from-slate-300 to-slate-400'}
-                before:content-[''] before:absolute before:h-4 before:w-4 sm:before:h-5 sm:before:w-5
-                before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full before:shadow-md
+                absolute inset-0 rounded-full transition-colors duration-300
+                ${mode === 'multiple' ? 'bg-[#0096c7]' : 'bg-slate-300'}
+                before:content-[''] before:absolute before:h-5 before:w-5
+                before:left-0.5 before:top-0.5 before:bg-white before:rounded-full before:shadow-md
                 before:transition-transform before:duration-300
-                ${mode === 'multiple' ? 'before:translate-x-5 sm:before:translate-x-6' : 'before:translate-x-0'}
+                ${mode === 'multiple' ? 'before:translate-x-5' : 'before:translate-x-0'}
               `}
             />
           </label>
-          <span className="text-xs sm:text-sm font-medium text-white">
-            {mode === 'single' ? 'Single' : 'Multiple'}
+          <span className={`text-xs font-semibold transition-colors duration-200
+                            ${mode === 'multiple' ? 'text-[#0096c7]' : 'text-slate-400'}`}>
+            Multiple
           </span>
         </div>
 
-        <button
-          onClick={handleRefresh}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-white/20 text-white rounded-lg hover:bg-white/30 transition-all backdrop-blur-sm"
-        >
-          Refresh
-        </button>
+        <button onClick={handleRefresh} className={btnOutline}>Refresh</button>
       </header>
 
-      {/* Main Content - Soft Background */}
-      <main className="flex-1 flex flex-row gap-3 p-3 overflow-hidden">
-        {/* Info Box - Left side - Soft Card */}
-        <section className="flex-1 bg-white/80 backdrop-blur-sm rounded-2xl shadow-xl border border-white/50 p-3 flex flex-col overflow-hidden min-h-0">
-          {/* Info Rows - flex-1 with min-h-0 to prevent overflow */}
-          <div className="flex-1 min-h-0 flex flex-col gap-1.5">
-            {/* Nama */}
-            <div className="flex flex-col gap-0.5 min-h-0">
-              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Nama</span>
-              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm break-words flex-shrink-0">
+      {/* ══ PORTRAIT (< 768px): strict 40 / 60 height split ════════════════
+           Using CSS grid 2fr/3fr so proportions hold regardless of content.
+      ════════════════════════════════════════════════════════════════════ */}
+      <div
+        className="md:hidden flex-1 min-h-0 grid"
+        style={{ gridTemplateRows: '2fr 3fr', gap: '12px', padding: '12px' }}
+      >
+        {/* ── Info area (40%) ── */}
+        <section className="bg-white rounded-xl shadow-sm border border-slate-200
+                            p-3 flex flex-col gap-2 min-h-0 overflow-hidden">
+
+          {/* Strip: Avatar · Name / SN  |  WC · Machine · Order */}
+          <div className="flex items-center gap-2.5 flex-shrink-0">
+            <AvatarCircle name={userData.name} className="w-9 h-9 text-sm" />
+
+            <div className="flex-1 min-w-0">
+              <div className="text-[11px] font-bold text-slate-800 truncate leading-tight">
                 {userData.name}
               </div>
-            </div>
-
-            {/* SN */}
-            <div className="flex flex-col gap-0.5 min-h-0">
-              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">SN</span>
-              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm flex-shrink-0">
+              <div className="text-[11px] font-mono text-slate-500 leading-tight">
                 {userData.sn}
               </div>
             </div>
 
-            {/* Work Center */}
-            <div className="flex flex-col gap-0.5 min-h-0">
-              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Work Center</span>
-              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm whitespace-pre-line flex-shrink-0">
-                {userData.workcenter}
+            <div className="grid grid-cols-2 gap-x-3 flex-shrink-0">
+              {/* Left column: Order + Ident */}
+              <div className="flex flex-col justify-start gap-1.5">
+                <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+                     style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+                  <span className="text-[11px] font-semibold text-slate-500 leading-none">Order</span>
+                  <div className="text-[11px] font-bold font-mono leading-tight" style={{ color: '#0096c7' }}>
+                    {userData.order}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+                     style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+                  <span className="text-[11px] font-semibold text-slate-500 leading-none">Ident</span>
+                  <div className="text-[11px] font-bold text-slate-800 leading-tight">{userData.ident}</div>
+                </div>
               </div>
-            </div>
-
-            {/* Order */}
-            <div className="flex flex-col gap-0.5 min-h-0">
-              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Order</span>
-              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm flex-shrink-0">
-                {userData.order}
-              </div>
-            </div>
-
-            {/* Activity */}
-            <div className="flex flex-col gap-0.5 flex-1 min-h-0">
-              <span className="text-[11px] font-semibold text-blue-700 flex-shrink-0">Activity</span>
-              <div className="text-[11px] sm:text-xs font-semibold text-slate-700 whitespace-pre-line overflow-auto bg-gradient-to-br from-blue-50 to-blue-100 px-2.5 py-1.5 rounded-lg border border-blue-200 shadow-sm flex-1 min-h-0">
-                {userData.activity}
+              {/* Right column: Work Center + Machine */}
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+                     style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+                  <span className="text-[11px] font-semibold text-slate-500 leading-none">Work Center</span>
+                  <div className="text-[11px] font-bold text-slate-800 leading-tight">{userData.workcenterCode}</div>
+                </div>
+                <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+                     style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+                  <span className="text-[11px] font-semibold text-slate-500 leading-none">Machine</span>
+                  <div className="text-[11px] font-bold text-slate-800 leading-tight">{userData.machineName}</div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Bottom Actions inside info box */}
-          <div className="flex gap-2 mt-2 pt-2 border-t border-blue-200 flex-shrink-0">
-            <button
-              onClick={handleRework}
-              className="flex-1 flex items-center justify-center gap-2 py-12 px-2 bg-gradient-to-br from-orange-400 to-orange-500 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
-            >
-              <span className="text-lg">⚠️</span>
-              <span>Rework</span>
+          {/* Activity chip — grows to fill remaining height, wraps & clips */}
+          <ActivityChip
+            activityText={userData.activityText}
+            activitySeq={userData.activitySeq}
+            partName={userData.partName}
+            className="flex-1 min-h-0"
+          />
+
+          {/* Rework / Finish — always visible, never scrolled out */}
+          <div className="flex gap-2 flex-shrink-0">
+            <button onClick={handleRework} className={`${reworkCls} flex-1 min-h-[44px]`}>
+              <span>⚠️</span><span>Rework</span>
             </button>
-            <button
-              onClick={finish}
-              className="flex-1 flex items-center justify-center gap-2 py-12 px-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-xl text-sm font-bold shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200"
-            >
-              <span className="text-lg">✅</span>
-              <span>Finish</span>
+            <button onClick={finish}       className={`${finishCls} flex-1 min-h-[44px]`}>
+              <span>✅</span><span>Finish</span>
             </button>
           </div>
         </section>
 
-        {/* Action Buttons - Right side */}
-        <section className="flex-1 grid grid-cols-2 grid-rows-3 gap-3 overflow-hidden">
-          {/* Start - Darker Blue */}
-          <button
-            onClick={postdata}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
-          >
-            <span className="text-3xl sm:text-4xl md:text-5xl">▶️</span>
-            <span>Start</span>
-          </button>
-
-          {/* Select Job - Soft Blue */}
-          <button
-            onClick={gotojob}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
-          >
-            <span className="text-3xl sm:text-4xl md:text-5xl">📋</span>
-            <span>Select Job</span>
-          </button>
-
-          {/* Select Machine - Soft Blue */}
-          <button
-            onClick={gotomesin}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
-          >
-            <span className="text-3xl sm:text-4xl md:text-5xl">🖥️</span>
-            <span>Select Machine</span>
-          </button>
-
-          {/* Process Control - Soft Blue */}
-          <button
-            onClick={gotoparameter}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
-          >
-            <span className="text-3xl sm:text-4xl md:text-5xl">⚙️</span>
-            <span>Process Control</span>
-          </button>
-
-          {/* View Timesheet - Soft Blue */}
-          <button
-            onClick={gotots}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
-          >
-            <span className="text-3xl sm:text-4xl md:text-5xl">🕐</span>
-            <span>View Timesheet</span>
-          </button>
-
-          {/* Consumable - Soft Blue */}
-          <button
-            onClick={handleConsumable}
-            className="flex flex-col items-center justify-center gap-1 sm:gap-2 bg-gradient-to-br from-blue-400 to-blue-500 text-white rounded-2xl shadow-xl hover:shadow-2xl hover:scale-105 transition-all duration-200 text-sm sm:text-base font-bold min-h-0"
-          >
-            <span className="text-3xl sm:text-4xl md:text-5xl">🔧</span>
-            <span>Consumable</span>
-          </button>
+        {/* ── Menu grid (60%): 2 cols × 3 rows ── */}
+        <section className="grid grid-cols-2 grid-rows-3 gap-3 min-h-0">
+          {MENU_ITEMS.map(({ emoji, label, onClick }) => (
+            <button key={label} onClick={onClick} className={actionBtn}>
+              <span className="text-3xl sm:text-4xl">{emoji}</span>
+              <span>{label}</span>
+            </button>
+          ))}
         </section>
-      </main>
+      </div>
+
+      {/* ══ LANDSCAPE (≥ 768px): info panel left | menu grid right ══════════ */}
+      <div className="hidden md:flex flex-1 overflow-hidden gap-3 p-3">
+
+        {/* ── Info panel — left ── */}
+        <section className="flex-1
+                            bg-white rounded-xl shadow-sm border border-slate-200
+                            flex flex-col">
+
+          {/* Scrollable top content */}
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0">
+
+            {/* Avatar + Name / SN */}
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <AvatarCircle name={userData.name} className="w-12 h-12 text-xl" />
+              <div className="min-w-0">
+                <div className="text-[11px] font-bold text-slate-800 leading-tight truncate">
+                  {userData.name}
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 mt-0.5">{userData.sn}</div>
+              </div>
+            </div>
+
+            <div className="h-px bg-slate-100 flex-shrink-0" />
+
+            {/* Info fields — 2-col grid + Activity at bottom */}
+            <div className="flex flex-col flex-1 gap-3">
+
+              {/* 2-column: left = Order + Ident, right = WC + Machine */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+                       style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+                    <span className="text-[11px] font-semibold text-slate-500 leading-none">Order</span>
+                    <div className="text-[11px] font-bold font-mono leading-tight" style={{ color: '#0096c7' }}>
+                      {userData.order}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border"
+                       style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
+                    <span className="text-[11px] font-semibold text-slate-500 leading-none">Ident</span>
+                    <div className="text-[11px] font-bold text-slate-800 leading-tight">{userData.ident}</div>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <InfoField label="Work Center" value={userData.workcenterCode} mono />
+                  <InfoField label="Machine"     value={userData.machineName} />
+                </div>
+              </div>
+
+              {/* Activity — full width, pushed to bottom */}
+              <div className="flex flex-col gap-1 mt-auto">
+                <span className="text-[11px] font-semibold text-slate-500">Activity</span>
+                <ActivityBox
+                  activityText={userData.activityText}
+                  activitySeq={userData.activitySeq}
+                  partName={userData.partName}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Rework / Finish — always pinned to bottom, never clipped */}
+          <div className="flex-shrink-0 flex gap-2 p-4 pt-3 border-t border-slate-200">
+            <button onClick={handleRework} className={`${reworkCls} flex-1 min-h-[52px]`}>
+              <span>⚠️</span><span>Rework</span>
+            </button>
+            <button onClick={finish}       className={`${finishCls} flex-1 min-h-[52px]`}>
+              <span>✅</span><span>Finish</span>
+            </button>
+          </div>
+        </section>
+
+        {/* ── Menu grid — right: 2 cols × 3 rows ── */}
+        <section
+          className="flex-1 grid grid-cols-2 gap-3 overflow-hidden"
+          style={{ gridTemplateRows: 'repeat(3, 1fr)' }}
+        >
+          {MENU_ITEMS.map(({ emoji, label, onClick }) => (
+            <button key={label} onClick={onClick} className={actionBtn}>
+              <span className="text-3xl xl:text-4xl">{emoji}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </section>
+      </div>
     </div>
   );
 };

@@ -58,7 +58,7 @@ def build_output_df(group_df: pd.DataFrame) -> pd.DataFrame:
     out["Unloading Point"]                                       = ""
     out["Operation/Activity Number"]                             = group_df["operation_no"]
     out["Work Center"]                                           = group_df["workcenter"]
-    out["Operation Short Text"]                                  = group_df["operationtext"]
+    out["Operation Short Text"]                                  = group_df["operation_text"]
     out["Base Quantity"]                                         = 1
     out["Unit of measure for activity"]                          = "PC"
     out["Standard Value"]                                        = group_df["planhours"]
@@ -84,7 +84,7 @@ try:
             order_no,
             ssbr_id,
             part_name,
-            operationtext,
+            operation_text,
             operation_no,
             planhours,
             workcenter

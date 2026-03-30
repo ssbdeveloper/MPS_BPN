@@ -167,10 +167,10 @@ const TimesheetEditPage = () => {
         tsnumber: record.tsnumber || '',
         serialnumber: record.serialnumber || '',
         full_name: record.full_name || '',
-        production_order: record.production_order || '',
-        ssbr_ident: record.ssbr_ident || '',
+        production_order: record.order_no || '',
+        ssbr_ident: record.ssbr_id || '',
         operation_text: record.operation_text || '',
-        seq: record.seq || '',
+        seq: record.operation_no || '',
         workcenterdescription: record.workcenterdescription || '',
         workcentercode: record.workcentercode || '',
         date_checkin: record.date_checkin || '',
@@ -375,10 +375,10 @@ const TimesheetEditPage = () => {
       const body = {
         serialnumber: formData.serialnumber,
         full_name: formData.full_name,
-        production_order: formData.production_order,
-        ssbr_ident: formData.ssbr_ident,
+        order_no: formData.production_order,
+        ssbr_id: formData.ssbr_ident,
         operation_text: formData.operation_text,
-        seq: formData.seq,
+        operation_no: formData.seq,
         workcentercode: formData.workcentercode,
         workcenterdescription: formData.workcenterdescription,
         longdate_checkin,
@@ -413,11 +413,6 @@ const TimesheetEditPage = () => {
         patchBody.planhours = formData.planhours;
       }
 
-      // Set state_flag = 5 when duration = 0
-      if (duration === 0) {
-        patchBody.state_flag = '5';
-      }
-
       if (Object.keys(patchBody).length > 0) {
         const patchRes = await fetch(`${API_BASE}/timesheet/${tsnumber}`, {
           method: 'PATCH',
@@ -449,195 +444,150 @@ const TimesheetEditPage = () => {
     navigate(returnUrl);
   };
 
+  const inputCls = 'w-full px-3 py-2 text-sm bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all duration-150';
+  const inputDisabledCls = 'w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 text-slate-500 rounded-lg cursor-not-allowed';
+  const labelCls = 'block text-xs font-semibold text-slate-700 mb-1';
+
+  const isDeleted   = formData.state_flag === '5';
+  const isSapReject = formData.state_flag === '3';
+  const isValidated = !!formData.validation_date && !isDeleted && !isSapReject;
+
   if (loading) {
     return (
-      <div className="h-screen w-screen bg-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-lg font-semibold text-blue-900">Loading...</div>
+      <div className="h-screen w-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#00b4d8', borderTopColor: 'transparent' }} />
+          <span className="text-sm font-medium text-slate-500">Loading…</span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
-      <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
+    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+
+      {/* ── Header ── */}
+      <header className="flex-shrink-0 flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
         <button
           onClick={handleCancel}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95"
         >
           Cancel
         </button>
-        <h2 className="text-base sm:text-lg font-bold text-white">Edit Timesheet</h2>
+        <h2 className="text-base font-extrabold text-slate-800">Edit Timesheet</h2>
         <button
           onClick={handleSave}
           disabled={saving || !hasChanges}
-          className={`px-3 py-1.5 text-xs sm:text-sm font-medium text-white rounded transition-colors ${
-            saving || !hasChanges
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-orange-500 hover:bg-orange-600'
-          }`}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? 'Saving…' : 'Save'}
         </button>
       </header>
 
-      {/* Form Content - Scrollable - White Background */}
-      <div className="flex-1 overflow-y-auto px-3 py-4 bg-white">
-        <div className="max-w-2xl mx-auto space-y-4">
-          {/* State Flag = 5 Warning */}
-          {formData.state_flag === '5' && (
-            <div className="bg-red-50 border border-red-300 rounded-lg p-3">
-              <div className="flex items-center gap-2">
-                <span className="text-red-600 text-xl font-bold">X</span>
-                <div>
-                  <div className="text-sm font-semibold text-red-800">Deleted</div>
-                  <div className="text-xs text-red-600">Timesheet ini ditandai sebagai Deleted (state_flag = 5)</div>
-                </div>
+      {/* ── Scrollable Form ── */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 bg-slate-50">
+        <div className="max-w-2xl mx-auto space-y-3">
+
+          {/* Status banners */}
+          {isDeleted && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-100 border border-slate-200">
+              <span className="text-slate-500 font-bold text-base leading-none">×</span>
+              <div>
+                <div className="text-sm font-semibold text-slate-600">Deleted</div>
+                <div className="text-xs text-slate-400">Timesheet ditandai sebagai Deleted (duration = 0)</div>
               </div>
             </div>
           )}
-
-          {/* Validation Status */}
-          {formData.validation_date && (
-            <div className="bg-green-50 border border-green-300 rounded-lg p-3">
-              <div className="flex items-center gap-2">
-                <span className="text-green-600 text-xl font-bold">✓</span>
-                <div>
-                  <div className="text-sm font-semibold text-green-800">Validated</div>
-                  <div className="text-xs text-green-600">
-                    Validated on: {formData.validation_date || '-'}
-                  </div>
-                </div>
+          {isSapReject && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 border border-red-200">
+              <span className="text-red-500 font-bold text-base leading-none">!</span>
+              <div>
+                <div className="text-sm font-semibold text-red-700">SAP Reject</div>
+                <div className="text-xs text-red-500">Record ini ditolak SAP — edit dan kirim ulang</div>
               </div>
             </div>
           )}
+          {isValidated && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200">
+              <span className="text-emerald-500 font-bold text-base leading-none">✓</span>
+              <div>
+                <div className="text-sm font-semibold text-emerald-700">Validated</div>
+                <div className="text-xs text-emerald-500">Validated on: {formData.validation_date}</div>
+              </div>
+            </div>
+          )}
+          {hasChanges && (
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200">
+              <span className="text-amber-500 font-bold text-base leading-none">!</span>
+              <div className="text-xs font-semibold text-amber-700">Ada perubahan yang belum disimpan</div>
+            </div>
+          )}
 
-          {/* General Information Section */}
-          <div className="bg-blue-50 rounded-lg shadow-sm border border-blue-200 p-4">
-            <h3 className="text-sm font-bold text-blue-900 mb-3">General Information</h3>
-
+          {/* General Information */}
+          <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">General Information</h3>
             <div className="space-y-3">
-              {/* TS Number (Read-only) */}
+
               <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">
-                  TS Number
-                </label>
-                <input
-                  type="text"
-                  value={formData.tsnumber}
-                  disabled
-                  className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed"
-                />
+                <label className={labelCls}>TS Number</label>
+                <input type="text" value={formData.tsnumber} disabled className={inputDisabledCls} />
               </div>
 
-              {/* Employee Info (Read-only) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Serial Number
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.serialnumber}
-                    disabled
-                    className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed"
-                  />
+                  <label className={labelCls}>Serial Number</label>
+                  <input type="text" value={formData.serialnumber} disabled className={inputDisabledCls} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Employee Name
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.full_name}
-                    disabled
-                    className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed"
-                  />
+                  <label className={labelCls}>Employee Name</label>
+                  <input type="text" value={formData.full_name} disabled className={inputDisabledCls} />
                 </div>
               </div>
 
-              {/* Production Order Info (Read-only) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Production Order
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.production_order}
-                    disabled
-                    className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed"
-                  />
+                  <label className={labelCls}>Production Order</label>
+                  <input type="text" value={formData.production_order} disabled className={inputDisabledCls} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Ident
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.ssbr_ident}
-                    disabled
-                    className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed"
-                  />
+                  <label className={labelCls}>Ident (SSBR)</label>
+                  <input type="text" value={formData.ssbr_ident} disabled className={inputDisabledCls} />
                 </div>
               </div>
 
-              {/* Operation Text (Read-only) */}
               <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">
-                  Operation
-                </label>
-                <textarea
-                  value={formData.operation_text}
-                  disabled
-                  rows={2}
-                  className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed resize-none"
-                />
+                <label className={labelCls}>Operation</label>
+                <textarea value={formData.operation_text} disabled rows={2}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 text-slate-500 rounded-lg cursor-not-allowed resize-none" />
               </div>
 
-              {/* Workcenter - Searchable Dropdown */}
+              {/* Workcenter searchable dropdown */}
               <div ref={workcenterDropdownRef}>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">
-                  Workcenter <span className="text-orange-500">*</span>
-                </label>
+                <label className={labelCls}>Workcenter <span className="text-[#0096c7]">*</span></label>
                 <div className="relative">
                   <input
                     type="text"
                     value={workcenterSearch || formData.workcenterdescription}
-                    onChange={(e) => {
-                      setWorkcenterSearch(e.target.value);
-                      setShowWorkcenterDropdown(true);
-                    }}
+                    onChange={(e) => { setWorkcenterSearch(e.target.value); setShowWorkcenterDropdown(true); }}
                     onFocus={() => setShowWorkcenterDropdown(true)}
-                    placeholder="Search workcenter..."
-                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
+                    placeholder="Search workcenter…"
+                    className={inputCls}
                   />
-
-                  {/* Dropdown List */}
                   {showWorkcenterDropdown && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-blue-300 rounded shadow-lg max-h-60 overflow-y-auto">
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-md max-h-60 overflow-y-auto">
                       {filteredWorkcenters.length === 0 ? (
-                        <div className="px-3 py-2 text-sm text-gray-500">
-                          No workcenter found
-                        </div>
+                        <div className="px-3 py-2 text-sm text-slate-400">No workcenter found</div>
                       ) : (
                         filteredWorkcenters.map((wc, idx) => (
-                          <div
-                            key={idx}
-                            onClick={() => selectWorkcenter(wc)}
-                            className="px-3 py-2 text-sm hover:bg-blue-50 cursor-pointer border-b border-blue-100 last:border-b-0"
-                          >
+                          <div key={idx} onClick={() => selectWorkcenter(wc)}
+                            className="px-3 py-2 text-sm hover:bg-slate-50 cursor-pointer border-b border-slate-100 last:border-b-0">
                             <div className="flex items-center justify-between">
-                              <span className="font-semibold text-blue-900">{wc.description}</span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                                wc.type === 'OT' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'
-                              }`}>
-                                {wc.type}
-                              </span>
+                              <span className="font-semibold text-slate-800">{wc.description}</span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                                wc.type === 'OT' ? 'bg-amber-100 text-amber-700' : 'bg-[#caf0f8] text-[#0077b6]'
+                              }`}>{wc.type}</span>
                             </div>
-                            <div className="text-xs text-gray-600">{wc.code}</div>
+                            <div className="text-xs text-slate-500">{wc.code}</div>
                           </div>
                         ))
                       )}
@@ -645,7 +595,7 @@ const TimesheetEditPage = () => {
                   )}
                 </div>
                 {formData.workcentercode && (
-                  <div className="text-xs text-blue-700 mt-1">
+                  <div className="text-xs text-[#0096c7] mt-1">
                     Selected: {formData.workcenterdescription} — {formData.workcentercode}
                   </div>
                 )}
@@ -653,153 +603,84 @@ const TimesheetEditPage = () => {
             </div>
           </div>
 
-          {/* Time Tracking Section */}
-          <div className="bg-blue-50 rounded-lg shadow-sm border border-blue-200 p-4">
-            <h3 className="text-sm font-bold text-blue-900 mb-3">Time Tracking</h3>
-
+          {/* Time Tracking */}
+          <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Time Tracking</h3>
             <div className="space-y-3">
-              {/* Check-in */}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Check-in Date <span className="text-orange-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={checkinDatePicker}
+                  <label className={labelCls}>Check-in Date <span className="text-[#0096c7]">*</span></label>
+                  <input type="date" value={checkinDatePicker}
                     onChange={(e) => handleDatePickerChange('checkin', e.target.value)}
-                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
-                  />
+                    className={inputCls} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Check-in Time <span className="text-orange-500">*</span>
-                  </label>
-                  <input
-                    type="time"
-                    value={checkinTimePicker}
+                  <label className={labelCls}>Check-in Time <span className="text-[#0096c7]">*</span></label>
+                  <input type="time" value={checkinTimePicker}
                     onChange={(e) => handleTimePickerChange('checkin', e.target.value)}
-                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
-                  />
+                    className={inputCls} />
                 </div>
               </div>
 
-              {/* Check-out */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Check-out Date <span className="text-orange-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={checkoutDatePicker}
+                  <label className={labelCls}>Check-out Date <span className="text-[#0096c7]">*</span></label>
+                  <input type="date" value={checkoutDatePicker}
                     onChange={(e) => handleDatePickerChange('checkout', e.target.value)}
-                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
-                  />
+                    className={inputCls} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Check-out Time <span className="text-orange-500">*</span>
-                  </label>
-                  <input
-                    type="time"
-                    value={checkoutTimePicker}
+                  <label className={labelCls}>Check-out Time <span className="text-[#0096c7]">*</span></label>
+                  <input type="time" value={checkoutTimePicker}
                     onChange={(e) => handleTimePickerChange('checkout', e.target.value)}
-                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
-                  />
+                    className={inputCls} />
                 </div>
               </div>
 
-              {/* Duration + Plan Hours + Std Foreman Hours */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Duration (hours)
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.duration}
-                    disabled
-                    className={`w-full px-3 py-2 text-sm border rounded cursor-not-allowed font-bold ${
+                  <label className={labelCls}>Duration (hours)</label>
+                  <input type="text" value={formData.duration} disabled
+                    className={`w-full px-3 py-2 text-sm border rounded-lg cursor-not-allowed font-bold ${
                       parseFloat(formData.duration || 0) === 0
-                        ? 'border-red-300 bg-red-50 text-red-700'
-                        : 'border-blue-200 bg-white text-blue-700'
+                        ? 'border-red-300 bg-red-50 text-red-600'
+                        : 'border-slate-200 bg-slate-50 text-[#023e8a]'
                     }`}
                   />
                   {parseFloat(formData.duration || 0) === 0 && formData.date_checkout && (
-                    <div className="text-[10px] text-red-600 mt-0.5 font-medium">
-                      Duration = 0, akan ditandai sebagai Deleted
-                    </div>
+                    <div className="text-[10px] text-red-500 mt-0.5 font-medium">Duration = 0 → akan jadi Deleted</div>
                   )}
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Plan Hours <span className="text-[10px] font-normal text-gray-500">(SOW)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.planhours}
-                    disabled
-                    className="w-full px-3 py-2 text-sm border border-blue-200 rounded bg-white text-gray-700 cursor-not-allowed font-bold"
-                  />
+                  <label className={labelCls}>Plan Hours <span className="text-[10px] font-normal text-slate-400">(SOW)</span></label>
+                  <input type="text" value={formData.planhours} disabled className={inputDisabledCls + ' font-bold'} />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-blue-900 mb-1">
-                    Std Foreman Hours
-                  </label>
+                  <label className={labelCls}>Std Foreman Hrs</label>
                   <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    min="0"
+                    type="number" inputMode="decimal" step="0.01" min="0"
                     value={formData.std_foreman_hours}
                     onChange={(e) => handleInputChange('std_foreman_hours', e.target.value)}
                     onKeyDown={(e) => {
-                      // Block non-numeric keys except control keys
-                      if (
-                        !/[0-9.]/.test(e.key) &&
-                        !['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)
-                      ) {
-                        e.preventDefault();
-                      }
-                      // Prevent multiple dots
-                      if (e.key === '.' && e.target.value.includes('.')) {
-                        e.preventDefault();
-                      }
+                      if (!/[0-9.]/.test(e.key) && !['Backspace','Delete','Tab','ArrowLeft','ArrowRight','Home','End'].includes(e.key)) e.preventDefault();
+                      if (e.key === '.' && e.target.value.includes('.')) e.preventDefault();
                     }}
                     placeholder="0.00"
-                    className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 bg-white"
+                    className={inputCls}
                   />
                 </div>
               </div>
 
-              {/* Note */}
               <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">
-                  Note
-                </label>
-                <textarea
-                  value={formData.note || ''}
-                  onChange={(e) => handleInputChange('note', e.target.value)}
-                  placeholder="Add note..."
-                  rows={3}
-                  className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded focus:outline-none focus:border-blue-600 resize-none bg-white"
-                />
+                <label className={labelCls}>Note</label>
+                <textarea value={formData.note || ''} onChange={(e) => handleInputChange('note', e.target.value)}
+                  placeholder="Add note…" rows={3}
+                  className={inputCls + ' resize-none'} />
               </div>
             </div>
           </div>
 
-          {/* Change Indicator */}
-          {hasChanges && (
-            <div className="bg-orange-50 border border-orange-300 rounded-lg p-3">
-              <div className="flex items-center gap-2">
-                <span className="text-orange-600 text-lg">!</span>
-                <div className="text-xs text-orange-800 font-semibold">
-                  You have unsaved changes
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

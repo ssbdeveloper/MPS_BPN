@@ -4,17 +4,17 @@ exports.getAll = async (req, res) => {
   const { sn, workcenter } = req.query;
   let result;
   if (sn) {
-    result = await pool.query(
+    result = await db.query(
       'SELECT * FROM processcontroldata WHERE snssb = $1 ORDER BY id_processcontroldata DESC',
       [sn]
     );
   } else if (workcenter) {
-    result = await pool.query(
+    result = await db.query(
       'SELECT * FROM processcontroldata WHERE workcenter = $1 ORDER BY id_processcontroldata DESC',
       [workcenter]
     );
   } else {
-    result = await pool.query(
+    result = await db.query(
       'SELECT * FROM processcontroldata ORDER BY id_processcontroldata DESC'
     );
   }
@@ -25,7 +25,7 @@ exports.getAll = async (req, res) => {
 // GET /process-control/by-sn/:sn
 exports.getBySN = async (req, res) => {
   const { sn } = req.params;
-  const result = await pool.query(
+  const result = await db.query(
     'SELECT * FROM processcontroldata WHERE snssb = $1 ORDER BY id_processcontroldata DESC',
     [sn]
   );
@@ -35,7 +35,7 @@ exports.getBySN = async (req, res) => {
 // GET /process-control/by-wct/:workcenter
 exports.getByWCT = async (req, res) => {
   const { workcenter } = req.params;
-  const result = await pool.query(
+  const result = await db.query(
     'SELECT * FROM processcontroldata WHERE workcenter = $1 ORDER BY id_processcontroldata DESC',
     [workcenter]
   );
@@ -46,7 +46,7 @@ exports.getByWCT = async (req, res) => {
 exports.create = async (req, res) => {
   const { snssb, full_name, production_order, ssbr_id, operation_text, operation_no,
           machineid, workcenter, validation_status, validation_date, validation_by, tsnumber } = req.body;
-  const result = await pool.query(
+  const result = await db.query(
     `INSERT INTO processcontroldata
     (snssb, full_name, production_order, ssbr_id, operation_text, operation_no, machineid,
      workcenter, validation_status, validation_date, validation_by, tsnumber)
@@ -60,7 +60,7 @@ exports.create = async (req, res) => {
 exports.validate = async (req, res) => {
   const { id } = req.params;
   const { validation_by, validation_status } = req.body;
-  const result = await pool.query(
+  const result = await db.query(
     `UPDATE processcontroldata
      SET validation_status = $1,
          validation_by = $2,
@@ -75,7 +75,7 @@ exports.validate = async (req, res) => {
 exports.update = async (req, res) => {
   const { id } = req.params;
   const { validation_by, validation_status } = req.body;
-  const result = await pool.query(
+  const result = await db.query(
     `UPDATE processcontroldata
      SET validation_status = $1,
          validation_by = $2,
@@ -88,6 +88,6 @@ exports.update = async (req, res) => {
 };
 
 exports.remove = async (req, res) => {
-  await pool.query('DELETE FROM processcontroldata WHERE id_processcontroldata=$1', [req.params.id]);
+  await db.query('DELETE FROM processcontroldata WHERE id_processcontroldata=$1', [req.params.id]);
   res.json({ message: 'Deleted' });
 };

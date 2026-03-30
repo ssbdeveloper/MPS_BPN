@@ -8,22 +8,25 @@
     "PLNFL":"000001",       // Sequence Number (table production_operations)
     "VORNR_B":"0020",       // Branch Operation (table production_operations)
     "VORNR_R":"0030",       // Return Operation (table production_operations)
-    "ZCONF_TYPE": "",       // Confirmation Type (kosong aja)
+    "ZCONF_TYPE": "",       // Confirmation Type (Jika nilai workcenter diakhiri dengan kata "OT", maka set ZCONF_TYPE = "OV"
+                            // Jika operation_no bernilai lebih dari 5000, maka set ZCONF_TYPE = "RW"
+                            // Jika tidak memenuhi semua kondisi, maka set ZCONF_TYPE = "RG")
+
     "ARBPL": "M5051WLS",    // workcenter (table timesheet_transaction)
     "LSTAR": "",            // activitytype (table timesheet_transaction)
-    "ISDD": "20260118",     // Start Date (table timesheet_transaction longdate_checkin "yyyymmdd")
-    "ISDZ": "153800",       // Start Time (table timesheet_transaction longdate_checkin "hhmmss")
-    "IEDD": "20260118",     // Finish Date (table timesheet_transaction longdate_checkout "yyyymmdd")
-    "IEDZ": "205900",       // Finish Time (table timesheet_transaction longdate_checkout "hhmmss")
+    "ISDD": "20260118",     // Start Date (table timesheet_transaction date_checkin "yyyymmdd")
+    "ISDZ": "153800",       // Start Time (table timesheet_transaction hour_checkin "hhmm")
+    "IEDD": "20260118",     // Finish Date (table timesheet_transaction date_checkout "yyyymmdd")
+    "IEDZ": "205900",       // Finish Time (table timesheet_transaction hour_checkout "hhmm")
     "WERKS": "5051",        // Plant (table timesheet_transaction)
     "AUERU": "",            // Final Confirmation (kosong aja)
-    "ZBARCODEID": "1575343" // BarcodeID (kosong aja)
+    "ZBARCODEID": "" // BarcodeID (kosong aja)
   },
 
   {
     "ZTIMESHEETID": "",
     "AUFNR": "1000131548",
-    "VORNR": "00005",
+    "VORNR": "0005",
     "FLGAT": "",
     "PLNFL": "",
     "VORNR_B": "",
@@ -39,12 +42,12 @@
     "IEDZ": "235900",
     "WERKS": "5051",
     "AUERU": "",
-    "ZBARCODEID": "1575343"
+    "ZBARCODEID": ""
 },
 {
     "ZTIMESHEETID": "",
     "AUFNR": "1000131548",
-    "VORNR": "00020",
+    "VORNR": "0020",
     "FLGAT": "1",
     "PLNFL": "1",
     "VORNR_B": "5001",
@@ -60,7 +63,7 @@
     "IEDZ": "235900",
     "WERKS": "5051",
     "AUERU": "",
-    "ZBARCODEID": "1575343"
+    "ZBARCODEID": ""
 }
 
 Confirmation of order 001000131557 saved

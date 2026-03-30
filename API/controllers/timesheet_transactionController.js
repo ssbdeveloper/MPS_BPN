@@ -148,14 +148,28 @@ exports.search = async (req, res) => {
     let params;
 
     if (start && end) {
-      query = `SELECT * FROM timesheet_transaction
-               WHERE DATE(${field}) BETWEEN $1 AND $2
-               ORDER BY longdate_checkin ASC`;
+      if (field === 'longdate_checkin') {
+        query = `SELECT * FROM timesheet_transaction
+                 WHERE longdate_checkin >= $1::date
+                   AND longdate_checkin <  ($2::date + interval '1 day')
+                 ORDER BY longdate_checkin ASC`;
+      } else {
+        query = `SELECT * FROM timesheet_transaction
+                 WHERE DATE(${field}) BETWEEN $1 AND $2
+                 ORDER BY longdate_checkin ASC`;
+      }
       params = [start, end];
     } else if (value) {
-      query = `SELECT * FROM timesheet_transaction
-               WHERE DATE(${field}) = $1
-               ORDER BY longdate_checkin ASC`;
+      if (field === 'longdate_checkin') {
+        query = `SELECT * FROM timesheet_transaction
+                 WHERE longdate_checkin >= $1::date
+                   AND longdate_checkin <  ($1::date + interval '1 day')
+                 ORDER BY longdate_checkin ASC`;
+      } else {
+        query = `SELECT * FROM timesheet_transaction
+                 WHERE DATE(${field}) = $1
+                 ORDER BY longdate_checkin ASC`;
+      }
       params = [value];
     } else {
       return res.status(400).json({ error: "Missing value or range (start/end)" });
@@ -233,14 +247,16 @@ exports.getbyid = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const {
-      production_order,
-      ssbr_ident,
+      order_no,
+      ssbr_id,
+      part_name,
       serialnumber,
       full_name,
       operation_no,
       operation_text,
       workcentercode,
       workcenterdescription,
+      planhours,
       id_unprod
     } = req.body;
 
@@ -253,23 +269,25 @@ exports.create = async (req, res) => {
 
     const result = await db.query(
       `INSERT INTO timesheet_transaction
-        (production_order, ssbr_ident, serialnumber, full_name, seq, operation_text,
-         workcentercode, workcenterdescription, longdate_checkin,
+        (order_no, ssbr_id, part_name, serialnumber, full_name, operation_no, operation_text,
+         workcentercode, workcenterdescription, planhours, longdate_checkin,
          date_checkin, hour_checkin, plant, activitytype)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(),
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(),
          to_char(NOW(), 'DD/MM/YYYY'),
          to_char(NOW(), 'HH24:MI'),
-         $9, $10)
+         $11, $12)
        RETURNING *`,
       [
-        production_order,
-        ssbr_ident,
+        order_no,
+        ssbr_id,
+        part_name,
         serialnumber,
         full_name,
         operation_no,
         operation_text,
         workcentercode,
         workcenterdescription,
+        planhours,
         PLANT_SSB,
         id_unprod
       ]
@@ -410,10 +428,10 @@ exports.updateTimesheetadmin = async (req, res) => {
     const {
       serialnumber,
       full_name,
-      production_order,
-      ssbr_ident,
+      order_no,
+      ssbr_id,
       operation_text,
-      seq,
+      operation_no,
       workcentercode,
       workcenterdescription,
       longdate_checkin,
@@ -432,10 +450,10 @@ exports.updateTimesheetadmin = async (req, res) => {
       UPDATE timesheet_transaction SET
         serialnumber = $1,
         full_name = $2,
-        production_order = $3,
-        ssbr_ident = $4,
+        order_no = $3,
+        ssbr_id = $4,
         operation_text = $5,
-        seq = $6,
+        operation_no = $6,
         workcentercode = $7,
         workcenterdescription = $8,
         longdate_checkin = $9::timestamptz,
@@ -464,6 +482,18 @@ exports.updateTimesheetadmin = async (req, res) => {
           WHEN $10 IS NOT NULL AND $9 IS NOT NULL
           THEN ROUND(EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz)) / 3600.0, 2)
           ELSE NULL
+        END,
+        state_flag = CASE
+          WHEN $10 IS NOT NULL AND $9 IS NOT NULL
+           AND ROUND(EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz)) / 3600.0, 2) = 0
+          THEN '5'
+          ELSE state_flag
+        END,
+        validation_date = CASE
+          WHEN $10 IS NOT NULL AND $9 IS NOT NULL
+           AND ROUND(EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz)) / 3600.0, 2) = 0
+          THEN NULL
+          ELSE validation_date
         END
       WHERE tsnumber = $11
       RETURNING *;
@@ -474,10 +504,10 @@ exports.updateTimesheetadmin = async (req, res) => {
     const values = [
       s(serialnumber),
       s(full_name),
-      s(production_order),
-      s(ssbr_ident),
+      s(order_no),
+      s(ssbr_id),
       s(operation_text),
-      s(seq),
+      s(operation_no),
       s(workcentercode),
       s(workcenterdescription),
       longdate_checkin || null,
@@ -537,7 +567,11 @@ const generateExport = async (req, res, format = 'csv') => {
     let where = '';
 
     if (start && end) {
-      where = `WHERE DATE(${field}) BETWEEN $1 AND $2`;
+      if (field === 'longdate_checkin' || field === 'longdate_checkout') {
+        where = `WHERE ${field} >= $1::date AND ${field} < ($2::date + interval '1 day')`;
+      } else {
+        where = `WHERE DATE(${field}) BETWEEN $1 AND $2`;
+      }
       params.push(start, end);
     }
 
@@ -705,8 +739,8 @@ exports.validationStats = async (req, res) => {
       end = now.toISOString().split('T')[0];
     }
 
-    // Build WHERE clause
-    let whereClauses = ['DATE(longdate_checkin) BETWEEN $1 AND $2'];
+    // Build WHERE clause — range predicate (SARGable, uses idx_ts_longdate_checkin)
+    let whereClauses = ['longdate_checkin >= $1::date AND longdate_checkin < ($2::date + interval \'1 day\')'];
     let params = [start, end];
     let paramIdx = 3;
 
@@ -717,7 +751,7 @@ exports.validationStats = async (req, res) => {
         OR LOWER(full_name) LIKE $${paramIdx}
         OR LOWER(workcentercode) LIKE $${paramIdx}
         OR LOWER(workcenterdescription) LIKE $${paramIdx}
-        OR LOWER(production_order) LIKE $${paramIdx}
+        OR LOWER(order_no) LIKE $${paramIdx}
       )`);
       params.push(searchLike);
       paramIdx++;
@@ -725,51 +759,51 @@ exports.validationStats = async (req, res) => {
 
     const whereSQL = whereClauses.join(' AND ');
 
-    // 1) Global stats
-    const statsQuery = `
-      SELECT
-        COUNT(*) AS total_records,
-        COALESCE(SUM(duration), 0) AS total_hours,
-        COUNT(DISTINCT serialnumber) AS total_employees,
-        COUNT(*) FILTER (WHERE validation_date IS NULL) AS total_pending,
-        COUNT(*) FILTER (WHERE validation_date IS NOT NULL) AS total_validated,
-        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL), 0) AS pending_hours,
-        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL), 0) AS validated_hours
-      FROM timesheet_transaction
-      WHERE ${whereSQL}
-    `;
-    const statsResult = await db.query(statsQuery, params);
-    const statsRow = statsResult.rows[0];
-
-    // 2) Grouped employee summary (serialnumber, full_name, counts, hours)
-    const groupsQuery = `
+    // Single query: groups + global stats via window functions (eliminates double scan)
+    const mergedQuery = `
       SELECT
         serialnumber,
-        MAX(full_name) AS full_name,
-        COUNT(*) AS record_count,
-        COALESCE(SUM(duration), 0) AS total_hours,
-        COUNT(*) FILTER (WHERE validation_date IS NULL) AS pending_count,
-        COUNT(*) FILTER (WHERE validation_date IS NOT NULL) AS validated_count,
-        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL), 0) AS pending_hours,
-        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL), 0) AS validated_hours
+        MAX(full_name)                                                          AS full_name,
+        COUNT(*)                                                                AS record_count,
+        COALESCE(SUM(duration), 0)                                             AS total_hours,
+        COUNT(*) FILTER (WHERE validation_date IS NULL)                         AS pending_count,
+        COUNT(*) FILTER (WHERE validation_date IS NOT NULL)                     AS validated_count,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL),  0)     AS pending_hours,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL), 0)  AS validated_hours,
+        SUM(COUNT(*)) OVER ()                                                   AS g_total_records,
+        COALESCE(SUM(SUM(duration)) OVER (), 0)                                AS g_total_hours,
+        COUNT(*) OVER ()                                                        AS g_total_employees,
+        SUM(COUNT(*) FILTER (WHERE validation_date IS NULL))  OVER ()          AS g_total_pending,
+        SUM(COUNT(*) FILTER (WHERE validation_date IS NOT NULL)) OVER ()       AS g_total_validated,
+        COALESCE(SUM(SUM(duration) FILTER (WHERE validation_date IS NULL))  OVER (), 0) AS g_pending_hours,
+        COALESCE(SUM(SUM(duration) FILTER (WHERE validation_date IS NOT NULL)) OVER (), 0) AS g_validated_hours
       FROM timesheet_transaction
       WHERE ${whereSQL}
       GROUP BY serialnumber
       ORDER BY MAX(full_name) ASC
     `;
-    const groupsResult = await db.query(groupsQuery, params);
+    const mergedResult = await db.query(mergedQuery, params);
+    const rows = mergedResult.rows;
+    const first = rows[0];
 
     res.json({
-      stats: {
-        totalRecords: parseInt(statsRow.total_records),
-        totalHours: parseFloat(statsRow.total_hours).toFixed(2),
-        totalEmployees: parseInt(statsRow.total_employees),
-        totalPending: parseInt(statsRow.total_pending),
-        totalValidated: parseInt(statsRow.total_validated),
-        pendingHours: parseFloat(statsRow.pending_hours).toFixed(2),
-        validatedHours: parseFloat(statsRow.validated_hours).toFixed(2)
+      stats: first ? {
+        totalRecords:   parseInt(first.g_total_records),
+        totalHours:     parseFloat(first.g_total_hours).toFixed(2),
+        totalEmployees: parseInt(first.g_total_employees),
+        totalPending:   parseInt(first.g_total_pending),
+        totalValidated: parseInt(first.g_total_validated),
+        pendingHours:   parseFloat(first.g_pending_hours).toFixed(2),
+        validatedHours: parseFloat(first.g_validated_hours).toFixed(2)
+      } : {
+        totalRecords: 0, totalHours: '0.00', totalEmployees: 0,
+        totalPending: 0, totalValidated: 0, pendingHours: '0.00', validatedHours: '0.00'
       },
-      groups: groupsResult.rows
+      groups: rows.map(({
+        g_total_records, g_total_hours, g_total_employees,
+        g_total_pending, g_total_validated, g_pending_hours, g_validated_hours,
+        ...rest
+      }) => rest)
     });
   } catch (err) {
     console.error('validationStats error:', err);
@@ -798,7 +832,7 @@ exports.validationGroupRecords = async (req, res) => {
     // Build WHERE conditions dengan optional search
     let whereConditions = [
       't.serialnumber = $1',
-      'DATE(t.longdate_checkin) BETWEEN $2 AND $3'
+      't.longdate_checkin >= $2::date AND t.longdate_checkin < ($3::date + interval \'1 day\')'
     ];
     let params = [serialnumber, start, end];
     let paramIdx = 4;
@@ -807,8 +841,8 @@ exports.validationGroupRecords = async (req, res) => {
     if (search && search.trim()) {
       const searchLike = `%${search.trim().toLowerCase()}%`;
       whereConditions.push(`(
-        LOWER(t.production_order) LIKE $${paramIdx}
-        OR LOWER(t.ssbr_ident) LIKE $${paramIdx}
+        LOWER(t.order_no) LIKE $${paramIdx}
+        OR LOWER(t.ssbr_id) LIKE $${paramIdx}
         OR LOWER(t.operation_text) LIKE $${paramIdx}
         OR LOWER(t.workcentercode) LIKE $${paramIdx}
         OR LOWER(t.workcenterdescription) LIKE $${paramIdx}
@@ -824,15 +858,15 @@ exports.validationGroupRecords = async (req, res) => {
 
     const query = `
       SELECT
-        t.tsnumber, t.serialnumber, t.full_name, t.production_order,
-        t.ssbr_ident, t.operation_text, t.seq, t.workcentercode,
+        t.tsnumber, t.serialnumber, t.full_name, t.order_no,
+        t.ssbr_id, t.operation_text, t.operation_no, t.workcentercode,
         t.workcenterdescription, t.date_checkin, t.hour_checkin,
         t.date_checkout, t.hour_checkout, t.duration, t.note,
         t.planhours, t.std_foreman_hours, t.state_flag,
         t.validation_date, t.activitytype, t.part_name,
         s.planhours AS sow_planhours
       FROM timesheet_transaction t
-      LEFT JOIN sow s ON s.codenumber = (t.production_order || t.seq::text)
+      LEFT JOIN sow s ON s.codenumber = (t.order_no || t.operation_no::text)
       WHERE ${whereSQL}
       ORDER BY t.longdate_checkin ASC
     `;
@@ -861,13 +895,26 @@ exports.validationGroupRecords = async (req, res) => {
  * Requires body: { tsnumbers: string[] }
  * Returns per-item results so caller can show success/failure per record.
  */
+const formatZTIMESHEETID = (tsnumber) => {
+  const prefix = String(process.env.ID_TIMESHEET || '');
+  const numStr = String(tsnumber || '');
+  const zeros  = '0'.repeat(Math.max(0, 10 - prefix.length - numStr.length));
+  return prefix + zeros + numStr;
+};
+
 exports.postToSap = async (req, res) => {
   const SAP_URL      = process.env.SAP_INBOUND_URL;
   const SAP_USER     = process.env.SAP_INBOUND_USERNAME;
   const SAP_PASSWORD = process.env.SAP_INBOUND_PASSWORD;
+  const ID_TIMESHEET = process.env.ID_TIMESHEET;
+  const TIMEZONE     = process.env.TIMEZONE;
+  const TGT_TABLE    = process.env.TGT_TABLE;
 
   if (!SAP_URL || !SAP_USER || !SAP_PASSWORD) {
     return res.status(500).json({ error: 'SAP credentials not configured in .env' });
+  }
+  if (!ID_TIMESHEET || !TIMEZONE || !TGT_TABLE) {
+    return res.status(500).json({ error: 'ID_TIMESHEET, TIMEZONE, or TGT_TABLE not configured in .env' });
   }
 
   const { tsnumbers } = req.body;
@@ -880,30 +927,30 @@ exports.postToSap = async (req, res) => {
     SELECT
       t.tsnumber,
       t.serialnumber,
-      t.production_order,
-      t.seq,
+      t.order_no,
+      t.operation_no,
       t.workcentercode,
       t.activitytype,
       t.plant,
-      TO_CHAR(t.longdate_checkin  AT TIME ZONE 'UTC', 'YYYYMMDD') AS isdd,
-      TO_CHAR(t.longdate_checkin  AT TIME ZONE 'UTC', 'HH24MISS') AS isdz,
-      TO_CHAR(t.longdate_checkout AT TIME ZONE 'UTC', 'YYYYMMDD') AS iedd,
-      TO_CHAR(t.longdate_checkout AT TIME ZONE 'UTC', 'HH24MISS') AS iedz,
-      po.confirmation       AS confirmation,
+      TO_CHAR(t.longdate_checkin  AT TIME ZONE $2, 'YYYYMMDD') AS isdd,
+      TO_CHAR(t.longdate_checkin  AT TIME ZONE $2, 'HH24MISS') AS isdz,
+      TO_CHAR(t.longdate_checkout AT TIME ZONE $2, 'YYYYMMDD') AS iedd,
+      TO_CHAR(t.longdate_checkout AT TIME ZONE $2, 'HH24MISS') AS iedz,
+      po.confirmation_number       AS confirmation_number,
       po.sequence_category  AS sequence_category,
       po.sequence_number    AS sequence_number,
-      po.branch_operation   AS branch_operation,
-      po.return_operation   AS return_operation
+      po.branch_operation_no   AS branch_operation_no,
+      po.return_operation_no   AS return_operation_no
     FROM timesheet_transaction t
-    LEFT JOIN production_operations po
-      ON po.order_number = t.production_order
-     AND po.operation_number = t.seq::text
-    WHERE t.tsnumber = ANY($1)
+    LEFT JOIN ${TGT_TABLE} po
+      ON LTRIM(po.order_no,     '0') = t.order_no
+     AND LTRIM(po.operation_no, '0') = t.operation_no::text
+    WHERE t.tsnumber = ANY($1::int[])
   `;
 
   let rows;
   try {
-    const result = await db.query(query, [tsnumbers]);
+    const result = await db.query(query, [tsnumbers.map(Number), TIMEZONE]);
     rows = result.rows;
   } catch (err) {
     console.error('postToSap DB error:', err);
@@ -916,28 +963,30 @@ exports.postToSap = async (req, res) => {
   const results = [];
 
   for (const row of rows) {
+    const isUnprod = !!row.activitytype;
     const payload = {
-      ZTIMESHEETID: String(row.tsnumber  || ''),
-      PERNR:        String(row.serialnumber || ''),
-      RUECK:        String(row.confirmation  || ''),
-      AUFNR:        String(row.production_order || '').padStart(12, '0'),
-      VORNR:        String(row.seq || '').padStart(4, '0'),
-      FLGAT:        String(row.sequence_category  || ''),
-      PLNFL:        String(row.sequence_number    || ''),
-      VORNR_B:      String(row.branch_operation   || ''),
-      VORNR_R:      String(row.return_operation   || ''),
-      ZCONF_TYPE:   String(row.workcentercode || '').endsWith('OT') ? 'OV'
-                  : parseInt(row.seq, 10) > 5000                   ? 'RW'
+      ZTIMESHEETID: formatZTIMESHEETID(row.tsnumber),
+      PERNR:        String(row.serialnumber || '').padStart(8, '0'),
+      RUECK:        isUnprod ? '' : String(row.confirmation_number || ''),
+      AUFNR:        isUnprod ? '' : String(row.order_no || '').padStart(12, '0'),
+      VORNR:        isUnprod ? '' : String(row.operation_no || '').padStart(4, '0'),
+      FLGAT:        isUnprod ? '' : String(row.sequence_category || ''),
+      PLNFL:        isUnprod ? '' : String(row.sequence_number || ''),
+      VORNR_B:      isUnprod ? '' : String(row.branch_operation_no || ''),
+      VORNR_R:      isUnprod ? '' : String(row.return_operation_no || ''),
+      ZCONF_TYPE:   isUnprod                                          ? ''
+                  : String(row.workcentercode || '').endsWith('OT')   ? 'OV'
+                  : parseInt(row.operation_no, 10) > 5000             ? 'RW'
                   : 'RG',
       ARBPL:        String(row.workcentercode || ''),
-      LSTAR:        String(row.activitytype   || ''),
+      LSTAR:        String(row.activitytype || ''),
       ISDD:         String(row.isdd || ''),
       ISDZ:         String(row.isdz || ''),
       IEDD:         String(row.iedd || ''),
       IEDZ:         String(row.iedz || ''),
       WERKS:        String(row.plant || ''),
       AUERU:        '',
-      ZBARCODEID:   ''
+      ZBARCODEID:   '',
     };
 
     console.log(`[SAP] Sending tsnumber=${row.tsnumber}`, JSON.stringify(payload, null, 2));
@@ -955,20 +1004,23 @@ exports.postToSap = async (req, res) => {
       const text = await sapRes.text();
       console.log(`[SAP] tsnumber=${row.tsnumber} → HTTP ${sapRes.status}: ${text}`);
 
-      // Parse SAP response to extract MESSAGE
+      // Parse SAP response to extract STATUS and MESSAGE
       let sapMessage = '';
+      let sapStatus  = '';
       try {
         const parsed = JSON.parse(text);
-        sapMessage = (parsed['n0:ABM_CPP_223_MT_Timesheet_Res'] || {}).MESSAGE || '';
+        const res    = parsed['n0:ABM_CPP_223_MT_Timesheet_Res'] || {};
+        sapMessage   = res.MESSAGE || '';
+        sapStatus    = res.STATUS  || '';
       } catch (_) {
         sapMessage = text;
       }
 
-      const isConfirmed = /^Confirmation of order .+ saved$/i.test(sapMessage.trim());
+      const isConfirmed = sapStatus === 'S';
 
       if (isConfirmed) {
         // SAP accepted — validation flag=2 stays as-is
-        console.log(`[SAP] tsnumber=${row.tsnumber} → SUCCESS: ${sapMessage}`);
+        console.log(`[SAP] tsnumber=${row.tsnumber} → SUCCESS (STATUS=S): ${sapMessage}`);
         results.push({
           tsnumber:   row.tsnumber,
           status:     sapRes.status,
@@ -1011,6 +1063,42 @@ exports.postToSap = async (req, res) => {
       });
     }
 
+    // Log every SAP attempt to log_timesheet_sap (fire-and-forget, never interrupts flow)
+    const lastResult  = results[results.length - 1];
+    const _raw        = lastResult?.response ?? lastResult?.sapMessage ?? '';
+    let sapResponse;
+    try {
+      const _parsed = JSON.parse(_raw);
+      const _res    = _parsed['n0:ABM_CPP_223_MT_Timesheet_Res'] || {};
+      const _status = _res.STATUS === 'S' ? 'SUCCESS' : 'ERROR';
+      sapResponse   = `${_status} : ${_res.MESSAGE || _raw}`;
+    } catch (_) {
+      sapResponse = _raw;
+    }
+    try {
+      await db.query(`
+        INSERT INTO log_timesheet_sap (
+          ztimesheetid, pernr, confirmation_number, order_no, operation_no,
+          sequence_category, sequence_number, branch_operation_no, return_operation_no,
+          zconf_type, work_center, activity_type,
+          start_date, start_time, end_date, end_time, plant_code, final_completed_indicator, zbarcodeid,
+          sap_response
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+          $13,$14,$15,$16,$17,$18,$19,$20
+        )
+      `, [
+        payload.ZTIMESHEETID, payload.PERNR, payload.RUECK, payload.AUFNR,
+        payload.VORNR, payload.FLGAT, payload.PLNFL, payload.VORNR_B,
+        payload.VORNR_R, payload.ZCONF_TYPE, payload.ARBPL, payload.LSTAR,
+        payload.ISDD, payload.ISDZ, payload.IEDD, payload.IEDZ,
+        payload.WERKS, payload.AUERU, payload.ZBARCODEID,
+        sapResponse
+      ]);
+    } catch (logErr) {
+      console.error(`[SAP] log insert failed for tsnumber=${row.tsnumber}:`, logErr.message);
+    }
+
     // Small delay between calls (mirrors testantri.js pattern)
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -1019,4 +1107,53 @@ exports.postToSap = async (req, res) => {
   const failCount    = results.length - successCount;
 
   res.json({ successCount, failCount, results });
+};
+
+/**
+ * GET /timesheet/log-sap
+ * Returns SAP post log with employee name joined from timesheet_transaction.
+ */
+exports.getLogSap = async (req, res) => {
+  const PAGE_SIZE = 100;
+  const page   = Math.max(1, parseInt(req.query.page) || 1);
+  const offset = (page - 1) * PAGE_SIZE;
+  try {
+    const [dataResult, countResult] = await Promise.all([
+      db.query(`
+        SELECT
+          l.id,
+          l.ztimesheetid,
+          l.pernr,
+          (SELECT full_name FROM timesheet_transaction
+            WHERE serialnumber = l.pernr LIMIT 1) AS full_name,
+          l.order_no,
+          l.confirmation_number,
+          l.operation_no,
+          l.zconf_type,
+          l.work_center,
+          l.activity_type,
+          l.start_date,
+          l.start_time,
+          l.end_date,
+          l.end_time,
+          l.plant_code,
+          l.sap_response,
+          l.created_at
+        FROM log_timesheet_sap l
+        ORDER BY l.id DESC
+        LIMIT $1 OFFSET $2
+      `, [PAGE_SIZE, offset]),
+      db.query('SELECT COUNT(*) FROM log_timesheet_sap'),
+    ]);
+    res.json({
+      rows:      dataResult.rows,
+      total:     parseInt(countResult.rows[0].count),
+      page,
+      pageSize:  PAGE_SIZE,
+      totalPages: Math.ceil(parseInt(countResult.rows[0].count) / PAGE_SIZE),
+    });
+  } catch (err) {
+    console.error('getLogSap error:', err);
+    res.status(500).json({ error: 'Terjadi error saat ambil data log SAP' });
+  }
 };

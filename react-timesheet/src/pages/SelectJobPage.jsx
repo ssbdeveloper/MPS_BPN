@@ -1,30 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BrowserMultiFormatReader } from '@zxing/library';
+import { toast } from 'sonner';
 
-/**
- * Select Job Page
- * Converted dari menujob.html + script.js + scanbarcode.js
- * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
- */
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const SelectJobPage = () => {
   const navigate = useNavigate();
 
-  // States
-  const [orderInput, setOrderInput] = useState('');
-  const [jobs, setJobs] = useState([]);
-  const [selectedJob, setSelectedJob] = useState(null);
-  const [showScanner, setShowScanner] = useState(false);
-
-  const [videoDevices, setVideoDevices] = useState([]);
+  const [orderInput, setOrderInput]           = useState('');
+  const [jobs, setJobs]                       = useState([]);
+  const [selectedJob, setSelectedJob]         = useState(null);
+  const [showScanner, setShowScanner]         = useState(false);
+  const [videoDevices, setVideoDevices]       = useState([]);
   const [currentDeviceIndex, setCurrentDeviceIndex] = useState(0);
 
-  const videoRef = useRef(null);
+  const videoRef      = useRef(null);
   const codeReaderRef = useRef(null);
 
-  // Load data on mount
+  // Load data on mount (restore last search)
   useEffect(() => {
     const savedOrder = sessionStorage.getItem('lastSearchOrder');
     if (savedOrder) {
@@ -33,51 +27,64 @@ const SelectJobPage = () => {
     }
   }, []);
 
-  // API: Load job data (all activities)
+  // ── API ─────────────────────────────────────────────────────────────────────
   const loaddatapgall = async (order) => {
-    const orderValue = order || orderInput;
+    const orderValue = order ?? orderInput;
     if (!orderValue.trim()) {
-      alert('Masukkan nomor order terlebih dahulu');
+      toast.warning('Masukkan nomor order terlebih dahulu');
       return;
     }
 
     try {
-      const response = await fetch(`${API_BASE}/sow/datajson?search=${encodeURIComponent(orderValue)}`);
-      if (!response.ok) throw new Error('Gagal load data');
-      const data = await response.json();
+      const response = await fetch(`${API_BASE}/sow/datajson?search=${encodeURIComponent(orderValue.trim())}`);
 
+      // 404 = no data found (valid empty result)
+      if (response.status === 404) {
+        setJobs([]);
+        toast.info('Tidak ada data untuk order tersebut');
+        return;
+      }
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      const data = await response.json();
       if (data && data.length > 0) {
         setJobs(data);
-        sessionStorage.setItem('lastSearchOrder', orderValue);
+        sessionStorage.setItem('lastSearchOrder', orderValue.trim());
       } else {
         setJobs([]);
+        toast.info('Tidak ada data untuk order tersebut');
       }
     } catch (error) {
       console.error('Error loading jobs:', error);
       setJobs([]);
+      toast.error('Gagal load data', { description: error.message });
     }
   };
 
-  // Handle job selection
+  // ── Select job ──────────────────────────────────────────────────────────────
   const handleSelectJob = (job) => {
     const rowData = {
-      order: job.order_no,
-      ssbr_id: job.ssbr_id,
-      operationtext: job.operationtext,
-      operation_no: job.operation_no,
-      planhours: job.planhours,
-      workcenter: job.workcenter,
+      order:         job.order_no,
+      ssbr_id:       job.ssbr_id,
+      part_name:     job.part_name,
+      operationtext: job.operation_text,   // DB column: operation_text
+      operation_no:  job.operation_no,
+      planhours:     job.planhours,
+      workcenter:    job.workcenter,
     };
 
     setSelectedJob(rowData);
     sessionStorage.setItem('selectedactivity', JSON.stringify(rowData));
 
+    toast.success(`Job dipilih: ${job.operation_text || job.order_no}`, { duration: 1500 });
+
     setTimeout(() => {
       navigate('/timesheet-mainmenu');
-    }, 300);
+    }, 400);
   };
 
-  // Start scanning with a specific device index
+  // ── Barcode scanner ──────────────────────────────────────────────────────────
   const startScanWithDevice = async (devices, deviceIndex) => {
     if (!codeReaderRef.current) {
       codeReaderRef.current = new BrowserMultiFormatReader();
@@ -90,7 +97,7 @@ const SelectJobPage = () => {
     await codeReaderRef.current.decodeFromVideoDevice(
       deviceId,
       videoRef.current,
-      (result, err) => {
+      (result) => {
         if (result) {
           const scannedText = result.getText();
           setOrderInput(scannedText);
@@ -102,10 +109,8 @@ const SelectJobPage = () => {
     );
   };
 
-  // Handle barcode scan — default kamera depan (user)
   const handleBarcodeScan = async () => {
     try {
-      // Request permission dulu
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       stream.getTracks().forEach(track => track.stop());
 
@@ -113,11 +118,10 @@ const SelectJobPage = () => {
       const vDevices = devices.filter(d => d.kind === 'videoinput');
 
       if (vDevices.length === 0) {
-        alert('Tidak ada kamera ditemukan');
+        toast.error('Tidak ada kamera ditemukan');
         return;
       }
 
-      // Default: cari kamera depan (front/user), fallback ke index 0
       const frontIndex = vDevices.findIndex(d =>
         d.label.toLowerCase().includes('front') ||
         d.label.toLowerCase().includes('user') ||
@@ -129,7 +133,6 @@ const SelectJobPage = () => {
       setCurrentDeviceIndex(startIndex);
       setShowScanner(true);
 
-      // Tunggu sebentar agar video element sudah mount
       setTimeout(async () => {
         try {
           await startScanWithDevice(vDevices, startIndex);
@@ -143,18 +146,17 @@ const SelectJobPage = () => {
       setShowScanner(false);
 
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        alert('Akses kamera ditolak. Silakan izinkan akses kamera di browser settings.');
+        toast.error('Akses kamera ditolak', { description: 'Silakan izinkan akses kamera di browser settings.' });
       } else if (err.name === 'NotFoundError') {
-        alert('Kamera tidak ditemukan pada device ini.');
+        toast.error('Kamera tidak ditemukan pada device ini.');
       } else if (err.name === 'NotReadableError') {
-        alert('Kamera sedang digunakan oleh aplikasi lain.');
+        toast.error('Kamera sedang digunakan oleh aplikasi lain.');
       } else {
-        alert('Gagal akses kamera: ' + err.message);
+        toast.error('Gagal akses kamera', { description: err.message });
       }
     }
   };
 
-  // Switch ke kamera berikutnya
   const switchCamera = async () => {
     if (videoDevices.length <= 1) return;
     const nextIndex = (currentDeviceIndex + 1) % videoDevices.length;
@@ -166,14 +168,9 @@ const SelectJobPage = () => {
     }
   };
 
-  // Close scanner overlay
   const closeScanner = () => {
     if (codeReaderRef.current) {
-      try {
-        codeReaderRef.current.reset();
-      } catch (err) {
-        console.error('Error closing scanner:', err);
-      }
+      try { codeReaderRef.current.reset(); } catch (_) {}
     }
     setShowScanner(false);
     setVideoDevices([]);
@@ -184,142 +181,139 @@ const SelectJobPage = () => {
   useEffect(() => {
     return () => {
       if (codeReaderRef.current) {
-        try {
-          codeReaderRef.current.reset();
-        } catch (err) {
-          console.error('Cleanup error:', err);
-        }
+        try { codeReaderRef.current.reset(); } catch (_) {}
       }
     };
   }, []);
 
-  // Back to main menu
-  const goBack = () => {
-    navigate('/timesheet-mainmenu');
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') loaddatapgall();
   };
 
-  // Handle search on Enter key
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      loaddatapgall();
-    }
-  };
+  // ── Style helpers ────────────────────────────────────────────────────────────
+  const btnOutline = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ' +
+    'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 ' +
+    'transition-all duration-150 active:scale-95 min-h-[44px]';
 
-  // Common cell style
+  const btnPrimary = 'inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold ' +
+    'bg-[#0096c7] hover:bg-[#0077b6] text-white transition-all duration-150 active:scale-95 min-h-[44px]';
+
   const cellBase = 'px-2 py-2 text-[11px] align-middle';
 
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
-      <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
-        <button
-          onClick={goBack}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-        >
+    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+
+      {/* ── Header ── */}
+      <header className="flex-shrink-0 flex items-center justify-between
+                         px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
+        <button onClick={() => navigate('/timesheet-mainmenu')} className={btnOutline}>
           Back
         </button>
-        <h2 className="text-base sm:text-lg font-bold text-white">Job Selection</h2>
-        <button
-          onClick={() => loaddatapgall()}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-        >
+        <h1 className="text-sm font-extrabold text-slate-800">Job Selection</h1>
+        <button onClick={() => loaddatapgall()} className={btnOutline}>
           Refresh
         </button>
       </header>
 
-      {/* Search Row */}
-      <div className="flex gap-2 px-3 py-2 bg-blue-50 border-b border-blue-200 flex-shrink-0">
+      {/* ── Search bar ── */}
+      <div className="flex-shrink-0 flex gap-2 px-4 py-3 bg-white border-b border-slate-200">
         <div className="flex-1 relative">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
             type="text"
             value={orderInput}
             onChange={(e) => setOrderInput(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             placeholder="Search Order..."
-            className="w-full pl-9 pr-3 py-2 text-sm border border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 text-slate-800
+                       placeholder-slate-400 rounded-lg text-sm focus:outline-none
+                       focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]
+                       transition-all duration-150 min-h-[44px]"
           />
         </div>
-        <button
-          onClick={() => loaddatapgall()}
-          className="px-4 py-2 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded-lg hover:bg-blue-600 transition-colors"
-        >
+        <button onClick={() => loaddatapgall()} className={btnPrimary}>
           Search
         </button>
         <button
           onClick={handleBarcodeScan}
-          className="px-4 py-2 text-xs sm:text-sm font-medium bg-orange-500 text-white rounded-lg hover:bg-orange-400 active:bg-orange-600 transition-colors"
+          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold
+                     bg-amber-500 hover:bg-amber-400 text-white transition-all duration-150
+                     active:scale-95 min-h-[44px]"
         >
           Barcode
         </button>
       </div>
 
-      {/* Table — native HTML table for perfect alignment */}
+      {/* ── Table ── */}
       <div className="flex-1 overflow-y-auto">
         <table className="w-full border-collapse">
           <colgroup>
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '12%' }} />
-            <col style={{ width: '35%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '38%' }} />
             <col style={{ width: '10%' }} />
             <col style={{ width: '10%' }} />
-            <col style={{ width: '20%' }} />
+            <col style={{ width: '24%' }} />
           </colgroup>
 
           <thead className="sticky top-0 z-10">
-            <tr className="bg-blue-100 border-b-2 border-blue-300">
-              <th className={`${cellBase} text-center font-bold text-blue-900`}>Order</th>
-              <th className={`${cellBase} text-center font-bold text-blue-900`}>Ident</th>
-              <th className={`${cellBase} text-center font-bold text-blue-900`}>Activity</th>
-              <th className={`${cellBase} text-center font-bold text-blue-900`}>Seq</th>
-              <th className={`${cellBase} text-center font-bold text-blue-900`}>Hours</th>
-              <th className={`${cellBase} text-center font-bold text-blue-900`}>Workcenter</th>
+            <tr style={{ background: '#caf0f8', borderBottomColor: '#90e0ef' }} className="border-b-2">
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Order</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Activity</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Seq</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Hours</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Workcenter</th>
             </tr>
           </thead>
 
           <tbody>
             {jobs.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center text-gray-400 py-10">
+                <td colSpan={5} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
-                    <svg className="w-10 h-10 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    <svg className="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
-                    <span className="text-sm">Tidak ada data. Silakan search order.</span>
+                    <span className="text-sm text-slate-400">Tidak ada data. Silakan search order.</span>
                   </div>
                 </td>
               </tr>
             ) : (
               jobs.map((job, index) => {
-                const isSelected = selectedJob?.order === job.order_no && selectedJob?.operation_no === job.operation_no;
+                const isSelected = selectedJob?.order === job.order_no &&
+                                   selectedJob?.operation_no === job.operation_no;
                 const rowBg = isSelected
-                  ? 'bg-blue-100 hover:bg-blue-150'
-                  : (index % 2 === 0 ? 'bg-white hover:bg-blue-50' : 'bg-blue-50/30 hover:bg-blue-50');
+                  ? 'bg-[#caf0f8]'
+                  : index % 2 === 0 ? 'bg-white' : 'bg-slate-50';
 
                 return (
                   <tr
                     key={index}
                     onClick={() => handleSelectJob(job)}
-                    className={`${rowBg} border-b border-blue-100 transition-colors cursor-pointer active:bg-orange-50`}
+                    className={`${rowBg} border-b border-slate-100 cursor-pointer
+                                hover:bg-[#ade8f4] active:bg-[#90e0ef] transition-colors duration-100`}
                   >
-                    <td className={`${cellBase} text-center font-semibold text-blue-900`}>
-                      {job.order_no}
+                    <td className={`${cellBase} text-center`}>
+                      <div className="font-semibold font-mono" style={{ color: '#0096c7' }}>{job.order_no}</div>
+                      {job.ssbr_id && <div className="text-[10px] text-slate-500 leading-tight">{job.ssbr_id}</div>}
                     </td>
-                    <td className={`${cellBase} text-center text-blue-700`}>
-                      {job.ssbr_id}
+                    <td className={`${cellBase} text-left text-slate-800`}>
+                      <div className="font-medium leading-snug">{job.operation_text}</div>
+                      {job.part_name && (
+                        <div className="text-[10px] text-slate-400 leading-tight mt-0.5">{job.part_name}</div>
+                      )}
                     </td>
-                    <td className={`${cellBase} text-left text-gray-800`}>
-                      <div className="font-medium leading-snug">{job.operationtext}</div>
-                    </td>
-                    <td className={`${cellBase} text-center text-gray-700`}>
+                    <td className={`${cellBase} text-center text-slate-700`}>
                       {job.operation_no}
                     </td>
-                    <td className={`${cellBase} text-center text-gray-700`}>
+                    <td className={`${cellBase} text-center text-slate-700`}>
                       {job.planhours}
                     </td>
-                    <td className={`${cellBase} text-center text-gray-800 font-medium`}>
+                    <td className={`${cellBase} text-center text-slate-800 font-medium`}>
                       {job.workcenter}
                     </td>
                   </tr>
@@ -330,22 +324,30 @@ const SelectJobPage = () => {
         </table>
       </div>
 
-      {/* Barcode Scanner Overlay */}
+      {/* ── Barcode Scanner Overlay ── */}
       {showScanner && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4"
           onClick={closeScanner}
         >
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-blue-900 px-5 py-3 flex justify-between items-center">
-              <h3 className="text-base font-bold text-white">Scan Barcode</h3>
+          <div
+            className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal header — employee group header style (satu-satunya yang boleh biru gelap) */}
+            <div className="px-5 py-3 flex justify-between items-center"
+                 style={{ background: 'linear-gradient(135deg, #023e8a 0%, #0077b6 100%)' }}>
+              <h3 className="text-sm font-bold text-white">Scan Barcode</h3>
               <button
                 onClick={closeScanner}
-                className="text-2xl text-blue-200 hover:text-white transition-colors"
+                className="w-8 h-8 flex items-center justify-center rounded-full
+                           bg-white/20 hover:bg-white/35 text-white text-xl
+                           transition-colors duration-150"
               >
                 ×
               </button>
             </div>
+
             <div className="p-4">
               <div className="relative">
                 <video
@@ -353,14 +355,16 @@ const SelectJobPage = () => {
                   autoPlay
                   className="w-full h-64 bg-black rounded-lg"
                 />
-                {/* Tombol flip kamera — hanya tampil jika ada lebih dari 1 kamera */}
                 {videoDevices.length > 1 && (
                   <button
                     onClick={switchCamera}
-                    className="absolute bottom-2 right-2 w-10 h-10 flex items-center justify-center bg-black bg-opacity-50 hover:bg-opacity-70 text-white rounded-full transition-colors"
+                    className="absolute bottom-2 right-2 w-10 h-10 flex items-center justify-center
+                               bg-black/50 hover:bg-black/70 text-white rounded-full transition-colors"
                     title="Putar kamera"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24"
+                         fill="none" stroke="currentColor" strokeWidth="2"
+                         strokeLinecap="round" strokeLinejoin="round">
                       <path d="M11 19H6.931A1.922 1.922 0 0 1 5 17.087V8h18v2" />
                       <path d="M18 8V5a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h5" />
                       <circle cx="18" cy="18" r="3" />
@@ -370,10 +374,11 @@ const SelectJobPage = () => {
                   </button>
                 )}
               </div>
-              <p className="text-xs text-gray-500 text-center mt-2">
+
+              <p className="text-xs text-slate-500 text-center mt-2">
                 Arahkan kamera ke barcode order
                 {videoDevices.length > 1 && (
-                  <span className="text-blue-500 ml-1">
+                  <span className="ml-1" style={{ color: '#0096c7' }}>
                     · Kamera {currentDeviceIndex + 1}/{videoDevices.length}
                   </span>
                 )}

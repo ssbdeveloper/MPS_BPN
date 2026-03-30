@@ -8,10 +8,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+      includeAssets: ['ssb.png'],
       manifest: {
-        name: 'MPS Timesheet App',
-        short_name: 'MPS Timesheet',
+        name: 'TIMESHEET SSB',
+        short_name: 'TIMESHEET SSB',
         description: 'Aplikasi Timesheet untuk Manufacturing',
         theme_color: '#007bff',
         background_color: '#ffffff',

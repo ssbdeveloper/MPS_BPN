@@ -177,7 +177,7 @@ def get_missing(data: MissingRequest):
                    operation_no,
                    workcenter,
                    planhours,
-                   operationtext
+                   operation_text
             FROM sow
             WHERE order_no = %s
               AND (order_no || operation_no) != ALL(%s)
@@ -192,7 +192,7 @@ def get_missing(data: MissingRequest):
                 "operation_no": r[1],
                 "workcenter": r[2],
                 "planhours": float(r[3] or 0),
-                "operationtext": r[4]
+                "operation_text": r[4]
             }
             for r in rows
         ]
@@ -272,7 +272,7 @@ def get_new_operations(data: GetNewRequest):
                    operation_no,
                    workcenter,
                    planhours,
-                   operationtext,
+                   operation_text,
                    plan_start,
                    plan_finish,
                    ssbr_id,
@@ -296,7 +296,7 @@ def get_new_operations(data: GetNewRequest):
                 "operation_no":  r[1],
                 "workcenter":    r[2],
                 "planhours":     float(r[3] or 0),
-                "operationtext": r[4],
+                "operation_text": r[4],
                 "plan_start":    str(r[5]) if r[5] else None,
                 "plan_finish":   str(r[6]) if r[6] else None,
                 "ssbr_id":       r[7],

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
 /**
  * Unproductive Menu Page
@@ -137,7 +138,7 @@ const UnproductiveMenuPage = () => {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
 
       if (!datakaryawan || !datakaryawan.snssb || !datakaryawan.full_name) {
-        alert('Data karyawan tidak lengkap!');
+        toast.error('Data karyawan tidak lengkap!');
         setLoading(false);
         return;
       }
@@ -173,12 +174,12 @@ const UnproductiveMenuPage = () => {
         throw new Error(errData.error || 'Gagal membuat unproductive entry');
       }
 
-      alert('TIMESHEET berhasil!');
-      navigate('/timesheet-mainmenu');
+      toast.success(`${label} berhasil dicatat!`);
+      setTimeout(() => navigate('/login-timesheet'), 800);
 
     } catch (err) {
       console.error('Error creating unprod entry:', err);
-      alert(`Terjadi kesalahan: ${err.message}`);
+      toast.error('Terjadi kesalahan', { description: err.message });
     } finally {
       setLoading(false);
     }
@@ -195,27 +196,35 @@ const UnproductiveMenuPage = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
-      <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
+    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+
+      {/* ── Header ── */}
+      <header className="flex-shrink-0 flex items-center justify-between
+                         px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
         <button
           onClick={handleBack}
           disabled={loading}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold
+                     bg-white border border-slate-200 text-slate-700
+                     hover:bg-slate-50 hover:border-slate-300 transition-all duration-150
+                     active:scale-95 min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Back
         </button>
-        <h1 className="text-base sm:text-lg font-bold text-white">Unproductive Menu</h1>
+        <h1 className="text-sm font-extrabold text-slate-800">Unproductive Menu</h1>
         <button
           onClick={handleRefresh}
           disabled={loading}
-          className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold
+                     bg-white border border-slate-200 text-slate-700
+                     hover:bg-slate-50 hover:border-slate-300 transition-all duration-150
+                     active:scale-95 min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Refresh
         </button>
       </header>
 
-      {/* Main Content - Button Grid, flex-1 fills remaining height without overflow */}
+      {/* ── Button Grid ── */}
       <main className="flex-1 min-h-0 p-2 sm:p-3">
         <div className="h-full grid grid-cols-3 landscape:grid-cols-4 gap-1.5 sm:gap-2 max-w-6xl mx-auto auto-rows-fr">
           {unprodCodes.map((item) => (
@@ -224,31 +233,32 @@ const UnproductiveMenuPage = () => {
               onClick={() => handleUnprodSelect(item.code, item.label)}
               disabled={loading}
               className="flex flex-col items-center justify-center gap-0.5
-                rounded-xl transition-all duration-150
-                bg-white border border-blue-200 text-blue-900
-                shadow-sm hover:shadow-md hover:border-blue-400 hover:bg-blue-50
-                active:bg-blue-100 active:shadow-inner
-                disabled:opacity-50 disabled:cursor-not-allowed
-                px-1.5 py-1 min-h-0 overflow-hidden"
+                         rounded-xl transition-all duration-150
+                         bg-white border border-slate-200 text-slate-800
+                         shadow-sm hover:shadow-md hover:border-[#00b4d8] hover:bg-[#caf0f8]
+                         active:scale-95 active:bg-[#ade8f4]
+                         disabled:opacity-50 disabled:cursor-not-allowed
+                         px-1.5 py-1 min-h-0 overflow-hidden"
             >
-              <div className="text-blue-600 flex-shrink-0">
+              <div className="flex-shrink-0" style={{ color: '#0096c7' }}>
                 {UNPROD_ICONS[item.code]}
               </div>
-              <span className="text-[9px] sm:text-[10px] font-bold text-blue-900 leading-tight text-center break-words w-full line-clamp-2">
+              <span className="text-[9px] sm:text-[10px] font-bold text-slate-800 leading-tight text-center break-words w-full line-clamp-2">
                 {item.label}
               </span>
-              <span className="text-[8px] sm:text-[9px] font-mono text-blue-400 flex-shrink-0">{item.code}</span>
+              <span className="text-[8px] sm:text-[9px] font-mono text-slate-400 flex-shrink-0">{item.code}</span>
             </button>
           ))}
         </div>
       </main>
 
-      {/* Loading Overlay */}
+      {/* ── Loading Overlay ── */}
       {loading && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-2xl p-6 flex flex-col items-center gap-3">
-            <div className="animate-spin w-12 h-12 border-4 border-blue-900 border-t-transparent rounded-full"></div>
-            <p className="text-blue-900 font-medium">Processing...</p>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 flex flex-col items-center gap-3">
+            <div className="animate-spin w-10 h-10 border-4 border-t-transparent rounded-full"
+                 style={{ borderColor: '#caf0f8', borderTopColor: '#0096c7' }} />
+            <p className="text-sm font-semibold text-slate-700">Processing...</p>
           </div>
         </div>
       )}
