@@ -1,179 +1,139 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 
-/**
- * Select Machine Page
- * Converted dari menuworkcenter.html
- * Color scheme: White 65%, Blue 25% (90% opacity), Orange 10% (CTA)
- */
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const SelectMachinePage = () => {
   const navigate = useNavigate();
 
-  // States
-  const [wcMode, setWcMode] = useState(() => sessionStorage.getItem('wcMode') || 'reguler');
-  const [searchInput, setSearchInput] = useState('');
-  const [machines, setMachines] = useState([]);
+  const [wcMode, setWcMode]                   = useState(() => sessionStorage.getItem('wcMode') || 'reguler');
+  const [searchInput, setSearchInput]         = useState('');
+  const [machines, setMachines]               = useState([]);
   const [filteredMachines, setFilteredMachines] = useState([]);
 
-  // Load machines on mount
-  useEffect(() => {
-    loadMachines();
-  }, []);
+  useEffect(() => { loadMachines(); }, []);
 
-  // Filter machines when search changes
   useEffect(() => {
-    if (!searchInput.trim()) {
-      setFilteredMachines(machines);
-      return;
-    }
-
-    const keyword = searchInput.toLowerCase();
-    const filtered = machines.filter(item =>
-      item.workcenter_description?.toLowerCase().includes(keyword) ||
-      item.machineid?.toLowerCase().includes(keyword) ||
-      item.groupname?.toLowerCase().includes(keyword)
-    );
-    setFilteredMachines(filtered);
+    if (!searchInput.trim()) { setFilteredMachines(machines); return; }
+    const kw = searchInput.toLowerCase();
+    setFilteredMachines(machines.filter(m =>
+      m.workcenter_description?.toLowerCase().includes(kw) ||
+      m.machineid?.toLowerCase().includes(kw) ||
+      m.groupname?.toLowerCase().includes(kw)
+    ));
   }, [searchInput, machines]);
 
-  // API: Load machines
   const loadMachines = async () => {
     try {
       const res = await fetch(`${API_BASE}/workcenter/`);
       if (!res.ok) throw new Error('Gagal load mesin');
       const data = await res.json();
-
-      if (data && data.length > 0) {
-        setMachines(data);
-        setFilteredMachines(data);
-      } else {
-        setMachines([]);
-        setFilteredMachines([]);
-      }
+      setMachines(data?.length ? data : []);
+      setFilteredMachines(data?.length ? data : []);
     } catch (err) {
       console.error('Error loading machines:', err);
+      toast.error('Gagal load data mesin', { description: err.message });
       setMachines([]);
       setFilteredMachines([]);
     }
   };
 
-  // Handle mode toggle
   const handleModeToggle = (checked) => {
     const newMode = checked ? 'overtime' : 'reguler';
     setWcMode(newMode);
     sessionStorage.setItem('wcMode', newMode);
   };
 
-  // Handle machine selection
   const handleSelectMachine = async (machine) => {
     try {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
       if (!datakaryawan) {
-        alert('Data karyawan tidak ditemukan. Silakan login kembali.');
+        toast.error('Data karyawan tidak ditemukan. Silakan login kembali.');
         navigate('/login-timesheet');
         return;
       }
 
-      const nfcid = datakaryawan.nfcid;
-      const selectedWorkcenter = wcMode === 'overtime'
-        ? machine.workcenterot
-        : machine.workcenternew;
-
-      // Check if OT mode but no OT workcenter
-      if (wcMode === 'overtime' && !machine.workcenterot) {
-        alert('Workcenter Overtime tidak tersedia');
+      if (isOT && !machine.workcenterot) {
+        toast.warning('Workcenter Overtime tidak tersedia untuk mesin ini.');
         return;
       }
 
-      // Update user's machine selection
+      const selectedWorkcenter = isOT ? machine.workcenterot : machine.workcenternew;
+
       const response = await fetch(`${API_BASE}/usernfc/update/`, {
-        method: 'PUT',
+        method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           serialnumber: datakaryawan.snssb,
-          machineid: machine.machineid,
-          machinename: machine.workcenter_description,
-          workcenter: selectedWorkcenter
-        })
+          machineid:    machine.machineid,
+          machinename:  machine.workcenter_description,
+          workcenter:   selectedWorkcenter,
+        }),
       });
+      if (!response.ok) throw new Error('Gagal update mesin');
 
-      if (!response.ok) {
-        throw new Error('Gagal update mesin');
-      }
+      const res = await fetch(`${API_BASE}/usernfc/nfcid/${datakaryawan.nfcid}`);
+      if (res.ok) sessionStorage.setItem('datakaryawan', JSON.stringify(await res.json()));
 
-      // Reload updated user data
-      const res = await fetch(`${API_BASE}/usernfc/nfcid/${nfcid}`);
-      if (res.ok) {
-        const updatedUser = await res.json();
-        sessionStorage.setItem('datakaryawan', JSON.stringify(updatedUser));
-      }
-
-      // Navigate back to main menu
       navigate('/timesheet-mainmenu');
-
     } catch (err) {
       console.error('Error selecting machine:', err);
-      alert('Update mesin gagal: ' + err.message);
+      toast.error('Update mesin gagal', { description: err.message });
     }
-  };
-
-  // Back to main menu
-  const goBack = () => {
-    navigate('/timesheet-mainmenu');
   };
 
   const isOT = wcMode === 'overtime';
 
+  const btnOutline = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ' +
+    'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 ' +
+    'transition-all duration-150 active:scale-95 min-h-[44px]';
+
   return (
-    <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
-      {/* Header - Dark Blue */}
-      <header className="bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
-        <div className="flex justify-between items-center">
-          <button
-            onClick={goBack}
-            className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-          >
-            Back
-          </button>
+    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
 
-          <h2 className="text-base sm:text-lg font-bold text-white">Select Machine</h2>
-
-          <button
-            onClick={loadMachines}
-            className="px-3 py-1.5 text-xs sm:text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
+      {/* ── Header ── */}
+      <header className="flex-shrink-0 flex items-center justify-between
+                         px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
+        <button onClick={() => navigate('/timesheet-mainmenu')} className={btnOutline}>
+          Back
+        </button>
+        <h1 className="text-sm font-extrabold text-slate-800">Select Machine</h1>
+        <button onClick={loadMachines} className={btnOutline}>
+          Refresh
+        </button>
       </header>
 
-      {/* Search + Mode Toggle - Light Blue */}
-      <div className="bg-blue-50 border-b border-blue-200 px-3 py-2.5 flex-shrink-0 space-y-2">
-        {/* Search */}
+      {/* ── Search + Mode Toggle ── */}
+      <div className="flex-shrink-0 bg-white border-b border-slate-200 px-4 py-3 space-y-2">
+
+        {/* Search input */}
         <div className="relative">
-          <svg xmlns="http://www.w3.org/2000/svg" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
             type="text"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search machine, ID, or group..."
-            className="w-full pl-9 pr-3 py-2 text-sm text-gray-800 bg-white border-2 border-blue-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 text-slate-800
+                       placeholder-slate-400 rounded-lg text-sm focus:outline-none
+                       focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]
+                       transition-all duration-150 min-h-[44px]"
           />
         </div>
 
-        {/* Mode Toggle Row */}
+        {/* Count + OT toggle */}
         <div className="flex items-center justify-between">
-          <div className="text-xs text-blue-700 font-medium">
-            {filteredMachines.length} machine{filteredMachines.length !== 1 ? 's' : ''} found
-          </div>
+          <span className="text-xs text-slate-500 font-medium">
+            {filteredMachines.length} mesin ditemukan
+          </span>
 
           <div className="flex items-center gap-2">
-            <span className={`text-xs font-bold transition-colors ${isOT ? 'text-blue-400' : 'text-blue-800'}`}>
+            <span className={`text-xs font-bold transition-colors ${isOT ? 'text-slate-400' : 'text-slate-700'}`}>
               Reguler
             </span>
             <label className="relative inline-block w-11 h-6 cursor-pointer">
@@ -181,83 +141,83 @@ const SelectMachinePage = () => {
                 type="checkbox"
                 checked={isOT}
                 onChange={(e) => handleModeToggle(e.target.checked)}
-                className="hidden"
+                className="sr-only"
               />
-              <span
-                className={`
-                  absolute inset-0 rounded-full transition-colors duration-300
-                  ${isOT ? 'bg-orange-500' : 'bg-blue-600'}
-                  before:content-[''] before:absolute before:h-5 before:w-5
-                  before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full
-                  before:transition-transform before:duration-300 before:shadow-sm
-                  ${isOT ? 'before:translate-x-5' : 'before:translate-x-0'}
-                `}
-              />
+              <span className={`
+                absolute inset-0 rounded-full transition-colors duration-300
+                ${isOT ? 'bg-amber-500' : 'bg-[#0096c7]'}
+                before:content-[''] before:absolute before:h-5 before:w-5
+                before:left-0.5 before:bottom-0.5 before:bg-white before:rounded-full
+                before:transition-transform before:duration-300 before:shadow-sm
+                ${isOT ? 'before:translate-x-5' : 'before:translate-x-0'}
+              `} />
             </label>
-            <span className={`text-xs font-bold transition-colors ${isOT ? 'text-orange-600' : 'text-blue-400'}`}>
+            <span className={`text-xs font-bold transition-colors ${isOT ? 'text-amber-500' : 'text-slate-400'}`}>
               Overtime
             </span>
           </div>
         </div>
       </div>
 
-      {/* Machine Grid - Scrollable */}
-      <div className="flex-1 overflow-y-auto p-3 bg-white">
+      {/* ── Machine Grid ── */}
+      <div className="flex-1 overflow-y-auto p-3">
         {filteredMachines.length === 0 ? (
-          <div className="text-center text-gray-500 mt-10">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 mx-auto mb-3 text-blue-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <div className="flex flex-col items-center justify-center gap-2 mt-12">
+            <svg className="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
-            <p className="text-sm font-medium">Tidak ada mesin ditemukan</p>
+            <span className="text-sm text-slate-400">Tidak ada mesin ditemukan</span>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {filteredMachines.map((machine, index) => {
-              const workcenterText = isOT
-                ? machine.workcenterot
-                : machine.workcenternew;
-
+              const workcenterText = isOT ? machine.workcenterot : machine.workcenternew;
               return (
                 <div
                   key={index}
                   onClick={() => handleSelectMachine(machine)}
-                  className={`
-                    relative rounded-lg overflow-hidden cursor-pointer
-                    transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0
-                    ${isOT
-                      ? 'border-2 border-orange-300 bg-white shadow-md hover:border-orange-400'
-                      : 'border-2 border-blue-200 bg-white shadow-md hover:border-blue-400'
-                    }
-                  `}
+                  className={`relative rounded-lg overflow-hidden cursor-pointer bg-white shadow-sm
+                             transition-all duration-150 hover:shadow-md hover:-translate-y-0.5
+                             active:translate-y-0 active:scale-[0.99]
+                             ${isOT
+                               ? 'border border-amber-200 hover:border-amber-400'
+                               : 'border border-slate-200 hover:border-[#0096c7]'
+                             }`}
                 >
-                  {/* Card Header Bar */}
-                  <div className={`px-4 py-2 ${isOT ? 'bg-orange-50' : 'bg-blue-50'}`}>
-                    <div className="flex items-center justify-between">
-                      <div className={`text-sm font-bold truncate pr-2 ${isOT ? 'text-orange-900' : 'text-blue-900'}`}>
-                        {machine.workcenter_description}
-                      </div>
-                      {isOT && (
-                        <span className="flex-shrink-0 bg-orange-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                          OT
-                        </span>
-                      )}
-                    </div>
+                  {/* Card header */}
+                  <div
+                    className="px-3 py-2 flex items-center justify-between"
+                    style={isOT
+                      ? { background: '#fef3c7', borderBottom: '1px solid #fde68a' }
+                      : { background: '#caf0f8', borderBottom: '1px solid #90e0ef' }
+                    }
+                  >
+                    <span className="text-sm font-bold text-slate-800 truncate pr-2">
+                      {machine.workcenter_description}
+                    </span>
+                    {isOT && (
+                      <span className="flex-shrink-0 bg-amber-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                        OT
+                      </span>
+                    )}
                   </div>
 
-                  {/* Card Body */}
-                  <div className="px-4 py-3 space-y-1.5">
+                  {/* Card body */}
+                  <div className="px-3 py-2.5 space-y-1.5">
                     <div className="flex text-[11px]">
-                      <span className={`w-[70px] flex-shrink-0 font-medium ${isOT ? 'text-orange-600' : 'text-blue-600'}`}>ID</span>
-                      <span className="font-semibold text-gray-800">: {machine.machineid}</span>
+                      <span className="w-[70px] flex-shrink-0 font-medium text-slate-500">ID</span>
+                      <span className="font-semibold text-slate-800">: {machine.machineid}</span>
                     </div>
                     <div className="flex text-[11px]">
-                      <span className={`w-[70px] flex-shrink-0 font-medium ${isOT ? 'text-orange-600' : 'text-blue-600'}`}>Group</span>
-                      <span className="font-semibold text-gray-800">: {machine.groupname}</span>
+                      <span className="w-[70px] flex-shrink-0 font-medium text-slate-500">Group</span>
+                      <span className="font-semibold text-slate-800">: {machine.groupname}</span>
                     </div>
                     <div className="flex text-[11px]">
-                      <span className={`w-[70px] flex-shrink-0 font-medium ${isOT ? 'text-orange-600' : 'text-blue-600'}`}>WC Code</span>
-                      <span className="font-bold text-gray-900">: {workcenterText || '-'}</span>
+                      <span className="w-[70px] flex-shrink-0 font-medium text-slate-500">WC Code</span>
+                      <span className="font-bold" style={{ color: isOT ? '#d97706' : '#0096c7' }}>
+                        : {workcenterText || '-'}
+                      </span>
                     </div>
                   </div>
                 </div>

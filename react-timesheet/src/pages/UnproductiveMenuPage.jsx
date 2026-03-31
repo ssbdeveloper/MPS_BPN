@@ -1,4 +1,3 @@
-import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
@@ -104,7 +103,6 @@ const UNPROD_ICONS = {
 
 const UnproductiveMenuPage = () => {
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
 
   // Unproductive codes data
   const unprodCodes = [
@@ -128,35 +126,25 @@ const UnproductiveMenuPage = () => {
   ];
 
   // Handle unprod code selection — real API calls
-  const handleUnprodSelect = async (code, label) => {
-    if (loading) return;
+  const handleUnprodSelect = (code, label) => {
+    const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
 
-    try {
-      setLoading(true);
+    if (!datakaryawan || !datakaryawan.snssb || !datakaryawan.full_name) {
+      toast.error('Data karyawan tidak lengkap!');
+      return;
+    }
 
-      // Get employee data from sessionStorage
-      const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
+    toast.success(`${label} berhasil dicatat!`);
+    navigate('/login-timesheet');
 
-      if (!datakaryawan || !datakaryawan.snssb || !datakaryawan.full_name) {
-        toast.error('Data karyawan tidak lengkap!');
-        setLoading(false);
-        return;
-      }
+    const operation_text = `${code} ${label}`;
 
-      // 1. Checkout current timesheet (if any open)
-      await fetch(`${API_BASE}/timesheet/checkout`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          datakaryawan: { sn: datakaryawan.snssb }
-        })
-      });
-      // Checkout may return 404 if no open timesheet — that's fine, continue
-
-      // 2. Create new unprod timesheet entry
-      const operation_text = `${code} ${label}`;
-
-      const res = await fetch(`${API_BASE}/timesheet/`, {
+    fetch(`${API_BASE}/timesheet/checkout`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ datakaryawan: { sn: datakaryawan.snssb } })
+    }).finally(() => {
+      fetch(`${API_BASE}/timesheet/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -167,22 +155,8 @@ const UnproductiveMenuPage = () => {
           workcentercode: datakaryawan.workcenter || '',
           workcenterdescription: datakaryawan.machinename || ''
         })
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Gagal membuat unproductive entry');
-      }
-
-      toast.success(`${label} berhasil dicatat!`);
-      setTimeout(() => navigate('/login-timesheet'), 800);
-
-    } catch (err) {
-      console.error('Error creating unprod entry:', err);
-      toast.error('Terjadi kesalahan', { description: err.message });
-    } finally {
-      setLoading(false);
-    }
+      }).catch(err => console.error('Error creating unprod entry:', err));
+    });
   };
 
   // Handle back button
@@ -203,22 +177,20 @@ const UnproductiveMenuPage = () => {
                          px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
         <button
           onClick={handleBack}
-          disabled={loading}
           className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold
                      bg-white border border-slate-200 text-slate-700
                      hover:bg-slate-50 hover:border-slate-300 transition-all duration-150
-                     active:scale-95 min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed"
+                     active:scale-95 min-h-[44px]"
         >
           Back
         </button>
         <h1 className="text-sm font-extrabold text-slate-800">Unproductive Menu</h1>
         <button
           onClick={handleRefresh}
-          disabled={loading}
           className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold
                      bg-white border border-slate-200 text-slate-700
                      hover:bg-slate-50 hover:border-slate-300 transition-all duration-150
-                     active:scale-95 min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed"
+                     active:scale-95 min-h-[44px]"
         >
           Refresh
         </button>
@@ -231,13 +203,11 @@ const UnproductiveMenuPage = () => {
             <button
               key={item.code}
               onClick={() => handleUnprodSelect(item.code, item.label)}
-              disabled={loading}
               className="flex flex-col items-center justify-center gap-0.5
                          rounded-xl transition-all duration-150
                          bg-white border border-slate-200 text-slate-800
                          shadow-sm hover:shadow-md hover:border-[#00b4d8] hover:bg-[#caf0f8]
                          active:scale-95 active:bg-[#ade8f4]
-                         disabled:opacity-50 disabled:cursor-not-allowed
                          px-1.5 py-1 min-h-0 overflow-hidden"
             >
               <div className="flex-shrink-0" style={{ color: '#0096c7' }}>
@@ -252,16 +222,6 @@ const UnproductiveMenuPage = () => {
         </div>
       </main>
 
-      {/* ── Loading Overlay ── */}
-      {loading && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 flex flex-col items-center gap-3">
-            <div className="animate-spin w-10 h-10 border-4 border-t-transparent rounded-full"
-                 style={{ borderColor: '#caf0f8', borderTopColor: '#0096c7' }} />
-            <p className="text-sm font-semibold text-slate-700">Processing...</p>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import ConfirmationModal from '../components/ui/ConfirmationModal';
 
 /**
  * Timesheet Edit Page
@@ -56,6 +57,10 @@ const TimesheetEditPage = () => {
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [originalData, setOriginalData] = useState(null);
+
+  // Confirmation modal state
+  const [confirmModal, setConfirmModal] = useState(null);
+  const closeConfirmModal = () => setConfirmModal(null);
 
   // Load timesheet data on mount
   useEffect(() => {
@@ -335,43 +340,13 @@ const TimesheetEditPage = () => {
     return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${hour.padStart(2, '0')}:${min.padStart(2, '0')}:00`;
   };
 
-  // Save changes via API
-  const handleSave = async () => {
-    if (!formData.date_checkin || !formData.hour_checkin) {
-      alert('Check-in date dan time wajib diisi');
-      return;
-    }
-
-    if (!formData.date_checkout || !formData.hour_checkout) {
-      alert('Check-out date dan time wajib diisi');
-      return;
-    }
-
-    if (!formData.workcentercode) {
-      alert('Workcenter wajib dipilih');
-      return;
-    }
-
-    // Check if duration = 0 → will set state_flag = 5 (Deleted)
-    const duration = parseFloat(formData.duration || 0);
-    if (duration === 0) {
-      const confirmDelete = window.confirm(
-        'Duration = 0 (Check-in dan Check-out sama).\nTimesheet ini akan ditandai sebagai "Deleted" (state_flag = 5).\n\nLanjutkan?'
-      );
-      if (!confirmDelete) return;
-    } else {
-      const confirmSave = window.confirm('Simpan perubahan timesheet ini?');
-      if (!confirmSave) return;
-    }
-
+  // Actual save logic — called after confirmation
+  const executeSave = async () => {
     setSaving(true);
-
     try {
-      // Build longdate timestamps
       const longdate_checkin = buildLongdate(formData.date_checkin, formData.hour_checkin);
       const longdate_checkout = buildLongdate(formData.date_checkout, formData.hour_checkout);
 
-      // Use updateTimesheetadmin for full update
       const body = {
         serialnumber: formData.serialnumber,
         full_name: formData.full_name,
@@ -393,7 +368,7 @@ const TimesheetEditPage = () => {
 
       if (!res.ok) throw new Error('Gagal save timesheet');
 
-      // Now use partialUpdate for fields not in updateadmin (std_foreman_hours, note, state_flag)
+      // Partial update for fields not covered by updateadmin
       const patchBody = {};
 
       if (formData.note !== (originalData?.note || '')) {
@@ -406,7 +381,6 @@ const TimesheetEditPage = () => {
         patchBody.std_foreman_hours = newStdForeman;
       }
 
-      // Persist planhours from SOW into timesheet_transaction
       if (formData.planhours !== '' && formData.planhours !== (originalData?.planhours != null ? String(originalData.planhours) : '')) {
         patchBody.planhours = formData.planhours;
       } else if (formData.planhours !== '' && !originalData?.planhours) {
@@ -419,10 +393,7 @@ const TimesheetEditPage = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(patchBody)
         });
-
-        if (!patchRes.ok) {
-          console.error('Partial update failed');
-        }
+        if (!patchRes.ok) console.error('Partial update failed');
       }
 
       setHasChanges(false);
@@ -435,11 +406,49 @@ const TimesheetEditPage = () => {
     }
   };
 
+  // Save changes via API — validate then confirm
+  const handleSave = async () => {
+    if (!formData.date_checkin || !formData.hour_checkin) {
+      alert('Check-in date dan time wajib diisi');
+      return;
+    }
+    if (!formData.date_checkout || !formData.hour_checkout) {
+      alert('Check-out date dan time wajib diisi');
+      return;
+    }
+    if (!formData.workcentercode) {
+      alert('Workcenter wajib dipilih');
+      return;
+    }
+
+    const duration = parseFloat(formData.duration || 0);
+    if (duration === 0) {
+      setConfirmModal({
+        title: 'Tandai sebagai Deleted?',
+        message: 'Duration = 0 karena Check-in dan Check-out sama. Timesheet ini akan ditandai sebagai Deleted (state_flag = 5).',
+        confirmLabel: 'Ya, Tandai Deleted',
+        cancelLabel: 'Tidak, Batalkan',
+        onConfirm: executeSave,
+      });
+      return;
+    }
+
+    const confirmSave = window.confirm('Simpan perubahan timesheet ini?');
+    if (!confirmSave) return;
+    await executeSave();
+  };
+
   // Cancel and go back
   const handleCancel = () => {
     if (hasChanges) {
-      const confirmCancel = window.confirm('Ada perubahan yang belum disimpan. Yakin ingin kembali?');
-      if (!confirmCancel) return;
+      setConfirmModal({
+        title: 'Perubahan Belum Disimpan',
+        message: 'Ada perubahan yang belum disimpan. Yakin ingin kembali?',
+        confirmLabel: 'Ya, Buang Perubahan',
+        cancelLabel: 'Tidak, Tetap Edit',
+        onConfirm: () => navigate(returnUrl),
+      });
+      return;
     }
     navigate(returnUrl);
   };
@@ -465,6 +474,15 @@ const TimesheetEditPage = () => {
 
   return (
     <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+      <ConfirmationModal
+        isOpen={!!confirmModal}
+        onConfirm={() => { confirmModal?.onConfirm(); closeConfirmModal(); }}
+        onCancel={closeConfirmModal}
+        title={confirmModal?.title}
+        message={confirmModal?.message}
+        confirmLabel={confirmModal?.confirmLabel}
+        cancelLabel={confirmModal?.cancelLabel}
+      />
 
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
@@ -477,63 +495,63 @@ const TimesheetEditPage = () => {
         <h2 className="text-base font-extrabold text-slate-800">Edit Timesheet</h2>
         <button
           onClick={handleSave}
-          disabled={saving || !hasChanges}
+          disabled={saving || !hasChanges || isValidated}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
       </header>
 
-      {/* ── Scrollable Form ── */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 bg-slate-50">
-        <div className="max-w-2xl mx-auto space-y-3">
+      {/* ── Content (no scroll) ── */}
+      <div className="flex-1 overflow-hidden flex flex-col px-4 py-2 gap-2 bg-slate-50">
 
-          {/* Status banners */}
-          {isDeleted && (
-            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-slate-100 border border-slate-200">
-              <span className="text-slate-500 font-bold text-base leading-none">×</span>
-              <div>
-                <div className="text-sm font-semibold text-slate-600">Deleted</div>
-                <div className="text-xs text-slate-400">Timesheet ditandai sebagai Deleted (duration = 0)</div>
+        {/* Status banners — compact, flex-shrink-0 */}
+        {(isDeleted || isSapReject || isValidated || hasChanges) && (
+          <div className="flex-shrink-0 flex flex-col gap-1">
+            {isDeleted && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200">
+                <span className="text-slate-500 font-bold text-sm leading-none">×</span>
+                <span className="text-xs font-semibold text-slate-600">Deleted</span>
+                <span className="text-xs text-slate-400">— Timesheet ditandai sebagai Deleted (duration = 0)</span>
               </div>
-            </div>
-          )}
-          {isSapReject && (
-            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-red-50 border border-red-200">
-              <span className="text-red-500 font-bold text-base leading-none">!</span>
-              <div>
-                <div className="text-sm font-semibold text-red-700">SAP Reject</div>
-                <div className="text-xs text-red-500">Record ini ditolak SAP — edit dan kirim ulang</div>
+            )}
+            {isSapReject && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-50 border border-red-200">
+                <span className="text-red-500 font-bold text-sm leading-none">!</span>
+                <span className="text-xs font-semibold text-red-700">SAP Reject</span>
+                <span className="text-xs text-red-500">— Record ini ditolak SAP, edit dan kirim ulang</span>
               </div>
-            </div>
-          )}
-          {isValidated && (
-            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200">
-              <span className="text-emerald-500 font-bold text-base leading-none">✓</span>
-              <div>
-                <div className="text-sm font-semibold text-emerald-700">Validated</div>
-                <div className="text-xs text-emerald-500">Validated on: {formData.validation_date}</div>
+            )}
+            {isValidated && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                <span className="text-emerald-500 font-bold text-sm leading-none">✓</span>
+                <span className="text-xs font-semibold text-emerald-700">Validated</span>
+                <span className="text-xs text-emerald-500">— {formData.validation_date}</span>
               </div>
-            </div>
-          )}
-          {hasChanges && (
-            <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200">
-              <span className="text-amber-500 font-bold text-base leading-none">!</span>
-              <div className="text-xs font-semibold text-amber-700">Ada perubahan yang belum disimpan</div>
-            </div>
-          )}
+            )}
+            {hasChanges && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200">
+                <span className="text-amber-500 font-bold text-sm leading-none">!</span>
+                <span className="text-xs font-semibold text-amber-700">Ada perubahan yang belum disimpan</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Two-column form — fills remaining height, no scroll */}
+        <div className="flex-1 overflow-hidden grid grid-cols-2 gap-3">
 
           {/* General Information */}
-          <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">General Information</h3>
-            <div className="space-y-3">
+          <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-3 flex flex-col overflow-hidden">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 flex-shrink-0">General Information</h3>
+            <div className="flex flex-col gap-2">
 
               <div>
                 <label className={labelCls}>TS Number</label>
                 <input type="text" value={formData.tsnumber} disabled className={inputDisabledCls} />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className={labelCls}>Serial Number</label>
                   <input type="text" value={formData.serialnumber} disabled className={inputDisabledCls} />
@@ -544,7 +562,7 @@ const TimesheetEditPage = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className={labelCls}>Production Order</label>
                   <input type="text" value={formData.production_order} disabled className={inputDisabledCls} />
@@ -568,13 +586,14 @@ const TimesheetEditPage = () => {
                   <input
                     type="text"
                     value={workcenterSearch || formData.workcenterdescription}
-                    onChange={(e) => { setWorkcenterSearch(e.target.value); setShowWorkcenterDropdown(true); }}
-                    onFocus={() => setShowWorkcenterDropdown(true)}
+                    onChange={(e) => { if (!isValidated) { setWorkcenterSearch(e.target.value); setShowWorkcenterDropdown(true); } }}
+                    onFocus={() => { if (!isValidated) setShowWorkcenterDropdown(true); }}
                     placeholder="Search workcenter…"
-                    className={inputCls}
+                    disabled={isValidated}
+                    className={isValidated ? inputDisabledCls : inputCls}
                   />
                   {showWorkcenterDropdown && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-md max-h-60 overflow-y-auto">
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-md max-h-48 overflow-y-auto">
                       {filteredWorkcenters.length === 0 ? (
                         <div className="px-3 py-2 text-sm text-slate-400">No workcenter found</div>
                       ) : (
@@ -604,41 +623,45 @@ const TimesheetEditPage = () => {
           </div>
 
           {/* Time Tracking */}
-          <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Time Tracking</h3>
-            <div className="space-y-3">
+          <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-3 flex flex-col overflow-hidden">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 flex-shrink-0">Time Tracking</h3>
+            <div className="flex flex-col gap-2">
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className={labelCls}>Check-in Date <span className="text-[#0096c7]">*</span></label>
                   <input type="date" value={checkinDatePicker}
                     onChange={(e) => handleDatePickerChange('checkin', e.target.value)}
-                    className={inputCls} />
+                    disabled={isValidated}
+                    className={isValidated ? inputDisabledCls : inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Check-in Time <span className="text-[#0096c7]">*</span></label>
                   <input type="time" value={checkinTimePicker}
                     onChange={(e) => handleTimePickerChange('checkin', e.target.value)}
-                    className={inputCls} />
+                    disabled={isValidated}
+                    className={isValidated ? inputDisabledCls : inputCls} />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className={labelCls}>Check-out Date <span className="text-[#0096c7]">*</span></label>
                   <input type="date" value={checkoutDatePicker}
                     onChange={(e) => handleDatePickerChange('checkout', e.target.value)}
-                    className={inputCls} />
+                    disabled={isValidated}
+                    className={isValidated ? inputDisabledCls : inputCls} />
                 </div>
                 <div>
                   <label className={labelCls}>Check-out Time <span className="text-[#0096c7]">*</span></label>
                   <input type="time" value={checkoutTimePicker}
                     onChange={(e) => handleTimePickerChange('checkout', e.target.value)}
-                    className={inputCls} />
+                    disabled={isValidated}
+                    className={isValidated ? inputDisabledCls : inputCls} />
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className={labelCls}>Duration (hours)</label>
                   <input type="text" value={formData.duration} disabled
@@ -666,8 +689,9 @@ const TimesheetEditPage = () => {
                       if (!/[0-9.]/.test(e.key) && !['Backspace','Delete','Tab','ArrowLeft','ArrowRight','Home','End'].includes(e.key)) e.preventDefault();
                       if (e.key === '.' && e.target.value.includes('.')) e.preventDefault();
                     }}
+                    disabled={isValidated}
                     placeholder="0.00"
-                    className={inputCls}
+                    className={isValidated ? inputDisabledCls : inputCls}
                   />
                 </div>
               </div>
@@ -675,7 +699,7 @@ const TimesheetEditPage = () => {
               <div>
                 <label className={labelCls}>Note</label>
                 <textarea value={formData.note || ''} onChange={(e) => handleInputChange('note', e.target.value)}
-                  placeholder="Add note…" rows={3}
+                  placeholder="Add note…" rows={2}
                   className={inputCls + ' resize-none'} />
               </div>
             </div>

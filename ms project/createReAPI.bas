@@ -121,7 +121,7 @@ Private Function ParseNewOperations(jsonText As String) As Collection
         opDict("operation_no") = ExtractValueFromJSON(objStr, "operation_no")  ' angka asli, tanpa padding
         opDict("workcenter") = ExtractValueFromJSON(objStr, "workcenter")
         opDict("planhours") = CDbl(ExtractValueFromJSON(objStr, "planhours"))
-        opDict("operationtext") = ExtractValueFromJSON(objStr, "operationtext")
+        opDict("operationtext") = ExtractValueFromJSON(objStr, "operation_text")
         opDict("plan_start") = ExtractValueFromJSON(objStr, "plan_start")
         opDict("plan_finish") = ExtractValueFromJSON(objStr, "plan_finish")
         opDict("ssbr_id") = ExtractValueFromJSON(objStr, "ssbr_id")

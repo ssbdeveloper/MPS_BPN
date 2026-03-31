@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import ssbLogo from '../assets/ssb.png';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -119,7 +120,6 @@ const LoginTimesheetPage = () => {
   const [scanInput, setScanInput]         = useState('');
   const [showUnprodPanel, setShowUnprodPanel] = useState(false);
   const [unprodQuickMode, setUnprodQuickMode] = useState(null);
-  const [successToast, setSuccessToast]   = useState(null);
   const [currentTime, setCurrentTime]     = useState('');
 
   // ── Refs (used inside NFC callbacks to avoid stale closures) ────────────────
@@ -237,10 +237,7 @@ const LoginTimesheetPage = () => {
   };
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
-  const showSuccessToast = (message) => {
-    setSuccessToast(message);
-    setTimeout(() => setSuccessToast(null), 2000);
-  };
+  const showSuccessToast = (message) => toast.success(message);
 
   const extractNfcId = (event) => {
     if (event.serialNumber?.trim()) return event.serialNumber.trim();
@@ -308,7 +305,7 @@ const LoginTimesheetPage = () => {
         showSuccessToast(`${user.full_name || 'User'} - Timesheet dihentikan!`);
       } else {
         setStatus('Gagal menghentikan timesheet');
-        alert('Gagal menghentikan timesheet!');
+        toast.error('Gagal menghentikan timesheet!');
       }
       setTimeout(resetProcessingState, 2000);
 
@@ -326,7 +323,7 @@ const LoginTimesheetPage = () => {
     if (mode === 'external') return;
     if (!('NDEFReader' in window)) {
       setStatus('Web NFC tidak didukung');
-      alert('Browser Anda tidak mendukung Web NFC. Gunakan Chrome di Android atau gunakan mode Eksternal.');
+      toast.error('Browser Anda tidak mendukung Web NFC. Gunakan Chrome di Android atau gunakan mode Eksternal.');
       return;
     }
 
@@ -351,7 +348,7 @@ const LoginTimesheetPage = () => {
 
         if (!nfcid) {
           setStatus('NFC ID tidak terbaca');
-          alert('NFC ID tidak valid atau tidak terbaca');
+          toast.error('NFC ID tidak valid atau tidak terbaca');
           return;
         }
 
@@ -359,7 +356,7 @@ const LoginTimesheetPage = () => {
         const user = await getUserByNfc(nfcid);
         if (!user) {
           setStatus('User tidak ditemukan');
-          alert('User tidak ditemukan di database!');
+          toast.error('User tidak ditemukan di database!');
           return;
         }
 
@@ -377,7 +374,7 @@ const LoginTimesheetPage = () => {
       const [statusMsg, alertMsg] = NFC_ERROR_MESSAGES[err.name]
         ?? ['Gagal scan NFC', `Gagal melakukan scan NFC: ${err.message}`];
       setStatus(statusMsg);
-      alert(alertMsg);
+      toast.error(alertMsg);
     }
   };
 
@@ -458,7 +455,7 @@ const LoginTimesheetPage = () => {
     const user = await getUserByNfc(id);
     if (!user) {
       setStatus('User tidak ditemukan');
-      alert('User tidak ditemukan di database!');
+      toast.error('User tidak ditemukan di database!');
       return;
     }
 
@@ -649,7 +646,7 @@ const LoginTimesheetPage = () => {
 
           {/* Tools & Consumable */}
           <button
-            onClick={() => alert('Tools & Consumable - Coming Soon')}
+            onClick={() => toast.info('Tools & Consumable - Coming Soon')}
             className={btnPrimary}
           >
             <span className="text-4xl sm:text-5xl">🔧</span>
@@ -684,18 +681,6 @@ const LoginTimesheetPage = () => {
           panelRef={unprodPanelRef}
           onSelect={handleUnprodPanelSelect}
         />
-      )}
-
-      {/* ── Success Toast ── */}
-      {successToast && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[60]
-                        bg-emerald-600 text-white px-6 py-4 rounded-2xl shadow-xl
-                        animate-pulse flex items-center gap-3 max-w-sm">
-          <svg className="w-8 h-8 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-          </svg>
-          <span className="text-sm font-bold">{successToast}</span>
-        </div>
       )}
 
       {/* ── Status Bar / Footer ── */}

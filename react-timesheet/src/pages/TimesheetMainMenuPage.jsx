@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { Play, ClipboardList, Monitor, Settings, Clock, Wrench, AlertTriangle, CheckCircle } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -264,12 +265,12 @@ const TimesheetMainMenuPage = () => {
     active:scale-95 hover:scale-105`;
 
   const MENU_ITEMS = [
-    { emoji: '▶️', label: 'Start',           onClick: postdata        },
-    { emoji: '📋', label: 'Select Job',       onClick: gotojob         },
-    { emoji: '🖥️', label: 'Select Machine',   onClick: gotomesin       },
-    { emoji: '⚙️', label: 'Process Control',  onClick: gotoparameter   },
-    { emoji: '🕐', label: 'View Timesheet',   onClick: gotots          },
-    { emoji: '🔧', label: 'Consumable',       onClick: handleConsumable },
+    { icon: Play,          label: 'Start',           onClick: postdata        },
+    { icon: ClipboardList, label: 'Select Job',       onClick: gotojob         },
+    { icon: Monitor,       label: 'Select Machine',   onClick: gotomesin       },
+    { icon: Settings,      label: 'Process Control',  onClick: gotoparameter   },
+    { icon: Clock,         label: 'View Timesheet',   onClick: gotots          },
+    { icon: Wrench,        label: 'Consumable',       onClick: handleConsumable },
   ];
 
   return (
@@ -381,19 +382,19 @@ const TimesheetMainMenuPage = () => {
           {/* Rework / Finish — always visible, never scrolled out */}
           <div className="flex gap-2 flex-shrink-0">
             <button onClick={handleRework} className={`${reworkCls} flex-1 min-h-[44px]`}>
-              <span>⚠️</span><span>Rework</span>
+              <AlertTriangle className="w-4 h-4" /><span>Rework</span>
             </button>
             <button onClick={finish}       className={`${finishCls} flex-1 min-h-[44px]`}>
-              <span>✅</span><span>Finish</span>
+              <CheckCircle className="w-4 h-4" /><span>Finish</span>
             </button>
           </div>
         </section>
 
         {/* ── Menu grid (60%): 2 cols × 3 rows ── */}
         <section className="grid grid-cols-2 grid-rows-3 gap-3 min-h-0">
-          {MENU_ITEMS.map(({ emoji, label, onClick }) => (
+          {MENU_ITEMS.map(({ icon: Icon, label, onClick }) => (
             <button key={label} onClick={onClick} className={actionBtn}>
-              <span className="text-3xl sm:text-4xl">{emoji}</span>
+              <Icon className="w-8 h-8 sm:w-10 sm:h-10" />
               <span>{label}</span>
             </button>
           ))}
@@ -464,10 +465,10 @@ const TimesheetMainMenuPage = () => {
           {/* Rework / Finish — always pinned to bottom, never clipped */}
           <div className="flex-shrink-0 flex gap-2 p-4 pt-3 border-t border-slate-200">
             <button onClick={handleRework} className={`${reworkCls} flex-1 min-h-[52px]`}>
-              <span>⚠️</span><span>Rework</span>
+              <AlertTriangle className="w-4 h-4" /><span>Rework</span>
             </button>
             <button onClick={finish}       className={`${finishCls} flex-1 min-h-[52px]`}>
-              <span>✅</span><span>Finish</span>
+              <CheckCircle className="w-4 h-4" /><span>Finish</span>
             </button>
           </div>
         </section>
@@ -477,9 +478,9 @@ const TimesheetMainMenuPage = () => {
           className="flex-1 grid grid-cols-2 gap-3 overflow-hidden"
           style={{ gridTemplateRows: 'repeat(3, 1fr)' }}
         >
-          {MENU_ITEMS.map(({ emoji, label, onClick }) => (
+          {MENU_ITEMS.map(({ icon: Icon, label, onClick }) => (
             <button key={label} onClick={onClick} className={actionBtn}>
-              <span className="text-3xl xl:text-4xl">{emoji}</span>
+              <Icon className="w-8 h-8 xl:w-10 xl:h-10" />
               <span>{label}</span>
             </button>
           ))}

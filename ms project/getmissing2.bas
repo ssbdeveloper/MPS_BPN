@@ -348,7 +348,7 @@ Private Function ParseAPIResponse(jsonText As String) As Collection
         opDict("planhours") = CDbl(planHoursStr)
         Debug.Print "  planhours: " & opDict("planhours")
         
-        opDict("operationtext") = ExtractValueFromJSON(objStr, "operationtext")
+        opDict("operationtext") = ExtractValueFromJSON(objStr, "operation_text")
 Debug.Print "  operationtext: " & opDict("operationtext")
 
 ' Tambahkan ke collection

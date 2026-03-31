@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Package, CheckCircle, AlertTriangle, XCircle, Plus, Download, BarChart2, RefreshCw, Camera, Search, X, Pencil, Trash2 } from 'lucide-react';
 import {
   PageContainer,
   AppHeader,
@@ -88,7 +89,7 @@ const ComponentTrackingPage = () => {
   return (
     <PageContainer>
       <AppHeader
-        title="📦 Component Tracking"
+        title={<><Package className="inline w-5 h-5 mr-1.5" />Component Tracking</>}
         rightContent={
           <Button variant="secondary" size="small" onClick={() => navigate('/')}>
             ← Back
@@ -101,7 +102,7 @@ const ComponentTrackingPage = () => {
         <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
           <div className="flex items-center justify-between mb-2">
             <span className="text-gray-600 text-sm">Total Components</span>
-            <span className="text-2xl">📦</span>
+            <Package className="w-6 h-6 text-gray-500" />
           </div>
           <div className="text-3xl font-bold text-gray-800">502</div>
           <div className="text-xs text-gray-500 mt-1">5 categories</div>
@@ -110,7 +111,7 @@ const ComponentTrackingPage = () => {
         <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
           <div className="flex items-center justify-between mb-2">
             <span className="text-gray-600 text-sm">Available</span>
-            <span className="text-2xl">✅</span>
+            <CheckCircle className="w-6 h-6 text-green-500" />
           </div>
           <div className="text-3xl font-bold text-green-600">490</div>
           <div className="text-xs text-gray-500 mt-1">97.6% of total</div>
@@ -119,7 +120,7 @@ const ComponentTrackingPage = () => {
         <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
           <div className="flex items-center justify-between mb-2">
             <span className="text-gray-600 text-sm">Low Stock</span>
-            <span className="text-2xl">⚠️</span>
+            <AlertTriangle className="w-6 h-6 text-yellow-500" />
           </div>
           <div className="text-3xl font-bold text-yellow-600">12</div>
           <div className="text-xs text-gray-500 mt-1">Need reorder</div>
@@ -128,7 +129,7 @@ const ComponentTrackingPage = () => {
         <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
           <div className="flex items-center justify-between mb-2">
             <span className="text-gray-600 text-sm">Out of Stock</span>
-            <span className="text-2xl">❌</span>
+            <XCircle className="w-6 h-6 text-red-500" />
           </div>
           <div className="text-3xl font-bold text-red-600">0</div>
           <div className="text-xs text-gray-500 mt-1">0% critical</div>
@@ -139,16 +140,16 @@ const ComponentTrackingPage = () => {
       <div className="bg-white rounded-xl p-4 shadow-md">
         <div className="flex flex-wrap gap-3">
           <Button variant="primary">
-            ➕ Add Component
+            <Plus className="inline w-4 h-4 mr-1" />Add Component
           </Button>
           <Button variant="success">
-            📥 Import Data
+            <Download className="inline w-4 h-4 mr-1" />Import Data
           </Button>
           <Button variant="warning">
-            📊 Reports
+            <BarChart2 className="inline w-4 h-4 mr-1" />Reports
           </Button>
           <Button variant="secondary">
-            🔄 Sync Stock
+            <RefreshCw className="inline w-4 h-4 mr-1" />Sync Stock
           </Button>
         </div>
       </div>
@@ -166,10 +167,10 @@ const ComponentTrackingPage = () => {
           </div>
           <div className="flex gap-2">
             <Button variant="primary" size="small">
-              📷 Scan Barcode
+              <Camera className="inline w-4 h-4 mr-1" />Scan Barcode
             </Button>
             <Button variant="secondary" size="small">
-              🔍 Advanced Filter
+              <Search className="inline w-4 h-4 mr-1" />Advanced Filter
             </Button>
           </div>
         </div>
@@ -239,7 +240,7 @@ const ComponentTrackingPage = () => {
               size="small"
               onClick={() => setSelectedIndex(null)}
             >
-              ✕
+              <X className="w-4 h-4" />
             </Button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -270,16 +271,16 @@ const ComponentTrackingPage = () => {
           </div>
           <div className="mt-4 flex gap-3">
             <Button variant="primary" size="small">
-              ✏️ Edit
+              <Pencil className="inline w-4 h-4 mr-1" />Edit
             </Button>
             <Button variant="success" size="small">
-              📦 Adjust Stock
+              <Package className="inline w-4 h-4 mr-1" />Adjust Stock
             </Button>
             <Button variant="warning" size="small">
-              📊 History
+              <BarChart2 className="inline w-4 h-4 mr-1" />History
             </Button>
             <Button variant="danger" size="small">
-              🗑️ Delete
+              <Trash2 className="inline w-4 h-4 mr-1" />Delete
             </Button>
           </div>
         </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Flame, Zap, Settings, Wrench, Gem, FlaskConical, Sparkles, Brush, Wind, FileEdit, ClipboardList } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -250,9 +251,13 @@ const ProcessControlPage = () => {
   };
 
   // Category icon map
-  const categoryIcon = {
-    '1': '🔥', '2': '⚡', '3': '⚙️', '4': '🔧',
-    '5': '💎', '6': '🧪', '7': '✨', '8': '🧹', '9': '🌀',
+  const categoryIconMap = {
+    '1': Flame, '2': Zap, '3': Settings, '4': Wrench,
+    '5': Gem, '6': FlaskConical, '7': Sparkles, '8': Brush, '9': Wind,
+  };
+  const getCategoryIcon = (id) => {
+    const Icon = categoryIconMap[id] || ClipboardList;
+    return <Icon className="w-5 h-5" />;
   };
 
   const selectedCategoryName = categories.find(c => String(c.id_process) === String(selectedCategory))?.process_name || '';
@@ -314,7 +319,7 @@ const ProcessControlPage = () => {
                   onClick={() => navigate('/edit-parameter')}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500 text-white rounded-lg hover:bg-amber-600 active:bg-amber-700 transition-colors shadow-sm"
                 >
-                  <span>📝</span>
+                  <FileEdit className="w-4 h-4" />
                   <span>Edit Parameter</span>
                 </button>
               </div>
@@ -325,7 +330,7 @@ const ProcessControlPage = () => {
                     onClick={() => handleCategorySelect(cat.id_process)}
                     className="p-3 bg-white border border-blue-200 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-all text-left group"
                   >
-                    <div className="text-lg mb-1">{categoryIcon[cat.id_process] || '📋'}</div>
+                    <div className="mb-1">{getCategoryIcon(cat.id_process)}</div>
                     <div className="text-xs font-bold text-blue-900 group-hover:text-blue-700 leading-tight">
                       {cat.process_name}
                     </div>
@@ -378,7 +383,7 @@ const ProcessControlPage = () => {
             <div>
               {/* Info bar */}
               <div className="flex items-center gap-2 mb-3 p-2 bg-blue-600 text-white rounded-lg text-xs">
-                <span className="text-base">{categoryIcon[selectedCategory]}</span>
+                <span>{getCategoryIcon(selectedCategory)}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold">{selectedCategoryName}</div>
                   <div className="text-blue-200 text-[10px] truncate">

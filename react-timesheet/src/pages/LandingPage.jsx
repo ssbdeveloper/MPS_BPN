@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ClipboardList, BarChart2, CheckCircle, Download, User, Settings, Package } from 'lucide-react';
 
 /**
  * Landing Page - Main Menu
@@ -63,56 +64,56 @@ useEffect(() => {
   const menuItems = [
     {
       title: 'TIMESHEET',
-      icon: '\u{1F4CB}',
+      icon: ClipboardList,
       path: '/login-timesheet',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
     },
     {
       title: 'DASHBOARD',
-      icon: '\u{1F4CA}',
+      icon: BarChart2,
       path: '/dashboard',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
     },
     {
       title: 'TIMESHEET VALIDATION',
-      icon: '\u2705',
+      icon: CheckCircle,
       path: '/timesheet-validation',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
     },
     {
       title: 'DOWNLOAD DATA',
-      icon: '\u{1F4E5}',
+      icon: Download,
       path: '/download',
       color: 'from-orange-400 to-orange-500',
       bgHover: 'hover:from-orange-500 hover:to-orange-600'
     },
     {
       title: 'USER REGISTRATION',
-      icon: '\u{1F464}',
+      icon: User,
       path: '/nfc-users',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
     },
     {
       title: 'SETTING',
-      icon: '\u2699\uFE0F',
+      icon: Settings,
       path: '/setting',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
     },
     {
       title: 'COMPONENT TRACKING',
-      icon: '\u{1F4E6}',
+      icon: Package,
       path: '/component-tracking',
       color: 'from-blue-400 to-blue-500',
       bgHover: 'hover:from-blue-500 hover:to-blue-600'
     },
     {
       title: 'ORDER LIST',
-      icon: '\u{1F4CB}',
+      icon: ClipboardList,
       path: '/sow-orders',
       color: 'from-orange-400 to-orange-500',
       bgHover: 'hover:from-orange-500 hover:to-orange-600'
@@ -269,8 +270,8 @@ useEffect(() => {
                 </div>
 
                 {/* Icon */}
-                <div className="relative text-5xl sm:text-6xl transform group-hover:scale-110 transition-transform duration-200">
-                  {item.icon}
+                <div className="relative transform group-hover:scale-110 transition-transform duration-200">
+                  <item.icon className="w-14 h-14 sm:w-16 sm:h-16" />
                 </div>
 
                 {/* Title */}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { X, Search, Pencil, Trash2, AlertTriangle } from 'lucide-react';
 import PasswordPrompt from '../components/auth/PasswordPrompt';
 
 /**
@@ -185,12 +186,12 @@ const NfcUserListPage = () => {
                       onClick={() => setSearchTerm('')}
                       className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
                     >
-                      ✕
+                      <X className="w-4 h-4" />
                     </button>
                   )}
                 </div>
                 <div className="mt-1.5 text-xs text-gray-600">
-                  🔍 Search in: Full Name, SNSSB, NFC ID, Machine Name
+                  <Search className="inline w-3.5 h-3.5 mr-1" />Search in: Full Name, SNSSB, NFC ID, Machine Name
                 </div>
               </div>
 
@@ -298,14 +299,14 @@ const NfcUserListPage = () => {
                               className="px-3 py-1 text-xs font-medium bg-blue-700 text-white rounded-lg shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
                               style={{ boxShadow: '0 3px 6px -1px rgba(37, 99, 235, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
                             >
-                              ✏️ Edit
+                              <Pencil className="inline w-3.5 h-3.5 mr-1" />Edit
                             </button>
                             <button
                               onClick={() => handleDeleteClick(user)}
                               className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded-lg shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
                               style={{ boxShadow: '0 3px 6px -1px rgba(220, 38, 38, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
                             >
-                              🗑️ Delete
+                              <Trash2 className="inline w-3.5 h-3.5 mr-1" />Delete
                             </button>
                           </div>
                         </td>
@@ -322,7 +323,7 @@ const NfcUserListPage = () => {
         {deleteModal.show && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-lg shadow-2xl p-6 w-full max-w-md">
-              <h3 className="text-lg font-bold text-blue-900 mb-4">⚠️ Konfirmasi Hapus</h3>
+              <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-yellow-500" /> Konfirmasi Hapus</h3>
               <p className="text-sm text-gray-700 mb-4">
                 Apakah Anda yakin ingin menghapus user berikut?
               </p>
@@ -363,7 +364,7 @@ const NfcUserListPage = () => {
                   className="flex-1 px-4 py-2 text-sm font-bold bg-gradient-to-b from-red-500 to-red-600 text-white rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform"
                   style={{ boxShadow: '0 6px 12px -2px rgba(220, 38, 38, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
                 >
-                  🗑️ Hapus
+                  <Trash2 className="inline w-4 h-4 mr-1" />Hapus
                 </button>
               </div>
             </div>

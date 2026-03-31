@@ -190,9 +190,14 @@ exports.getbysn = async (req, res) => {
   try {
     const { snkaryawan } = req.params;
     const result = await db.query(
-      `SELECT * FROM timesheet_transaction 
-       WHERE serialnumber = $1
-       ORDER BY longdate_checkin DESC`,
+      `SELECT t.*,
+              COALESCE(NULLIF(t.part_name, ''), s.part_name) AS part_name
+       FROM timesheet_transaction t
+       LEFT JOIN sow s
+         ON s.order_no      = t.order_no
+        AND s.operation_no  = t.operation_no
+       WHERE t.serialnumber = $1
+       ORDER BY t.longdate_checkin DESC`,
       [snkaryawan]
     );
     res.json(result.rows);

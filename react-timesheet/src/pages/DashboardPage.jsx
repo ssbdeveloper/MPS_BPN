@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Package, HardHat, Zap, Timer, TrendingUp, BarChart2, FileText, Download, Settings } from 'lucide-react';
 import {
   PageContainer,
   AppHeader,
@@ -22,7 +23,7 @@ const DashboardPage = () => {
       unit: 'units',
       trend: '+12%',
       trendUp: true,
-      icon: '📦',
+      icon: Package,
       color: 'bg-blue-500'
     },
     {
@@ -31,7 +32,7 @@ const DashboardPage = () => {
       unit: 'people',
       trend: '+3',
       trendUp: true,
-      icon: '👷',
+      icon: HardHat,
       color: 'bg-green-500'
     },
     {
@@ -40,7 +41,7 @@ const DashboardPage = () => {
       unit: '%',
       trend: '+5%',
       trendUp: true,
-      icon: '⚡',
+      icon: Zap,
       color: 'bg-yellow-500'
     },
     {
@@ -49,7 +50,7 @@ const DashboardPage = () => {
       unit: 'hours',
       trend: '-15%',
       trendUp: false,
-      icon: '⏱️',
+      icon: Timer,
       color: 'bg-red-500'
     }
   ];
@@ -81,7 +82,7 @@ const DashboardPage = () => {
   return (
     <PageContainer>
       <AppHeader
-        title="📊 Dashboard"
+        title={<><BarChart2 className="inline w-5 h-5 mr-1.5" />Dashboard</>}
         rightContent={
           <Button variant="secondary" size="small" onClick={() => navigate('/')}>
             ← Back
@@ -97,8 +98,8 @@ const DashboardPage = () => {
             className="bg-white rounded-xl p-5 shadow-md border border-gray-200 hover:shadow-lg transition-shadow duration-200"
           >
             <div className="flex items-start justify-between mb-3">
-              <div className={`${stat.color} w-12 h-12 rounded-lg flex items-center justify-center text-2xl`}>
-                {stat.icon}
+              <div className={`${stat.color} w-12 h-12 rounded-lg flex items-center justify-center`}>
+                <stat.icon className="w-6 h-6 text-white" />
               </div>
               <div
                 className={`px-2 py-1 rounded-full text-xs font-semibold ${
@@ -132,7 +133,7 @@ const DashboardPage = () => {
           </h3>
           <div className="h-64 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg flex items-center justify-center">
             <div className="text-center text-gray-500">
-              <div className="text-4xl mb-2">📈</div>
+              <div className="flex justify-center mb-2"><TrendingUp className="w-10 h-10 text-gray-400" /></div>
               <p className="text-sm">Chart will be displayed here</p>
               <p className="text-xs mt-1">(Integration with Chart.js or Recharts)</p>
             </div>
@@ -146,7 +147,7 @@ const DashboardPage = () => {
           </h3>
           <div className="h-64 bg-gradient-to-br from-green-50 to-green-100 rounded-lg flex items-center justify-center">
             <div className="text-center text-gray-500">
-              <div className="text-4xl mb-2">📊</div>
+              <div className="flex justify-center mb-2"><BarChart2 className="w-10 h-10 text-gray-400" /></div>
               <p className="text-sm">Chart will be displayed here</p>
               <p className="text-xs mt-1">(Integration with Chart.js or Recharts)</p>
             </div>
@@ -182,16 +183,16 @@ const DashboardPage = () => {
       {/* Quick Actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Button variant="primary" className="h-20">
-          📄 Daily Report
+          <FileText className="inline w-4 h-4 mr-1" />Daily Report
         </Button>
         <Button variant="success" className="h-20">
-          📊 Analytics
+          <BarChart2 className="inline w-4 h-4 mr-1" />Analytics
         </Button>
         <Button variant="warning" className="h-20">
-          📥 Export Data
+          <Download className="inline w-4 h-4 mr-1" />Export Data
         </Button>
         <Button variant="secondary" className="h-20">
-          ⚙️ Settings
+          <Settings className="inline w-4 h-4 mr-1" />Settings
         </Button>
       </div>
     </PageContainer>

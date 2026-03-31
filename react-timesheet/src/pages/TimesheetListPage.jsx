@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { StopCircle, RotateCcw, NotebookPen } from 'lucide-react';
 
 /**
  * Elapsed Timer Component
@@ -141,6 +142,7 @@ const TimesheetListPage = () => {
         body: JSON.stringify({
           order_no:              item.order_no,
           ssbr_id:               item.ssbr_id,
+          part_name:             item.part_name || '',
           operation_text:        item.operation_text,
           operation_no:          item.operation_no,
           serialnumber:          item.serialnumber,
@@ -232,28 +234,26 @@ const TimesheetListPage = () => {
           {/* colgroup for consistent widths */}
           <colgroup>
             <col style={{ width: '14%' }} />
-            <col style={{ width: '28%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '13%' }} />
-            <col style={{ width: '18%' }} />
-            <col style={{ width: '14%' }} />
+            <col style={{ width: '32%' }} />
+            <col style={{ width: '20%' }} />
+            <col style={{ width: '24%' }} />
+            <col style={{ width: '10%' }} />
           </colgroup>
 
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-slate-200" style={{ background: '#caf0f8' }}>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Order</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Operation</th>
-              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Check In</th>
-              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Check Out</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Time</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Workcenter</th>
-              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Actions</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Act</th>
             </tr>
           </thead>
 
           <tbody>
             {timesheets.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center text-gray-500 py-10">
+                <td colSpan={5} className="text-center text-gray-500 py-10">
                   Tidak ada data timesheet
                 </td>
               </tr>
@@ -282,22 +282,43 @@ const TimesheetListPage = () => {
                       )}
                     </td>
 
-                    {/* Check In */}
+                    {/* Time (Check In + Check Out merged) */}
                     <td className={`${cellBase} text-center`}>
-                      <div className="font-medium text-gray-700">{formatDateShort(item.date_checkin)}</div>
-                      <div className="text-blue-700 font-semibold">{item.hour_checkin || '-'}</div>
-                    </td>
-
-                    {/* Check Out */}
-                    <td className={`${cellBase} text-center`}>
-                      {item.hour_checkout ? (
-                        <>
-                          <div className="font-medium text-gray-700">{formatDateShort(item.date_checkout)}</div>
-                          <div className="text-blue-700 font-semibold">{item.hour_checkout}</div>
-                        </>
-                      ) : (
-                        <ElapsedTimer longdateCheckin={item.longdate_checkin} />
-                      )}
+                      <div className="text-[11px]">
+                        {item.hour_checkout ? (
+                          item.date_checkin === item.date_checkout ? (
+                            /* Same date: date left, times stacked right */
+                            <div className="flex items-center justify-center gap-1.5">
+                              <span className="font-medium text-gray-700">{formatDateShort(item.date_checkin)}</span>
+                              <div className="flex flex-col leading-tight" style={{ color: '#0077b6' }}>
+                                <span>{item.hour_checkin}</span>
+                                <span>{item.hour_checkout}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            /* Different dates: each row inline */
+                            <>
+                              <div className="text-gray-700">
+                                <span className="font-medium">{formatDateShort(item.date_checkin)}</span>
+                                <span className="ml-1" style={{ color: '#0077b6' }}>{item.hour_checkin}</span>
+                              </div>
+                              <div className="text-gray-700">
+                                <span className="font-medium">{formatDateShort(item.date_checkout)}</span>
+                                <span className="ml-1" style={{ color: '#0077b6' }}>{item.hour_checkout}</span>
+                              </div>
+                            </>
+                          )
+                        ) : (
+                          /* Running: checkin + elapsed timer */
+                          <>
+                            <div className="flex items-center justify-center gap-1.5">
+                              <span className="font-medium text-gray-700">{formatDateShort(item.date_checkin)}</span>
+                              <span style={{ color: '#0077b6' }}>{item.hour_checkin}</span>
+                            </div>
+                            <ElapsedTimer longdateCheckin={item.longdate_checkin} />
+                          </>
+                        )}
+                      </div>
                     </td>
 
                     {/* Workcenter */}
@@ -310,23 +331,26 @@ const TimesheetListPage = () => {
                       <div className="flex gap-1 justify-center">
                         <button
                           onClick={() => handleNote(item)}
-                          className="min-h-[36px] px-2 py-1 text-[10px] font-bold bg-[#0096c7] text-white rounded hover:bg-[#0077b6] active:scale-95 transition-all"
+                          title="Note"
+                          className="w-8 h-8 flex items-center justify-center rounded-full text-[#0096c7] hover:bg-blue-100 active:scale-95 transition-all"
                         >
-                          Note
+                          <NotebookPen className="w-4 h-4" />
                         </button>
                         {item.hour_checkout ? (
                           <button
                             onClick={() => handleRestart(item)}
-                            className="min-h-[36px] px-2 py-1 text-[10px] font-bold bg-[#0096c7] text-white rounded hover:bg-[#0077b6] active:scale-95 transition-all"
+                            title="Restart"
+                            className="w-8 h-8 flex items-center justify-center rounded-full text-[#0096c7] hover:bg-blue-100 active:scale-95 transition-all"
                           >
-                            Restart
+                            <RotateCcw className="w-4 h-4" />
                           </button>
                         ) : (
                           <button
                             onClick={() => handleStop(item)}
-                            className="min-h-[36px] px-2 py-1 text-[10px] font-bold bg-orange-500 text-white rounded hover:bg-orange-400 active:bg-orange-600 transition-all"
+                            title="Stop"
+                            className="w-8 h-8 flex items-center justify-center rounded-full text-orange-500 hover:bg-orange-100 active:scale-95 transition-all"
                           >
-                            Stop
+                            <StopCircle className="w-4 h-4" />
                           </button>
                         )}
                       </div>

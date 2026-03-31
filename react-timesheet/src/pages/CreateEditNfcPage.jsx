@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Smartphone, Shuffle, User, Factory, Save } from 'lucide-react';
 import PasswordPrompt from '../components/auth/PasswordPrompt';
 
 /**
@@ -386,7 +387,7 @@ const CreateEditNfcPage = () => {
             <form onSubmit={handleSubmit} className="space-y-4">
               {/* NFC Scan Section */}
               <section className="bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4">
-                <h2 className="text-base font-bold text-blue-900 mb-3">📱 NFC Scan Section</h2>
+                <h2 className="text-base font-bold text-blue-900 mb-3 flex items-center gap-2"><Smartphone className="w-5 h-5" /> NFC Scan Section</h2>
 
                 {/* NFC ID Display Box */}
                 <div className="bg-gradient-to-br from-blue-900 to-blue-700 rounded-lg p-6 mb-3 text-center">
@@ -409,7 +410,7 @@ const CreateEditNfcPage = () => {
                     }`}
                     style={mode !== 'edit' ? { boxShadow: '0 6px 12px -2px rgba(37, 99, 235, 0.4), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' } : {}}
                   >
-                    📱 Scan NFC Card
+                    <Smartphone className="inline w-4 h-4 mr-1" />Scan NFC Card
                   </button>
 
                   {/* Secondary: Generate Test ID (Fallback for devices without NFC) */}
@@ -424,7 +425,7 @@ const CreateEditNfcPage = () => {
                     }`}
                     style={mode !== 'edit' ? { boxShadow: '0 6px 12px -2px rgba(0, 0, 0, 0.15), 0 4px 6px -1px rgba(0, 0, 0, 0.2)' } : {}}
                   >
-                    🎲 Generate Test ID
+                    <Shuffle className="inline w-4 h-4 mr-1" />Generate Test ID
                   </button>
 
                   {/* Manual NFC ID Input */}
@@ -453,7 +454,7 @@ const CreateEditNfcPage = () => {
 
               {/* User Information Section */}
               <section className="bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4">
-                <h2 className="text-base font-bold text-blue-900 mb-3">👤 User Information</h2>
+                <h2 className="text-base font-bold text-blue-900 mb-3 flex items-center gap-2"><User className="w-5 h-5" /> User Information</h2>
 
                 <div className="space-y-3">
                   {/* Full Name - Required */}
@@ -490,7 +491,7 @@ const CreateEditNfcPage = () => {
 
               {/* Machine Assignment Section */}
               <section className="bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4">
-                <h2 className="text-base font-bold text-blue-900 mb-3">🏭 Machine Assignment (Optional)</h2>
+                <h2 className="text-base font-bold text-blue-900 mb-3 flex items-center gap-2"><Factory className="w-5 h-5" /> Machine Assignment (Optional)</h2>
 
                 <div className="space-y-3">
                   {/* Workcenter Dropdown — pilih satu, auto-fill 3 field */}
@@ -601,7 +602,7 @@ const CreateEditNfcPage = () => {
                   }`}
                   style={!isSaving ? { boxShadow: '0 6px 12px -2px rgba(249, 115, 22, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' } : {}}
                 >
-                  {isSaving ? 'Saving...' : mode === 'edit' ? '💾 Update User' : '💾 Save User'}
+                  {isSaving ? 'Saving...' : <><Save className="inline w-4 h-4 mr-1" />{mode === 'edit' ? 'Update User' : 'Save User'}</>}
                 </button>
               </div>
             </form>

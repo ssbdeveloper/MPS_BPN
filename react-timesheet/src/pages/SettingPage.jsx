@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Settings, User, Wrench, Info, Circle, Save, RefreshCw, Trash2, Download, BookOpen, Mail, Link } from 'lucide-react';
 import {
   PageContainer,
   AppHeader,
@@ -44,7 +45,7 @@ const SettingPage = () => {
   return (
     <PageContainer>
       <AppHeader
-        title="⚙️ Settings"
+        title={<><Settings className="inline w-5 h-5 mr-1.5" />Settings</>}
         rightContent={
           <Button variant="secondary" size="small" onClick={() => navigate('/')}>
             ← Back
@@ -55,7 +56,7 @@ const SettingPage = () => {
       {/* User Profile Section */}
       <div className="bg-white rounded-xl p-6 shadow-md">
         <h3 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2">
-          👤 User Profile
+          <User className="w-5 h-5" /> User Profile
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <FormRow label="Employee ID">
@@ -101,7 +102,7 @@ const SettingPage = () => {
       {/* Application Settings */}
       <div className="bg-white rounded-xl p-6 shadow-md">
         <h3 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2">
-          🔧 Application Settings
+          <Wrench className="w-5 h-5" /> Application Settings
         </h3>
         <div className="space-y-4">
           <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
@@ -161,7 +162,7 @@ const SettingPage = () => {
       {/* System Information */}
       <div className="bg-white rounded-xl p-6 shadow-md">
         <h3 className="font-bold text-lg text-gray-800 mb-4 flex items-center gap-2">
-          ℹ️ System Information
+          <Info className="w-5 h-5" /> System Information
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
@@ -174,7 +175,7 @@ const SettingPage = () => {
           </div>
           <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
             <span className="text-gray-600">Server Status</span>
-            <span className="font-semibold text-green-600">🟢 Online</span>
+            <span className="font-semibold text-green-600 flex items-center gap-1"><Circle className="w-3 h-3 fill-green-500 text-green-500" /> Online</span>
           </div>
           <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
             <span className="text-gray-600">Last Sync</span>
@@ -194,16 +195,16 @@ const SettingPage = () => {
       {/* Action Buttons */}
       <div className="flex flex-wrap gap-3">
         <Button variant="primary" onClick={handleSave} className="flex-1 md:flex-none">
-          💾 Save Settings
+          <Save className="inline w-4 h-4 mr-1" />Save Settings
         </Button>
         <Button variant="warning" onClick={handleReset} className="flex-1 md:flex-none">
-          🔄 Reset to Default
+          <RefreshCw className="inline w-4 h-4 mr-1" />Reset to Default
         </Button>
         <Button variant="danger" className="flex-1 md:flex-none">
-          🗑️ Clear Cache
+          <Trash2 className="inline w-4 h-4 mr-1" />Clear Cache
         </Button>
         <Button variant="secondary" className="flex-1 md:flex-none">
-          📥 Export Settings
+          <Download className="inline w-4 h-4 mr-1" />Export Settings
         </Button>
       </div>
 
@@ -221,13 +222,13 @@ const SettingPage = () => {
           </p>
           <div className="mt-4 flex justify-center gap-3">
             <Button variant="primary" size="small">
-              📖 Help
+              <BookOpen className="inline w-4 h-4 mr-1" />Help
             </Button>
             <Button variant="secondary" size="small">
-              📧 Support
+              <Mail className="inline w-4 h-4 mr-1" />Support
             </Button>
             <Button variant="secondary" size="small">
-              🔗 About
+              <Link className="inline w-4 h-4 mr-1" />About
             </Button>
           </div>
         </div>

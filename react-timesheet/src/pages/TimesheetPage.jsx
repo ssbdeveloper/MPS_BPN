@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ClipboardList, Camera, BarChart2 } from 'lucide-react';
 import {
   PageContainer,
   AppHeader,
@@ -59,7 +60,7 @@ const TimesheetPage = () => {
   return (
     <PageContainer>
       <AppHeader
-        title="📋 Timesheet"
+        title={<><ClipboardList className="inline w-5 h-5 mr-1.5" />Timesheet</>}
         rightContent={
           <Button variant="secondary" size="small" onClick={() => navigate('/')}>
             ← Back
@@ -81,10 +82,10 @@ const TimesheetPage = () => {
                   Check Out
                 </Button>
                 <Button variant="primary" size="small2">
-                  📷 Scan Barcode
+                  <Camera className="inline w-4 h-4 mr-1" />Scan Barcode
                 </Button>
                 <Button variant="warning" size="small2">
-                  📊 Reports
+                  <BarChart2 className="inline w-4 h-4 mr-1" />Reports
                 </Button>
               </div>
             }

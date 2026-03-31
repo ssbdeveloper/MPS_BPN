@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Download, BarChart2, Search, Info, Calendar, FileText, Lightbulb } from 'lucide-react';
 
 /**
  * Download Timesheet Page
@@ -149,7 +150,7 @@ const DownloadPage = () => {
             ← Back
           </button>
           <h1 className="text-lg font-bold text-white flex items-center gap-2">
-            <span className="text-2xl">📥</span>
+            <Download className="w-6 h-6" />
             Export Timesheet
           </h1>
           <div className="w-20"></div> {/* Spacer */}
@@ -173,7 +174,7 @@ const DownloadPage = () => {
             {/* Card Header - Blue Gradient */}
             <div className="bg-gradient-to-r from-blue-700 to-blue-600 px-6 py-4">
               <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                <span className="text-2xl">📊</span>
+                <BarChart2 className="w-6 h-6" />
                 Export Timesheet Data
               </h2>
               <p className="text-blue-100 text-sm mt-1">
@@ -186,7 +187,7 @@ const DownloadPage = () => {
               {/* Date Field Selector */}
               <section className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
                 <label className="block text-sm font-bold text-blue-900 mb-2 flex items-center gap-2">
-                  <span className="text-lg">🔍</span>
+                  <Search className="w-4 h-4" />
                   Date Field
                 </label>
                 <select
@@ -199,14 +200,14 @@ const DownloadPage = () => {
                   <option value="longdate_checkin">📥 Check-in Date (longdate_checkin)</option>
                 </select>
                 <p className="text-xs text-blue-700 mt-2">
-                  ℹ️ Pilih field tanggal yang akan digunakan untuk filter data
+                  <Info className="inline w-3.5 h-3.5 mr-1" />Pilih field tanggal yang akan digunakan untuk filter data
                 </p>
               </section>
 
               {/* Date Range Section */}
               <section className="bg-gradient-to-br from-orange-50 to-yellow-50 rounded-lg p-4 border border-orange-200">
                 <h3 className="text-sm font-bold text-orange-900 mb-3 flex items-center gap-2">
-                  <span className="text-lg">📅</span>
+                  <Calendar className="w-4 h-4" />
                   Date Range
                 </h3>
 
@@ -262,7 +263,7 @@ const DownloadPage = () => {
                   className="w-full px-6 py-4 text-base font-bold bg-gradient-to-b from-blue-600 to-blue-700 text-white rounded-lg shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
                   style={{ boxShadow: '0 6px 16px -2px rgba(37, 99, 235, 0.6), 0 4px 8px -1px rgba(0, 0, 0, 0.3)', opacity: '0.9' }}
                 >
-                  <span className="text-2xl">📊</span>
+                  <BarChart2 className="w-6 h-6" />
                   <span>{downloading ? 'Downloading...' : 'Download Excel (.xlsx)'}</span>
                 </button>
 
@@ -273,7 +274,7 @@ const DownloadPage = () => {
                   className="w-full px-6 py-4 text-base font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded-lg shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3"
                   style={{ boxShadow: '0 6px 12px -2px rgba(249, 115, 22, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
                 >
-                  <span className="text-2xl">📄</span>
+                  <FileText className="w-6 h-6" />
                   <span>{downloading ? 'Downloading...' : 'Download CSV (.csv)'}</span>
                 </button>
               </section>
@@ -281,7 +282,7 @@ const DownloadPage = () => {
               {/* Info Box */}
               <div className="bg-blue-50 border-l-4 border-blue-500 rounded-lg p-4">
                 <div className="flex items-start gap-3">
-                  <span className="text-2xl">💡</span>
+                  <Lightbulb className="w-6 h-6 text-blue-700 flex-shrink-0" />
                   <div>
                     <h4 className="text-sm font-bold text-blue-900 mb-1">Tips:</h4>
                     <ul className="text-xs text-blue-800 space-y-1">
