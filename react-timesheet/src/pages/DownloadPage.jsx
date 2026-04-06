@@ -137,7 +137,7 @@ const DownloadPage = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-gradient-to-br from-blue-50 via-white to-blue-50 flex flex-col overflow-hidden">
       {/* Header - Dark Blue with Gradient */}
       <header className="bg-gradient-to-r from-blue-900 to-blue-800 px-4 py-3 shadow-lg flex-shrink-0">
         <div className="flex justify-between items-center">

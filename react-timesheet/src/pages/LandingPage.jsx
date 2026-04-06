@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardList, BarChart2, CheckCircle, Download, User, Settings, Package } from 'lucide-react';
+import { ClipboardList, BarChart2, CheckCircle, Download, User, Settings, Package, BookOpen } from 'lucide-react';
 
 /**
  * Landing Page - Main Menu
@@ -117,6 +117,13 @@ useEffect(() => {
       path: '/sow-orders',
       color: 'from-orange-400 to-orange-500',
       bgHover: 'hover:from-orange-500 hover:to-orange-600'
+    },
+    {
+      title: 'SOW MANAGEMENT',
+      icon: BookOpen,
+      path: '/sow-management/list',
+      color: 'from-blue-400 to-blue-500',
+      bgHover: 'hover:from-blue-500 hover:to-blue-600'
     }
   ];
 

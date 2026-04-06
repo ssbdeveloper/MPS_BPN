@@ -1,0 +1,961 @@
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  Search, ChevronRight, ChevronLeft, Loader2, ChevronDown, ChevronUp,
+  Plus, Pencil, Trash2, Upload, Eye, X, FileText,
+  Save, AlertCircle, Paperclip, Image as ImageIcon, Download, FileSpreadsheet,
+} from 'lucide-react';
+import { toast } from 'sonner';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const GROUP_LIMIT = 20;
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+const fmtHours = (v) => (v != null ? parseFloat(v).toFixed(2) : '—');
+const fmtSize  = (bytes) => {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+// ─── file-type helpers ────────────────────────────────────────────────────────
+const isImage = (name) => /\.(png|jpe?g|gif|webp)$/i.test(name || '');
+const isExcel = (name) => /\.(xlsx?)$/i.test(name || '');
+const isPdf   = (name) => /\.pdf$/i.test(name || '');
+
+const INPUT_CLS = `w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
+  placeholder-slate-400 rounded-lg text-sm focus:outline-none
+  focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all`;
+
+const SELECT_CLS = `w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
+  rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8]
+  focus:border-[#0096c7] transition-all appearance-none cursor-pointer`;
+
+const EMPTY_OP = {
+  operation_no: '', operation_text: '', machineid: '',
+  workcenter: '', std_hours: '', source_plant: '',
+};
+
+// ─── useWorkcenterData: fetch once, memo derived lists ────────────────────────
+function useWorkcenterData() {
+  const [rows, setRows]     = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/workcenter`)
+      .then((r) => r.json())
+      .then((data) => setRows(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  // Unique sorted groupnames
+  const groupnames = [...new Set(rows.map((r) => r.groupname).filter(Boolean))].sort();
+
+  // Filter workcenters by groupname
+  const workcentersByGroup = useCallback(
+    (groupname) =>
+      rows
+        .filter((r) => r.groupname === groupname && r.workcenternew)
+        .sort((a, b) => (a.workcenternew > b.workcenternew ? 1 : -1)),
+    [rows]
+  );
+
+  return { rows, loading, groupnames, workcentersByGroup };
+}
+
+// ─── OperationFormModal ───────────────────────────────────────────────────────
+function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
+  const [form, setForm]       = useState(mode === 'edit' ? { ...initial } : { ...EMPTY_OP });
+  const [saving, setSaving]   = useState(false);
+  const [formErr, setFormErr] = useState(null);
+
+  // Workcenter dropdown data
+  const { groupnames, workcentersByGroup, loading: wcLoading } = useWorkcenterData();
+  const [wcOptions, setWcOptions] = useState([]);
+
+  // Derive initial wc options from pre-loaded groupname (edit mode)
+  useEffect(() => {
+    if (!wcLoading && form.machineid) {
+      const opts = workcentersByGroup(form.machineid);
+      setWcOptions(opts);
+      // If current workcenter not in filtered list, clear it
+      if (opts.length > 0 && !opts.find((o) => o.workcenternew === form.workcenter)) {
+        setForm((p) => ({ ...p, workcenter: opts[0].workcenternew }));
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wcLoading]);
+
+  const handleGroupChange = (e) => {
+    const groupname = e.target.value;
+    const opts      = workcentersByGroup(groupname);
+    setWcOptions(opts);
+    setForm((p) => ({
+      ...p,
+      machineid:  groupname,
+      workcenter: opts.length > 0 ? opts[0].workcenternew : '',
+    }));
+  };
+
+  const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
+
+  // Attachments
+  const [attachments, setAttachments]     = useState(initial?.attachments || []);
+  const [loadingAttach, setLoadingAttach] = useState(false);
+  const [uploading, setUploading]         = useState(false);
+  const [deleting, setDeleting]           = useState(null);
+  const [previewIdx, setPreviewIdx]       = useState(0);
+  const fileRef = useRef(null);
+
+  const hasPreview  = mode === 'edit' && attachments.length > 0;
+  const currentFile = attachments[previewIdx] ?? null;
+
+  useEffect(() => {
+    if (mode !== 'edit' || !initial?.id) return;
+    if (Array.isArray(initial.attachments) && initial.attachments.length > 0) {
+      setAttachments(initial.attachments);
+      return;
+    }
+    setLoadingAttach(true);
+    fetch(`${API_BASE}/sow/standard/operation/${initial.id}/attachments`)
+      .then((r) => r.json())
+      .then((data) => setAttachments(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setLoadingAttach(false));
+  }, [mode, initial]);
+
+  useEffect(() => {
+    if (previewIdx >= attachments.length && attachments.length > 0) {
+      setPreviewIdx(attachments.length - 1);
+    }
+  }, [attachments.length, previewIdx]);
+
+  // ── save ──
+  const handleSave = async () => {
+    if (!form.operation_no || !form.operation_text) {
+      setFormErr('Operation No. dan Operation Text wajib diisi.');
+      return;
+    }
+    setSaving(true);
+    setFormErr(null);
+    try {
+      const url    = mode === 'edit'
+        ? `${API_BASE}/sow/standard/operation/${initial.id}`
+        : `${API_BASE}/sow/standard/operation`;
+      const method = mode === 'edit' ? 'PUT' : 'POST';
+      const body   = mode === 'edit'
+        ? { ...form }
+        : { ...form, component_id: componentId };
+      const res = await fetch(url, {
+        method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Server ${res.status}`);
+      }
+      const saved = await res.json();
+      onSaved(saved, attachments);
+      onClose();
+    } catch (e) {
+      setFormErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ── upload ──
+  const handleUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const ALLOWED_TYPES = [
+      'application/pdf',
+      'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    if (files.some((f) => !ALLOWED_TYPES.includes(f.type))) {
+      toast.error('Format tidak didukung. Upload PDF, gambar (JPG/PNG), atau Excel (.xlsx/.xls)');
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      files.forEach((f) => fd.append('files', f));
+      const res = await fetch(
+        `${API_BASE}/sow/standard/operation/${initial.id}/attachments`,
+        { method: 'POST', body: fd }
+      );
+      if (!res.ok) throw new Error(`Upload gagal: ${res.status}`);
+      const added = await res.json();
+      setAttachments((prev) => {
+        const next = [...prev, ...added];
+        setPreviewIdx(next.length - 1);
+        return next;
+      });
+      toast.success(`${files.length} file berhasil di-upload`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  // ── delete attachment ──
+  const handleDeleteAttachment = async (id) => {
+    setDeleting(id);
+    try {
+      const res = await fetch(`${API_BASE}/sow/standard/attachment/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Gagal hapus');
+      setAttachments((prev) => prev.filter((a) => a.id !== id));
+      toast.success('File dihapus');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  // ── SelectWrapper (adds chevron to native select) ──
+  const SelectWrapper = ({ children }) => (
+    <div className="relative">
+      {children}
+      <ChevronDown
+        size={13}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+      />
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center
+                    bg-black/30 backdrop-blur-sm p-0 md:p-4">
+      {/*
+        Container width:
+          - No preview  → max-w-lg  (single column)
+          - Has preview → max-w-6xl, form≈60%, preview≈40%
+      */}
+      <div
+        className={`flex flex-col md:flex-row w-full gap-3
+                    ${hasPreview ? 'md:w-[95vw] md:max-w-[1400px] md:h-[90vh]' : 'md:max-w-lg'}`}
+      >
+        {/* ── Left panel: Form + Attachments ─────────────────────────────── */}
+        <div
+          className={`bg-white shadow-xl flex flex-col overflow-hidden
+                      rounded-t-2xl md:rounded-2xl
+                      ${hasPreview ? 'md:flex-[2] md:min-w-0 h-full' : 'w-full max-h-[90vh]'}`}
+        >
+          {/* Header */}
+          <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-slate-100">
+            <h2 className="text-base font-bold text-slate-800">
+              {mode === 'edit' ? 'Edit Operation' : 'New Operation'}
+            </h2>
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg hover:bg-slate-100"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Scrollable body */}
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {/* Error banner */}
+            {formErr && (
+              <div className="mb-4 flex items-start gap-2 bg-red-50 border border-red-200
+                              rounded-lg px-3 py-2 text-xs text-red-700">
+                <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+                {formErr}
+              </div>
+            )}
+
+            {/* Form fields */}
+            <div className="flex flex-col gap-4">
+              {/* Row 1: Op No + Std Hours */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Op No. *</label>
+                  <input
+                    value={form.operation_no} onChange={set('operation_no')}
+                    type="number" min="1"
+                    className={INPUT_CLS}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Std Hours</label>
+                  <input
+                    value={form.std_hours} onChange={set('std_hours')}
+                    type="number" min="0" step="0.01"
+                    className={INPUT_CLS}
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Operation Text */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Operation Text *</label>
+                <textarea
+                  value={form.operation_text} onChange={set('operation_text')}
+                  rows={3}
+                  className={`${INPUT_CLS} resize-none`}
+                />
+              </div>
+
+              {/* Row 3: Group Name + Workcenter (dependent dropdowns) */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Group Name</label>
+                  <SelectWrapper>
+                    <select
+                      value={form.machineid}
+                      onChange={handleGroupChange}
+                      disabled={wcLoading}
+                      className={SELECT_CLS}
+                    >
+                      <option value="">— Pilih Group —</option>
+                      {groupnames.map((g) => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
+                    </select>
+                  </SelectWrapper>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Workcenter</label>
+                  <SelectWrapper>
+                    <select
+                      value={form.workcenter}
+                      onChange={set('workcenter')}
+                      disabled={wcLoading || wcOptions.length === 0}
+                      className={`${SELECT_CLS} ${wcOptions.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <option value="">— Pilih Workcenter —</option>
+                      {wcOptions.map((wc) => (
+                        <option key={wc.idrow} value={wc.workcenternew}>
+                          {wc.workcenternew}
+                          {wc.workcenter_description ? ` — ${wc.workcenter_description}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </SelectWrapper>
+                  {wcLoading && (
+                    <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                      <Loader2 size={10} className="animate-spin" /> Memuat data…
+                    </p>
+                  )}
+                  {!wcLoading && !form.machineid && (
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Pilih Group Name terlebih dahulu
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Attachment section (edit only) ── */}
+            {mode === 'edit' && (
+              <div className="mt-6">
+                {/* Divider */}
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="flex-1 h-px bg-slate-100" />
+                  <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    <Paperclip size={10} />
+                    Attachments
+                    {attachments.length > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold
+                                       bg-[#caf0f8] text-[#0077b6] border border-[#90e0ef]">
+                        {attachments.length}
+                      </span>
+                    )}
+                  </span>
+                  <div className="flex-1 h-px bg-slate-100" />
+                </div>
+
+                {/* Upload zone */}
+                <button
+                  type="button"
+                  onClick={() => !uploading && fileRef.current?.click()}
+                  disabled={uploading}
+                  className={`w-full border-2 border-dashed rounded-xl px-4 py-3 text-center
+                             transition-all mb-3 cursor-pointer
+                             ${uploading
+                               ? 'border-[#00b4d8] bg-[#caf0f8]/20 cursor-wait'
+                               : 'border-slate-200 hover:border-[#00b4d8] hover:bg-[#caf0f8]/20'
+                             }`}
+                >
+                  {uploading
+                    ? <Loader2 size={16} className="mx-auto text-[#0096c7] animate-spin mb-1" />
+                    : <Upload size={16} className="mx-auto text-slate-300 mb-1" />}
+                  <p className="text-[11px] text-slate-400">
+                    {uploading ? 'Mengupload…' : 'Klik untuk upload PDF, gambar (JPG/PNG), atau Excel (max 20 MB)'}
+                  </p>
+                  <input
+                    ref={fileRef} type="file"
+                    accept="application/pdf,image/jpeg,image/png,image/jpg,.xlsx,.xls"
+                    multiple className="hidden" onChange={handleUpload} disabled={uploading}
+                  />
+                </button>
+
+                {/* File list */}
+                {loadingAttach ? (
+                  <div className="py-4 flex justify-center">
+                    <Loader2 size={16} className="animate-spin text-[#0096c7]" />
+                  </div>
+                ) : attachments.length === 0 ? (
+                  <p className="text-center text-[11px] text-slate-400 py-2">
+                    Belum ada attachment.
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1">
+                    {attachments.map((a, idx) => {
+                      const isActive = previewIdx === idx;
+                      return (
+                        <div
+                          key={a.id}
+                          onClick={() => setPreviewIdx(idx)}
+                          className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer
+                                     transition-all border
+                                     ${isActive
+                                       ? 'bg-[#caf0f8] border-[#90e0ef]'
+                                       : 'bg-slate-50 border-transparent hover:border-slate-200 hover:bg-white'
+                                     }`}
+                        >
+                          {isImage(a.original_name)
+                            ? <ImageIcon size={13} className={`flex-shrink-0 ${isActive ? 'text-[#0096c7]' : 'text-emerald-500'}`} />
+                            : isExcel(a.original_name)
+                              ? <FileSpreadsheet size={13} className={`flex-shrink-0 ${isActive ? 'text-[#0096c7]' : 'text-green-600'}`} />
+                              : <FileText size={13} className={`flex-shrink-0 ${isActive ? 'text-[#0096c7]' : 'text-red-400'}`} />
+                          }
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-semibold text-slate-700 truncate"
+                               title={a.original_name}>
+                              {a.original_name}
+                            </p>
+                            <p className="text-[10px] text-slate-400">{fmtSize(a.file_size)}</p>
+                          </div>
+                          <div className="flex items-center gap-0.5 flex-shrink-0">
+                            <a
+                              href={`${API_BASE}${a.file_path}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-7 h-7 flex items-center justify-center rounded
+                                         text-slate-400 hover:text-[#0096c7] transition-colors"
+                              title="Buka di tab baru"
+                            >
+                              <Eye size={12} />
+                            </a>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(a.id); }}
+                              disabled={deleting === a.id}
+                              className="w-7 h-7 flex items-center justify-center rounded
+                                         text-slate-400 hover:text-red-500 transition-colors
+                                         disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="Hapus"
+                            >
+                              {deleting === a.id
+                                ? <Loader2 size={12} className="animate-spin" />
+                                : <Trash2 size={12} />}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Create mode hint */}
+            {mode === 'create' && (
+              <p className="mt-5 text-[11px] text-slate-400 text-center italic">
+                Simpan operasi terlebih dahulu untuk menambahkan attachment.
+              </p>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="flex-shrink-0 flex gap-2 justify-end px-5 py-4 border-t border-slate-100">
+            <button
+              onClick={onClose}
+              className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50
+                         px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95"
+            >
+              Batal
+            </button>
+            <button
+              onClick={handleSave} disabled={saving}
+              className="flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white
+                         px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              Simpan
+            </button>
+          </div>
+        </div>
+
+        {/* ── Right panel: PDF Preview (40% of container, shown only when attachments exist) */}
+        {hasPreview && currentFile && (
+          <div
+            className="bg-white shadow-xl flex flex-col overflow-hidden
+                       rounded-b-2xl md:rounded-2xl
+                       h-[50vh] md:h-full md:flex-[3] md:min-w-0"
+          >
+            {/* Preview header */}
+            <div className="flex-shrink-0 flex items-center gap-2 px-4 py-3 border-b border-slate-100">
+              {isImage(currentFile.original_name)
+                ? <ImageIcon size={14} className="text-emerald-500 flex-shrink-0" />
+                : isExcel(currentFile.original_name)
+                  ? <FileSpreadsheet size={14} className="text-green-600 flex-shrink-0" />
+                  : <FileText size={14} className="text-red-400 flex-shrink-0" />
+              }
+              <span
+                className="flex-1 text-xs font-semibold text-slate-700 truncate min-w-0"
+                title={currentFile.original_name}
+              >
+                {currentFile.original_name}
+              </span>
+
+              {/* Prev / counter / Next */}
+              {attachments.length > 1 && (
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => setPreviewIdx((p) => Math.max(0, p - 1))}
+                    disabled={previewIdx === 0}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                               border border-slate-200 text-slate-600 hover:bg-slate-50
+                               disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-95"
+                    title="Sebelumnya"
+                  >
+                    <ChevronLeft size={13} />
+                  </button>
+                  <span className="text-[11px] text-slate-500 font-semibold tabular-nums px-0.5">
+                    {previewIdx + 1} / {attachments.length}
+                  </span>
+                  <button
+                    onClick={() => setPreviewIdx((p) => Math.min(attachments.length - 1, p + 1))}
+                    disabled={previewIdx === attachments.length - 1}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                               border border-slate-200 text-slate-600 hover:bg-slate-50
+                               disabled:opacity-30 disabled:cursor-not-allowed transition-all active:scale-95"
+                    title="Berikutnya"
+                  >
+                    <ChevronRight size={13} />
+                  </button>
+                </div>
+              )}
+
+              {/* Open in new tab */}
+              <a
+                href={`${API_BASE}${currentFile.file_path}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                           border border-slate-200 text-slate-500 hover:text-[#0096c7]
+                           hover:bg-[#caf0f8] hover:border-[#90e0ef] transition-all"
+                title="Buka di tab baru"
+              >
+                <Eye size={13} />
+              </a>
+            </div>
+
+            {/* File preview — conditional by type */}
+            {isPdf(currentFile.original_name) && (
+              <iframe
+                key={currentFile.file_path}
+                src={`${API_BASE}${currentFile.file_path}#toolbar=1&view=FitH`}
+                title={currentFile.original_name}
+                className="flex-1 w-full border-0 block"
+              />
+            )}
+            {isImage(currentFile.original_name) && (
+              <div className="flex-1 flex items-center justify-center bg-slate-50 p-4 overflow-auto">
+                <img
+                  key={currentFile.file_path}
+                  src={`${API_BASE}${currentFile.file_path}`}
+                  alt={currentFile.original_name}
+                  className="max-w-full max-h-full object-contain rounded-lg shadow-sm"
+                />
+              </div>
+            )}
+            {isExcel(currentFile.original_name) && (
+              <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-slate-50 p-8">
+                <FileSpreadsheet size={52} className="text-green-500" />
+                <div className="text-center">
+                  <p className="text-sm font-semibold text-slate-700 mb-1">{currentFile.original_name}</p>
+                  <p className="text-xs text-slate-400 mb-5">{fmtSize(currentFile.file_size)}</p>
+                  <a
+                    href={`${API_BASE}${currentFile.file_path}`}
+                    download={currentFile.original_name}
+                    className="inline-flex items-center gap-2 bg-[#0096c7] hover:bg-[#0077b6] text-white
+                               px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95"
+                  >
+                    <Download size={14} />
+                    Download File
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── OperationRow ─────────────────────────────────────────────────────────────
+function OperationRow({ op, onEdit, onDelete, deleting }) {
+  return (
+    <tr
+      className="hover:bg-slate-50 cursor-pointer transition-colors"
+      onClick={() => onEdit(op)}
+    >
+      <td className="px-3 py-2 font-mono text-xs text-slate-700 whitespace-nowrap">
+        {op.operation_no}
+      </td>
+      <td className="px-3 py-2 text-xs text-slate-800">{op.operation_text}</td>
+      <td className="px-3 py-2 text-xs text-slate-500 hidden md:table-cell whitespace-nowrap">
+        {op.machineid || '—'}
+      </td>
+      <td className="px-3 py-2 text-xs text-right font-mono text-slate-700 whitespace-nowrap">
+        {fmtHours(op.std_hours)}
+      </td>
+      <td className="px-3 py-2">
+        <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+          {op.attachments?.length > 0 && (
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-[#0077b6]
+                             bg-[#caf0f8] border border-[#90e0ef] px-1.5 py-0.5 rounded-full">
+              <Paperclip size={9} />
+              {op.attachments.length}
+            </span>
+          )}
+          <button
+            onClick={() => onEdit(op)}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                       border border-slate-200 text-slate-500 hover:bg-slate-50
+                       hover:border-slate-300 transition-all"
+            title="Edit"
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            onClick={() => onDelete(op.id)}
+            disabled={deleting === op.id}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                       border border-slate-200 text-red-400 hover:bg-red-50
+                       hover:border-red-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Hapus"
+          >
+            {deleting === op.id
+              ? <Loader2 size={12} className="animate-spin" />
+              : <Trash2 size={12} />}
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ─── ComponentGroup ───────────────────────────────────────────────────────────
+function ComponentGroup({ group }) {
+  const [open, setOpen]             = useState(false);
+  const [operations, setOperations] = useState([]);
+  const [loadingOps, setLoadingOps] = useState(false);
+  const [modal, setModal]           = useState(null);
+  const [deleting, setDeleting]     = useState(null);
+  const fetched = useRef(false);
+
+  const loadOperations = useCallback(async () => {
+    setLoadingOps(true);
+    try {
+      const res  = await fetch(`${API_BASE}/sow/standard/component/${group.component_id}`);
+      const json = await res.json();
+      setOperations(Array.isArray(json) ? json : []);
+    } catch {
+      setOperations([]);
+    } finally {
+      setLoadingOps(false);
+    }
+  }, [group.component_id]);
+
+  const handleToggle = () => {
+    setOpen((v) => {
+      if (!v && !fetched.current) { fetched.current = true; loadOperations(); }
+      return !v;
+    });
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Hapus operasi ini?')) return;
+    setDeleting(id);
+    try {
+      const res = await fetch(`${API_BASE}/sow/standard/operation/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Gagal hapus');
+      setOperations((prev) => prev.filter((o) => o.id !== id));
+      toast.success('Operasi dihapus');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const handleSaved = (saved, freshAttachments) => {
+    setOperations((prev) => {
+      const idx    = prev.findIndex((o) => o.id === saved.id);
+      const merged = { ...saved, attachments: freshAttachments ?? [] };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx]  = { ...prev[idx], ...merged };
+        return next;
+      }
+      return [...prev, merged].sort((a, b) => a.operation_no - b.operation_no);
+    });
+    toast.success('Operasi disimpan');
+  };
+
+  return (
+    <div className="bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden mb-3">
+      {/* Group header */}
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 text-left min-h-[56px]
+                   transition-colors hover:bg-slate-50 active:bg-slate-100"
+        onClick={handleToggle}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            <span className="text-sm font-bold text-slate-800 truncate">{group.part_name}</span>
+            <span className="font-mono text-xs text-[#0096c7]">{group.part_number}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
+            <span className="text-xs text-slate-500">{group.model}</span>
+            {group.source_plant > 0 && (
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full
+                               bg-[#caf0f8] text-[#0077b6] border border-[#90e0ef]">
+                Plant {group.source_plant}
+              </span>
+            )}
+            <span className="text-[10px] text-slate-400">{group.operation_count} op.</span>
+          </div>
+        </div>
+        <div className="flex-shrink-0 ml-3 text-slate-400">
+          {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </div>
+      </button>
+
+      {/* Expanded content */}
+      {open && (
+        <div className="border-t border-slate-100">
+          <div className="flex items-center justify-between px-4 py-2 bg-slate-50 border-b border-slate-100">
+            <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">
+              Operations
+            </span>
+            <button
+              onClick={() => setModal({ mode: 'create' })}
+              className="flex items-center gap-1 text-xs font-semibold text-white px-2.5 py-1.5
+                         rounded-lg bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95"
+            >
+              <Plus size={12} />
+              Tambah
+            </button>
+          </div>
+
+          {loadingOps ? (
+            <div className="py-6 flex justify-center">
+              <Loader2 size={18} className="animate-spin text-[#0096c7]" />
+            </div>
+          ) : operations.length === 0 ? (
+            <p className="text-center text-xs text-slate-400 py-5">Belum ada operasi.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr style={{ background: '#caf0f8' }}>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">Op No.</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">Operation</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap hidden md:table-cell">Group</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700 whitespace-nowrap">Std Hrs</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {operations.map((op) => (
+                    <OperationRow
+                      key={op.id}
+                      op={op}
+                      onEdit={(o) => setModal({ mode: 'edit', op: o })}
+                      onDelete={handleDelete}
+                      deleting={deleting}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal */}
+      {modal && (
+        <OperationFormModal
+          mode={modal.mode}
+          initial={modal.op}
+          componentId={group.component_id}
+          onClose={() => setModal(null)}
+          onSaved={handleSaved}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── SowStandardListPage ──────────────────────────────────────────────────────
+const SowStandardListPage = () => {
+  const [inputValue, setInputValue] = useState('');
+  const [search, setSearch]         = useState('');
+  const [page, setPage]             = useState(1);
+  const [groups, setGroups]         = useState([]);
+  const [total, setTotal]           = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState(null);
+  const debounceRef = useRef(null);
+
+  const fetchGroups = useCallback(async (searchTerm, pageNum) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({ page: pageNum, limit: GROUP_LIMIT });
+      if (searchTerm.trim()) params.set('search', searchTerm.trim());
+      const res  = await fetch(`${API_BASE}/sow/standard/grouped?${params}`);
+      if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const json = await res.json();
+      setGroups(json.data || []);
+      setTotal(json.total || 0);
+      setTotalPages(json.totalPages || 0);
+    } catch (err) {
+      setError(err.message);
+      setGroups([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchGroups(search, page); }, [fetchGroups, search, page]);
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setInputValue(val);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => { setPage(1); setSearch(val); }, 400);
+  };
+
+  const handlePage = (p) => {
+    if (p < 1 || p > totalPages) return;
+    setPage(p);
+  };
+
+  const pageRange = () => {
+    const left  = Math.max(1, page - 2);
+    const right = Math.min(totalPages, page + 2);
+    const r = [];
+    for (let i = left; i <= right; i++) r.push(i);
+    return r;
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Toolbar */}
+      <div className="flex-shrink-0 px-4 md:px-6 py-3 bg-white border-b border-slate-200">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="relative flex-1 w-full sm:max-w-sm">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              type="text"
+              value={inputValue}
+              onChange={handleInputChange}
+              placeholder="Cari part name, part number, model..."
+              className="w-full pl-8 pr-3 py-2 bg-white border border-slate-200 text-slate-800
+                         placeholder-slate-400 rounded-lg text-sm focus:outline-none
+                         focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+            />
+          </div>
+          <div className="text-xs text-slate-500">
+            {loading ? (
+              <span className="flex items-center gap-1">
+                <Loader2 size={12} className="animate-spin" /> Loading...
+              </span>
+            ) : (
+              <span>{total.toLocaleString()} komponen</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mx-4 md:mx-6 mt-3 flex items-start gap-2 px-4 py-2.5 bg-red-50
+                        border border-red-200 rounded-lg text-sm text-red-700">
+          <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {/* Group list */}
+      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-3">
+        {loading && groups.length === 0 ? (
+          <div className="py-12 flex justify-center">
+            <Loader2 size={24} className="animate-spin text-[#0096c7]" />
+          </div>
+        ) : groups.length === 0 ? (
+          <div className="py-12 text-center text-slate-400 text-sm">Tidak ada data ditemukan.</div>
+        ) : (
+          groups.map((g) => <ComponentGroup key={g.component_id} group={g} />)
+        )}
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+            <span className="text-[11px] text-slate-500">
+              Halaman {page} / {totalPages} ({total} komponen)
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => handlePage(page - 1)} disabled={page <= 1}
+                className="w-8 h-8 flex items-center justify-center bg-white border border-slate-200
+                           text-slate-600 rounded-lg hover:bg-slate-50 disabled:opacity-40
+                           disabled:cursor-not-allowed transition-all active:scale-95"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              {pageRange().map((p) => (
+                <button
+                  key={p} onClick={() => handlePage(p)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg text-xs font-semibold
+                             transition-all active:scale-95"
+                  style={p === page
+                    ? { background: '#0096c7', color: '#fff', border: 'none' }
+                    : { background: '#fff', border: '1px solid #e2e8f0', color: '#475569' }
+                  }
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                onClick={() => handlePage(page + 1)} disabled={page >= totalPages}
+                className="w-8 h-8 flex items-center justify-center bg-white border border-slate-200
+                           text-slate-600 rounded-lg hover:bg-slate-50 disabled:opacity-40
+                           disabled:cursor-not-allowed transition-all active:scale-95"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default SowStandardListPage;

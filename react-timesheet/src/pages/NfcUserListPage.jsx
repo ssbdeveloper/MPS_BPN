@@ -132,7 +132,7 @@ const NfcUserListPage = () => {
 
   return (
     <PasswordPrompt password="12345">
-      <div className="h-screen w-screen bg-white flex flex-col overflow-hidden">
+      <div className="h-dvh w-screen bg-white flex flex-col overflow-hidden">
         {/* Header - Dark Blue */}
         <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md flex-shrink-0">
           <button

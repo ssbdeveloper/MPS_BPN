@@ -90,7 +90,7 @@ const SelectMachinePage = () => {
     'transition-all duration-150 active:scale-95 min-h-[44px]';
 
   return (
-    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
 
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between

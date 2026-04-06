@@ -371,6 +371,9 @@ const TimesheetValidationPage = () => {
   const [downloadingExcel,     setDownloadingExcel]     = useState(false);
   const [sapStatus,            setSapStatus]            = useState(null);
   const [sapPendingTsnumbers,  setSapPendingTsnumbers]  = useState(new Set());
+  const [postToSapEnabled,     setPostToSapEnabled]     = useState(
+    () => localStorage.getItem('validation_postToSap') !== 'false'
+  );
 
   const containerRef    = useRef(null);
   const searchTimerRef  = useRef(null);
@@ -602,15 +605,20 @@ const TimesheetValidationPage = () => {
       if (!res.ok) throw new Error('Gagal validasi');
       const data = await res.json();
       const validated = (data.updated_rows || []).map(r => r.tsnumber);
-      // sendToSap will clear pending and refresh after SAP responds
-      if (validated.length > 0) sendToSap(validated);
-      else setSapPendingTsnumbers(prev => { const next = new Set(prev); next.delete(tsnumber); return next; });
+      if (validated.length > 0 && postToSapEnabled) {
+        // sendToSap will clear pending and refresh after SAP responds
+        sendToSap(validated);
+      } else {
+        setSapPendingTsnumbers(prev => { const next = new Set(prev); next.delete(tsnumber); return next; });
+        loadValidationData(true);
+        if (validated.length > 0) toast.success('Validated (SAP off)');
+      }
     } catch (err) {
       console.error(err);
       setSapPendingTsnumbers(prev => { const next = new Set(prev); next.delete(tsnumber); return next; });
       toast.error('Gagal validasi timesheet', { description: err.message });
     }
-  }, [sendToSap]);
+  }, [sendToSap, postToSapEnabled, loadValidationData]);
 
   const handleValidateGroup = useCallback(async (sn, records) => {
     const recs = records || groupRecords[sn]?.records || [];
@@ -626,15 +634,20 @@ const TimesheetValidationPage = () => {
       if (!res.ok) throw new Error('Gagal validasi batch');
       const data = await res.json();
       const validated = (data.updated_rows || []).map(r => r.tsnumber);
-      // sendToSap will clear pending and refresh after SAP responds
-      if (validated.length > 0) sendToSap(validated);
-      else setSapPendingTsnumbers(prev => { const next = new Set(prev); tsnumbers.forEach(t => next.delete(t)); return next; });
+      if (validated.length > 0 && postToSapEnabled) {
+        // sendToSap will clear pending and refresh after SAP responds
+        sendToSap(validated);
+      } else {
+        setSapPendingTsnumbers(prev => { const next = new Set(prev); tsnumbers.forEach(t => next.delete(t)); return next; });
+        loadValidationData(true);
+        if (validated.length > 0) toast.success(`${validated.length} records validated (SAP off)`);
+      }
     } catch (err) {
       console.error(err);
       setSapPendingTsnumbers(prev => { const next = new Set(prev); tsnumbers.forEach(t => next.delete(t)); return next; });
       toast.error('Gagal validasi batch', { description: err.message });
     }
-  }, [groupRecords, sendToSap]);
+  }, [groupRecords, sendToSap, postToSapEnabled, loadValidationData]);
 
   const handleEdit = useCallback((tsnumber) => {
     if (containerRef.current) sessionStorage.setItem('timesheet_scroll', containerRef.current.scrollTop);
@@ -672,7 +685,7 @@ const TimesheetValidationPage = () => {
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-slate-50">
+    <div className="h-dvh w-screen flex flex-col overflow-hidden bg-slate-50">
 
       {/* ══ HEADER ══════════════════════════════════════════════════════════ */}
       <header className="flex-shrink-0 flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
@@ -733,6 +746,24 @@ const TimesheetValidationPage = () => {
             <div className="flex-1" />
 
             <button onClick={clearFilters}  className={btnOutline}>Clear</button>
+
+            {/* SAP Post toggle */}
+            <button
+              onClick={() => setPostToSapEnabled(v => { const next = !v; localStorage.setItem('validation_postToSap', next); return next; })}
+              title={postToSapEnabled ? 'Post ke SAP aktif — klik untuk nonaktifkan' : 'Post ke SAP nonaktif — klik untuk aktifkan'}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all duration-150 active:scale-95
+                ${postToSapEnabled
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                  : 'bg-slate-100 border-slate-300 text-slate-500 hover:bg-slate-200'}`}
+            >
+              {/* Toggle track */}
+              <span className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border transition-colors duration-200
+                ${postToSapEnabled ? 'bg-emerald-500 border-emerald-500' : 'bg-slate-300 border-slate-300'}`}>
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform duration-200
+                  ${postToSapEnabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+              </span>
+              SAP
+            </button>
             <button onClick={expandAll}     className={btnOutline}>Expand All</button>
             <button onClick={collapseAll}   className={btnOutline}>Collapse All</button>
             <button

@@ -463,7 +463,7 @@ const TimesheetEditPage = () => {
 
   if (loading) {
     return (
-      <div className="h-screen w-screen bg-slate-50 flex items-center justify-center">
+      <div className="h-dvh w-screen bg-slate-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-4 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#00b4d8', borderTopColor: 'transparent' }} />
           <span className="text-sm font-medium text-slate-500">Loading…</span>
@@ -473,7 +473,7 @@ const TimesheetEditPage = () => {
   }
 
   return (
-    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
       <ConfirmationModal
         isOpen={!!confirmModal}
         onConfirm={() => { confirmModal?.onConfirm(); closeConfirmModal(); }}

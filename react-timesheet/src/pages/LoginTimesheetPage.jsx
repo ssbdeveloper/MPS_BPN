@@ -180,7 +180,9 @@ const LoginTimesheetPage = () => {
 
   const createUnprodActivity = async (user, unprodCode, unprodLabel) => {
     try {
-      await fetch(`${API_BASE}/timesheet/checkout`, {
+      const isMultiple = user.mode === 'multiple';
+      const checkoutEndpoint = isMultiple ? 'checkout-unprod' : 'checkout';
+      await fetch(`${API_BASE}/timesheet/${checkoutEndpoint}`, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ datakaryawan: { sn: user.snssb } }),
@@ -535,7 +537,7 @@ const LoginTimesheetPage = () => {
   const isActive = (key) => selectedAction === key && !unprodQuickMode;
 
   return (
-    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
 
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between

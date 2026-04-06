@@ -22,6 +22,8 @@ import UnproductiveMenuPage from '../pages/UnproductiveMenuPage';
 import DownloadPage from '../pages/DownloadPage';
 import OrderListPage from '../pages/OrderListPage';
 import SowEditPage from '../pages/SowEditPage';
+import SowManagementPage from '../pages/SowManagementPage';
+import SowStandardListPage from '../pages/SowStandardListPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -118,6 +120,16 @@ const router = createBrowserRouter([
     path: '/sow-edit/:id',
     element: <SowEditPage />,
   },
+  {
+    path: '/sow-management',
+    element: <SowManagementPage />,
+    children: [
+      {
+        path: 'list',
+        element: <SowStandardListPage />,
+      },
+    ],
+  },
 {
   path: '/log-timesheet',
   element: <LogTimesheetPage />,
@@ -126,7 +138,7 @@ const router = createBrowserRouter([
   {
     path: '*',
     element: (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
+      <div className="flex items-center justify-center h-dvh bg-gray-100">
         <div className="text-center">
           <h1 className="text-6xl font-bold text-gray-800 mb-4">404</h1>
           <p className="text-xl text-gray-600 mb-6">Page not found</p>

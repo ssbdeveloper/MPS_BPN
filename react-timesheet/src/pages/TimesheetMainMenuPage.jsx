@@ -101,7 +101,10 @@ const ActivityBox = ({ activityText, activitySeq, partName }) => {
 const TimesheetMainMenuPage = () => {
   const navigate = useNavigate();
 
-  const [mode, setMode] = useState(() => sessionStorage.getItem('timesheetMode') || 'single');
+  const [mode, setMode] = useState(() => {
+    const dk = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
+    return dk.mode || sessionStorage.getItem('timesheetMode') || 'single';
+  });
   const [userData, setUserData] = useState({
     name: '-', sn: '-',
     workcenterCode: '-', machineName: '-',
@@ -140,10 +143,24 @@ const TimesheetMainMenuPage = () => {
   }, []);
 
   // ── Handlers (logic unchanged) ─────────────────────────────────────────────
-  const handleModeChange = (checked) => {
+  const handleModeChange = async (checked) => {
     const newMode = checked ? 'multiple' : 'single';
     setMode(newMode);
     sessionStorage.setItem('timesheetMode', newMode);
+
+    const dk = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
+    if (dk.snssb) {
+      try {
+        await fetch(`${API_BASE}/usernfc/mode/${dk.snssb}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: newMode }),
+        });
+        sessionStorage.setItem('datakaryawan', JSON.stringify({ ...dk, mode: newMode }));
+      } catch (err) {
+        console.error('Failed to persist mode:', err);
+      }
+    }
   };
 
   const goHome           = () => navigate('/login-timesheet');
@@ -274,7 +291,7 @@ const TimesheetMainMenuPage = () => {
   ];
 
   return (
-    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
 
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between

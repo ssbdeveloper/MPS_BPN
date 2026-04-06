@@ -102,7 +102,7 @@ const LogTimesheetPage = () => {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-slate-50">
+    <div className="h-dvh w-screen flex flex-col overflow-hidden bg-slate-50">
 
       {/* Header */}
       <header className="flex-shrink-0 flex items-center justify-between

@@ -69,7 +69,7 @@ export const ContainerHorizontal = ({
   return (
     <div className={`
       flex flex-row bg-white p-2.5 rounded-xl
-      w-screen h-screen justify-center items-center
+      w-screen h-dvh justify-center items-center
       gap-2.5
       ${border ? 'border-2 border-gray-300' : ''}
       ${className}
@@ -91,7 +91,7 @@ export const ContainerVertical = ({
   return (
     <div className={`
       flex flex-col bg-white p-1.5 rounded-xl
-      w-screen h-screen justify-center items-center
+      w-screen h-dvh justify-center items-center
       gap-2.5
       ${border ? 'border-2 border-gray-300' : ''}
       ${className}

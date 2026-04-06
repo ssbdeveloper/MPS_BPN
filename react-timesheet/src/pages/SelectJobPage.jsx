@@ -201,7 +201,7 @@ const SelectJobPage = () => {
   const cellBase = 'px-2 py-2 text-[11px] align-middle';
 
   return (
-    <div className="h-screen w-screen bg-slate-50 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
 
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between

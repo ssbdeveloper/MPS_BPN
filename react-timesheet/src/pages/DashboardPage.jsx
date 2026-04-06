@@ -1,202 +1,146 @@
-import React from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Package, HardHat, Zap, Timer, TrendingUp, BarChart2, FileText, Download, Settings } from 'lucide-react';
-import {
-  PageContainer,
-  AppHeader,
-  Button,
-  MachineCard
-} from '../components';
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { BarChart2, Package, AlertTriangle, Clock, TrendingUp } from "lucide-react";
+import { PageContainer, AppHeader, Button } from "../components";
+import KpiCard from "../components/dashboard/KpiCard";
+import DashboardFilters from "../components/dashboard/DashboardFilters";
+import ChartErrorBoundary from "../components/dashboard/ChartErrorBoundary";
+import OrderStatusChart from "../components/dashboard/OrderStatusChart";
+import WorkloadChart from "../components/dashboard/WorkloadChart";
+import DailyHoursChart from "../components/dashboard/DailyHoursChart";
+import OperatorEfficiencyChart from "../components/dashboard/OperatorEfficiencyChart";
+import OnTimeChart from "../components/dashboard/OnTimeChart";
+import ProgressHistogramChart from "../components/dashboard/ProgressHistogramChart";
+import ValidationRateChart from "../components/dashboard/ValidationRateChart";
+import OperatorHeatmap from "../components/dashboard/OperatorHeatmap";
 
-/**
- * Dashboard Page
- * Halaman analytics dan reports
- */
-const DashboardPage = () => {
+function toDateStr(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function defaultFilters() {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - 30);
+  return { from: toDateStr(from), to: toDateStr(to), workcenter: "all" };
+}
+
+export default function DashboardPage() {
   const navigate = useNavigate();
+  const [filters, setFilters] = useState(defaultFilters);
+  const [kpi, setKpi] = useState(null);
+  const [kpiLoading, setKpiLoading] = useState(true);
 
-  // Demo data
-  const statsCards = [
-    {
-      title: 'Total Production',
-      value: '1,245',
-      unit: 'units',
-      trend: '+12%',
-      trendUp: true,
-      icon: Package,
-      color: 'bg-blue-500'
-    },
-    {
-      title: 'Active Workers',
-      value: '48',
-      unit: 'people',
-      trend: '+3',
-      trendUp: true,
-      icon: HardHat,
-      color: 'bg-green-500'
-    },
-    {
-      title: 'Avg Efficiency',
-      value: '87',
-      unit: '%',
-      trend: '+5%',
-      trendUp: true,
-      icon: Zap,
-      color: 'bg-yellow-500'
-    },
-    {
-      title: 'Downtime',
-      value: '2.5',
-      unit: 'hours',
-      trend: '-15%',
-      trendUp: false,
-      icon: Timer,
-      color: 'bg-red-500'
-    }
-  ];
-
-  const machines = [
-    {
-      code: 'M001',
-      name: 'CNC Machine 1',
-      status: 'Active',
-      efficiency: '92%',
-      operator: 'John Doe'
-    },
-    {
-      code: 'M002',
-      name: 'Lathe Machine',
-      status: 'Idle',
-      efficiency: '75%',
-      operator: 'Jane Smith'
-    },
-    {
-      code: 'M003',
-      name: 'Milling Machine',
-      status: 'Active',
-      efficiency: '88%',
-      operator: 'Bob Wilson'
-    }
-  ];
+  useEffect(() => {
+    setKpiLoading(true);
+    fetch("/api/dashboard/kpi")
+      .then((r) => r.json())
+      .then((json) => setKpi(json.data))
+      .catch(() => setKpi(null))
+      .finally(() => setKpiLoading(false));
+  }, []);
 
   return (
     <PageContainer>
       <AppHeader
-        title={<><BarChart2 className="inline w-5 h-5 mr-1.5" />Dashboard</>}
+        title={
+          <>
+            <BarChart2 className="inline w-5 h-5 mr-1.5" />
+            Dashboard
+          </>
+        }
         rightContent={
-          <Button variant="secondary" size="small" onClick={() => navigate('/')}>
+          <Button variant="secondary" size="small" onClick={() => navigate("/")}>
             ← Back
           </Button>
         }
       />
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {statsCards.map((stat, index) => (
-          <div
-            key={index}
-            className="bg-white rounded-xl p-5 shadow-md border border-gray-200 hover:shadow-lg transition-shadow duration-200"
-          >
-            <div className="flex items-start justify-between mb-3">
-              <div className={`${stat.color} w-12 h-12 rounded-lg flex items-center justify-center`}>
-                <stat.icon className="w-6 h-6 text-white" />
-              </div>
-              <div
-                className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                  stat.trendUp
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-red-100 text-red-700'
-                }`}
-              >
-                {stat.trend}
-              </div>
-            </div>
-            <h3 className="text-gray-600 text-sm font-medium mb-1">
-              {stat.title}
-            </h3>
-            <div className="flex items-end gap-1">
-              <span className="text-3xl font-bold text-gray-800">
-                {stat.value}
-              </span>
-              <span className="text-gray-500 text-sm mb-1">{stat.unit}</span>
-            </div>
-          </div>
-        ))}
+      {/* Global Filters */}
+      <DashboardFilters filters={filters} onChange={setFilters} />
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KpiCard
+          title="Active Orders"
+          value={kpi ? kpi.active_orders.toLocaleString() : "—"}
+          icon={Package}
+          color="#0096c7"
+          loading={kpiLoading}
+        />
+        <KpiCard
+          title="Overdue Orders"
+          value={kpi ? kpi.overdue_orders.toLocaleString() : "—"}
+          icon={AlertTriangle}
+          color="#f87171"
+          loading={kpiLoading}
+        />
+        <KpiCard
+          title="Hours Today"
+          value={kpi ? kpi.today_hours.toLocaleString() : "—"}
+          unit="hrs"
+          icon={Clock}
+          color="#023e8a"
+          loading={kpiLoading}
+        />
+        <KpiCard
+          title="Avg Progress"
+          value={kpi ? kpi.avg_progress.toLocaleString() : "—"}
+          unit="%"
+          icon={TrendingUp}
+          color="#0077b6"
+          loading={kpiLoading}
+        />
       </div>
 
-      {/* Charts Section */}
+      {/* Charts — 2-column grid on desktop */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Production Chart Placeholder */}
-        <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
-          <h3 className="font-bold text-lg text-gray-800 mb-4">
-            Production Trend
-          </h3>
-          <div className="h-64 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg flex items-center justify-center">
-            <div className="text-center text-gray-500">
-              <div className="flex justify-center mb-2"><TrendingUp className="w-10 h-10 text-gray-400" /></div>
-              <p className="text-sm">Chart will be displayed here</p>
-              <p className="text-xs mt-1">(Integration with Chart.js or Recharts)</p>
-            </div>
-          </div>
-        </div>
 
-        {/* Efficiency Chart Placeholder */}
-        <div className="bg-white rounded-xl p-5 shadow-md border border-gray-200">
-          <h3 className="font-bold text-lg text-gray-800 mb-4">
-            Efficiency Rate
-          </h3>
-          <div className="h-64 bg-gradient-to-br from-green-50 to-green-100 rounded-lg flex items-center justify-center">
-            <div className="text-center text-gray-500">
-              <div className="flex justify-center mb-2"><BarChart2 className="w-10 h-10 text-gray-400" /></div>
-              <p className="text-sm">Chart will be displayed here</p>
-              <p className="text-xs mt-1">(Integration with Chart.js or Recharts)</p>
-            </div>
-          </div>
-        </div>
-      </div>
+        {/* Chart 1 — Order Status Donut */}
+        <ChartErrorBoundary>
+          <OrderStatusChart />
+        </ChartErrorBoundary>
 
-      {/* Machine Status */}
-      <div className="bg-white rounded-xl p-5 shadow-md">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-lg text-gray-800">Machine Status</h3>
-          <Button variant="primary" size="small">
-            View All
-          </Button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {machines.map((machine, index) => (
-            <MachineCard
-              key={index}
-              title={machine.code}
-              details={[
-                { label: 'Name', value: machine.name },
-                { label: 'Status', value: machine.status },
-                { label: 'Efficiency', value: machine.efficiency },
-                { label: 'Operator', value: machine.operator }
-              ]}
-              onClick={() => console.log('Machine clicked:', machine)}
-            />
-          ))}
-        </div>
-      </div>
+        {/* Chart 6 — Progress Distribution */}
+        <ChartErrorBoundary>
+          <ProgressHistogramChart />
+        </ChartErrorBoundary>
 
-      {/* Quick Actions */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Button variant="primary" className="h-20">
-          <FileText className="inline w-4 h-4 mr-1" />Daily Report
-        </Button>
-        <Button variant="success" className="h-20">
-          <BarChart2 className="inline w-4 h-4 mr-1" />Analytics
-        </Button>
-        <Button variant="warning" className="h-20">
-          <Download className="inline w-4 h-4 mr-1" />Export Data
-        </Button>
-        <Button variant="secondary" className="h-20">
-          <Settings className="inline w-4 h-4 mr-1" />Settings
-        </Button>
+        {/* Chart 2 — Workload per Workcenter */}
+        <ChartErrorBoundary>
+          <WorkloadChart />
+        </ChartErrorBoundary>
+
+        {/* Chart 5 — On-Time vs Overdue */}
+        <ChartErrorBoundary>
+          <OnTimeChart />
+        </ChartErrorBoundary>
+
+        {/* Chart 3 — Daily Hours Trend (filter-aware) */}
+        <ChartErrorBoundary>
+          <DailyHoursChart workcenter={filters.workcenter} days={30} />
+        </ChartErrorBoundary>
+
+        {/* Chart 4 — Operator Efficiency (filter-aware) */}
+        <ChartErrorBoundary>
+          <OperatorEfficiencyChart
+            from={filters.from}
+            to={filters.to}
+            workcenter={filters.workcenter}
+          />
+        </ChartErrorBoundary>
+
+        {/* Chart 7 — Process Control Validation Rate (filter-aware) */}
+        <ChartErrorBoundary>
+          <ValidationRateChart workcenter={filters.workcenter} />
+        </ChartErrorBoundary>
+
+        {/* Chart 8 — Operator Heatmap (full-width) */}
+        <ChartErrorBoundary>
+          <OperatorHeatmap days={30} />
+        </ChartErrorBoundary>
+
       </div>
     </PageContainer>
   );
-};
-
-export default DashboardPage;
+}

@@ -824,7 +824,7 @@ const OrderListPage = () => {
   const handlePageChange  = (v) => { setPage(v); setExpandedRows(new Set()); };
 
   return (
-    <div className="h-screen w-screen bg-slate-100 flex flex-col overflow-hidden">
+    <div className="h-dvh w-screen bg-slate-100 flex flex-col overflow-hidden">
 
       {/* ── Header ──────────────────────────────────────────────── */}
       <header className="flex items-center justify-between bg-blue-900 px-4 py-2.5 shadow-lg flex-shrink-0 border-b border-blue-800">
