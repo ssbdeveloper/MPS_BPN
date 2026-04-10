@@ -4,11 +4,11 @@ Const OUTPUT_FOLDER      As String = "D:\mpp\"
 Const TEMPLATE_PATH      As String = "D:\MPS2\ms project\master.mpt"
 Const RESOURCE_POOL_PATH As String = "D:\MPS2\ms project\5051_RESOURCES.mpp"
 Const FAKTOR_KOREKSI     As Double = 1
-Const API_URL_GET_NEW    As String = "https://100.80.101.53/fastapi/sow/get-new"
-Const API_URL_UPD_SYNC   As String = "https://100.80.101.53/fastapi/sow/update-sync"
+Const API_URL_GET_NEW    As String = "https://10.169.1.12/fastapi/sow/get-new"
+Const API_URL_UPD_SYNC   As String = "https://10.169.1.12/fastapi/sow/update-sync"
 
 ' ============================================================================
-' HELPER: HTTP POST — returns response text or ""
+' HELPER: HTTP POST — returns response text or 100.80.101.53""
 ' ============================================================================
 Private Function HttpPost(url As String, jsonBody As String) As String
     On Error GoTo ErrorHandler
@@ -228,6 +228,12 @@ Sub ConvertAPI_To_MPP_And_Inserts2()
     Set masterProj = ActiveProject
     masterProjName = masterProj.FullName
 
+    ' Validasi master project sudah disimpan ke disk
+    If masterProjName = "" Then
+        MsgBox "Simpan master project ke disk terlebih dahulu sebelum menjalankan macro ini.", vbCritical
+        Exit Sub
+    End If
+
     ' 1. Fetch dari API
     Application.StatusBar = "Mengambil data dari API..."
     jsonResponse = HttpPost(API_URL_GET_NEW, "{""order_no"":null}")
@@ -345,6 +351,11 @@ Sub ConvertAPI_To_MPP_And_Inserts2()
         End If
         On Error GoTo 0
         Set masterProj = ActiveProject
+
+        ' Pastikan master sudah tersimpan ke disk sebelum insert subproject
+        On Error Resume Next
+        FileSave
+        On Error GoTo 0
 
         ' Insert ke master
         On Error Resume Next

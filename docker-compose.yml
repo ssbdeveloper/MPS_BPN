@@ -43,6 +43,11 @@ services:
       - TIMEZONE=${TIMEZONE}
       - CORS_ORIGIN=${CORS_ORIGIN}
       - TZ=${TIMEZONE}
+      - SAP_INBOUND_URL=${SAP_INBOUND_URL}
+      - SAP_INBOUND_USERNAME=${SAP_INBOUND_USERNAME}
+      - SAP_INBOUND_PASSWORD=${SAP_INBOUND_PASSWORD}
+      - ID_TIMESHEET=${ID_TIMESHEET}
+      - TGT_TABLE=${TGT_TABLE}
     volumes:
       - uploads_data:/app/uploads
     depends_on:

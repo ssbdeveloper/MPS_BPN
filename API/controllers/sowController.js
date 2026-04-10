@@ -1,4 +1,7 @@
 const db = global.pool || require("../db");
+const path = require('path');
+const fs   = require('fs');
+const { v4: uuidv4 } = require('uuid');
 
 // GET grouped orders from view — paginated (for OrderListPage)
 exports.getGrouped = async (req, res) => {
@@ -79,8 +82,6 @@ exports.getProgressHistory = async (req, res) => {
 // Server decodes → writes JPEG file → stores relative path in image_path column.
 // After insert: updates sow.progress for the operation row.
 exports.addProgressUpdate = async (req, res) => {
-  const fs   = require('fs');
-  const path = require('path');
 
   try {
     const { operation_id, order_no, progress, issue_description, image_data, created_by } = req.body;
@@ -1610,6 +1611,324 @@ exports.getPlanhoursMulti = async (req, res) => {
       map[row.codenumber] = row.planhours;
     }
     res.json(map);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ============================================
+// SOW STANDARD (sow_standard + components join)
+// ============================================
+
+// GET sow_standard list with pagination and search
+exports.getSowStandard = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    const params = [];
+    let where = '';
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      where = ` WHERE (c.part_name   ILIKE $1
+                    OR c.part_number ILIKE $1
+                    OR c.model       ILIKE $1)`;
+    }
+
+    const countResult = await db.query(
+      `SELECT COUNT(*)
+       FROM sow_standard ss
+       JOIN components c ON ss.component_id = c.component_id
+       ${where}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    params.push(limit, offset);
+    const dataResult = await db.query(
+      `SELECT
+         ss.id,
+         ss.component_id,
+         ss.operation_no,
+         ss.operation_text,
+         ss.machineid,
+         ss.workcenter,
+         ss.std_hours,
+         ss.source_plant,
+         c.part_name,
+         c.part_number,
+         c.model
+       FROM sow_standard ss
+       JOIN components c ON ss.component_id = c.component_id
+       ${where}
+       ORDER BY c.part_name ASC, ss.operation_no ASC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({
+      data:       dataResult.rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ============================================
+// SOW STANDARD — GROUPED (by component)
+// ============================================
+
+// GET sow_standard grouped by component, with search + pagination on component level
+exports.getSowStandardGrouped = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    const params = [];
+    let where = '';
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      where = ` WHERE (c.part_name   ILIKE $1
+                    OR c.part_number ILIKE $1
+                    OR c.model       ILIKE $1)`;
+    }
+
+    // Count distinct components
+    const countResult = await db.query(
+      `SELECT COUNT(DISTINCT c.component_id)
+       FROM sow_standard ss
+       JOIN components c ON ss.component_id = c.component_id
+       ${where}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    // Paginated component list
+    params.push(limit, offset);
+    const componentResult = await db.query(
+      `SELECT
+         c.component_id,
+         c.part_name,
+         c.part_number,
+         c.model,
+         COUNT(ss.id)::int AS operation_count,
+         COALESCE(MAX(ss.source_plant), 0) AS source_plant
+       FROM sow_standard ss
+       JOIN components c ON ss.component_id = c.component_id
+       ${where}
+       GROUP BY c.component_id, c.part_name, c.part_number, c.model
+       ORDER BY c.part_name ASC, c.part_number ASC
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+
+    res.json({
+      data:       componentResult.rows,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET operations for a single component (by component_id)
+exports.getSowStandardByComponent = async (req, res) => {
+  try {
+    const { component_id } = req.params;
+    const result = await db.query(
+      `SELECT
+         ss.id,
+         ss.operation_no,
+         ss.operation_text,
+         ss.machineid,
+         ss.workcenter,
+         ss.std_hours,
+         ss.source_plant,
+         COALESCE(
+           json_agg(
+             json_build_object(
+               'id', a.id,
+               'filename', a.filename,
+               'original_name', a.original_name,
+               'file_path', a.file_path,
+               'file_size', a.file_size,
+               'uploaded_at', a.uploaded_at
+             ) ORDER BY a.uploaded_at
+           ) FILTER (WHERE a.id IS NOT NULL),
+           '[]'
+         ) AS attachments
+       FROM sow_standard ss
+       LEFT JOIN sow_standard_attachments a ON a.standard_id = ss.id
+       WHERE ss.component_id = $1
+       GROUP BY ss.id
+       ORDER BY ss.operation_no ASC`,
+      [component_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET single operation with attachments
+exports.getSowStandardById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      `SELECT
+         ss.*,
+         c.part_name, c.part_number, c.model,
+         COALESCE(
+           json_agg(
+             json_build_object(
+               'id', a.id,
+               'filename', a.filename,
+               'original_name', a.original_name,
+               'file_path', a.file_path,
+               'file_size', a.file_size,
+               'uploaded_at', a.uploaded_at
+             ) ORDER BY a.uploaded_at
+           ) FILTER (WHERE a.id IS NOT NULL),
+           '[]'
+         ) AS attachments
+       FROM sow_standard ss
+       JOIN components c ON ss.component_id = c.component_id
+       LEFT JOIN sow_standard_attachments a ON a.standard_id = ss.id
+       WHERE ss.id = $1
+       GROUP BY ss.id, c.part_name, c.part_number, c.model`,
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST create new operation under a component
+exports.createSowStandardOperation = async (req, res) => {
+  try {
+    const { component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant } = req.body;
+    if (!component_id || !operation_no || !operation_text) {
+      return res.status(400).json({ error: 'component_id, operation_no, dan operation_text wajib diisi' });
+    }
+    const result = await db.query(
+      `INSERT INTO sow_standard (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING *`,
+      [component_id, operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PUT update operation
+exports.updateSowStandardOperation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { operation_no, operation_text, machineid, workcenter, std_hours, source_plant } = req.body;
+    const result = await db.query(
+      `UPDATE sow_standard
+       SET operation_no=$1, operation_text=$2, machineid=$3, workcenter=$4, std_hours=$5, source_plant=$6
+       WHERE id=$7
+       RETURNING *`,
+      [operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE operation
+exports.deleteSowStandardOperation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Attachments will cascade delete via FK. Also clean up files.
+    const attachments = await db.query(
+      'SELECT file_path FROM sow_standard_attachments WHERE standard_id = $1', [id]
+    );
+    for (const row of attachments.rows) {
+      const fullPath = path.join(__dirname, '..', row.file_path);
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    }
+    const result = await db.query('DELETE FROM sow_standard WHERE id=$1 RETURNING id', [id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ============================================
+// SOW STANDARD — ATTACHMENTS (PDF)
+// Files: /uploads/sow-pdf/{part_number}/{operation_no}/{uuid}.pdf
+// ============================================
+
+// POST upload PDFs for an operation (handled via multer in route)
+exports.uploadAttachments = async (req, res) => {
+  try {
+    const { id } = req.params; // standard_id
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'Tidak ada file yang di-upload' });
+    }
+
+    const inserted = [];
+    for (const file of req.files) {
+      const result = await db.query(
+        `INSERT INTO sow_standard_attachments (standard_id, filename, original_name, file_path, file_size)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [id, file.filename, file.originalname, `/uploads/sow-pdf/${file.filename}`, file.size]
+      );
+      inserted.push(result.rows[0]);
+    }
+    res.status(201).json(inserted);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET attachments list for an operation
+exports.getAttachments = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      `SELECT * FROM sow_standard_attachments WHERE standard_id=$1 ORDER BY uploaded_at ASC`,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE a single attachment
+exports.deleteAttachment = async (req, res) => {
+  try {
+    const { attachmentId } = req.params;
+    const result = await db.query(
+      'DELETE FROM sow_standard_attachments WHERE id=$1 RETURNING *',
+      [attachmentId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const row = result.rows[0];
+    const fullPath = path.join(__dirname, '..', row.file_path);
+    if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

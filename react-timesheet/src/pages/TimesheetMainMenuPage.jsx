@@ -103,7 +103,7 @@ const TimesheetMainMenuPage = () => {
 
   const [mode, setMode] = useState(() => {
     const dk = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
-    return dk.mode || sessionStorage.getItem('timesheetMode') || 'single';
+    return dk.mode || 'single'; // DB adalah source of truth
   });
   const [userData, setUserData] = useState({
     name: '-', sn: '-',
@@ -145,21 +145,27 @@ const TimesheetMainMenuPage = () => {
   // ── Handlers (logic unchanged) ─────────────────────────────────────────────
   const handleModeChange = async (checked) => {
     const newMode = checked ? 'multiple' : 'single';
-    setMode(newMode);
-    sessionStorage.setItem('timesheetMode', newMode);
-
     const dk = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
-    if (dk.snssb) {
-      try {
-        await fetch(`${API_BASE}/usernfc/mode/${dk.snssb}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: newMode }),
-        });
-        sessionStorage.setItem('datakaryawan', JSON.stringify({ ...dk, mode: newMode }));
-      } catch (err) {
-        console.error('Failed to persist mode:', err);
-      }
+
+    if (!dk.snssb) {
+      toast.error('Data karyawan tidak ditemukan');
+      return;
+    }
+
+    setMode(newMode); // optimistic update
+    try {
+      const res = await fetch(`${API_BASE}/usernfc/mode/${dk.snssb}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      sessionStorage.setItem('datakaryawan', JSON.stringify({ ...dk, mode: newMode }));
+      toast.success(`Mode diubah ke ${newMode}`);
+    } catch (err) {
+      setMode(dk.mode || 'single'); // revert UI on failure
+      toast.error('Gagal menyimpan mode ke server');
+      console.error('Failed to persist mode:', err);
     }
   };
 

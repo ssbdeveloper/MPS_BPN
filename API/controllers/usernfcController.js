@@ -97,6 +97,25 @@ exports.update = async (req, res) => {
   }
 };
 
+// UPDATE mode (single/multiple) berdasarkan snssb
+exports.updateMode = async (req, res) => {
+  const { snssb } = req.params;
+  const { mode } = req.body;
+  if (!['single', 'multiple'].includes(mode)) {
+    return res.status(400).json({ message: 'Invalid mode value' });
+  }
+  try {
+    const result = await db.query(
+      'UPDATE usernfc SET mode = $1 WHERE snssb = $2 RETURNING *',
+      [mode, snssb]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.updatemesin = async (req, res) => {
   // ambil sn dari sessionStorage
   try {

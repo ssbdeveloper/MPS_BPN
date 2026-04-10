@@ -1,6 +1,56 @@
 const express = require("express");
-const router = express.Router();
+const router  = express.Router();
+const path    = require('path');
+const multer  = require('multer');
+const { v4: uuidv4 } = require('uuid');
 const controller = require("../controllers/sowController");
+
+// ── Multer config: store files at /uploads/sow-pdf/{uuid}.{ext} ──────────────
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../uploads/sow-pdf');
+    require('fs').mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.bin';
+    cb(null, `${uuidv4()}${ext}`);
+  },
+});
+const ALLOWED_MIMES = new Set([
+  'application/pdf',
+  'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    cb(null, ALLOWED_MIMES.has(file.mimetype));
+  },
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+});
+
+// ============================================
+// SOW STANDARD — flat list (legacy)
+// ============================================
+router.get("/standard", controller.getSowStandard);
+
+// ============================================
+// SOW STANDARD — grouped by component
+// ============================================
+router.get("/standard/grouped",          controller.getSowStandardGrouped);
+router.get("/standard/component/:component_id", controller.getSowStandardByComponent);
+router.get("/standard/operation/:id",    controller.getSowStandardById);
+router.post("/standard/operation",       controller.createSowStandardOperation);
+router.put("/standard/operation/:id",    controller.updateSowStandardOperation);
+router.delete("/standard/operation/:id", controller.deleteSowStandardOperation);
+
+// ── Attachments ───────────────────────────────────────────────────────────────
+router.get("/standard/operation/:id/attachments",               controller.getAttachments);
+router.post("/standard/operation/:id/attachments", upload.array('files', 10), controller.uploadAttachments);
+router.delete("/standard/attachment/:attachmentId",             controller.deleteAttachment);
 
 // ============================================
 // GROUPED ORDERS VIEW (for OrderListPage)

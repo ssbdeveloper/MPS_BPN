@@ -693,7 +693,7 @@ const LoginTimesheetPage = () => {
           Status: <span className="font-semibold text-slate-800">{status}</span>
         </div>
         <div className="flex-1 text-center text-slate-400">
-          Ver: <span className="font-semibold">2.1.0</span>
+          Ver: <span className="font-semibold">2.2.0</span>
         </div>
         <div className="flex-1 text-right">
           ID: <span className="font-semibold text-slate-800">{nfcId}</span>

@@ -346,6 +346,43 @@ exports.checkout = async (req, res) => {
 };
 
 /**
+ * UPDATE timesheet - checkout unprod entries only (activitytype IS NOT NULL)
+ * Digunakan saat mode=multiple agar productive activity tidak ikut ter-checkout
+ */
+exports.checkoutUnprod = async (req, res) => {
+  try {
+    const { datakaryawan } = req.body;
+
+    if (!datakaryawan?.sn) {
+      return res.status(400).json({ error: 'datakaryawan.sn is required' });
+    }
+
+    const serialnumber = datakaryawan.sn;
+
+    const result = await db.query(
+      `UPDATE timesheet_transaction
+       SET longdate_checkout = NOW(),
+           date_checkout = to_char(NOW(), 'DD/MM/YYYY'),
+           hour_checkout = to_char(NOW(), 'HH24:MI'),
+           duration = ROUND(
+             EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2
+           )
+       WHERE serialnumber = $1
+         AND date_checkout IS NULL
+         AND activitytype IS NOT NULL AND activitytype <> ''
+       RETURNING *`,
+      [serialnumber]
+    );
+
+    // Tidak ada unprod terbuka bukan error — kembalikan array kosong
+    res.json(result.rows);
+  } catch (err) {
+    console.error('checkoutUnprod error:', err);
+    res.status(500).json({ error: 'Error updating data: ' + err.message });
+  }
+};
+
+/**
  * UPDATE timesheet - checkout by tsnumber (ID)
  */
 exports.checkoutid = async (req, res) => {
@@ -979,10 +1016,11 @@ exports.postToSap = async (req, res) => {
       PLNFL:        isUnprod ? '' : String(row.sequence_number || ''),
       VORNR_B:      isUnprod ? '' : String(row.branch_operation_no || ''),
       VORNR_R:      isUnprod ? '' : String(row.return_operation_no || ''),
-      ZCONF_TYPE:   isUnprod                                          ? ''
-                  : String(row.workcentercode || '').endsWith('OT')   ? 'OV'
-                  : parseInt(row.operation_no, 10) > 5000             ? 'RW'
-                  : 'RG',
+      ZCONF_TYPE:   String('M1'),
+      //ZCONF_TYPE:   isUnprod                                          ? ''
+      //            : String(row.workcentercode || '').endsWith('OT')   ? 'OV'
+      //            : parseInt(row.operation_no, 10) > 5000             ? 'RW'
+      //            : 'RG',
       ARBPL:        String(row.workcentercode || ''),
       LSTAR:        String(row.activitytype || ''),
       ISDD:         String(row.isdd || ''),

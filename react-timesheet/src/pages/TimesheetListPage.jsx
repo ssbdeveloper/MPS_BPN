@@ -136,6 +136,25 @@ const TimesheetListPage = () => {
   // Handle Restart button
   const handleRestart = async (item) => {
     try {
+      const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
+      const mode = datakaryawan?.mode || 'single';
+
+      // Mode single: checkout semua activity yang masih running sebelum restart
+      if (mode === 'single') {
+        const running = timesheets.filter(t => !t.hour_checkout);
+        if (running.length > 0) {
+          await Promise.all(
+            running.map(t =>
+              fetch(`${API_BASE}/timesheet/checkoutid/`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tsnumber: t.tsnumber }),
+              })
+            )
+          );
+        }
+      }
+
       const res = await fetch(`${API_BASE}/timesheet/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -149,7 +168,7 @@ const TimesheetListPage = () => {
           full_name:             item.full_name,
           workcentercode:        item.workcentercode,
           workcenterdescription: item.workcenterdescription,
-          id_unprod:             item.activitytype,   // preserve activitytype
+          id_unprod:             item.activitytype,
         })
       });
 

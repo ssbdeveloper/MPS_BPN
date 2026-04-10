@@ -2,10 +2,8 @@
 -- PostgreSQL database dump
 --
 
-\restrict ndwJquZgtlgsbE8zUdxVxhC9IJm56dMbW7tk7T311udoV1rUfH26lCkyML2tIby
-
--- Dumped from database version 15.15
--- Dumped by pg_dump version 15.17 (Ubuntu 15.17-1.pgdg22.04+1)
+-- Dumped from database version 15.0
+-- Dumped by pg_dump version 15.0
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -33,7 +31,7 @@ COMMENT ON EXTENSION pg_trgm IS 'text similarity measurement and index searching
 
 
 --
--- Name: fn_delete_dup_sow(); Type: FUNCTION; Schema: public; Owner: tag
+-- Name: fn_delete_dup_sow(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.fn_delete_dup_sow() RETURNS trigger
@@ -44,16 +42,15 @@ BEGIN
     WHERE codenumber = NEW.codenumber
       AND order_no IS NOT NULL
       AND idsow < NEW.idsow;
-
     RETURN NEW;
 END;
 $$;
 
 
-ALTER FUNCTION public.fn_delete_dup_sow() OWNER TO tag;
+ALTER FUNCTION public.fn_delete_dup_sow() OWNER TO postgres;
 
 --
--- Name: trg_set_sync_modified(); Type: FUNCTION; Schema: public; Owner: tag
+-- Name: trg_set_sync_modified(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.trg_set_sync_modified() RETURNS trigger
@@ -63,28 +60,23 @@ DECLARE
     old_data jsonb;
     new_data jsonb;
 BEGIN
-    -- kalau user mengubah kolom sync → jangan lakukan apa-apa
     IF NEW.sync IS DISTINCT FROM OLD.sync THEN
         RETURN NEW;
     END IF;
-
-    -- bandingkan semua kolom kecuali sync
     old_data := to_jsonb(OLD) - 'sync';
     new_data := to_jsonb(NEW) - 'sync';
-
     IF old_data IS DISTINCT FROM new_data THEN
         NEW.sync := 'modified';
     END IF;
-
     RETURN NEW;
 END;
 $$;
 
 
-ALTER FUNCTION public.trg_set_sync_modified() OWNER TO tag;
+ALTER FUNCTION public.trg_set_sync_modified() OWNER TO postgres;
 
 --
--- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: tag
+-- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
 CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
@@ -97,14 +89,42 @@ END;
 $$;
 
 
-ALTER FUNCTION public.update_updated_at_column() OWNER TO tag;
+ALTER FUNCTION public.update_updated_at_column() OWNER TO postgres;
 
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
 --
--- Name: log_timesheet_sap; Type: TABLE; Schema: public; Owner: tag
+-- Name: components; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.components (
+    component_id bigint NOT NULL,
+    part_name text NOT NULL,
+    model text NOT NULL,
+    part_number text NOT NULL
+);
+
+
+ALTER TABLE public.components OWNER TO postgres;
+
+--
+-- Name: components_component_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.components ALTER COLUMN component_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.components_component_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: log_timesheet_sap; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.log_timesheet_sap (
@@ -133,10 +153,10 @@ CREATE TABLE public.log_timesheet_sap (
 );
 
 
-ALTER TABLE public.log_timesheet_sap OWNER TO tag;
+ALTER TABLE public.log_timesheet_sap OWNER TO postgres;
 
 --
--- Name: log_timesheet_sap_id_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: log_timesheet_sap_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.log_timesheet_sap ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
@@ -149,19 +169,17 @@ ALTER TABLE public.log_timesheet_sap ALTER COLUMN id ADD GENERATED ALWAYS AS IDE
 );
 
 
-
-
 --
--- Name: operations; Type: TABLE; Schema: public; Owner: tag
+-- Name: operations; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.operations (
     operation_id integer NOT NULL,
-    part_id integer NOT NULL,
+    part_id integer,
     operation_no integer NOT NULL,
     operation_text text NOT NULL,
-    wct_group character varying(50),
-    workcenter character varying(50),
+    wct_group text,
+    workcenter text,
     planhours numeric(5,2),
     drawing_path text,
     remark text,
@@ -170,15 +188,15 @@ CREATE TABLE public.operations (
 );
 
 
-ALTER TABLE public.operations OWNER TO tag;
+ALTER TABLE public.operations OWNER TO postgres;
 
 --
--- Name: operations_operation_id_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: operations_operation_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.operations ALTER COLUMN operation_id ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.operations_operation_id_seq
-    START WITH 1
+    START WITH 6850
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
@@ -187,7 +205,7 @@ ALTER TABLE public.operations ALTER COLUMN operation_id ADD GENERATED ALWAYS AS 
 
 
 --
--- Name: sow; Type: TABLE; Schema: public; Owner: tag
+-- Name: sow; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.sow (
@@ -209,13 +227,13 @@ CREATE TABLE public.sow (
     confirmation text,
     status text,
     finish_date date,
-    codenumber text GENERATED ALWAYS AS ((order_no || (operation_no)::text)) STORED,
     weight numeric(5,2),
     created_by text,
     type text,
     "group" text,
     category text,
     remark text,
+    codenumber text GENERATED ALWAYS AS ((order_no || (operation_no)::text)) STORED,
     sync text DEFAULT 'new'::text,
     plan_start date,
     plan_finish date,
@@ -229,10 +247,10 @@ CREATE TABLE public.sow (
 );
 
 
-ALTER TABLE public.sow OWNER TO tag;
+ALTER TABLE public.sow OWNER TO postgres;
 
 --
--- Name: order; Type: MATERIALIZED VIEW; Schema: public; Owner: tag
+-- Name: order; Type: MATERIALIZED VIEW; Schema: public; Owner: postgres
 --
 
 CREATE MATERIALIZED VIEW public."order" AS
@@ -252,31 +270,77 @@ CREATE MATERIALIZED VIEW public."order" AS
   WITH NO DATA;
 
 
-ALTER TABLE public."order" OWNER TO tag;
+ALTER TABLE public."order" OWNER TO postgres;
 
 --
--- Name: parts; Type: TABLE; Schema: public; Owner: tag
+-- Name: parts; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.parts (
     part_id integer NOT NULL,
-    partnumber character varying(50) NOT NULL,
-    partname character varying(200) NOT NULL,
-    model character varying(100) NOT NULL,
+    partnumber text NOT NULL,
+    partname text NOT NULL,
+    model text NOT NULL,
     drawing_path text,
-    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
 );
 
 
-ALTER TABLE public.parts OWNER TO tag;
+ALTER TABLE public.parts OWNER TO postgres;
 
 --
--- Name: parts_part_id_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: parts_part_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.parts ALTER COLUMN part_id ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.parts_part_id_seq
+    START WITH 700
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: ph3_order; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.ph3_order (
+    id bigint NOT NULL,
+    confirmation_number character varying(20) NOT NULL,
+    indicator_code character varying(20),
+    operation_short_text text,
+    order_no character varying(20) NOT NULL,
+    operation_no character varying(10),
+    sequence_category character varying(5),
+    sequence_number character varying(20),
+    branch_operation_no character varying(10),
+    return_operation_no character varying(10),
+    material_no character varying(50),
+    material_description text,
+    operation_description text,
+    work_center character varying(30),
+    cost_center character varying(30),
+    plant_code character varying(10),
+    unit_of_measure character varying(10),
+    standard_value character varying(30),
+    order_type character varying(10),
+    order_description text,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    status_etl character varying(10) DEFAULT 'NEW'::character varying
+);
+
+
+ALTER TABLE public.ph3_order OWNER TO postgres;
+
+--
+-- Name: ph3_order_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.ph3_order ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.ph3_order_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -286,7 +350,7 @@ ALTER TABLE public.parts ALTER COLUMN part_id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
--- Name: process_category; Type: TABLE; Schema: public; Owner: tag
+-- Name: process_category; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.process_category (
@@ -296,10 +360,10 @@ CREATE TABLE public.process_category (
 );
 
 
-ALTER TABLE public.process_category OWNER TO tag;
+ALTER TABLE public.process_category OWNER TO postgres;
 
 --
--- Name: process_category_id_process_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: process_category_id_process_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.process_category ALTER COLUMN id_process ADD GENERATED ALWAYS AS IDENTITY (
@@ -313,7 +377,7 @@ ALTER TABLE public.process_category ALTER COLUMN id_process ADD GENERATED ALWAYS
 
 
 --
--- Name: process_parameter; Type: TABLE; Schema: public; Owner: tag
+-- Name: process_parameter; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.process_parameter (
@@ -328,10 +392,10 @@ CREATE TABLE public.process_parameter (
 );
 
 
-ALTER TABLE public.process_parameter OWNER TO tag;
+ALTER TABLE public.process_parameter OWNER TO postgres;
 
 --
--- Name: process_parameter_choicebase; Type: TABLE; Schema: public; Owner: tag
+-- Name: process_parameter_choicebase; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.process_parameter_choicebase (
@@ -342,10 +406,10 @@ CREATE TABLE public.process_parameter_choicebase (
 );
 
 
-ALTER TABLE public.process_parameter_choicebase OWNER TO tag;
+ALTER TABLE public.process_parameter_choicebase OWNER TO postgres;
 
 --
--- Name: process_parameter_choicebase_id_choice_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: process_parameter_choicebase_id_choice_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.process_parameter_choicebase ALTER COLUMN id_choice ADD GENERATED ALWAYS AS IDENTITY (
@@ -359,7 +423,7 @@ ALTER TABLE public.process_parameter_choicebase ALTER COLUMN id_choice ADD GENER
 
 
 --
--- Name: process_parameter_id_parameter_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: process_parameter_id_parameter_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.process_parameter ALTER COLUMN id_parameter ADD GENERATED ALWAYS AS IDENTITY (
@@ -373,7 +437,7 @@ ALTER TABLE public.process_parameter ALTER COLUMN id_parameter ADD GENERATED ALW
 
 
 --
--- Name: processcontroldata; Type: TABLE; Schema: public; Owner: tag
+-- Name: processcontroldata; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.processcontroldata (
@@ -394,10 +458,10 @@ CREATE TABLE public.processcontroldata (
 );
 
 
-ALTER TABLE public.processcontroldata OWNER TO tag;
+ALTER TABLE public.processcontroldata OWNER TO postgres;
 
 --
--- Name: processcontroldata_id_processcontroldata_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: processcontroldata_id_processcontroldata_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.processcontroldata ALTER COLUMN id_processcontroldata ADD GENERATED ALWAYS AS IDENTITY (
@@ -411,7 +475,7 @@ ALTER TABLE public.processcontroldata ALTER COLUMN id_processcontroldata ADD GEN
 
 
 --
--- Name: processcontroldata_item; Type: TABLE; Schema: public; Owner: tag
+-- Name: processcontroldata_item; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.processcontroldata_item (
@@ -430,10 +494,10 @@ CREATE TABLE public.processcontroldata_item (
 );
 
 
-ALTER TABLE public.processcontroldata_item OWNER TO tag;
+ALTER TABLE public.processcontroldata_item OWNER TO postgres;
 
 --
--- Name: processcontroldata_item_id_processcontroldata_item_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: processcontroldata_item_id_processcontroldata_item_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.processcontroldata_item ALTER COLUMN id_processcontroldata_item ADD GENERATED ALWAYS AS IDENTITY (
@@ -447,7 +511,7 @@ ALTER TABLE public.processcontroldata_item ALTER COLUMN id_processcontroldata_it
 
 
 --
--- Name: production_operations; Type: TABLE; Schema: public; Owner: tag
+-- Name: production_operations; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.production_operations (
@@ -473,10 +537,10 @@ CREATE TABLE public.production_operations (
 );
 
 
-ALTER TABLE public.production_operations OWNER TO tag;
+ALTER TABLE public.production_operations OWNER TO postgres;
 
 --
--- Name: production_operations_id_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: production_operations_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.production_operations ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
@@ -490,7 +554,7 @@ ALTER TABLE public.production_operations ALTER COLUMN id ADD GENERATED ALWAYS AS
 
 
 --
--- Name: progress_update_history; Type: TABLE; Schema: public; Owner: tag
+-- Name: progress_update_history; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.progress_update_history (
@@ -506,10 +570,10 @@ CREATE TABLE public.progress_update_history (
 );
 
 
-ALTER TABLE public.progress_update_history OWNER TO tag;
+ALTER TABLE public.progress_update_history OWNER TO postgres;
 
 --
--- Name: progress_update_history_id_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: progress_update_history_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 CREATE SEQUENCE public.progress_update_history_id_seq
@@ -521,17 +585,17 @@ CREATE SEQUENCE public.progress_update_history_id_seq
     CACHE 1;
 
 
-ALTER TABLE public.progress_update_history_id_seq OWNER TO tag;
+ALTER TABLE public.progress_update_history_id_seq OWNER TO postgres;
 
 --
--- Name: progress_update_history_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: tag
+-- Name: progress_update_history_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
 --
 
 ALTER SEQUENCE public.progress_update_history_id_seq OWNED BY public.progress_update_history.id;
 
 
 --
--- Name: qh3_order; Type: TABLE; Schema: public; Owner: tag
+-- Name: qh3_order; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.qh3_order (
@@ -560,10 +624,10 @@ CREATE TABLE public.qh3_order (
 );
 
 
-ALTER TABLE public.qh3_order OWNER TO tag;
+ALTER TABLE public.qh3_order OWNER TO postgres;
 
 --
--- Name: qh3_order_id_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: qh3_order_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.qh3_order ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
@@ -577,11 +641,81 @@ ALTER TABLE public.qh3_order ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
--- Name: sow_idsow_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: sow_idsow_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.sow ALTER COLUMN idsow ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.sow_idsow_seq
+    START WITH 99100
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: sow_standard; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.sow_standard (
+    id bigint NOT NULL,
+    component_id bigint NOT NULL,
+    operation_no integer NOT NULL,
+    operation_text text NOT NULL,
+    machineid text,
+    workcenter text,
+    std_hours numeric(10,2),
+    source_plant integer
+);
+
+
+ALTER TABLE public.sow_standard OWNER TO postgres;
+
+--
+-- Name: sow_standard_attachments; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.sow_standard_attachments (
+    id bigint NOT NULL,
+    standard_id bigint NOT NULL,
+    filename text NOT NULL,
+    original_name text NOT NULL,
+    file_path text NOT NULL,
+    file_size integer,
+    uploaded_at timestamp with time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.sow_standard_attachments OWNER TO postgres;
+
+--
+-- Name: sow_standard_attachments_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.sow_standard_attachments_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.sow_standard_attachments_id_seq OWNER TO postgres;
+
+--
+-- Name: sow_standard_attachments_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.sow_standard_attachments_id_seq OWNED BY public.sow_standard_attachments.id;
+
+
+--
+-- Name: sow_standard_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.sow_standard ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sow_standard_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -591,7 +725,63 @@ ALTER TABLE public.sow ALTER COLUMN idsow ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
--- Name: timesheet_transaction; Type: TABLE; Schema: public; Owner: tag
+-- Name: sow_template_lines; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.sow_template_lines (
+    id bigint NOT NULL,
+    template_id bigint NOT NULL,
+    standard_id bigint NOT NULL
+);
+
+
+ALTER TABLE public.sow_template_lines OWNER TO postgres;
+
+--
+-- Name: sow_template_lines_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.sow_template_lines ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sow_template_lines_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: sow_templates; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.sow_templates (
+    template_id bigint NOT NULL,
+    component_id bigint NOT NULL,
+    template_name text NOT NULL,
+    created_by text,
+    created_at timestamp without time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.sow_templates OWNER TO postgres;
+
+--
+-- Name: sow_templates_template_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+ALTER TABLE public.sow_templates ALTER COLUMN template_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sow_templates_template_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: timesheet_transaction; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.timesheet_transaction (
@@ -608,8 +798,6 @@ CREATE TABLE public.timesheet_transaction (
     longdate_checkin timestamp with time zone,
     longdate_checkout timestamp with time zone,
     note text,
-    operation_no integer,
-    order_no text,
     part_name text,
     planhours numeric(10,2),
     plant text,
@@ -619,19 +807,21 @@ CREATE TABLE public.timesheet_transaction (
     validation_date timestamp with time zone,
     workcentercode text,
     workcenterdescription text,
-    duration numeric(10,2)
+    duration numeric,
+    operation_no integer,
+    order_no text
 );
 
 
-ALTER TABLE public.timesheet_transaction OWNER TO tag;
+ALTER TABLE public.timesheet_transaction OWNER TO postgres;
 
 --
--- Name: timesheet_transaction_tsnumber_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: timesheet_transaction_tsnumber_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.timesheet_transaction ALTER COLUMN tsnumber ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.timesheet_transaction_tsnumber_seq
-    START WITH 1
+    START WITH 18300
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
@@ -640,30 +830,30 @@ ALTER TABLE public.timesheet_transaction ALTER COLUMN tsnumber ADD GENERATED ALW
 
 
 --
--- Name: usernfc; Type: TABLE; Schema: public; Owner: tag
+-- Name: usernfc; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.usernfc (
-    idrow integer NOT NULL,
-    nfcid text,
+    nfcid text NOT NULL,
     full_name text,
     snssb text,
     machineid text,
     machinename text,
+    roles text,
     workcenter text,
-    roles text
+    idrow integer NOT NULL
 );
 
 
-ALTER TABLE public.usernfc OWNER TO tag;
+ALTER TABLE public.usernfc OWNER TO postgres;
 
 --
--- Name: usernfc_idrow_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: usernfc_idrow_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.usernfc ALTER COLUMN idrow ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.usernfc_idrow_seq
-    START WITH 1
+    START WITH 8
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
@@ -672,7 +862,7 @@ ALTER TABLE public.usernfc ALTER COLUMN idrow ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
--- Name: vw_sow_orders; Type: VIEW; Schema: public; Owner: tag
+-- Name: vw_sow_orders; Type: VIEW; Schema: public; Owner: postgres
 --
 
 CREATE VIEW public.vw_sow_orders AS
@@ -702,14 +892,13 @@ CREATE VIEW public.vw_sow_orders AS
   GROUP BY s.order_no;
 
 
-ALTER TABLE public.vw_sow_orders OWNER TO tag;
+ALTER TABLE public.vw_sow_orders OWNER TO postgres;
 
 --
--- Name: workcenter; Type: TABLE; Schema: public; Owner: tag
+-- Name: workcenter; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.workcenter (
-    idrow integer NOT NULL,
     plant integer,
     workcenterot character varying(50),
     condition character varying(50),
@@ -721,18 +910,19 @@ CREATE TABLE public.workcenter (
     costcenter_rate integer,
     workcenter_description character varying(50),
     workcenternew character varying(50),
-    workcenterold character varying(50)
+    workcenterold character varying(50),
+    idrow integer NOT NULL
 );
 
 
-ALTER TABLE public.workcenter OWNER TO tag;
+ALTER TABLE public.workcenter OWNER TO postgres;
 
 --
--- Name: workcenter_idrow_seq; Type: SEQUENCE; Schema: public; Owner: tag
+-- Name: workcenter_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
 ALTER TABLE public.workcenter ALTER COLUMN idrow ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.workcenter_idrow_seq
+    SEQUENCE NAME public.workcenter_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -742,14 +932,37 @@ ALTER TABLE public.workcenter ALTER COLUMN idrow ADD GENERATED ALWAYS AS IDENTIT
 
 
 --
--- Name: progress_update_history id; Type: DEFAULT; Schema: public; Owner: tag
+-- Name: progress_update_history id; Type: DEFAULT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.progress_update_history ALTER COLUMN id SET DEFAULT nextval('public.progress_update_history_id_seq'::regclass);
 
 
 --
--- Name: log_timesheet_sap log_timesheet_sap_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: sow_standard_attachments id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_standard_attachments ALTER COLUMN id SET DEFAULT nextval('public.sow_standard_attachments_id_seq'::regclass);
+
+
+--
+-- Name: components components_model_part_number_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.components
+    ADD CONSTRAINT components_model_part_number_key UNIQUE (model, part_number);
+
+
+--
+-- Name: components components_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.components
+    ADD CONSTRAINT components_pkey PRIMARY KEY (component_id);
+
+
+--
+-- Name: log_timesheet_sap log_timesheet_sap_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.log_timesheet_sap
@@ -757,15 +970,7 @@ ALTER TABLE ONLY public.log_timesheet_sap
 
 
 --
--- Name: mst_job mst_job_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
---
-
-ALTER TABLE ONLY public.mst_job
-    ADD CONSTRAINT mst_job_pkey PRIMARY KEY (id);
-
-
---
--- Name: operations operations_part_id_operation_no_key; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: operations operations_part_id_operation_no_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.operations
@@ -773,7 +978,7 @@ ALTER TABLE ONLY public.operations
 
 
 --
--- Name: operations operations_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: operations operations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.operations
@@ -781,7 +986,7 @@ ALTER TABLE ONLY public.operations
 
 
 --
--- Name: parts parts_partnumber_key; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: parts parts_partnumber_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.parts
@@ -789,7 +994,7 @@ ALTER TABLE ONLY public.parts
 
 
 --
--- Name: parts parts_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: parts parts_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.parts
@@ -797,7 +1002,23 @@ ALTER TABLE ONLY public.parts
 
 
 --
--- Name: process_category process_category_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: ph3_order ph3_order_confirmation_number_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ph3_order
+    ADD CONSTRAINT ph3_order_confirmation_number_key UNIQUE (confirmation_number);
+
+
+--
+-- Name: ph3_order ph3_order_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.ph3_order
+    ADD CONSTRAINT ph3_order_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: process_category process_category_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.process_category
@@ -805,7 +1026,7 @@ ALTER TABLE ONLY public.process_category
 
 
 --
--- Name: process_parameter_choicebase process_parameter_choicebase_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: process_parameter_choicebase process_parameter_choicebase_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.process_parameter_choicebase
@@ -813,7 +1034,7 @@ ALTER TABLE ONLY public.process_parameter_choicebase
 
 
 --
--- Name: process_parameter process_parameter_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: process_parameter process_parameter_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.process_parameter
@@ -821,7 +1042,7 @@ ALTER TABLE ONLY public.process_parameter
 
 
 --
--- Name: processcontroldata_item processcontroldata_item_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: processcontroldata_item processcontroldata_item_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.processcontroldata_item
@@ -829,7 +1050,7 @@ ALTER TABLE ONLY public.processcontroldata_item
 
 
 --
--- Name: processcontroldata processcontroldata_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: processcontroldata processcontroldata_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.processcontroldata
@@ -837,7 +1058,7 @@ ALTER TABLE ONLY public.processcontroldata
 
 
 --
--- Name: production_operations production_operations_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: production_operations production_operations_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.production_operations
@@ -845,7 +1066,7 @@ ALTER TABLE ONLY public.production_operations
 
 
 --
--- Name: progress_update_history progress_update_history_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: progress_update_history progress_update_history_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.progress_update_history
@@ -853,7 +1074,7 @@ ALTER TABLE ONLY public.progress_update_history
 
 
 --
--- Name: qh3_order qh3_order_confirmation_number_key; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: qh3_order qh3_order_confirmation_number_key; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.qh3_order
@@ -861,7 +1082,7 @@ ALTER TABLE ONLY public.qh3_order
 
 
 --
--- Name: qh3_order qh3_order_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: qh3_order qh3_order_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.qh3_order
@@ -869,7 +1090,7 @@ ALTER TABLE ONLY public.qh3_order
 
 
 --
--- Name: sow sow_codenumber_uniq; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: sow sow_codenumber_uniq; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.sow
@@ -877,7 +1098,7 @@ ALTER TABLE ONLY public.sow
 
 
 --
--- Name: sow sow_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: sow sow_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.sow
@@ -885,7 +1106,39 @@ ALTER TABLE ONLY public.sow
 
 
 --
--- Name: timesheet_transaction timesheet_transaction_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: sow_standard_attachments sow_standard_attachments_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_standard_attachments
+    ADD CONSTRAINT sow_standard_attachments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sow_standard sow_standard_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_standard
+    ADD CONSTRAINT sow_standard_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sow_template_lines sow_template_lines_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_template_lines
+    ADD CONSTRAINT sow_template_lines_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sow_templates sow_templates_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_templates
+    ADD CONSTRAINT sow_templates_pkey PRIMARY KEY (template_id);
+
+
+--
+-- Name: timesheet_transaction timesheet_transaction_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.timesheet_transaction
@@ -893,7 +1146,7 @@ ALTER TABLE ONLY public.timesheet_transaction
 
 
 --
--- Name: sow uq_sow_order_operation; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: sow uq_sow_order_operation; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.sow
@@ -901,7 +1154,7 @@ ALTER TABLE ONLY public.sow
 
 
 --
--- Name: usernfc usernfc_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: usernfc usernfc_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.usernfc
@@ -909,7 +1162,7 @@ ALTER TABLE ONLY public.usernfc
 
 
 --
--- Name: usernfc usernfc_snssb_unique; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: usernfc usernfc_snssb_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.usernfc
@@ -917,7 +1170,15 @@ ALTER TABLE ONLY public.usernfc
 
 
 --
--- Name: workcenter workcenter_pkey; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: workcenter workcenter_machineid_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.workcenter
+    ADD CONSTRAINT workcenter_machineid_unique UNIQUE (machineid);
+
+
+--
+-- Name: workcenter workcenter_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.workcenter
@@ -925,7 +1186,7 @@ ALTER TABLE ONLY public.workcenter
 
 
 --
--- Name: workcenter workcenter_workcenternew_unique; Type: CONSTRAINT; Schema: public; Owner: tag
+-- Name: workcenter workcenter_workcenternew_unique; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.workcenter
@@ -933,322 +1194,329 @@ ALTER TABLE ONLY public.workcenter
 
 
 --
--- Name: idx_mst_job_order_no; Type: INDEX; Schema: public; Owner: tag
---
-
-CREATE INDEX idx_mst_job_order_no ON public.mst_job USING btree (order_no);
-
-
---
--- Name: idx_mst_job_order_wc; Type: INDEX; Schema: public; Owner: tag
---
-
-CREATE INDEX idx_mst_job_order_wc ON public.mst_job USING btree (order_no, workcenter);
-
-
---
--- Name: idx_mst_job_system_status; Type: INDEX; Schema: public; Owner: tag
---
-
-CREATE INDEX idx_mst_job_system_status ON public.mst_job USING btree (system_status);
-
-
---
--- Name: idx_mst_job_workcenter; Type: INDEX; Schema: public; Owner: tag
---
-
-CREATE INDEX idx_mst_job_workcenter ON public.mst_job USING btree (workcenter);
-
-
---
--- Name: idx_operations_drawing_path; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_operations_drawing_path; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_operations_drawing_path ON public.operations USING btree (drawing_path);
 
 
 --
--- Name: idx_operations_part_id; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_operations_part_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_operations_part_id ON public.operations USING btree (part_id);
 
 
 --
--- Name: idx_parts_model; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_parts_model; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_parts_model ON public.parts USING btree (model);
 
 
 --
--- Name: idx_parts_partname; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_parts_partname; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_parts_partname ON public.parts USING btree (partname);
 
 
 --
--- Name: idx_parts_partnumber; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_parts_partnumber; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_parts_partnumber ON public.parts USING btree (partnumber);
 
 
 --
--- Name: idx_pcd_operation_no; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pcd_operation_no; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pcd_operation_no ON public.processcontroldata USING btree (operation_no);
 
 
 --
--- Name: idx_pcd_production_order; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pcd_production_order; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pcd_production_order ON public.processcontroldata USING btree (production_order);
 
 
 --
--- Name: idx_pcd_snssb; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pcd_snssb; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pcd_snssb ON public.processcontroldata USING btree (snssb);
 
 
 --
--- Name: idx_pcd_tsnumber; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pcd_tsnumber; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pcd_tsnumber ON public.processcontroldata USING btree (tsnumber);
 
 
 --
--- Name: idx_pcdi_id_parameter; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pcdi_id_parameter; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pcdi_id_parameter ON public.processcontroldata_item USING btree (id_parameter);
 
 
 --
--- Name: idx_pcdi_id_processcontroldata; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pcdi_id_processcontroldata; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pcdi_id_processcontroldata ON public.processcontroldata_item USING btree (id_processcontroldata);
 
 
 --
--- Name: idx_pp_id_process; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_pp_id_process; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_pp_id_process ON public.process_parameter USING btree (id_process);
 
 
 --
--- Name: idx_ppcb_id_parameter; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ppcb_id_parameter; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ppcb_id_parameter ON public.process_parameter_choicebase USING btree (id_parameter);
 
 
 --
--- Name: idx_prodops_order_operation; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_prodops_order_operation; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_prodops_order_operation ON public.production_operations USING btree (order_number, operation_number);
 
 
 --
--- Name: idx_puh_created_at; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_puh_created_at; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_puh_created_at ON public.progress_update_history USING btree (created_at DESC);
 
 
 --
--- Name: idx_puh_operation_id; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_puh_operation_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_puh_operation_id ON public.progress_update_history USING btree (operation_id);
 
 
 --
--- Name: idx_sow_codenumber; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_codenumber; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_codenumber ON public.sow USING btree (codenumber);
 
 
 --
--- Name: idx_sow_model; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_model; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_model ON public.sow USING btree (model);
 
 
 --
--- Name: idx_sow_order_no; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_order_no; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_order_no ON public.sow USING btree (order_no);
 
 
 --
--- Name: idx_sow_part_name_trgm; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_part_name_trgm; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_part_name_trgm ON public.sow USING gin (part_name public.gin_trgm_ops);
 
 
 --
--- Name: idx_sow_part_number; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_part_number; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_part_number ON public.sow USING btree (part_number);
 
 
 --
--- Name: idx_sow_ssbr_id; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_ssbr_id; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_ssbr_id ON public.sow USING btree (ssbr_id);
 
 
 --
--- Name: idx_sow_sync_modified; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_standard_component_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_sow_standard_component_id ON public.sow_standard USING btree (component_id);
+
+
+--
+-- Name: idx_sow_standard_source_plant; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_sow_standard_source_plant ON public.sow_standard USING btree (source_plant);
+
+
+--
+-- Name: idx_sow_std_attach_standard_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_sow_std_attach_standard_id ON public.sow_standard_attachments USING btree (standard_id);
+
+
+--
+-- Name: idx_sow_sync_modified; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_sync_modified ON public.sow USING btree (order_no, operation_no) WHERE (sync = 'modified'::text);
 
 
 --
--- Name: idx_sow_workcenter; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_sow_tmpl_lines_standard_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_sow_tmpl_lines_standard_id ON public.sow_template_lines USING btree (standard_id);
+
+
+--
+-- Name: idx_sow_tmpl_lines_template_id; Type: INDEX; Schema: public; Owner: postgres
+--
+
+CREATE INDEX idx_sow_tmpl_lines_template_id ON public.sow_template_lines USING btree (template_id);
+
+
+--
+-- Name: idx_sow_workcenter; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_sow_workcenter ON public.sow USING btree (workcenter);
 
 
 --
--- Name: idx_ts_full_name_trgm; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_full_name_trgm; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_full_name_trgm ON public.timesheet_transaction USING gin (full_name public.gin_trgm_ops);
 
 
 --
--- Name: idx_ts_longdate_checkin; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_longdate_checkin; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_longdate_checkin ON public.timesheet_transaction USING btree (longdate_checkin);
 
 
 --
--- Name: idx_ts_longdate_checkout; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_longdate_checkout; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_longdate_checkout ON public.timesheet_transaction USING btree (longdate_checkout);
 
 
 --
--- Name: idx_ts_operation_no; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_operation_no; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_operation_no ON public.timesheet_transaction USING btree (operation_no);
 
 
 --
--- Name: idx_ts_order_no; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_order_no; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_order_no ON public.timesheet_transaction USING btree (order_no);
 
 
 --
--- Name: idx_ts_order_no_trgm; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_order_no_trgm; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_order_no_trgm ON public.timesheet_transaction USING gin (order_no public.gin_trgm_ops);
 
 
 --
--- Name: idx_ts_order_wc; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_order_wc; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_order_wc ON public.timesheet_transaction USING btree (order_no, workcentercode);
 
 
 --
--- Name: idx_ts_serial_checkin; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_serial_checkin; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_serial_checkin ON public.timesheet_transaction USING btree (serialnumber, longdate_checkin);
 
 
 --
--- Name: idx_ts_serialnumber_trgm; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_serialnumber_trgm; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_serialnumber_trgm ON public.timesheet_transaction USING gin (serialnumber public.gin_trgm_ops);
 
 
 --
--- Name: idx_ts_state_flag; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_state_flag; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_state_flag ON public.timesheet_transaction USING btree (state_flag);
 
 
 --
--- Name: idx_ts_validation_date; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_validation_date; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_validation_date ON public.timesheet_transaction USING btree (validation_date);
 
 
 --
--- Name: idx_ts_workcentercode; Type: INDEX; Schema: public; Owner: tag
+-- Name: idx_ts_workcentercode; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE INDEX idx_ts_workcentercode ON public.timesheet_transaction USING btree (workcentercode);
 
 
 --
--- Name: uq_usernfc_nfcid; Type: INDEX; Schema: public; Owner: tag
+-- Name: uq_usernfc_nfcid; Type: INDEX; Schema: public; Owner: postgres
 --
 
 CREATE UNIQUE INDEX uq_usernfc_nfcid ON public.usernfc USING btree (nfcid);
 
 
 --
--- Name: sow before_update_set_sync; Type: TRIGGER; Schema: public; Owner: tag
+-- Name: sow before_update_set_sync; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER before_update_set_sync BEFORE UPDATE ON public.sow FOR EACH ROW EXECUTE FUNCTION public.trg_set_sync_modified();
 
 
 --
--- Name: sow trg_delete_dup_sow; Type: TRIGGER; Schema: public; Owner: tag
+-- Name: sow trg_delete_dup_sow; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER trg_delete_dup_sow AFTER INSERT ON public.sow FOR EACH ROW EXECUTE FUNCTION public.fn_delete_dup_sow();
 
 
 --
--- Name: operations update_operations_updated_at; Type: TRIGGER; Schema: public; Owner: tag
+-- Name: operations update_operations_updated_at; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER update_operations_updated_at BEFORE UPDATE ON public.operations FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
--- Name: parts update_parts_updated_at; Type: TRIGGER; Schema: public; Owner: tag
+-- Name: parts update_parts_updated_at; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
 CREATE TRIGGER update_parts_updated_at BEFORE UPDATE ON public.parts FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
--- Name: process_parameter_choicebase fk_choice_parameter; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: process_parameter_choicebase fk_choice_parameter; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.process_parameter_choicebase
@@ -1256,7 +1524,7 @@ ALTER TABLE ONLY public.process_parameter_choicebase
 
 
 --
--- Name: processcontroldata_item fk_item_parameter; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: processcontroldata_item fk_item_parameter; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.processcontroldata_item
@@ -1264,7 +1532,7 @@ ALTER TABLE ONLY public.processcontroldata_item
 
 
 --
--- Name: processcontroldata_item fk_item_processcontroldata; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: processcontroldata_item fk_item_processcontroldata; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.processcontroldata_item
@@ -1272,7 +1540,7 @@ ALTER TABLE ONLY public.processcontroldata_item
 
 
 --
--- Name: operations fk_operations_part; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: operations fk_operations_part; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.operations
@@ -1280,7 +1548,7 @@ ALTER TABLE ONLY public.operations
 
 
 --
--- Name: processcontroldata fk_pcd_timesheet; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: processcontroldata fk_pcd_timesheet; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.processcontroldata
@@ -1288,7 +1556,7 @@ ALTER TABLE ONLY public.processcontroldata
 
 
 --
--- Name: process_parameter fk_pp_process_category; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: process_parameter fk_pp_process_category; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.process_parameter
@@ -1296,7 +1564,7 @@ ALTER TABLE ONLY public.process_parameter
 
 
 --
--- Name: progress_update_history fk_puh_sow_operation; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: progress_update_history fk_puh_sow_operation; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.progress_update_history
@@ -1304,16 +1572,54 @@ ALTER TABLE ONLY public.progress_update_history
 
 
 --
--- Name: timesheet_transaction fk_timesheet_user; Type: FK CONSTRAINT; Schema: public; Owner: tag
+-- Name: timesheet_transaction fk_timesheet_user; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
 ALTER TABLE ONLY public.timesheet_transaction
-    ADD CONSTRAINT fk_timesheet_user FOREIGN KEY (serialnumber) REFERENCES public.usernfc(snssb) ON UPDATE CASCADE ON DELETE RESTRICT;
+    ADD CONSTRAINT fk_timesheet_user FOREIGN KEY (serialnumber) REFERENCES public.usernfc(snssb) ON UPDATE CASCADE ON DELETE RESTRICT NOT VALID;
+
+
+--
+-- Name: sow_standard_attachments sow_standard_attachments_standard_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_standard_attachments
+    ADD CONSTRAINT sow_standard_attachments_standard_id_fkey FOREIGN KEY (standard_id) REFERENCES public.sow_standard(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sow_standard sow_standard_component_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_standard
+    ADD CONSTRAINT sow_standard_component_id_fkey FOREIGN KEY (component_id) REFERENCES public.components(component_id);
+
+
+--
+-- Name: sow_template_lines sow_template_lines_standard_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_template_lines
+    ADD CONSTRAINT sow_template_lines_standard_id_fkey FOREIGN KEY (standard_id) REFERENCES public.sow_standard(id);
+
+
+--
+-- Name: sow_template_lines sow_template_lines_template_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_template_lines
+    ADD CONSTRAINT sow_template_lines_template_id_fkey FOREIGN KEY (template_id) REFERENCES public.sow_templates(template_id);
+
+
+--
+-- Name: sow_templates sow_templates_component_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.sow_templates
+    ADD CONSTRAINT sow_templates_component_id_fkey FOREIGN KEY (component_id) REFERENCES public.components(component_id);
 
 
 --
 -- PostgreSQL database dump complete
 --
-
-\unrestrict ndwJquZgtlgsbE8zUdxVxhC9IJm56dMbW7tk7T311udoV1rUfH26lCkyML2tIby
 

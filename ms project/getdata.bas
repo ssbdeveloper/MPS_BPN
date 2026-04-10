@@ -63,9 +63,10 @@ Sub SyncActualFromAPI()
                 If t.Text1 & t.Text2 = codenumber Then
 
                     ' Progress 0-1 ? Physical % (0-100)
+                    ' t.PercentComplete
                     t.PhysicalPercentComplete = _
                         CDbl(item("actual_progress")) * 100
-
+                    
                     ' Actual hours
                     t.ActualWork = _
                         CDbl(item("actual_hours")) * 60   ' jam ? menit

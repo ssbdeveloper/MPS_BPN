@@ -17,6 +17,7 @@ router.put("/validation", controller.bulkValidation);
 router.post("/post-to-sap", controller.postToSap);
 router.put("/updateadmin/:id", controller.updateTimesheetadmin);
 router.put("/checkout", controller.checkout);
+router.put("/checkout-unprod", controller.checkoutUnprod);
 router.put("/checkoutid/", controller.checkoutid);
 router.patch("/:tsnumber", controller.partialUpdate);
 router.delete("/:id", controller.remove);

@@ -99,7 +99,7 @@ if (process.env.NODE_ENV !== 'production') {
   console.log('📁 Serving static files from:', path.join(__dirname, '../UI'));
 }
 
-// Uploaded progress photos — served in all environments
+// Uploaded files — served in all environments
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ========================================
@@ -136,6 +136,7 @@ app.use('/process-parameter', require('./routes/processParameterRoutes'));
 app.use('/process-parameter-choicebase', require('./routes/processParameterChoicebaseRoutes'));
 app.use('/process-control', require('./routes/processControlDataRoutes'));
 app.use('/process-control-item', require('./routes/processControlDataItemRoutes'));
+app.use('/dashboard', require('./routes/dashboard'));
 
 // ========================================
 // ERROR HANDLERS
