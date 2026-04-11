@@ -220,12 +220,16 @@ const LoginTimesheetPage = () => {
       const last = data.find(t => !t.activitytype);
       if (!last) return;
 
+      // Jangan resume jika record terakhir tidak punya order_no / operation_no —
+      // biar user memilih job baru lewat SelectJobPage, bukan meneruskan data rusak.
+      if (!last.order_no || !last.operation_no) return;
+
       sessionStorage.setItem('selectedactivity', JSON.stringify({
-        order:         last.order_no       || '',
+        order:         last.order_no,
         ssbr_id:       last.ssbr_id        || '',
         part_name:     last.part_name      || '',
         operationtext: last.operation_text || '',
-        operation_no:  last.operation_no   || '',
+        operation_no:  last.operation_no,
         planhours:     last.planhours      || '',
         workcenter:    last.workcentercode || '',
       }));
@@ -701,6 +705,6 @@ const LoginTimesheetPage = () => {
       </footer>
     </div>
   );
-};
+};  
 
 export default LoginTimesheetPage;

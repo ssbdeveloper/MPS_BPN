@@ -135,6 +135,15 @@ const TimesheetListPage = () => {
 
   // Handle Restart button
   const handleRestart = async (item) => {
+    // Record productive (bukan unproductive) tapi order_no/operation_no kosong →
+    // data rusak, tidak boleh di-restart karena akan propagate null ke record baru.
+    if (!item.activitytype && (!item.order_no || !item.operation_no)) {
+      toast.error('Tidak dapat restart', {
+        description: 'Record ini tidak memiliki Order No / Operation No. Pilih job baru dari menu utama.'
+      });
+      return;
+    }
+
     try {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
       const mode = datakaryawan?.mode || 'single';
@@ -339,7 +348,7 @@ const TimesheetListPage = () => {
                         )}
                       </div>
                     </td>
-
+                        
                     {/* Workcenter */}
                     <td className={`${cellBase} text-center text-gray-800 font-medium`}>
                       {item.workcenterdescription || '-'}
