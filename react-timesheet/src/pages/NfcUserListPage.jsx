@@ -1,28 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, Search, Pencil, Trash2, AlertTriangle } from 'lucide-react';
+import { X, Search, Pencil, Trash2, AlertTriangle, Plus } from 'lucide-react';
 import PasswordPrompt from '../components/auth/PasswordPrompt';
 
-/**
- * NFC User List Page
- * Converted from editnfc.html with improvements
- * Features:
- * - Password protection (12345)
- * - List all NFC users in table
- * - Single search box for name OR SNSSB
- * - Delete with modal confirmation
- * - Loading states and error handling
- * - Color scheme: White 65%, Blue 25%, Orange 10%
- */
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const NfcUserListPage = () => {
   const navigate = useNavigate();
 
-  // States
   const [allData, setAllData] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [deleteModal, setDeleteModal] = useState({
     show: false,
     nfcid: '',
@@ -31,37 +20,21 @@ const NfcUserListPage = () => {
   });
   const [statusMessage, setStatusMessage] = useState({ type: '', text: '' });
 
-  // Load all NFC users on mount
   useEffect(() => {
     loadNfcUsers();
   }, []);
 
-  // Memoized filtered data - lebih efisien
   const filteredData = useMemo(() => {
-    if (!searchTerm.trim()) {
-      return allData;
-    }
-    
+    if (!searchTerm.trim()) return allData;
     const term = searchTerm.toLowerCase().trim();
-    return allData.filter(user => {
-      // Cari di nama lengkap
-      const nameMatch = (user.full_name || '').toLowerCase().includes(term);
-      
-      // Cari di SNSSB
-      const snssbMatch = (user.snssb || '').toLowerCase().includes(term);
-      
-      // Cari di NFC ID (opsional)
-      const nfcidMatch = (user.nfcid || '').toLowerCase().includes(term);
-      
-      // Cari di machine name (opsional)
-      const machineMatch = (user.machinename || '').toLowerCase().includes(term);
-      
-      // Return true jika ada yang match (OR logic)
-      return nameMatch || snssbMatch || nfcidMatch || machineMatch;
-    });
+    return allData.filter(user =>
+      (user.full_name || '').toLowerCase().includes(term) ||
+      (user.snssb || '').toLowerCase().includes(term) ||
+      (user.nfcid || '').toLowerCase().includes(term) ||
+      (user.machinename || '').toLowerCase().includes(term)
+    );
   }, [allData, searchTerm]);
 
-  // Load NFC users from API
   const loadNfcUsers = async () => {
     setLoading(true);
     try {
@@ -71,242 +44,195 @@ const NfcUserListPage = () => {
       setAllData(data);
     } catch (err) {
       console.error('Error loading NFC users:', err);
-      showStatus('error', '❌ Gagal memuat data NFC users');
+      showStatus('error', 'Gagal memuat data NFC users');
     } finally {
       setLoading(false);
     }
   };
 
-  // Show status message
   const showStatus = (type, text) => {
     setStatusMessage({ type, text });
-    setTimeout(() => {
-      setStatusMessage({ type: '', text: '' });
-    }, 5000);
+    setTimeout(() => setStatusMessage({ type: '', text: '' }), 5000);
   };
 
-  // Open delete confirmation modal
   const handleDeleteClick = (user) => {
-    setDeleteModal({
-      show: true,
-      nfcid: user.nfcid,
-      full_name: user.full_name,
-      snssb: user.snssb
-    });
+    setDeleteModal({ show: true, nfcid: user.nfcid, full_name: user.full_name, snssb: user.snssb });
   };
 
-  // Close delete modal
   const closeDeleteModal = () => {
-    setDeleteModal({
-      show: false,
-      nfcid: '',
-      full_name: '',
-      snssb: ''
-    });
+    setDeleteModal({ show: false, nfcid: '', full_name: '', snssb: '' });
   };
 
-  // Confirm delete
   const confirmDelete = async () => {
+    setDeleting(true);
     try {
-      const response = await fetch(`${API_BASE}/usernfc/${deleteModal.nfcid}`, {
+      // encodeURIComponent penting — NFC ID bisa mengandung karakter khusus
+      const response = await fetch(`${API_BASE}/usernfc/${encodeURIComponent(deleteModal.nfcid)}`, {
         method: 'DELETE'
       });
-      if (!response.ok) throw new Error('Failed to delete');
 
-      // Remove from local state
-      const updatedData = allData.filter(user => user.nfcid !== deleteModal.nfcid);
-      setAllData(updatedData);
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => null);
+        const errMsg = errBody?.error || errBody?.message || `Server error ${response.status}`;
+        throw new Error(errMsg);
+      }
 
-      showStatus('success', '✅ User berhasil dihapus');
+
+      setAllData(prev => prev.filter(u => u.nfcid !== deleteModal.nfcid));
+      showStatus('success', 'User berhasil dihapus');
       closeDeleteModal();
     } catch (err) {
       console.error('Error deleting user:', err);
-      showStatus('error', '❌ Gagal menghapus user');
+      showStatus('error', `Gagal menghapus: ${err.message}`);
+      closeDeleteModal();
+    } finally {
+      setDeleting(false);
     }
   };
 
-  // Navigate to edit page
   const handleEditClick = (nfcid) => {
-    navigate(`/create-edit-nfc?edit=${nfcid}`);
+    navigate(`/create-edit-nfc?edit=${encodeURIComponent(nfcid)}`);
   };
 
   return (
     <PasswordPrompt password="12345">
-      <div className="h-dvh w-screen bg-white flex flex-col overflow-hidden">
-        {/* Header - Dark Blue */}
-        <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md flex-shrink-0">
+      <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
+
+        {/* Header */}
+        <header className="flex-shrink-0 flex items-center justify-between px-4 md:px-6 py-2.5 bg-white border-b border-slate-200 shadow-sm">
           <button
             onClick={() => navigate('/')}
-            className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded shadow-lg hover:shadow-xl active:shadow-sm active:translate-y-1 transition-all duration-150 transform"
-            style={{ boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
+            className="min-h-[44px] flex items-center bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95"
           >
             ← Back
           </button>
-          <h1 className="text-lg font-bold text-white">NFC User Management</h1>
-          <div className="w-20"></div> {/* Spacer */}
+          <h1 className="text-sm md:text-base font-extrabold text-slate-800">NFC User Management</h1>
+          <button
+            onClick={() => navigate('/create-edit-nfc')}
+            className="min-h-[44px] flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white px-3 md:px-4 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95"
+          >
+            <Plus size={14} />
+            <span className="hidden sm:inline">Create New</span>
+            <span className="sm:hidden">New</span>
+          </button>
         </header>
 
         {/* Status Message */}
         {statusMessage.text && (
-          <div className={`px-4 py-3 text-sm font-medium text-center ${
-            statusMessage.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+          <div className={`flex-shrink-0 px-4 py-2.5 text-xs font-semibold text-center ${
+            statusMessage.type === 'success'
+              ? 'bg-emerald-50 text-emerald-700 border-b border-emerald-200'
+              : 'bg-red-50 text-red-700 border-b border-red-200'
           }`}>
             {statusMessage.text}
           </div>
         )}
 
-        {/* Main Content */}
-        <main className="flex-1 flex flex-col gap-3 p-4 overflow-hidden">
-          {/* Search and Create Section */}
-          <section className="bg-blue-50 rounded-lg shadow-md border border-blue-200 p-4 flex-shrink-0">
-            <div className="flex flex-col lg:flex-row gap-3 items-end">
-              {/* Single Search Input */}
-              <div className="flex-1">
-                <label className="block text-sm font-medium text-blue-900 mb-1">
-                  Search Users
-                </label>
-                <div className="relative">
-                  <svg
-                    className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 text-sm bg-white border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                    placeholder="Search by name, SNSSB, NFC ID, or machine..."
-                  />
-                  {searchTerm && (
-                    <button
-                      onClick={() => setSearchTerm('')}
-                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-                <div className="mt-1.5 text-xs text-gray-600">
-                  <Search className="inline w-3.5 h-3.5 mr-1" />Search in: Full Name, SNSSB, NFC ID, Machine Name
-                </div>
-              </div>
-
-              {/* Create New Button - Orange CTA */}
+        {/* Search toolbar */}
+        <div className="flex-shrink-0 px-4 md:px-6 py-3 bg-white border-b border-slate-200">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-9 py-2 bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+              placeholder="Search by name, SNSSB, NFC ID, or machine..."
+            />
+            {searchTerm && (
               <button
-                onClick={() => navigate('/create-edit-nfc')}
-                className="px-6 py-2.5 text-sm font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded-lg shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform whitespace-nowrap"
-                style={{ boxShadow: '0 6px 12px -2px rgba(249, 115, 22, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
-                + Create New User
+                <X className="w-4 h-4" />
               </button>
-            </div>
-
-            {/* Results Count */}
-            {!loading && (
-              <div className="mt-3 text-xs text-blue-900 flex items-center justify-between">
-                <div>
-                  Showing <span className="font-bold">{filteredData.length}</span> of <span className="font-bold">{allData.length}</span> users
-                </div>
-                {searchTerm && (
-                  <div className="text-gray-500">
-                    Search: "<span className="font-medium">{searchTerm}</span>"
-                  </div>
-                )}
-              </div>
             )}
-          </section>
+          </div>
+          {!loading && (
+            <div className="mt-2 text-[10px] text-slate-500 flex items-center justify-between">
+              <span>
+                Showing <span className="font-semibold text-slate-700">{filteredData.length}</span> of{' '}
+                <span className="font-semibold text-slate-700">{allData.length}</span> users
+              </span>
+              {searchTerm && (
+                <span>Hasil untuk: "<span className="font-medium text-slate-700">{searchTerm}</span>"</span>
+              )}
+            </div>
+          )}
+        </div>
 
-          {/* Table Section */}
-          <section className="flex-1 bg-blue-50 rounded-lg shadow-md border border-blue-200 overflow-hidden flex flex-col">
+        {/* Table */}
+        <div className="flex-1 overflow-hidden px-4 md:px-6 py-3">
+          <div className="h-full bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden flex flex-col">
             {loading ? (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center">
-                  <div className="animate-spin w-12 h-12 border-4 border-blue-900 border-t-transparent rounded-full mx-auto mb-3"></div>
-                  <p className="text-blue-900 font-medium">Loading...</p>
+                  <div className="animate-spin w-10 h-10 border-4 border-[#00b4d8] border-t-transparent rounded-full mx-auto mb-3" />
+                  <p className="text-sm text-slate-500">Loading...</p>
                 </div>
               </div>
             ) : filteredData.length === 0 ? (
               <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <svg className="w-16 h-16 text-gray-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-                  </svg>
-                  <p className="text-gray-600 font-medium mb-1">
-                    {allData.length === 0 ? 'Tidak ada data NFC user' : 'Tidak ada hasil untuk pencarian ini'}
+                <div className="text-center px-4">
+                  <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <Search className="w-6 h-6 text-slate-400" />
+                  </div>
+                  <p className="text-sm font-medium text-slate-600 mb-1">
+                    {allData.length === 0 ? 'Tidak ada data NFC user' : 'Tidak ada hasil'}
                   </p>
-                  {allData.length > 0 && searchTerm && (
-                    <p className="text-sm text-gray-500">
-                      Tidak ditemukan untuk: "{searchTerm}"
-                    </p>
+                  {searchTerm && (
+                    <p className="text-xs text-slate-400">Tidak ditemukan untuk: "{searchTerm}"</p>
                   )}
                 </div>
               </div>
             ) : (
-              <div className="overflow-auto">
+              <div className="overflow-auto flex-1">
                 <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-blue-700 text-white">
-                    <tr>
-                      <th className="px-3 py-3 text-left">NFC ID</th>
-                      <th className="px-3 py-3 text-left">Full Name</th>
-                      <th className="px-3 py-3 text-left">SNSSB</th>
-                      <th className="px-3 py-3 text-left">Machine ID</th>
-                      <th className="px-3 py-3 text-left">Machine Name</th>
-                      <th className="px-3 py-3 text-left">Work Center</th>
-                      <th className="px-3 py-3 text-left">Role</th>
-                      <th className="px-3 py-3 text-center">Actions</th>
+                  <thead className="sticky top-0">
+                    <tr style={{ background: '#caf0f8' }}>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap">NFC ID</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap">Full Name</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap">SNSSB</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap hidden md:table-cell">Machine ID</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap hidden md:table-cell">Machine Name</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap hidden md:table-cell">Work Center</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap">Role</th>
+                      <th className="px-3 py-2.5 text-center font-semibold text-slate-700 whitespace-nowrap">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white">
-                    {filteredData.map((user, index) => (
-                      <tr
-                        key={user.nfcid}
-                        className={`border-b border-blue-200 hover:bg-blue-50 transition-colors ${
-                          index % 2 === 0 ? 'bg-white' : 'bg-blue-50/30'
-                        }`}
-                      >
-                        <td className="px-3 py-2 font-mono font-semibold text-blue-900">
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredData.map((user) => (
+                      <tr key={user.nfcid} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-3 py-2 font-mono font-semibold text-[#0096c7]">
                           {user.nfcid}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 text-slate-800">
                           {highlightMatch(user.full_name || '', searchTerm)}
                         </td>
-                        <td className="px-3 py-2 font-medium">
+                        <td className="px-3 py-2 font-medium text-slate-700">
                           {highlightMatch(user.snssb || '', searchTerm)}
                         </td>
-                        <td className="px-3 py-2">{user.machineid || '-'}</td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 text-slate-600 hidden md:table-cell">{user.machineid || '-'}</td>
+                        <td className="px-3 py-2 text-slate-600 hidden md:table-cell">
                           {highlightMatch(user.machinename || '', searchTerm)}
                         </td>
-                        <td className="px-3 py-2">{user.workcenter || '-'}</td>
+                        <td className="px-3 py-2 text-slate-600 hidden md:table-cell">{user.workcenter || '-'}</td>
                         <td className="px-3 py-2">
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            user.roles === 'Admin' ? 'bg-purple-100 text-purple-800' :
-                            user.roles === 'Supervisor' ? 'bg-blue-100 text-blue-800' :
-                            user.roles === 'Technician' ? 'bg-green-100 text-green-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {user.roles || '-'}
-                          </span>
+                          <RoleBadge role={user.roles} />
                         </td>
                         <td className="px-3 py-2">
-                          <div className="flex gap-2 justify-center">
+                          <div className="flex gap-1.5 justify-center">
                             <button
                               onClick={() => handleEditClick(user.nfcid)}
-                              className="px-3 py-1 text-xs font-medium bg-blue-700 text-white rounded-lg shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
-                              style={{ boxShadow: '0 3px 6px -1px rgba(37, 99, 235, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
+                              className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-[#0096c7] hover:bg-[#0077b6] text-white rounded-lg transition-all active:scale-95"
                             >
-                              <Pencil className="inline w-3.5 h-3.5 mr-1" />Edit
+                              <Pencil size={12} />Edit
                             </button>
                             <button
                               onClick={() => handleDeleteClick(user)}
-                              className="px-3 py-1 text-xs font-medium bg-red-600 text-white rounded-lg shadow-md hover:shadow-lg active:shadow-sm active:translate-y-0.5 transition-all duration-150 transform"
-                              style={{ boxShadow: '0 3px 6px -1px rgba(220, 38, 38, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.2)' }}
+                              className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all active:scale-95"
                             >
-                              <Trash2 className="inline w-3.5 h-3.5 mr-1" />Delete
+                              <Trash2 size={12} />Del
                             </button>
                           </div>
                         </td>
@@ -316,55 +242,60 @@ const NfcUserListPage = () => {
                 </table>
               </div>
             )}
-          </section>
-        </main>
+          </div>
+        </div>
 
         {/* Delete Confirmation Modal */}
         {deleteModal.show && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-2xl p-6 w-full max-w-md">
-              <h3 className="text-lg font-bold text-blue-900 mb-4 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-yellow-500" /> Konfirmasi Hapus</h3>
-              <p className="text-sm text-gray-700 mb-4">
+          <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm px-0 md:px-4">
+            <div className="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl shadow-xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center gap-2 mb-4">
+                <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                <h3 className="text-base font-bold text-slate-800">Konfirmasi Hapus</h3>
+              </div>
+
+              <p className="text-sm text-slate-600 mb-4">
                 Apakah Anda yakin ingin menghapus user berikut?
               </p>
 
-              {/* User Details */}
-              <div className="bg-blue-50 rounded-lg p-3 mb-4 border border-blue-200">
-                <div className="text-xs space-y-1">
-                  <div className="flex">
-                    <span className="font-medium text-blue-900 w-24">NFC ID:</span>
-                    <span className="font-mono font-semibold">{deleteModal.nfcid}</span>
-                  </div>
-                  <div className="flex">
-                    <span className="font-medium text-blue-900 w-24">Full Name:</span>
-                    <span>{deleteModal.full_name}</span>
-                  </div>
-                  <div className="flex">
-                    <span className="font-medium text-blue-900 w-24">SNSSB:</span>
-                    <span className="font-medium">{deleteModal.snssb}</span>
-                  </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-4 space-y-1.5">
+                <div className="flex text-xs">
+                  <span className="font-semibold text-slate-500 w-24">NFC ID</span>
+                  <span className="font-mono font-bold text-slate-800">{deleteModal.nfcid}</span>
+                </div>
+                <div className="flex text-xs">
+                  <span className="font-semibold text-slate-500 w-24">Full Name</span>
+                  <span className="text-slate-800">{deleteModal.full_name}</span>
+                </div>
+                <div className="flex text-xs">
+                  <span className="font-semibold text-slate-500 w-24">SNSSB</span>
+                  <span className="font-medium text-slate-800">{deleteModal.snssb}</span>
                 </div>
               </div>
 
-              <p className="text-xs text-red-600 mb-4">
-                ⚠️ Aksi ini tidak dapat dibatalkan. Data akan dihapus secara permanen.
+              <p className="text-xs text-red-600 mb-6">
+                Aksi ini tidak dapat dibatalkan. Data akan dihapus secara permanen.
               </p>
 
-              {/* Action Buttons */}
-              <div className="flex gap-3">
+              <div className="flex gap-2">
                 <button
                   onClick={closeDeleteModal}
-                  className="flex-1 px-4 py-2 text-sm font-medium bg-gray-300 text-gray-800 rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform"
-                  style={{ boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.15)' }}
+                  disabled={deleting}
+                  className="flex-1 px-4 py-2.5 text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 rounded-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Batal
                 </button>
                 <button
                   onClick={confirmDelete}
-                  className="flex-1 px-4 py-2 text-sm font-bold bg-gradient-to-b from-red-500 to-red-600 text-white rounded shadow-lg hover:shadow-xl active:shadow-md active:translate-y-1 transition-all duration-150 transform"
-                  style={{ boxShadow: '0 6px 12px -2px rgba(220, 38, 38, 0.5), 0 4px 6px -1px rgba(0, 0, 0, 0.3)' }}
+                  disabled={deleting}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-semibold bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Trash2 className="inline w-4 h-4 mr-1" />Hapus
+                  {deleting ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Trash2 size={14} />
+                  )}
+                  {deleting ? 'Menghapus...' : 'Hapus'}
                 </button>
               </div>
             </div>
@@ -375,27 +306,34 @@ const NfcUserListPage = () => {
   );
 };
 
-// Helper function untuk highlight search result
+const RoleBadge = ({ role }) => {
+  const styles = {
+    Admin:      'bg-purple-100 text-purple-700 border-purple-200',
+    Supervisor: 'bg-[#caf0f8] border-[#90e0ef] text-[#0077b6]',
+    Technician: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  };
+  const cls = styles[role] || 'bg-slate-100 text-slate-600 border-slate-200';
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}`}>
+      {role || '-'}
+    </span>
+  );
+};
+
 const highlightMatch = (text, searchTerm) => {
   if (!searchTerm.trim() || !text) return text;
-  
   const term = searchTerm.toLowerCase();
   const lowerText = text.toLowerCase();
-  
   if (!lowerText.includes(term)) return text;
-  
-  const parts = text.split(new RegExp(`(${term})`, 'gi'));
-  
+  const parts = text.split(new RegExp(`(${searchTerm.trim()})`, 'gi'));
   return (
     <span>
-      {parts.map((part, index) =>
+      {parts.map((part, i) =>
         part.toLowerCase() === term ? (
-          <mark key={index} className="bg-yellow-200 font-semibold px-0.5 rounded">
+          <mark key={i} className="bg-amber-100 text-amber-800 px-0.5 rounded">
             {part}
           </mark>
-        ) : (
-          part
-        )
+        ) : part
       )}
     </span>
   );

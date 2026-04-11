@@ -148,13 +148,19 @@ exports.remove = async (req, res) => {
   try {
     const { nfcid } = req.params;
     const result = await db.query("DELETE FROM usernfc WHERE nfcid = $1 RETURNING *", [nfcid]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ message: "Data tidak ditemukan" });
     }
-    
+
     res.json({ message: "Deleted successfully", data: result.rows[0] });
   } catch (err) {
+    // FK violation: snssb user masih direferensikan di timesheet_transaction.serialnumber
+    if (err.code === '23503') {
+      return res.status(409).json({
+        error: 'User tidak dapat dihapus karena SNSSB-nya masih tercatat dalam riwayat timesheet.'
+      });
+    }
     res.status(500).json({ error: err.message });
   }
 };
@@ -162,26 +168,41 @@ exports.remove = async (req, res) => {
 
 exports.updatenfc = async (req, res) => {
   try {
-    const { nfcid } = req.params;
-    const { full_name, snssb, machineid, machinename, workcenter, roles } = req.body;
-    
-    console.log("[USERNFC UPDATE]", nfcid, JSON.stringify(req.body));
-    
+    const { nfcid: originalNfcId } = req.params;
+    const { nfcid: newNfcId, full_name, snssb, machineid, machinename, workcenter, roles } = req.body;
+
+    console.log("[USERNFC UPDATE]", originalNfcId, "→", newNfcId, JSON.stringify(req.body));
+
+    // Jika nfcid berubah, cek duplikat (aman dari FK — constraint bukan di nfcid)
+    if (newNfcId && newNfcId !== originalNfcId) {
+      const exists = await db.query('SELECT 1 FROM usernfc WHERE nfcid = $1', [newNfcId]);
+      if (exists.rows.length > 0) {
+        return res.status(409).json({ error: `NFC ID "${newNfcId}" sudah digunakan oleh user lain.` });
+      }
+    }
+
     const result = await db.query(
-      `UPDATE usernfc 
-       SET full_name = $1, snssb = $2, machineid = $3, machinename = $4, workcenter = $5, roles = $6
-       WHERE nfcid = $7 
+      `UPDATE usernfc
+       SET nfcid = $1, full_name = $2, snssb = $3, machineid = $4, machinename = $5, workcenter = $6, roles = $7
+       WHERE nfcid = $8
        RETURNING *`,
-      [full_name, snssb, machineid, machinename, workcenter, roles, nfcid]
+      [newNfcId || originalNfcId, full_name, snssb, machineid, machinename, workcenter, roles, originalNfcId]
     );
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "User tidak ditemukan" });
     }
-    
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error("[USERNFC ERROR]", err.message);
+    // FK constraint: usernfc.snssb direferensikan oleh timesheet_transaction.serialnumber
+    // Triggered jika SNSSB diubah dan sudah ada riwayat timesheet
+    if (err.code === '23503') {
+      return res.status(409).json({
+        error: 'SNSSB tidak dapat diubah karena sudah memiliki riwayat timesheet yang menggunakan SNSSB ini.'
+      });
+    }
     res.status(500).json({ error: err.message });
   }
 };
