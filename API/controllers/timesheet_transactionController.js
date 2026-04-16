@@ -1016,11 +1016,11 @@ exports.postToSap = async (req, res) => {
       PLNFL:        isUnprod ? '' : String(row.sequence_number || ''),
       VORNR_B:      isUnprod ? '' : String(row.branch_operation_no || ''),
       VORNR_R:      isUnprod ? '' : String(row.return_operation_no || ''),
-      ZCONF_TYPE:   String('M1'),
-      //ZCONF_TYPE:   isUnprod                                          ? ''
-      //            : String(row.workcentercode || '').endsWith('OT')   ? 'OV'
-      //            : parseInt(row.operation_no, 10) > 5000             ? 'RW'
-      //            : 'RG',
+      //ZCONF_TYPE:   String('M1'),
+      ZCONF_TYPE:   isUnprod                                          ? ''
+                  : String(row.workcentercode || '').endsWith('OT')   ? 'OV'
+                  : parseInt(row.operation_no, 10) > 5000             ? 'RW'
+                  : 'RG',
       ARBPL:        String(row.workcentercode || ''),
       LSTAR:        String(row.activitytype || ''),
       ISDD:         String(row.isdd || ''),

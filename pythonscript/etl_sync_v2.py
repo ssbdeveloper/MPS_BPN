@@ -128,7 +128,7 @@ def sync_sow(tgt_cur, rows: list) -> None:
             desc = existing_desc or row.get("material_description")
             order_material[order] = (mat, desc)
 
-    sow_tuples = []
+    sow_map: dict = {}
     for row in rows:
         order_no       = row["order_no"]
         operation_no   = row["operation_no"]
@@ -143,10 +143,16 @@ def sync_sow(tgt_cur, rows: list) -> None:
         except (ValueError, TypeError):
             planhours = None
 
-        sow_tuples.append((
+        # Deduplicate by (order_no, operation_no) — last write wins.
+        # execute_values sends all rows in one SQL statement; PostgreSQL raises
+        # "ON CONFLICT DO UPDATE command cannot affect row a second time" if
+        # duplicates on the conflict key exist within the same batch.
+        sow_map[(order_no, operation_no)] = (
             order_no, operation_no, work_center, confirmation,
             planhours, part_number, part_name, operation_text,
-        ))
+        )
+
+    sow_tuples = list(sow_map.values())
 
     extras.execute_values(
         tgt_cur,
