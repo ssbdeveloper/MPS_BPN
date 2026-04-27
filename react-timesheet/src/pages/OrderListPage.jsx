@@ -829,7 +829,7 @@ const OrderListPage = () => {
       {/* ── Header ──────────────────────────────────────────────── */}
       <header className="flex items-center justify-between bg-blue-900 px-4 py-2.5 shadow-lg flex-shrink-0 border-b border-blue-800">
         <button
-          onClick={() => navigate(-1)}
+          onClick={() => navigate('/operations-hub')}
           className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-blue-700 text-white
                      rounded-lg transition-all hover:bg-blue-600 active:translate-y-px"
           style={{ boxShadow: '0 4px 0 rgba(0,0,0,0.25), 0 6px 12px rgba(0,0,0,0.2)' }}

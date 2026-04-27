@@ -14,7 +14,6 @@ const navItems = [
     icon: PlusCircle,
     path: '/sow-management/create',
     description: 'Tambah SOW baru',
-    disabled: true,
   },
   {
     label: 'SOW History',
@@ -35,7 +34,7 @@ const SowManagementPage = () => {
       <header className="flex-shrink-0 flex items-center justify-between px-4 md:px-6 py-2.5
                          bg-white border-b border-slate-200 shadow-sm">
         <button
-          onClick={() => navigate('/LandingPage')}
+          onClick={() => navigate('/operations-hub')}
           className="min-h-[44px] min-w-[44px] flex items-center gap-1.5
                      bg-white border border-slate-200 text-slate-700
                      hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5

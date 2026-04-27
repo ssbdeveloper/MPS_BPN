@@ -101,7 +101,7 @@ const NfcUserListPage = () => {
         {/* Header */}
         <header className="flex-shrink-0 flex items-center justify-between px-4 md:px-6 py-2.5 bg-white border-b border-slate-200 shadow-sm">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate('/operations-hub')}
             className="min-h-[44px] flex items-center bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95"
           >
             ← Back

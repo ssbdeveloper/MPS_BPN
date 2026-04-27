@@ -231,7 +231,7 @@ const TimesheetListPage = () => {
 
   // Back to main menu
   const goBack = () => {
-    navigate('/timesheet-mainmenu');
+    navigate('/operations-hub');
   };
 
   // Common cell style

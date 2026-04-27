@@ -654,7 +654,7 @@ const TimesheetValidationPage = () => {
     navigate(`/timesheet-edit/${tsnumber}?returnUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`);
   }, [navigate]);
 
-  const goBack        = useCallback(() => navigate('/'), [navigate]);
+  const goBack        = useCallback(() => navigate('/operations-hub'), [navigate]);
   const toggleFilters = useCallback(() => {
     setShowFilters(prev => {
       const next = !prev;

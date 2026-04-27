@@ -36,8 +36,8 @@ const path = require('path');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const DB = {
-  host: 'localhost', port: 5432,
-  database: 'ptssb', user: 'postgres', password: '@dminta9',
+  host: '100.86.231.55', port: 5433,
+  database: 'ptssb', user: 'tag', password: '@dminta9',
 };
 
 const DEFAULT_FILE = path.join(__dirname, 'sample scope of work.xlsx');

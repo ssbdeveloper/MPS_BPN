@@ -91,7 +91,7 @@ const ComponentTrackingPage = () => {
       <AppHeader
         title={<><Package className="inline w-5 h-5 mr-1.5" />Component Tracking</>}
         rightContent={
-          <Button variant="secondary" size="small" onClick={() => navigate('/')}>
+          <Button variant="secondary" size="small" onClick={() => navigate('/operations-hub')}>
             ← Back
           </Button>
         }

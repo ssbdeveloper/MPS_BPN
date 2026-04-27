@@ -50,7 +50,7 @@ export default function DashboardPage() {
           </>
         }
         rightContent={
-          <Button variant="secondary" size="small" onClick={() => navigate("/")}>
+          <Button variant="secondary" size="small" onClick={() => navigate("/operations-hub")}>
             ← Back
           </Button>
         }

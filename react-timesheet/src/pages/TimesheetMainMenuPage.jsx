@@ -169,7 +169,7 @@ const TimesheetMainMenuPage = () => {
     }
   };
 
-  const goHome           = () => navigate('/login-timesheet');
+  const goHome           = () => navigate('/operations-hub');
   const gotojob          = () => navigate('/select-job');
   const gotomesin        = () => navigate('/select-machine');
   const gotoparameter    = () => navigate('/process-control');

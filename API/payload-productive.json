@@ -11,7 +11,7 @@
     "ZCONF_TYPE": "",       // Confirmation Type (Jika nilai workcenter diakhiri dengan kata "OT", maka set ZCONF_TYPE = "OV"
                             // Jika operation_no bernilai lebih dari 5000, maka set ZCONF_TYPE = "RW"
                             // Jika tidak memenuhi semua kondisi, maka set ZCONF_TYPE = "RG")
-
+                            // Jika dari Machine Hours (M1 untuk VA, M2 untuk NNVA)
     "ARBPL": "M5051WLS",    // workcenter (table timesheet_transaction)
     "LSTAR": "",            // activitytype (table timesheet_transaction)
     "ISDD": "20260118",     // Start Date (table timesheet_transaction date_checkin "yyyymmdd")
@@ -20,9 +20,10 @@
     "IEDZ": "205900",       // Finish Time (table timesheet_transaction hour_checkout "hhmm")
     "WERKS": "5051",        // Plant (table timesheet_transaction)
     "AUERU": "",            // Final Confirmation (kosong aja)
-    "ZBARCODEID": "" // BarcodeID (kosong aja)
+    "ZBARCODEID": ""        // Confirm Text (Loading, Unloading, Setting, Meassure (Jika M2 di ZCONF_TYPE))
   },
-
+        // confirmation + sequence, (split by digit confirmation)
+            // 0006876534
   {
     "ZTIMESHEETID": "",
     "AUFNR": "1000131548",

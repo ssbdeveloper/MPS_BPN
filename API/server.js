@@ -137,6 +137,7 @@ app.use('/process-parameter-choicebase', require('./routes/processParameterChoic
 app.use('/process-control', require('./routes/processControlDataRoutes'));
 app.use('/process-control-item', require('./routes/processControlDataItemRoutes'));
 app.use('/dashboard', require('./routes/dashboard'));
+app.use('/receiving-shipment', require('./routes/receivingShipment'));
 
 // ========================================
 // ERROR HANDLERS

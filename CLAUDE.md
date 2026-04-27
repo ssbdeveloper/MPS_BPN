@@ -2,6 +2,9 @@
  
 > AI context file. Baca ini sebelum membuat atau mengubah kode apapun di project ini.
  
+untuk koneksi dengan postgres gunakan
+"C:\Program Files\PostgreSQL\15\bin\psql.exe" 
+ $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Program Files\PostgreSQL\15\bin"; [System.Environment]::SetEnvironmentVariable("Path", $env:Path, "User")
 ---
  
 ## Project Overview

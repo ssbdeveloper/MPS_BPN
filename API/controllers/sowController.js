@@ -3,6 +3,11 @@ const path = require('path');
 const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
+const normalizeOrderNo = (value) => {
+  const text = String(value ?? '').trim();
+  return text ? text.replace(/-/g, '000') : '';
+};
+
 // GET grouped orders from view — paginated (for OrderListPage)
 exports.getGrouped = async (req, res) => {
   try {
@@ -782,6 +787,158 @@ exports.upsert = async (req, res) => {
       error: err.message,
       detail: err.detail || null
     });
+  }
+};
+
+exports.createFromBuilder = async (req, res) => {
+  const {
+    order_no,
+    production_order,
+    ssbr_id,
+    part_number,
+    part_name,
+    model,
+    customer,
+    location,
+    created_by,
+    type,
+    group,
+    category,
+    remark,
+    operations,
+  } = req.body;
+
+  const normalizedOrderNo = normalizeOrderNo(order_no || production_order);
+
+  if (!normalizedOrderNo) {
+    return res.status(400).json({
+      success: false,
+      error: 'Production order wajib diisi untuk membuat SOW',
+    });
+  }
+
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Minimal 1 operasi wajib dipilih atau ditambahkan',
+    });
+  }
+
+  let client = null;
+
+  try {
+    client = typeof db.connect === 'function' ? await db.connect() : null;
+    const query = client ? client.query.bind(client) : db.query.bind(db);
+
+    if (client) await query('BEGIN');
+
+    const results = [];
+
+    for (const op of operations) {
+      const operationNo = Number.parseInt(op.operation_no, 10);
+      if (!Number.isFinite(operationNo)) {
+        throw new Error('Operation number tidak valid');
+      }
+
+      const planhours =
+        op.planhours !== undefined && op.planhours !== ''
+          ? Number.parseFloat(op.planhours)
+          : op.std_hours !== undefined && op.std_hours !== ''
+            ? Number.parseFloat(op.std_hours)
+            : null;
+
+      const result = await query(
+        `
+          INSERT INTO sow (
+            order_no,
+            operation_no,
+            ssbr_id,
+            part_number,
+            part_name,
+            model,
+            customer,
+            location,
+            wct_group,
+            workcenter,
+            operation_text,
+            workcenterdescription,
+            planhours,
+            status,
+            created_by,
+            "type",
+            "group",
+            category,
+            remark
+          )
+          VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19
+          )
+          ON CONFLICT (order_no, operation_no)
+          DO UPDATE SET
+            ssbr_id = EXCLUDED.ssbr_id,
+            part_number = EXCLUDED.part_number,
+            part_name = EXCLUDED.part_name,
+            model = EXCLUDED.model,
+            customer = EXCLUDED.customer,
+            location = EXCLUDED.location,
+            wct_group = EXCLUDED.wct_group,
+            workcenter = EXCLUDED.workcenter,
+            operation_text = EXCLUDED.operation_text,
+            workcenterdescription = EXCLUDED.workcenterdescription,
+            planhours = EXCLUDED.planhours,
+            status = COALESCE(sow.status, EXCLUDED.status),
+            created_by = COALESCE(EXCLUDED.created_by, sow.created_by),
+            "type" = EXCLUDED."type",
+            "group" = EXCLUDED."group",
+            category = EXCLUDED.category,
+            remark = EXCLUDED.remark,
+            sync = 'new'
+          RETURNING *
+        `,
+        [
+          normalizedOrderNo,
+          operationNo,
+          ssbr_id || null,
+          part_number || null,
+          part_name || null,
+          model || null,
+          customer || null,
+          location || null,
+          op.wct_group || null,
+          op.workcenter || op.machineid || null,
+          op.operation_text || null,
+          op.workcenterdescription || null,
+          Number.isFinite(planhours) ? planhours : null,
+          'OPEN',
+          created_by || null,
+          type || null,
+          group || null,
+          category || null,
+          remark || null,
+        ]
+      );
+
+      results.push(result.rows[0]);
+    }
+
+    if (client) await query('COMMIT');
+
+    res.json({
+      success: true,
+      order_no: normalizedOrderNo,
+      count: results.length,
+      data: results,
+    });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK');
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      detail: err.detail || null,
+    });
+  } finally {
+    if (client) client.release();
   }
 };
 

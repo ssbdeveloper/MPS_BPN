@@ -57,6 +57,7 @@ router.delete("/standard/attachment/:attachmentId",             controller.delet
 // ============================================
 router.get("/grouped", controller.getGrouped);
 router.get("/getrow/:id", controller.getRowById);
+router.post("/create", controller.createFromBuilder);
 
 // ============================================
 // PROGRESS UPDATE HISTORY

@@ -312,7 +312,7 @@ const EditParameterPage = () => {
       {/* Header */}
       <header className="flex justify-between items-center bg-blue-900 px-4 py-3 shadow-md flex-shrink-0">
         <button
-          onClick={() => navigate('/process-control')}
+          onClick={() => navigate('/operations-hub')}
           className="px-4 py-2 text-sm font-medium bg-blue-700 text-white rounded hover:bg-blue-600 transition-colors"
         >
           ← Back

@@ -1,5 +1,5 @@
 import { createBrowserRouter } from 'react-router-dom';
-import LandingPage from '../pages/LandingPage';
+import OperationsHubPage from '../pages/OperationsHubPage';
 import LoginTimesheetPage from '../pages/LoginTimesheetPage';
 import TimesheetPage from '../pages/TimesheetPage';
 import TimesheetMainMenuPage from '../pages/TimesheetMainMenuPage';
@@ -24,6 +24,9 @@ import OrderListPage from '../pages/OrderListPage';
 import SowEditPage from '../pages/SowEditPage';
 import SowManagementPage from '../pages/SowManagementPage';
 import SowStandardListPage from '../pages/SowStandardListPage';
+import SowCreatePage from '../pages/SowCreatePage';
+import EditorImage from '../pages/editorimage';
+import ReceivingShipmentPage from '../pages/ReceivingShipmentPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -33,7 +36,15 @@ import ProtectedRoute from "../components/auth/ProtectedRoute";
 const router = createBrowserRouter([
   {
     path: '/LandingPage',
-    element: <LandingPage />,
+    element: <OperationsHubPage />,
+  },
+  {
+    path: '/operations-hub',
+    element: <OperationsHubPage />,
+  },
+  {
+    path: '/receiving-shipment',
+    element: <ReceivingShipmentPage />,
   },
   {
     path: '/',
@@ -128,11 +139,19 @@ const router = createBrowserRouter([
         path: 'list',
         element: <SowStandardListPage />,
       },
+      {
+        path: 'create',
+        element: <SowCreatePage />,
+      },
     ],
   },
 {
   path: '/log-timesheet',
   element: <LogTimesheetPage />,
+},
+{
+  path: '/editor-image',
+  element: <EditorImage />,
 },
 
   {
@@ -143,10 +162,10 @@ const router = createBrowserRouter([
           <h1 className="text-6xl font-bold text-gray-800 mb-4">404</h1>
           <p className="text-xl text-gray-600 mb-6">Page not found</p>
           <a
-            href="/"
+            href="/operations-hub"
             className="px-6 py-3 bg-primary text-white rounded-lg hover:bg-primary-dark transition-colors"
           >
-            Back to Home
+            Back to MPS Main
           </a>
         </div>
       </div>

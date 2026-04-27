@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "db": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@bytebase/dbhub",
+        "--dsn",
+        "postgresql://postgres:%40dminta9@localhost:5432/ptssb"
+      ],
+      "env": {}
+    }
+  }
+}

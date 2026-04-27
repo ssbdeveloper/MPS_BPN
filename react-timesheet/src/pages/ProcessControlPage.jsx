@@ -166,7 +166,7 @@ const ProcessControlPage = () => {
   };
 
   const goBack = () => {
-    navigate('/timesheet-mainmenu');
+    navigate('/operations-hub');
   };
 
   // ====== RENDER HELPERS ======
