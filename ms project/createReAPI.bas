@@ -4,8 +4,8 @@ Const OUTPUT_FOLDER      As String = "D:\mpp\"
 Const TEMPLATE_PATH      As String = "D:\MPS2\ms project\master.mpt"
 Const RESOURCE_POOL_PATH As String = "D:\MPS2\ms project\5051_RESOURCES.mpp"
 Const FAKTOR_KOREKSI     As Double = 1
-Const API_URL_GET_NEW    As String = "https://10.169.1.12/fastapi/sow/get-new"
-Const API_URL_UPD_SYNC   As String = "https://10.169.1.12/fastapi/sow/update-sync"
+Const API_URL_GET_NEW    As String = "https://100.80.101.53/fastapi/sow/get-new"
+Const API_URL_UPD_SYNC   As String = "https://100.80.101.53/fastapi/sow/update-sync"
 
 ' ============================================================================
 ' HELPER: HTTP POST — returns response text or 100.80.101.53""
@@ -121,7 +121,7 @@ Private Function ParseNewOperations(jsonText As String) As Collection
         opDict("operation_no") = ExtractValueFromJSON(objStr, "operation_no")  ' angka asli, tanpa padding
         opDict("workcenter") = ExtractValueFromJSON(objStr, "workcenter")
         opDict("planhours") = CDbl(ExtractValueFromJSON(objStr, "planhours"))
-        opDict("operationtext") = ExtractValueFromJSON(objStr, "operation_text")
+        opDict("operation_text") = ExtractValueFromJSON(objStr, "operation_text")
         opDict("plan_start") = ExtractValueFromJSON(objStr, "plan_start")
         opDict("plan_finish") = ExtractValueFromJSON(objStr, "plan_finish")
         opDict("ssbr_id") = ExtractValueFromJSON(objStr, "ssbr_id")
@@ -303,7 +303,7 @@ Sub ConvertAPI_To_MPP_And_Inserts2()
             Set opDict = orderOps(i)
             hoursVal = opDict("planhours") * FAKTOR_KOREKSI
 
-            Set t = subProj.Tasks.Add(opDict("operationtext"))
+            Set t = subProj.Tasks.Add(opDict("operation_text"))
             t.Type = pjFixedWork
             t.Text1 = opDict("order_no")
             t.Text2 = opDict("operation_no")  ' angka asli: "10", "20", dst
@@ -335,7 +335,7 @@ Sub ConvertAPI_To_MPP_And_Inserts2()
                 On Error GoTo 0
             End If
 
-            Debug.Print "  [OK] op=" & opDict("operation_no") & " " & opDict("operationtext")
+            Debug.Print "  [OK] op=" & opDict("operation_no") & " " & opDict("operation_text")
         Next i
 
         ' Save & close
@@ -383,4 +383,3 @@ Sub ConvertAPI_To_MPP_And_Inserts2()
            "Order berhasil : " & successOrders.Count & "/" & groups.Count & vbCrLf & _
            "Total operasi  : " & operations.Count, vbInformation
 End Sub
-

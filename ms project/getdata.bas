@@ -1,4 +1,27 @@
 
+Private Function HttpPostBulks(url As String, body As String) As String
+    On Error GoTo ErrHandler
+    Dim http As Object
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    http.Open "POST", url, False
+    http.Option(4) = 13056
+    http.SetRequestHeader "Content-Type", "application/json"
+    http.SetRequestHeader "Accept", "application/json"
+    http.SetTimeouts 5000, 5000, 15000, 15000
+    http.Send body
+    http.WaitForResponse
+    If http.Status = 200 Then
+        HttpPostBulks = http.ResponseText
+    Else
+        MsgBox "HTTP Error: " & http.Status & " - " & http.StatusText, vbCritical
+        HttpPostBulks = ""
+    End If
+    Exit Function
+ErrHandler:
+    MsgBox "Connection Error: " & Err.Description, vbCritical
+    HttpPostBulks = ""
+End Function
+
 Sub SyncActualFromAPI()
 
     Dim t As Task
@@ -39,13 +62,20 @@ Sub SyncActualFromAPI()
     ' ============================================
     '10.16.1.103
     '
-    response = HttpPostBulks("https://10.169.1.12/fastapi/sow/get-actual", json)
+    response = HttpPostBulks("https://100.80.101.53/fastapi/sow/get-actual", json)
 
     ' ============================================
     ' 3. PARSE JSON
     ' ============================================
 
+    On Error GoTo JsonError
     Set dict = JsonConverter.ParseJson(response)
+    On Error GoTo 0
+    GoTo AfterJsonParse
+JsonError:
+    MsgBox "JsonConverter tidak ditemukan. Import VBA-JSON (JsonConverter.bas) ke project ini." & vbCrLf & Err.Description, vbCritical
+    Exit Sub
+AfterJsonParse:
 
     ' ============================================
     ' 4. UPDATE TASK
@@ -62,8 +92,7 @@ Sub SyncActualFromAPI()
 
                 If t.Text1 & t.Text2 = codenumber Then
 
-                    ' Progress 0-1 ? Physical % (0-100)
-                    ' t.PercentComplete
+                    ' actual_progress sudah dalam skala 0-100 di DB
                     t.PhysicalPercentComplete = _
                         CDbl(item("actual_progress")) * 100
                     
@@ -82,5 +111,4 @@ Sub SyncActualFromAPI()
     MsgBox "Sync Actual Selesai!", vbInformation
 
 End Sub
-
 
