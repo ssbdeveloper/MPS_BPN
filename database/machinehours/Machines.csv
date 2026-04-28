@@ -1,0 +1,80 @@
+MachineNo,SiteMachineNo,MachineGroupID,PlantID,MachineTypeID,MachineID,MachineName,IPAddress,Description,Brand,ModelNumber,SerialNumber,BuildYear,mqtt_topic,mqtt_topic_param
+1,1,1,3,3,M5071CM3,Taikan VMC,192.168.5.51,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+2,2,1,3,4,M5071CM2,Mitseiki 02,192.168.5.52,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+3,3,1,3,4,M5071CM1,Mitseiki 01,192.168.5.53,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+4,4,1,3,1,M5071BL2,Shibaura 06,192.168.5.54,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+5,5,1,3,1,M5071BL1,Shibaura 05,192.168.5.55,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+6,6,2,3,1,M5071MB7,HB 04,192.168.5.56,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+7,7,2,3,1,M5071MB6,HB 03,192.168.5.57,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+8,8,2,3,1,M5071MB5,HB 02,192.168.5.58,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+9,9,2,3,1,M5071MB4,HB 01,192.168.5.59,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+10,10,2,3,9,M5071CL1,Loco Wheel,192.168.5.60,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+11,11,3,3,9,M5071CS1,LM1 - Alpha Horizon,192.168.5.61,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+12,12,3,3,9,M5071SW1,Gleason 1,192.168.5.62,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+13,13,3,3,9,M5071SW2,Gleason 2,192.168.5.63,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+14,14,3,3,9,M5071PM1,Press Loco,192.168.5.64,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+15,15,4,3,9,M5071ML3,LM5 - SUI 80,192.168.5.65,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+16,16,4,3,11,M5071ML2,LM4 - Ryazan,192.168.5.66,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+17,17,4,3,9,M5071MS1,LM3 - Hafco,192.168.5.67,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+18,18,4,3,9,M5071MS2,LM2 - Trenz,192.168.5.68,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+19,19,5,3,7,M5071MH1,Honing,192.168.5.69,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+20,20,5,3,5,M5071DR1,RD02,192.168.5.70,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+21,21,5,3,10,M5071IW1,ID Weld 1,192.168.5.71,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+22,22,5,3,10,M5071IW2,ID Weld 2,192.168.5.72,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+23,23,6,3,18,M5071CR1,Chrome 1,192.168.5.73,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+24,24,6,3,18,M5071CR2,Chrome 2,192.168.5.74,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+25,25,6,3,18,M5071CR3,Chrome 3,192.168.5.75,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+26,26,6,3,18,M5071CR4,Chrome 4,192.168.5.76,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+27,1,1,4,18,M5153CR1,Chrome 1,192.168.50.71,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/chrome_1,
+28,2,1,4,18,M5153CR2,Chrome 2,192.168.50.72,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/chrome_2,NULL
+29,3,1,4,18,M5153CR3,Chrome 3,192.168.50.73,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/chrome_3,NULL
+30,4,2,4,9,M5153ML2,Magnum 1,192.168.50.74,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/magnum_1,NULL
+31,5,2,4,9,M5153ML3,Magnum 2,192.168.50.75,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/magnum_2,NULL
+32,6,2,4,12,M5153PS1,Polisher 1,192.168.50.76,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/polisher_1,NULL
+33,7,2,4,12,M5153PS2,Polisher 2,192.168.50.77,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/polisher_2,NULL
+34,8,3,4,7,M5153CH1,Honing Machine,192.168.50.78,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/honing_1,NULL
+35,9,3,4,3,M5153MV1,Vertical Lathe,192.168.50.79,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/vertical_1,NULL
+36,10,3,4,8,M5153BM2,Horizontal Bore,192.168.50.80,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/horizontal_1,NULL
+37,11,4,4,9,M5153MS1,Shenyang 1,192.168.50.81,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/shenyang_1,NULL
+38,12,4,4,9,M5153MS2,Shenyang 2,192.168.50.82,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/shenyang_2,NULL
+39,13,4,4,16,M5153MM1,Milling Machine,192.168.50.83,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/milling_1,NULL
+40,14,5,4,9,M5153ML1,Turning Kodok,192.168.50.84,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/kodok_1,NULL
+41,15,5,4,5,M5153DR1,Radial Drill,192.168.50.85,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/radial_1,NULL
+42,16,6,4,13,M5153SW1,SAW Machine,192.168.50.86,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/saw_1,NULL
+43,17,6,4,10,M5153IW1,ID Weld,192.168.50.87,NULL,NULL,NULL,NULL,NULL,data/MachineSebamban/idweld_1,NULL
+44,1,1,1,16,M5051MM1,Gomel,192.168.112.64,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/gomel,Parameter/MachineBalikpapan/Gomel
+45,2,1,1,14,M5051CM4,EM105H,192.168.112.64,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/em105h,Parameter/MachineBalikpapan/EM105H
+46,3,2,1,5,M5051DR1,"Okuma ",192.168.112.65,NULL,NULL,NULL,NULL,NULL,"data/MachineBalikpapan/okuma ",Parameter/MachineBalikpapan/Okuma
+47,4,2,1,1,M5051BL2,Shibaura 2,192.168.112.65,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/shibaura2,Parameter/MachineBalikpapan/Shibaura2
+48,5,2,1,1,M5051BL3,Shibaura 3,192.168.112.65,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/shibaura3,Parameter/MachineBalikpapan/Shibaura3
+49,6,3,1,3,M5051CV2,Takang,192.168.112.66,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/takang,Parameter/MachineBalikpapan/Takang
+50,7,3,1,21,M5051CV1,WB,192.168.112.66,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/wb,Parameter/MachineBalikpapan/WB
+51,8,3,1,17,M5051SP2,Arc Spray 2,192.168.112.66,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/arcspray2,Parameter/MachineBalikpapan/ArcSpray2
+52,9,3,1,17,M5051SP1,Arc Spray 1,192.168.112.66,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/arcspray1,Parameter/MachineBalikpapan/ArcSpray1
+53,10,4,1,2,M5051CL2,DT 3000 1,192.168.112.67,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/dt30001,Parameter/MachineBalikpapan/DT30001
+54,11,4,1,2,M5051CS2,Goodway 1,192.168.112.67,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/goodway1,Parameter/MachineBalikpapan/Goodway1
+55,12,4,1,2,M5051CL3,DT 3000 2,192.168.112.67,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/dt30002,Parameter/MachineBalikpapan/DT30002
+56,13,4,1,2,M5051CS1,Goodway 2,192.168.112.67,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/goodway2,Parameter/MachineBalikpapan/Goodway2
+57,14,4,1,2,M5051CL4,FAT 3,192.168.112.67,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/fat3,Parameter/MachineBalikpapan/FAT3
+58,15,5,1,9,M5051ML2,Ryazan,192.168.112.68,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/ryazan,Parameter/MachineBalikpapan/Ryazan
+59,16,5,1,1,M5051BL1,Shibaura 1,192.168.112.68,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/shibaura 1,Parameter/MachineBalikpapan/Shibaura1
+60,17,5,1,15,M5051IN1,Eitel,192.168.112.68,NULL,NULL,NULL,NULL,NULL,"data/MachineBalikpapan/eitel ",Parameter/MachineBalikpapan/Eitel
+61,18,1,2,18,M5051CR1,Chrome 1,192.168.112.61,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/chrome1,Parameter/MachineBalikpapan/Chrome1
+62,19,1,2,18,M5051CR2,Chrome 2,192.168.112.61,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/chrome2,Parameter/MachineBalikpapan/Chrome2
+63,20,1,2,18,M5051CR3,Chrome 3,192.168.112.61,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/chrome3,Parameter/MachineBalikpapan/Chrome3
+64,21,1,2,18,M5051CR4,Chrome 4,192.168.112.61,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/chrome4,Parameter/MachineBalikpapan/Chrome4
+65,22,1,2,18,M5051CR5,Chrome 5,192.168.112.61,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/chrome5,Parameter/MachineBalikpapan/Chrome5
+66,23,2,2,20,M5051BW1,Bensaw,192.168.112.62,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/bensaw,Parameter/MachineBalikpapan/Bensaw
+67,24,2,2,10,M5051IW2,ID Weld 2,192.168.112.62,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/idweld2,Parameter/MachineBalikpapan/IDWeld2
+68,25,2,2,10,M5051IW4,ID Weld 4,192.168.112.62,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/idweld4,Parameter/MachineBalikpapan/IDWeld4
+69,26,2,2,13,M5051SW1,SAW 1,192.168.112.62,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/saw1,Parameter/MachineBalikpapan/SAW1
+70,27,2,2,13,M5051SW3,SAW 3,192.168.112.62,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/saw3,Parameter/MachineBalikpapan/SAW3
+71,28,3,2,6,M5051PL1,Churcil,192.168.112.63,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/churchil,Parameter/MachineBalikpapan/Churchil
+72,29,3,2,7,M5051CH1,Honing 1,192.168.112.63,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/honing1,Parameter/MachineBalikpapan/Honing1
+73,30,3,2,7,M5051CH2,Honing 2,192.168.112.63,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/honing2,Parameter/MachineBalikpapan/Honing2
+74,32,3,2,2,M5051CL5,FAT 4,192.168.112.63,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/fat4,Parameter/MachineBalikpapan/FAT4
+75,33,4,2,4,M5051CM1,"Mitseiki ",192.168.112.40,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/mitseiki,Parameter/MachineBalikpapan/Mitseiki
+76,34,4,2,22,M5051CM2,HAAS,192.168.112.40,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/haas,Parameter/MachineBalikpapan/Haas
+77,31,3,2,2,M5051CL1,DT 1000,192.168.112.63,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/dt1000,Parameter/MachineBalikpapan/DT1000
+78,35,4,2,2,M5051CL6,"Colchester ",192.168.112.40,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/colchester,Parameter/MachineBalikpapan/Colchester
+79,36,4,2,1,M5051BS4,Shibaura 4,192.168.112.40,NULL,NULL,NULL,NULL,NULL,data/MachineBalikpapan/shibaura4,Parameter/MachineBalikpapan/Shibaura4

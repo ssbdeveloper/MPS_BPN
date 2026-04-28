@@ -3,6 +3,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
 
 // ========================================
 // ENVIRONMENT SETUP
@@ -73,6 +74,7 @@ global.pool = pool;
 // EXPRESS SETUP
 // ========================================
 const app = express();
+const server = http.createServer(app);
 
 // Middleware
 app.use(express.json());
@@ -138,6 +140,9 @@ app.use('/process-control', require('./routes/processControlDataRoutes'));
 app.use('/process-control-item', require('./routes/processControlDataItemRoutes'));
 app.use('/dashboard', require('./routes/dashboard'));
 app.use('/receiving-shipment', require('./routes/receivingShipment'));
+app.use('/machine-hours-sqlserver', require('./routes/machineHoursSqlServer'));
+
+require('./websocket/machineHoursSqlServerSocket')(server);
 
 // ========================================
 // ERROR HANDLERS
@@ -180,7 +185,7 @@ async function startServer() {
     }
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📅 Local time: ${new Date().toLocaleString('id-ID', { timeZone: process.env.TIMEZONE })}`);

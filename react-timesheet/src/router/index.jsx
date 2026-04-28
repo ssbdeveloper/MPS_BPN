@@ -27,6 +27,7 @@ import SowStandardListPage from '../pages/SowStandardListPage';
 import SowCreatePage from '../pages/SowCreatePage';
 import EditorImage from '../pages/editorimage';
 import ReceivingShipmentPage from '../pages/ReceivingShipmentPage';
+import MachineHoursSqlServerPage from '../pages/MachineHoursSqlServerPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -45,6 +46,10 @@ const router = createBrowserRouter([
   {
     path: '/receiving-shipment',
     element: <ReceivingShipmentPage />,
+  },
+  {
+    path: '/machine-hours-sqlserver',
+    element: <MachineHoursSqlServerPage />,
   },
   {
     path: '/',
