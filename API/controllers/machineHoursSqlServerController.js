@@ -1,13 +1,11 @@
 const sql = require("mssql");
 
-const VIEW_NAME = "dbo.vDrainduration";
-
 const sqlServerConfig = {
   server: process.env.SQLSERVER_HOST || "10.169.13.13",
   port: parseInt(process.env.SQLSERVER_PORT || "57970", 10),
   database: process.env.SQLSERVER_DATABASE || "SSB_OEE",
-  user: process.env.SQLSERVER_USER,
-  password: process.env.SQLSERVER_PASSWORD,
+  user: process.env.SQLSERVER_USER || "bsa",
+  password: process.env.SQLSERVER_PASSWORD || "@dminbsa",
   pool: {
     max: 10,
     min: 0,
@@ -21,6 +19,15 @@ const sqlServerConfig = {
   connectionTimeout: 10000,
   requestTimeout: 30000,
 };
+
+function getSafeConnectionInfo() {
+  return {
+    server: sqlServerConfig.server,
+    port: sqlServerConfig.port,
+    database: sqlServerConfig.database,
+    user: sqlServerConfig.user ? "configured" : "missing",
+  };
+}
 
 let poolPromise;
 
@@ -48,40 +55,40 @@ function parseDateParam(value) {
 }
 
 function applyFilters(request, filters = {}) {
-  const where = ["work_date IS NOT NULL"];
+  const where = ["p.startdatetime IS NOT NULL"];
 
   const from = parseDateParam(filters.from);
   if (from) {
     request.input("from", sql.Date, from);
-    where.push("work_date >= @from");
+    where.push("CAST(p.startdatetime AS DATE) >= @from");
   }
 
   const to = parseDateParam(filters.to);
   if (to) {
     request.input("to", sql.Date, to);
-    where.push("work_date <= @to");
+    where.push("CAST(p.startdatetime AS DATE) <= @to");
   }
 
   const statusId = filters.statusid ? parseInt(filters.statusid, 10) : null;
   if (Number.isInteger(statusId)) {
     request.input("statusid", sql.Int, statusId);
-    where.push("statusid = @statusid");
+    where.push("p.statusid = @statusid");
   }
 
   const machineNo = filters.machineno ? parseInt(filters.machineno, 10) : null;
   if (Number.isInteger(machineNo)) {
     request.input("machineno", sql.Int, machineNo);
-    where.push("machineno = @machineno");
+    where.push("p.machineno = @machineno");
   }
 
   if (filters.operatorid) {
     request.input("operatorid", sql.VarChar(64), String(filters.operatorid));
-    where.push("operatorid = @operatorid");
+    where.push("p.operatorid = @operatorid");
   }
 
   if (filters.jobid) {
     request.input("jobid", sql.VarChar(64), String(filters.jobid));
-    where.push("jobid = @jobid");
+    where.push("p.jobid = @jobid");
   }
 
   return where.join(" AND ");
@@ -111,25 +118,53 @@ async function fetchMachineHoursRows(filters = {}) {
   const where = applyFilters(request, filters);
   const result = await request.query(`
     SELECT TOP (@limit)
-      work_date,
-      statusid,
-      status_description,
-      machineno,
-      machineid,
-      machinename,
-      machine_description,
-      plantid,
-      operatorid,
-      jobid,
-      event_count,
-      open_event_count,
-      DATEADD(HOUR, -8, first_startdatetime) AS first_startdatetime,
-      DATEADD(HOUR, -8, last_enddatetime) AS last_enddatetime,
-      duration_seconds,
-      duration_hours
-    FROM ${VIEW_NAME}
+      CAST(p.startdatetime AS DATE) AS work_date,
+      p.statusid,
+      st.description AS status_description,
+      p.machineno,
+      m.machineid,
+      m.machinename,
+      COALESCE(NULLIF(m.description, ''), m.machinename) AS machine_description,
+      m.plantid,
+      p.operatorid,
+      p.jobid,
+      COUNT(*) AS event_count,
+      SUM(CASE WHEN p.enddatetime IS NULL THEN 1 ELSE 0 END) AS open_event_count,
+      DATEADD(HOUR, -8, MIN(p.startdatetime)) AS first_startdatetime,
+      DATEADD(HOUR, -8, MAX(p.enddatetime)) AS last_enddatetime,
+      SUM(
+        CASE
+          WHEN p.enddatetime IS NULL THEN 0
+          ELSE DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
+        END
+      ) AS duration_seconds,
+      ROUND(
+        CAST(
+          SUM(
+            CASE
+              WHEN p.enddatetime IS NULL THEN 0
+              ELSE DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
+            END
+          ) AS NUMERIC(18, 4)
+        ) / 3600.0,
+        4
+      ) AS duration_hours
+    FROM dbo.ProductionData p
+    LEFT JOIN dbo.Machines m ON m.machineno = p.machineno
+    LEFT JOIN dbo.StatusTypes st ON st.statusid = p.statusid
     WHERE ${where}
-    ORDER BY first_startdatetime DESC, machineno ASC, operatorid ASC, jobid ASC
+    GROUP BY
+      CAST(p.startdatetime AS DATE),
+      p.statusid,
+      st.description,
+      p.machineno,
+      m.machineid,
+      m.machinename,
+      COALESCE(NULLIF(m.description, ''), m.machinename),
+      m.plantid,
+      p.operatorid,
+      p.jobid
+    ORDER BY MIN(p.startdatetime) DESC, p.machineno ASC, p.operatorid ASC, p.jobid ASC
   `);
 
   return result.recordset.map(normalizeRow);
@@ -148,28 +183,31 @@ async function getMachineHours(req, res) {
     });
   } catch (err) {
     console.error("SQL Server machine hours error:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      source: "sqlserver",
+      connection: getSafeConnectionInfo(),
+    });
   }
 }
 
 async function getHealth(req, res) {
   try {
     const pool = await getPool();
-    const result = await pool.request().query(`SELECT TOP 1 work_date FROM ${VIEW_NAME}`);
+    const result = await pool.request().query("SELECT TOP 1 startdatetime FROM dbo.ProductionData");
     res.json({
       success: true,
       connected: true,
       sample_count: result.recordset.length,
-      server: sqlServerConfig.server,
-      database: sqlServerConfig.database,
+      connection: getSafeConnectionInfo(),
     });
   } catch (err) {
     res.status(500).json({
       success: false,
       connected: false,
       error: err.message,
-      server: sqlServerConfig.server,
-      database: sqlServerConfig.database,
+      connection: getSafeConnectionInfo(),
     });
   }
 }
