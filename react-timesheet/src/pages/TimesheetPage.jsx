@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { ClipboardList, Camera, BarChart2 } from 'lucide-react';
 import {
   PageContainer,
@@ -62,7 +63,7 @@ const TimesheetPage = () => {
       <AppHeader
         title={<><ClipboardList className="inline w-5 h-5 mr-1.5" />Timesheet</>}
         rightContent={
-          <Button variant="secondary" size="small" onClick={() => navigate('/operations-hub')}>
+          <Button variant="secondary" size="small" onClick={() => goBackOrFallback(navigate)}>
             ← Back
           </Button>
         }

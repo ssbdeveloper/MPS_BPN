@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { AlertCircle, CheckCircle2, Clock, FileText, Users, Download, RefreshCw, Filter, ChevronLeft, Search, X, ChevronRight } from 'lucide-react';
 
 /**
@@ -654,7 +655,7 @@ const TimesheetValidationPage = () => {
     navigate(`/timesheet-edit/${tsnumber}?returnUrl=${encodeURIComponent(window.location.pathname + window.location.search)}`);
   }, [navigate]);
 
-  const goBack        = useCallback(() => navigate('/operations-hub'), [navigate]);
+  const goBack        = useCallback(() => goBackOrFallback(navigate), [navigate]);
   const toggleFilters = useCallback(() => {
     setShowFilters(prev => {
       const next = !prev;

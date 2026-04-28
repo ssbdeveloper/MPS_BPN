@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -95,7 +96,7 @@ const SelectMachinePage = () => {
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between
                          px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
-        <button onClick={() => navigate('/operations-hub')} className={btnOutline}>
+        <button onClick={() => goBackOrFallback(navigate)} className={btnOutline}>
           Back
         </button>
         <h1 className="text-sm font-extrabold text-slate-800">Select Machine</h1>

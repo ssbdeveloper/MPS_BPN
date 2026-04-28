@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { Download, BarChart2, Search, Info, Calendar, FileText, Lightbulb } from 'lucide-react';
 
 /**
@@ -133,7 +134,7 @@ const DownloadPage = () => {
 
   // Handle back button
   const handleBack = () => {
-    navigate('/operations-hub');
+    goBackOrFallback(navigate);
   };
 
   return (

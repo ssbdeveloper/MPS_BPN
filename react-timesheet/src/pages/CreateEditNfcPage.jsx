@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { Smartphone, Shuffle, User, Factory, Save, CreditCard } from 'lucide-react';
 import PasswordPrompt from '../components/auth/PasswordPrompt';
 
@@ -234,7 +235,7 @@ const CreateEditNfcPage = () => {
         {/* Header */}
         <header className="sticky top-0 z-10 flex items-center justify-between px-4 md:px-6 py-2.5 bg-white border-b border-slate-200 shadow-sm">
           <button
-            onClick={() => navigate('/operations-hub')}
+            onClick={() => goBackOrFallback(navigate)}
             className="min-h-[44px] flex items-center bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95"
           >
             ← Back

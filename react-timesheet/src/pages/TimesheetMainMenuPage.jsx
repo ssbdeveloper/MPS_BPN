@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { toast } from 'sonner';
 import { Play, ClipboardList, Monitor, Settings, Clock, Wrench, AlertTriangle, CheckCircle } from 'lucide-react';
 
@@ -169,7 +170,7 @@ const TimesheetMainMenuPage = () => {
     }
   };
 
-  const goHome           = () => navigate('/operations-hub');
+  const goHome           = () => goBackOrFallback(navigate);
   const gotojob          = () => navigate('/select-job');
   const gotomesin        = () => navigate('/select-machine');
   const gotoparameter    = () => navigate('/process-control');

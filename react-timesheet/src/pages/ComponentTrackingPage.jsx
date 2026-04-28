@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { Package, CheckCircle, AlertTriangle, XCircle, Plus, Download, BarChart2, RefreshCw, Camera, Search, X, Pencil, Trash2 } from 'lucide-react';
 import {
   PageContainer,
@@ -91,7 +92,7 @@ const ComponentTrackingPage = () => {
       <AppHeader
         title={<><Package className="inline w-5 h-5 mr-1.5" />Component Tracking</>}
         rightContent={
-          <Button variant="secondary" size="small" onClick={() => navigate('/operations-hub')}>
+          <Button variant="secondary" size="small" onClick={() => goBackOrFallback(navigate)}>
             ← Back
           </Button>
         }

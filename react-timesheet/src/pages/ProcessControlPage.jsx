@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { Flame, Zap, Settings, Wrench, Gem, FlaskConical, Sparkles, Brush, Wind, FileEdit, ClipboardList } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -166,7 +167,7 @@ const ProcessControlPage = () => {
   };
 
   const goBack = () => {
-    navigate('/operations-hub');
+    goBackOrFallback(navigate);
   };
 
   // ====== RENDER HELPERS ======

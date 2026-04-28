@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { List, PlusCircle, Clock, ChevronLeft } from 'lucide-react';
 
 const navItems = [
@@ -34,7 +35,7 @@ const SowManagementPage = () => {
       <header className="flex-shrink-0 flex items-center justify-between px-4 md:px-6 py-2.5
                          bg-white border-b border-slate-200 shadow-sm">
         <button
-          onClick={() => navigate('/operations-hub')}
+          onClick={() => goBackOrFallback(navigate)}
           className="min-h-[44px] min-w-[44px] flex items-center gap-1.5
                      bg-white border border-slate-200 text-slate-700
                      hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5

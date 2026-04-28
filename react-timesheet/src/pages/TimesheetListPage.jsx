@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { toast } from 'sonner';
 import { StopCircle, RotateCcw, NotebookPen } from 'lucide-react';
 
@@ -231,7 +232,7 @@ const TimesheetListPage = () => {
 
   // Back to main menu
   const goBack = () => {
-    navigate('/operations-hub');
+    goBackOrFallback(navigate);
   };
 
   // Common cell style

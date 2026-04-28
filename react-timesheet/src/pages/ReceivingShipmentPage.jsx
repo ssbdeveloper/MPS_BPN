@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import {
   AlertCircle,
   ArrowLeft,
@@ -445,7 +446,7 @@ function ReceivingShipmentPage() {
           <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              onClick={() => navigate('/operations-hub')}
+              onClick={() => goBackOrFallback(navigate)}
               className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
               title="Back to MPS Main"
             >

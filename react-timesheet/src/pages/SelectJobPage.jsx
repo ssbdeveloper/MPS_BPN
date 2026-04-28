@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { toast } from 'sonner';
 
@@ -206,7 +207,7 @@ const SelectJobPage = () => {
       {/* ── Header ── */}
       <header className="flex-shrink-0 flex items-center justify-between
                          px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
-        <button onClick={() => navigate('/operations-hub')} className={btnOutline}>
+        <button onClick={() => goBackOrFallback(navigate)} className={btnOutline}>
           Back
         </button>
         <h1 className="text-sm font-extrabold text-slate-800">Job Selection</h1>

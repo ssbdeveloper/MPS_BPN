@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { goBackOrFallback } from '../utils/navigation';
 import { BarChart2, Package, AlertTriangle, Clock, TrendingUp } from "lucide-react";
 import { PageContainer, AppHeader, Button } from "../components";
 import KpiCard from "../components/dashboard/KpiCard";
@@ -50,7 +51,7 @@ export default function DashboardPage() {
           </>
         }
         rightContent={
-          <Button variant="secondary" size="small" onClick={() => navigate("/operations-hub")}>
+          <Button variant="secondary" size="small" onClick={() => goBackOrFallback(navigate)}>
             ← Back
           </Button>
         }

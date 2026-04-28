@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 import { toast } from 'sonner';
 import {
   Users, Coffee, Brush, GraduationCap, Package, FileWarning,
@@ -110,7 +111,7 @@ const UnproductiveMenuPage = () => {
 
   // Handle back button
   const handleBack = () => {
-    navigate('/operations-hub');
+    goBackOrFallback(navigate);
   };
 
   // Handle refresh

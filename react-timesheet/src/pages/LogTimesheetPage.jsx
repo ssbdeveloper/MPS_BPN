@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { goBackOrFallback } from '../utils/navigation';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ const LogTimesheetPage = () => {
       <header className="flex-shrink-0 flex items-center justify-between
                          px-4 md:px-6 py-2.5
                          bg-white border-b border-slate-200 shadow-sm">
-        <button onClick={() => navigate('/operations-hub')} className={btnOutline}>
+        <button onClick={() => goBackOrFallback(navigate)} className={btnOutline}>
           <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24"
                fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6"/>
