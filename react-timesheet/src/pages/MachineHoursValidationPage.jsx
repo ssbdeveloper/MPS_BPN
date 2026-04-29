@@ -69,6 +69,40 @@ const StatusBadge = ({ isValidated, isSapPending }) => {
   return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">Pending</span>;
 };
 
+function getActivityBadge(activityType) {
+  const normalized = String(activityType || '').trim().toUpperCase();
+  if (normalized === 'M2') {
+    return {
+      label: 'NNVA',
+      className: 'bg-blue-50 text-blue-700 border-blue-200',
+    };
+  }
+  if (normalized === 'M1') {
+    return {
+      label: 'VA',
+      className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    };
+  }
+  return {
+    label: 'NVA',
+    className: 'bg-red-50 text-red-700 border-red-200',
+  };
+}
+
+const ActivityBadge = ({ activityType }) => {
+  const badge = getActivityBadge(activityType);
+  const title = activityType ? `Activity type: ${activityType}` : 'Activity type: empty';
+
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center justify-center rounded-full border px-2.5 py-0.5 text-[10px] font-extrabold tracking-wide whitespace-nowrap ${badge.className}`}
+    >
+      {badge.label}
+    </span>
+  );
+};
+
 const ValidateBtn = ({ onClick, size = 'sm', title = 'Validate' }) => (
   <button
     onClick={onClick}
@@ -187,8 +221,7 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
         </div>
 
         <div className="text-[11px] text-center">
-          <div className="font-medium text-gray-800 break-words leading-snug">{record.activitytype || '-'}</div>
-          <div className="text-[10px] text-gray-400">{record.sap_payload?.ZCONF_TYPE || record.sap_payload?.LSTAR || '-'}</div>
+          <ActivityBadge activityType={record.activitytype} />
         </div>
 
         <div className="flex items-center justify-center">

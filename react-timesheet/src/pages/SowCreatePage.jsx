@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { Rnd } from 'react-rnd';
 import {
   Search, Loader2, X, Plus, AlertCircle, Package, ClipboardList,
   BookmarkPlus, Check, ChevronRight, GripVertical, Trash2,
@@ -8,12 +9,84 @@ import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
 import ssbLogo from '../assets/ssb.png';
 import travelCardHtml from '../templates/travel-card.html?raw';
+import operationCardHtml from '../templates/operation-card.html?raw';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
 
 const fmtHours = (v) => (v != null && v !== '' ? parseFloat(v).toFixed(2) : '—');
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
+
+const OP_MAIN_BOX_W = 700;
+const OP_MAIN_BOX_H = 560;
+
+const makeOperationCardKey = (op) => op?._key || `${op?.operation_no || 'op'}-${op?.machineid || ''}`;
+const operationCardStyle = operationCardHtml.match(/<style>([\s\S]*?)<\/style>/i)?.[1] || '';
+const operationCardBody = operationCardHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || operationCardHtml;
+
+function getOperationQrValue({ selectedPart, cardInfo, op }) {
+  const productionOrder = cardInfo.productionOrder || selectedPart?.production_order || '';
+  return [
+    'OPERATION_CARD',
+    `PO:${normalizeProductionOrder(productionOrder) || '-'}`,
+    `PART:${selectedPart?.part_number || '-'}`,
+    `OP:${op.operation_no || '-'}`,
+    `WC:${op.machineid || '-'}`,
+  ].join('|');
+}
+
+function renderOperationCardImages(images = []) {
+  return images.map((img) => {
+    const left = (img.x / OP_MAIN_BOX_W) * 100;
+    const top = (img.y / OP_MAIN_BOX_H) * 100;
+    const width = (img.width / OP_MAIN_BOX_W) * 100;
+    const height = (img.height / OP_MAIN_BOX_H) * 100;
+
+    return `
+      <img
+        class="main-box-image"
+        src="${escAttr(img.src)}"
+        alt=""
+        style="left:${left.toFixed(4)}%; top:${top.toFixed(4)}%; width:${width.toFixed(4)}%; height:${height.toFixed(4)}%;"
+      >`;
+  }).join('');
+}
+
+function buildOperationCardsHtml({ selectedPart, editOps, selectedKeys, imagesByKey, qrByKey, cardInfo }) {
+  const selectedKeySet = new Set(selectedKeys);
+  const selectedOps = editOps.filter((op) => selectedKeySet.has(makeOperationCardKey(op)));
+
+  const cards = selectedOps.map((op) => {
+    const key = makeOperationCardKey(op);
+    const productionOrder = normalizeProductionOrder(cardInfo.productionOrder || selectedPart?.production_order || '');
+    const confirmationNo = `${productionOrder || selectedPart?.part_number || 'OP'}-${op.operation_no || key}`;
+
+    return operationCardBody
+      .replace('{{opsNo}}', esc(op.operation_no || '-'))
+      .replace('{{operationText}}', esc(op.operation_text || '-'))
+      .replace('{{workCenter}}', esc(op.machineid || '-'))
+      .replace('{{confirmationNo}}', esc(confirmationNo))
+      .replace('{{qrCodeDataUrl}}', qrByKey[key] || '')
+      .replace('{{mainBoxImages}}', renderOperationCardImages(imagesByKey[key] || []));
+  }).join('\n<div class="page-break"></div>\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SSB Operation Card</title>
+<style>
+${operationCardStyle}
+.page-break { page-break-after: always; break-after: page; height: 0; }
+.page-break:last-child { display: none; }
+</style>
+</head>
+<body>
+${cards || '<div style="padding:16px;font-family:Arial,sans-serif;">Pilih minimal satu operation card.</div>'}
+</body>
+</html>`;
+}
 
 // ─── useWorkcenterData ────────────────────────────────────────────────────────
 function useWorkcenterData() {
@@ -1110,6 +1183,390 @@ function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef }) {
 }
 
 // ─── SowCreatePage ─────────────────────────────────────────────────────────────
+function OperationCardPreview({
+  selectedPart,
+  editOps,
+  cardInfo,
+  printRef,
+  selectedKeys,
+  onSelectedKeysChange,
+  activeOperationKey,
+  onActiveOperationChange,
+  imagesByKey,
+  onImagesByKeyChange,
+}) {
+  const [srcDoc, setSrcDoc] = useState('');
+  const [selectedImageId, setSelectedImageId] = useState(null);
+  const fileInputRef = useRef(null);
+  const qrRef = useRef(null);
+
+  const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+  const selectedOps = useMemo(
+    () => editOps.filter((op) => selectedKeySet.has(makeOperationCardKey(op))),
+    [editOps, selectedKeySet],
+  );
+  const activeOp = useMemo(
+    () => editOps.find((op) => makeOperationCardKey(op) === activeOperationKey) || selectedOps[0] || editOps[0],
+    [activeOperationKey, editOps, selectedOps],
+  );
+  const activeKey = activeOp ? makeOperationCardKey(activeOp) : null;
+  const activeImages = activeKey ? (imagesByKey[activeKey] || []) : [];
+
+  useEffect(() => {
+    if (!activeOperationKey && editOps.length > 0) {
+      onActiveOperationChange(makeOperationCardKey(editOps[0]));
+    }
+  }, [activeOperationKey, editOps, onActiveOperationChange]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const qrByKey = {};
+      qrRef.current?.querySelectorAll('[data-op-key]').forEach((node) => {
+        const key = node.getAttribute('data-op-key');
+        const canvas = node.querySelector('canvas');
+        if (key && canvas) qrByKey[key] = canvas.toDataURL('image/png');
+      });
+
+      setSrcDoc(buildOperationCardsHtml({
+        selectedPart,
+        editOps,
+        selectedKeys,
+        imagesByKey,
+        qrByKey,
+        cardInfo,
+      }));
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [selectedPart, editOps, selectedKeys, imagesByKey, cardInfo]);
+
+  const handleToggleOperation = useCallback((key) => {
+    const exists = selectedKeys.includes(key);
+    const next = exists ? selectedKeys.filter((item) => item !== key) : [...selectedKeys, key];
+    onSelectedKeysChange(next);
+    if (!exists) {
+      onActiveOperationChange(key);
+      return;
+    }
+    if (activeOperationKey === key) {
+      onActiveOperationChange(next[0] || null);
+      setSelectedImageId(null);
+    }
+  }, [activeOperationKey, onActiveOperationChange, onSelectedKeysChange, selectedKeys]);
+
+  const readImageFile = useCallback((file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  }), []);
+
+  const handleAddImages = useCallback(async (event) => {
+    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith('image/'));
+    if (!activeKey || files.length === 0) return;
+
+    const dataUrls = await Promise.all(files.map(readImageFile));
+    const additions = dataUrls.map((src, index) => ({
+      id: `img-${Date.now()}-${index}`,
+      src,
+      x: Math.min(40 + index * 18, OP_MAIN_BOX_W - 180),
+      y: Math.min(40 + index * 18, OP_MAIN_BOX_H - 120),
+      width: 240,
+      height: 160,
+    }));
+
+    onImagesByKeyChange((prev) => ({
+      ...prev,
+      [activeKey]: [...(prev[activeKey] || []), ...additions],
+    }));
+    setSelectedImageId(additions[additions.length - 1]?.id || null);
+    event.target.value = '';
+  }, [activeKey, onImagesByKeyChange, readImageFile]);
+
+  const updateImage = useCallback((imageId, patch) => {
+    if (!activeKey) return;
+    onImagesByKeyChange((prev) => ({
+      ...prev,
+      [activeKey]: (prev[activeKey] || []).map((img) =>
+        img.id === imageId ? { ...img, ...patch } : img
+      ),
+    }));
+  }, [activeKey, onImagesByKeyChange]);
+
+  const removeSelectedImage = useCallback(() => {
+    if (!activeKey || !selectedImageId) return;
+    onImagesByKeyChange((prev) => ({
+      ...prev,
+      [activeKey]: (prev[activeKey] || []).filter((img) => img.id !== selectedImageId),
+    }));
+    setSelectedImageId(null);
+  }, [activeKey, onImagesByKeyChange, selectedImageId]);
+
+  return (
+    <div className="grid min-h-full grid-cols-[390px_minmax(0,1fr)] bg-slate-100">
+      <div className="flex min-h-0 flex-col border-r border-slate-200 bg-white">
+        <div className="border-b border-slate-100 px-4 py-3">
+          <div className="flex items-center gap-1.5">
+            <StepBadge n={4} active done={false} />
+            <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+              Operation Card
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Pilih operation, lalu sisipkan gambar ke main box operation aktif.
+          </p>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="mb-4 space-y-2">
+            {editOps.map((op) => {
+              const key = makeOperationCardKey(op);
+              const checked = selectedKeys.includes(key);
+              const active = activeKey === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onActiveOperationChange(key)}
+                  className={`flex w-full items-start gap-2 rounded-lg border p-2 text-left transition-all ${
+                    active ? 'border-[#00b4d8] bg-cyan-50' : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <span
+                    onClick={(e) => { e.stopPropagation(); handleToggleOperation(key); }}
+                    className="mt-0.5"
+                  >
+                    <Checkbox checked={checked} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] font-bold text-slate-700">
+                        Ops {op.operation_no}
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-400">
+                        {op.machineid || '-'}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 line-clamp-2 text-xs font-semibold leading-snug text-slate-800">
+                      {op.operation_text || '-'}
+                    </p>
+                    {(imagesByKey[key] || []).length > 0 && (
+                      <p className="mt-1 text-[10px] font-semibold text-[#0096c7]">
+                        {(imagesByKey[key] || []).length} gambar
+                      </p>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Card Selection</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Checklist menentukan operation yang ikut dicetak. Klik row untuk mengedit preview operation tersebut.
+            </p>
+            <div className="mt-3 flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs">
+              <span className="font-semibold text-slate-600">{selectedKeys.length} card dipilih</span>
+              <span className="text-slate-400">{activeImages.length} gambar pada operation aktif</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-h-0 overflow-y-auto p-5" style={{ background: '#e8e6e0' }}>
+        <div
+          ref={qrRef}
+          style={{ position: 'absolute', left: '-9999px', top: 0, pointerEvents: 'none' }}
+          aria-hidden="true"
+        >
+          {selectedOps.map((op) => {
+            const key = makeOperationCardKey(op);
+            return (
+              <div key={key} data-op-key={key}>
+                <QRCodeCanvas
+                  value={getOperationQrValue({ selectedPart, cardInfo, op })}
+                  size={180}
+                  level="M"
+                  bgColor="#ffffff"
+                  fgColor="#000000"
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={handleAddImages}
+        />
+
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Preview Operation Aktif</p>
+            <p className="truncate text-sm font-bold text-slate-800">
+              {activeOp ? `Ops ${activeOp.operation_no} - ${activeOp.operation_text || '-'}` : 'Tidak ada operation'}
+            </p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              {activeKey && selectedKeys.includes(activeKey) ? 'Operation ini dipilih untuk print.' : 'Operation ini belum dicentang untuk print.'}
+            </p>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!activeKey}
+              className="flex items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0077b6] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Plus size={12} />
+              Add Image
+            </button>
+            <button
+              type="button"
+              onClick={removeSelectedImage}
+              disabled={!selectedImageId}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Trash2 size={12} />
+              Remove
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="mx-auto bg-white"
+          style={{
+            width: 794,
+            minHeight: 1010,
+            border: '2px solid #000',
+            fontFamily: 'Arial, sans-serif',
+            fontSize: '13px',
+          }}
+        >
+          <table style={{ width: '100%', borderCollapse: 'collapse', borderBottom: '2px solid #000' }}>
+            <tbody>
+              <tr>
+                <td style={{ padding: 0 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <tbody>
+                      <tr>
+                        <td style={{ width: 150, padding: 8 }}>Ops. No</td>
+                        <td style={{ width: 20, textAlign: 'center' }}>:</td>
+                        <td style={{ borderBottom: '1px solid #000', padding: 8, fontWeight: 'bold' }}>{activeOp?.operation_no || '-'}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 8 }}>Operation Text</td>
+                        <td style={{ textAlign: 'center' }}>:</td>
+                        <td style={{ borderBottom: '1px solid #000', padding: 8 }}>{activeOp?.operation_text || '-'}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 8 }}>Work Center</td>
+                        <td style={{ textAlign: 'center' }}>:</td>
+                        <td style={{ borderBottom: '1px solid #000', padding: 8 }}>{activeOp?.machineid || '-'}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: 8 }}>Confirmation No</td>
+                        <td style={{ textAlign: 'center' }}>:</td>
+                        <td style={{ padding: 8 }}>
+                          {activeOp ? `${normalizeProductionOrder(cardInfo.productionOrder || selectedPart?.production_order || '') || selectedPart?.part_number || 'OP'}-${activeOp.operation_no || activeKey}` : '-'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </td>
+                <td style={{ width: 152, borderLeft: '2px solid #000', textAlign: 'center', verticalAlign: 'middle' }}>
+                  {activeOp && (
+                    <QRCodeCanvas
+                      value={getOperationQrValue({ selectedPart, cardInfo, op: activeOp })}
+                      size={114}
+                      level="M"
+                      bgColor="#ffffff"
+                      fgColor="#000000"
+                    />
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div
+            style={{
+              width: OP_MAIN_BOX_W,
+              height: OP_MAIN_BOX_H,
+              margin: '19px auto',
+              border: '2px solid #000',
+              position: 'relative',
+              overflow: 'hidden',
+              background: '#fff',
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setSelectedImageId(null);
+            }}
+          >
+            {activeImages.map((img) => {
+              const selected = selectedImageId === img.id;
+              return (
+                <Rnd
+                  key={img.id}
+                  size={{ width: img.width, height: img.height }}
+                  position={{ x: img.x, y: img.y }}
+                  bounds="parent"
+                  lockAspectRatio
+                  onDragStop={(_, d) => updateImage(img.id, { x: d.x, y: d.y })}
+                  onResizeStop={(_, __, ref, ___, pos) =>
+                    updateImage(img.id, {
+                      x: pos.x,
+                      y: pos.y,
+                      width: parseFloat(ref.style.width),
+                      height: parseFloat(ref.style.height),
+                    })
+                  }
+                  style={{
+                    border: selected ? '2px dashed #0096c7' : '2px dashed transparent',
+                    boxSizing: 'border-box',
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedImageId(img.id);
+                  }}
+                >
+                  <img
+                    src={img.src}
+                    alt=""
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      pointerEvents: 'none',
+                      display: 'block',
+                    }}
+                  />
+                </Rnd>
+              );
+            })}
+          </div>
+        </div>
+
+        <iframe
+          ref={printRef}
+          srcDoc={srcDoc}
+          title="Operation Card Print Output"
+          scrolling="no"
+          style={{ position: 'absolute', left: '-9999px', top: 0, width: '210mm', border: 'none', background: '#fff' }}
+          onLoad={(e) => {
+            const body = e.target.contentDocument?.body;
+            if (body) e.target.style.height = body.scrollHeight + 1 + 'px';
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 const SowCreatePage = () => {
   const [selectedPart, setSelectedPart] = useState(null);
   const [checkedOps, setCheckedOps]     = useState(new Set());
@@ -1117,6 +1574,9 @@ const SowCreatePage = () => {
   const [saving, setSaving]             = useState(false);
   const [activeStep, setActiveStep]     = useState('edit');
   const [cardInfo, setCardInfo]         = useState({ customer: '', productionOrder: '', location: '', ident: '' });
+  const [operationCardKeys, setOperationCardKeys] = useState([]);
+  const [activeOperationKey, setActiveOperationKey] = useState(null);
+  const [operationCardImages, setOperationCardImages] = useState({});
   const [showInfoPanel, setShowInfoPanel] = useState(false);
   const [printing, setPrinting]           = useState(false);
   const printRef = useRef(null);
@@ -1135,11 +1595,24 @@ const SowCreatePage = () => {
 
   const wcData = useWorkcenterData();
 
+  const handleGoToOperationCard = useCallback(() => {
+    const keys = editOps.map(makeOperationCardKey);
+    setOperationCardKeys((prev) => {
+      const valid = prev.filter((key) => keys.includes(key));
+      return valid.length > 0 ? valid : keys;
+    });
+    setActiveOperationKey((prev) => (keys.includes(prev) ? prev : keys[0] || null));
+    setActiveStep('operation-card');
+  }, [editOps]);
+
   // ── Select / deselect part ──
   const handleSelectPart = useCallback((part) => {
     setSelectedPart(part);
     setCheckedOps(new Set());
     setEditOps([]);
+    setOperationCardKeys([]);
+    setActiveOperationKey(null);
+    setOperationCardImages({});
     setCardInfo({
       customer: part?.customer_name || '',
       productionOrder: normalizeProductionOrder(part?.production_order || ''),
@@ -1159,6 +1632,9 @@ const SowCreatePage = () => {
     }));
     setCheckedOps(new Set());
     setEditOps([]);
+    setOperationCardKeys([]);
+    setActiveOperationKey(null);
+    setOperationCardImages({});
     toast.success('Master component dipilih. Operasi standar siap dimuat.');
   }, []);
 
@@ -1306,6 +1782,9 @@ const SowCreatePage = () => {
       setSelectedPart(null);
       setCheckedOps(new Set());
       setEditOps([]);
+      setOperationCardKeys([]);
+      setActiveOperationKey(null);
+      setOperationCardImages({});
       setActiveStep('edit');
     } catch (e) {
       toast.error(e.message);
@@ -1329,6 +1808,21 @@ const SowCreatePage = () => {
       {activeStep === 'preview' ? (
         <div className="flex-1 overflow-y-auto">
           <TravelCardPreview selectedPart={selectedPart} editOps={editOps} cardInfo={cardInfo} printRef={printRef} />
+        </div>
+      ) : activeStep === 'operation-card' ? (
+        <div className="flex-1 overflow-hidden">
+          <OperationCardPreview
+            selectedPart={selectedPart}
+            editOps={editOps}
+            cardInfo={cardInfo}
+            printRef={printRef}
+            selectedKeys={operationCardKeys}
+            onSelectedKeysChange={setOperationCardKeys}
+            activeOperationKey={activeOperationKey}
+            onActiveOperationChange={setActiveOperationKey}
+            imagesByKey={operationCardImages}
+            onImagesByKeyChange={setOperationCardImages}
+          />
         </div>
       ) : (
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
@@ -1486,13 +1980,13 @@ const SowCreatePage = () => {
           <>
             {/* Back */}
             <button
-              onClick={() => setActiveStep('edit')}
+              onClick={() => setActiveStep(activeStep === 'operation-card' ? 'preview' : 'edit')}
               className="flex items-center gap-1.5 bg-white border border-slate-200
                          text-slate-700 hover:bg-slate-50 hover:border-slate-300
                          px-3 py-2 rounded-lg text-xs font-semibold transition-all active:scale-95"
             >
               <ArrowLeft size={13} />
-              Back to Edit
+              {activeStep === 'operation-card' ? 'Back to Travel Card' : 'Back to Edit'}
             </button>
             {/* Preview actions */}
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -1507,7 +2001,7 @@ const SowCreatePage = () => {
               </button>
               <button
                 onClick={handlePrint}
-                disabled={printing}
+                disabled={printing || (activeStep === 'operation-card' && operationCardKeys.length === 0)}
                 className="flex items-center gap-1.5 bg-white border border-slate-200
                            text-slate-700 hover:bg-slate-50 hover:border-slate-300
                            px-3 py-2 rounded-lg text-xs font-semibold transition-all active:scale-95
@@ -1516,6 +2010,18 @@ const SowCreatePage = () => {
                 {printing ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />}
                 {printing ? 'Generating…' : 'Print PDF'}
               </button>
+              {activeStep === 'preview' && (
+                <button
+                  onClick={handleGoToOperationCard}
+                  className="flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white
+                             px-4 py-2 rounded-lg text-xs font-semibold transition-all active:scale-95"
+                >
+                  Next Operation Card
+                  <ArrowRight size={13} />
+                </button>
+              )}
+              {activeStep === 'operation-card' && (
+                <>
               <button
                 onClick={() => handleCreate(true)}
                 disabled={saving}
@@ -1537,6 +2043,8 @@ const SowCreatePage = () => {
                 {saving ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
                 Create SOW
               </button>
+                </>
+              )}
             </div>
           </>
         )}

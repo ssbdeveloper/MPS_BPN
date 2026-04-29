@@ -86,6 +86,14 @@
     margin: 5mm;
     border: 2px solid #000;
     height: 160mm;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .main-box-image {
+    position: absolute;
+    object-fit: contain;
+    display: block;
   }
 
 </style>
@@ -137,7 +145,7 @@
   </table>
 
   <!-- MAIN BOX -->
-  <div class="main-box"></div>
+  <div class="main-box">{{mainBoxImages}}</div>
 
 </div>
 
