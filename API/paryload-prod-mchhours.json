@@ -1,0 +1,29 @@
+{
+    "ZTIMESHEETID": "505151",  // PLANT_SSB + id (505101)
+    "PERNR": "00016502",    // operatorid (table view mch_daily_machinehours_by_status)
+    "RUECK": "0004727824",  // JobID (0006876534) table view mch_daily_machinehours_by_status
+    "AUFNR":"001000073558", // ambil dari table qh3_order, ambil ke kolom order_no lookup JobID = confirmation_number)
+    "VORNR":"0020",         // ambil dari table qh3_order, ambil ke kolom operation_no lookup JobID = confirmation_number)
+    "FLGAT":"",             // 
+    "PLNFL":"",             // 
+    "VORNR_B":"",           // 
+    "VORNR_R":"",           // 
+    "ZCONF_TYPE": "",       // ambil dari table StatusTypes, jika di dikolom activity type join dengan Status ID outputnya M1 maka M1, M2 maka M2, selain itu blank
+    "ARBPL": "M5051WLS",    // ambil dari machineid table view mch_daily_machinehours_by_status
+    "LSTAR": "",            // activitytype (dari table StatusTypes,jika di dikolom activity type join dengan Status ID outputnya selain M1 atau M2, maka sesuai dengan activitytype tersebut, jika tidak maka Blank )
+    "ISDD": "20260118",     // Start Date (start "yyyymmdd") table view mch_daily_machinehours_by_status
+    "ISDZ": "153800",       // Start Time (start "hhmm")
+    "IEDD": "20260118",     // Finish Date (finish "yyyymmdd")
+    "IEDZ": "205900",       // Finish Time (finish "hhmm")
+    "WERKS": "5051",        // PLANT_SSB (dari .env )
+    "AUERU": "",            // Final Confirmation (kosong aja)
+    "ZBARCODEID": ""        // Confirm Text (Loading, Unloading, Setting, Meassure sesuai Status Descriptionnya (Jika M2 di ZCONF_TYPE))
+  }
+
+
+
+
+
+
+  
+  //QR = confirmation_no + ZCONF_TYPE + Sequence

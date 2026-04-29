@@ -12,5 +12,6 @@ router.get("/progress-distribution", controller.getProgressDistribution);
 router.get("/validation-rate", controller.getValidationRate);
 router.get("/operator-heatmap", controller.getOperatorHeatmap);
 router.get("/workcenter-list", controller.getWorkcenterList);
+router.get("/operations-hub", controller.getOperationsHub);
 
 module.exports = router;

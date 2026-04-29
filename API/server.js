@@ -141,6 +141,7 @@ app.use('/process-control-item', require('./routes/processControlDataItemRoutes'
 app.use('/dashboard', require('./routes/dashboard'));
 app.use('/receiving-shipment', require('./routes/receivingShipment'));
 app.use('/machine-hours-sqlserver', require('./routes/machineHoursSqlServer'));
+app.use('/machine-hours-validation', require('./routes/machineHoursValidation'));
 
 require('./websocket/machineHoursSqlServerSocket')(server);
 

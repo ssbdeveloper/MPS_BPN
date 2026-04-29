@@ -28,6 +28,7 @@ import SowCreatePage from '../pages/SowCreatePage';
 import EditorImage from '../pages/editorimage';
 import ReceivingShipmentPage from '../pages/ReceivingShipmentPage';
 import MachineHoursSqlServerPage from '../pages/MachineHoursSqlServerPage';
+import MachineHoursValidationPage from '../pages/MachineHoursValidationPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -50,6 +51,14 @@ const router = createBrowserRouter([
   {
     path: '/machine-hours-sqlserver',
     element: <MachineHoursSqlServerPage />,
+  },
+  {
+    path: '/machine-hours-validation',
+    element: (
+      <ProtectedRoute>
+        <MachineHoursValidationPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '/',
