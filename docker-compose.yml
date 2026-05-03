@@ -13,8 +13,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
-      - ./database/init_database.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - ./database/migrate_sow_to_parts.sql:/docker-entrypoint-initdb.d/02-migrate.sql:ro
+      - ./database/local_schema.sql:/docker-entrypoint-initdb.d/01-local-schema.sql:ro
     ports:
       - "5433:5432"
     restart: unless-stopped

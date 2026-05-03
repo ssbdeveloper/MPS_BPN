@@ -2,20 +2,26 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
+  AlertCircle,
   BarChart2,
   BookOpen,
+  CheckCircle2,
   ChevronRight,
+  ClipboardCheck,
   Eye,
   EyeOff,
   Factory,
   LayoutDashboard,
   Lock,
   LogOut,
+  Loader2,
   Package,
+  Settings,
   ShieldCheck,
   TimerReset,
   Truck,
   Users,
+  X,
 } from 'lucide-react';
 
 const ADMIN_PASSWORD = 'adminssbuye';
@@ -26,7 +32,8 @@ const sidebarItems = [
   { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list' },
   { title: 'Component Tracking', icon: Package, path: '/component-tracking' },
   { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment' },
-  { title: 'Manage User', icon: Users, path: '/nfc-users' },
+  { title: 'Consumable Control', icon: ClipboardCheck, path: '/consumable-control' },
+  { title: 'Manage User', icon: Users, path: '/manage-user' },
   { title: 'Validation', icon: ShieldCheck, path: '/timesheet-validation' },
   { title: 'Machine Hours', icon: TimerReset, path: '/machine-hours-validation' },
 ];
@@ -84,6 +91,14 @@ function formatDateTimeLabel(value) {
 
 function progressTone(index) {
   return progressTones[index % progressTones.length];
+}
+
+function readAuthUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem('authUser') || 'null');
+  } catch {
+    return null;
+  }
 }
 
 function DashboardCard({ children, className = '' }) {
@@ -161,6 +176,177 @@ function Sidebar({ onNavigate, onLogout }) {
         </div>
       </div>
     </aside>
+  );
+}
+
+function ChangePasswordPanel({ user, onClose }) {
+  const [form, setForm] = useState({
+    oldPassword: '',
+    newPassword: '',
+    retypeNewPassword: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const canConfirm = Boolean(
+    user?.username &&
+    form.oldPassword &&
+    form.newPassword &&
+    form.retypeNewPassword &&
+    form.newPassword === form.retypeNewPassword &&
+    form.newPassword.length >= 5
+  );
+
+  const updateField = (key, value) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setMessage(null);
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!canConfirm || loading) return;
+
+    setLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/auth/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: user.username,
+          oldPassword: form.oldPassword,
+          newPassword: form.newPassword,
+          retypeNewPassword: form.retypeNewPassword,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok || payload.success === false) {
+        throw new Error(payload.error || 'Gagal ubah password');
+      }
+
+      setForm({ oldPassword: '', newPassword: '', retypeNewPassword: '' });
+      setMessage({ type: 'success', text: 'Password berhasil diubah' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-30">
+      <button
+        type="button"
+        className="absolute inset-0 bg-slate-950/30 backdrop-blur-[1px]"
+        onClick={onClose}
+        aria-label="Close change password panel"
+      />
+
+      <aside className="absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-6 py-5">
+          <div>
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e8f7fb] text-[#0077b6]">
+              <Settings size={22} />
+            </div>
+            <h2 className="mt-4 text-lg font-extrabold text-slate-950">Ubah Password</h2>
+            <p className="mt-1 text-sm font-medium text-slate-500">
+              Konfirmasi old password sebelum menyimpan password baru.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Username</p>
+            <p className="mt-1 truncate text-sm font-extrabold text-slate-900">{user?.username || '-'}</p>
+          </div>
+
+          {!user?.username && (
+            <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              Login melalui welcome page diperlukan untuk ubah password.
+            </div>
+          )}
+
+          <label className="block">
+            <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">
+              Old Password
+            </span>
+            <input
+              type="password"
+              value={form.oldPassword}
+              onChange={(event) => updateField('oldPassword', event.target.value)}
+              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#00b4d8] focus:ring-4 focus:ring-cyan-100"
+              autoComplete="current-password"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">
+              New Password
+            </span>
+            <input
+              type="password"
+              value={form.newPassword}
+              onChange={(event) => updateField('newPassword', event.target.value)}
+              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#00b4d8] focus:ring-4 focus:ring-cyan-100"
+              autoComplete="new-password"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-xs font-extrabold uppercase tracking-wide text-slate-500">
+              Retype New Password
+            </span>
+            <input
+              type="password"
+              value={form.retypeNewPassword}
+              onChange={(event) => updateField('retypeNewPassword', event.target.value)}
+              className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-800 outline-none transition focus:border-[#00b4d8] focus:ring-4 focus:ring-cyan-100"
+              autoComplete="new-password"
+            />
+          </label>
+
+          {form.retypeNewPassword && form.newPassword !== form.retypeNewPassword && (
+            <p className="text-xs font-bold text-red-600">Retype new password belum sama.</p>
+          )}
+
+          {message && (
+            <div className={`flex gap-2 rounded-xl border px-4 py-3 text-sm font-semibold ${
+              message.type === 'success'
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-red-200 bg-red-50 text-red-700'
+            }`}>
+              {message.type === 'success' ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              ) : (
+                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              )}
+              <span>{message.text}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={!canConfirm || loading}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#0077b6] px-4 text-sm font-extrabold text-white transition hover:bg-[#023e8a] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Confirm
+          </button>
+        </form>
+      </aside>
+    </div>
   );
 }
 
@@ -422,6 +608,8 @@ function OperationsHubPage() {
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [hubData, setHubData] = useState(emptyHubData);
+  const [authUser, setAuthUser] = useState(readAuthUser);
+  const [showPasswordPanel, setShowPasswordPanel] = useState(false);
   const [kpiStatus, setKpiStatus] = useState(() => (
     sessionStorage.getItem('isVerified') === 'true' ? 'loading' : 'idle'
   ));
@@ -497,6 +685,9 @@ function OperationsHubPage() {
 
     if (password === ADMIN_PASSWORD) {
       sessionStorage.setItem('isVerified', 'true');
+      const localAdmin = { username: 'admin', name: 'Administrator', roles: 'administrator' };
+      sessionStorage.setItem('authUser', JSON.stringify(localAdmin));
+      setAuthUser(localAdmin);
       setKpiStatus('loading');
       setIsVerified(true);
       setError('');
@@ -510,6 +701,9 @@ function OperationsHubPage() {
 
   const handleLogout = useCallback(() => {
     sessionStorage.removeItem('isVerified');
+    sessionStorage.removeItem('authUser');
+    setAuthUser(null);
+    setShowPasswordPanel(false);
     setIsVerified(false);
     setKpiStatus('idle');
     setPassword('');
@@ -625,9 +819,31 @@ function OperationsHubPage() {
               }`}>
                 {statusLabel}
               </span>
+              <span className="inline-flex min-h-[34px] items-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 shadow-sm">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#e8f7fb] text-[#0077b6]">
+                  <Users size={14} />
+                </span>
+                {authUser?.username || 'admin'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowPasswordPanel(true)}
+                className="flex h-[34px] w-[34px] items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-[#90e0ef] hover:bg-cyan-50 hover:text-[#0077b6]"
+                title="Ubah password"
+                aria-label="Ubah password"
+              >
+                <Settings size={16} />
+              </button>
             </div>
           </div>
         </header>
+
+        {showPasswordPanel && (
+          <ChangePasswordPanel
+            user={authUser}
+            onClose={() => setShowPasswordPanel(false)}
+          />
+        )}
 
         <div className="space-y-4 px-4 py-4 md:px-6">
           <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">

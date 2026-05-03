@@ -77,8 +77,8 @@ const app = express();
 const server = http.createServer(app);
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // CORS configuration
 app.use(
@@ -87,7 +87,7 @@ app.use(
 
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-role'],
     credentials: false,
   })
 );
@@ -133,15 +133,14 @@ app.use('/usernfc', require('./routes/usernfc'));
 app.use('/workcenter', require('./routes/workcenter'));
 app.use('/timesheet', require('./routes/timesheet_transaction'));
 app.use('/production-operations', require('./routes/production_operations'));
-app.use('/process-category', require('./routes/processCategoryRoutes'));
-app.use('/process-parameter', require('./routes/processParameterRoutes'));
-app.use('/process-parameter-choicebase', require('./routes/processParameterChoicebaseRoutes'));
-app.use('/process-control', require('./routes/processControlDataRoutes'));
-app.use('/process-control-item', require('./routes/processControlDataItemRoutes'));
+app.use('/process-control', require('./routes/processControlRoutes'));
 app.use('/dashboard', require('./routes/dashboard'));
 app.use('/receiving-shipment', require('./routes/receivingShipment'));
+app.use('/component-tracking', require('./routes/componentTracking'));
 app.use('/machine-hours-sqlserver', require('./routes/machineHoursSqlServer'));
 app.use('/machine-hours-validation', require('./routes/machineHoursValidation'));
+app.use('/consumable', require('./routes/consumable'));
+app.use('/auth', require('./routes/auth'));
 
 require('./websocket/machineHoursSqlServerSocket')(server);
 

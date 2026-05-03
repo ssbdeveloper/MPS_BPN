@@ -5,7 +5,7 @@
     "AUFNR":"001000073558", // ambil dari table qh3_order, ambil ke kolom order_no lookup JobID = confirmation_number)
     "VORNR":"0020",         // ambil dari table qh3_order, ambil ke kolom operation_no lookup JobID = confirmation_number)
     "FLGAT":"",             // 
-    "PLNFL":"",             // 
+    "PLNFL":"",             // sequence_number ambil dari ph3_order
     "VORNR_B":"",           // 
     "VORNR_R":"",           // 
     "ZCONF_TYPE": "",       // ambil dari table StatusTypes, jika di dikolom activity type join dengan Status ID outputnya M1 maka M1, M2 maka M2, selain itu blank
@@ -25,5 +25,5 @@
 
 
 
-  
+
   //QR = confirmation_no + ZCONF_TYPE + Sequence

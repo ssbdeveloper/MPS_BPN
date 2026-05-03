@@ -1,34 +1,41 @@
 import { createBrowserRouter } from 'react-router-dom';
+import WelcomePage from '../pages/WelcomePage';
 import OperationsHubPage from '../pages/OperationsHubPage';
-import LoginTimesheetPage from '../pages/LoginTimesheetPage';
-import TimesheetPage from '../pages/TimesheetPage';
-import TimesheetMainMenuPage from '../pages/TimesheetMainMenuPage';
-import TimesheetListPage from '../pages/TimesheetListPage';
-import TimesheetValidationPage from '../pages/TimesheetValidationPage';
-import LogTimesheetPage from '../pages/LogTimesheetPage';
+import LoginTimesheetPage from '../pages/TIMESHEET/LoginTimesheetPage';
+import TimesheetPage from '../pages/TIMESHEET/TimesheetPage';
+import TimesheetMainMenuPage from '../pages/TIMESHEET/TimesheetMainMenuPage';
+import TimesheetListPage from '../pages/TIMESHEET/TimesheetListPage';
+import TimesheetValidationPage from '../pages/TIMESHEET/TimesheetValidationPage';
+import LogTimesheetPage from '../pages/TIMESHEET/LogTimesheetPage';
 
 
-import TimesheetEditPage from '../pages/TimesheetEditPage';
-import ProcessControlPage from '../pages/ProcessControlPage';
-import SelectJobPage from '../pages/SelectJobPage';
-import SelectMachinePage from '../pages/SelectMachinePage';
+import TimesheetEditPage from '../pages/TIMESHEET/TimesheetEditPage';
+import ProcessControlPage from '../pages/MACHINE_H/ProcessControlPage';
+import SelectJobPage from '../pages/TIMESHEET/SelectJobPage';
+import SelectMachinePage from '../pages/TIMESHEET/SelectMachinePage';
 import DashboardPage from '../pages/DashboardPage';
 import SettingPage from '../pages/SettingPage';
-import ComponentTrackingPage from '../pages/ComponentTrackingPage';
-import EditParameterPage from '../pages/EditParameterPage';
-import NfcUserListPage from '../pages/NfcUserListPage';
-import CreateEditNfcPage from '../pages/CreateEditNfcPage';
-import UnproductiveMenuPage from '../pages/UnproductiveMenuPage';
+import ComponentTrackingPage from '../pages/PPC/ComponentTrackingPage';
+import BufferTransactionPage from '../pages/PPC/BufferTransactionPage';
+import EditParameterPage from '../pages/MACHINE_H/EditParameterPage';
+import NfcUserListPage from '../pages/TIMESHEET/NfcUserListPage';
+import CreateEditNfcPage from '../pages/TIMESHEET/CreateEditNfcPage';
+import ManageUserPage from '../pages/PPC/ManageUserPage';
+import ManageUsersPage from '../pages/PPC/ManageUsersPage';
+import UnproductiveMenuPage from '../pages/TIMESHEET/UnproductiveMenuPage';
 import DownloadPage from '../pages/DownloadPage';
 import OrderListPage from '../pages/OrderListPage';
-import SowEditPage from '../pages/SowEditPage';
-import SowManagementPage from '../pages/SowManagementPage';
-import SowStandardListPage from '../pages/SowStandardListPage';
-import SowCreatePage from '../pages/SowCreatePage';
+import SowEditPage from '../pages/PE/SowEditPage';
+import SowManagementPage from '../pages/PE/SowManagementPage';
+import SowStandardListPage from '../pages/PE/SowStandardListPage';
+import SowCreatePage from '../pages/PE/SowCreatePage';
+import SowHistoryPage from '../pages/PE/SowHistoryPage';
 import EditorImage from '../pages/editorimage';
-import ReceivingShipmentPage from '../pages/ReceivingShipmentPage';
-import MachineHoursSqlServerPage from '../pages/MachineHoursSqlServerPage';
-import MachineHoursValidationPage from '../pages/MachineHoursValidationPage';
+import ReceivingShipmentPage from '../pages/PPC/ReceivingShipmentPage';
+import MachineHoursSqlServerPage from '../pages/MACHINE_H/MachineHoursSqlServerPage';
+import MachineHoursValidationPage from '../pages/MACHINE_H/MachineHoursValidationPage';
+import ConsumableRequestPage from '../pages/WAREHOUSE/ConsumableRequestPage';
+import ConsumableControlPage from '../pages/WAREHOUSE/ConsumableControlPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -49,6 +56,18 @@ const router = createBrowserRouter([
     element: <ReceivingShipmentPage />,
   },
   {
+    path: '/consumable-request',
+    element: <ConsumableRequestPage />,
+  },
+  {
+    path: '/consumable-control',
+    element: (
+      <ProtectedRoute>
+        <ConsumableControlPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
     path: '/machine-hours-sqlserver',
     element: <MachineHoursSqlServerPage />,
   },
@@ -62,7 +81,11 @@ const router = createBrowserRouter([
   },
   {
     path: '/',
-    element: <LoginTimesheetPage />,
+    element: <WelcomePage />,
+  },
+  {
+    path: '/welcome',
+    element: <WelcomePage />,
   },
   {
     path: '/login-timesheet',
@@ -118,8 +141,28 @@ const router = createBrowserRouter([
     element: <ComponentTrackingPage />,
   },
   {
+    path: '/buffer-transaction',
+    element: <BufferTransactionPage />,
+  },
+  {
     path: '/edit-parameter',
     element: <EditParameterPage />,
+  },
+  {
+    path: '/manage-user',
+    element: (
+      <ProtectedRoute>
+        <ManageUserPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/manage-users',
+    element: (
+      <ProtectedRoute>
+        <ManageUsersPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '/nfc-users',
@@ -156,6 +199,10 @@ const router = createBrowserRouter([
       {
         path: 'create',
         element: <SowCreatePage />,
+      },
+      {
+        path: 'history',
+        element: <SowHistoryPage />,
       },
     ],
   },

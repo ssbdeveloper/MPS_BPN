@@ -76,6 +76,23 @@ const validateInput = (schema, data) => {
   return validated;
 };
 
+const normalizeText = (value) => (value ?? "").toString().trim();
+
+const inferActivityType = ({ id_unprod, activitytype, operation_text, order_no, operation_no }) => {
+  const explicit = normalizeText(id_unprod || activitytype);
+  if (explicit) return explicit;
+
+  // Legacy/untrusted callers sometimes sent unproductive rows with only
+  // operation_text like "1510BRIEFING" and activitytype = ''. Infer only when
+  // the row does not look like a productive order operation.
+  if (order_no || operation_no) return null;
+
+  const match = normalizeText(operation_text).match(/^(\d{4})\b|^(\d{4})(?=[A-Za-z])/);
+  return match ? (match[1] || match[2]) : null;
+};
+
+const isUnproductiveRow = (row) => Boolean(inferActivityType(row));
+
 // ============ QUERY HANDLERS ============
 
 /**
@@ -262,7 +279,8 @@ exports.create = async (req, res) => {
       workcentercode,
       workcenterdescription,
       planhours,
-      id_unprod
+      id_unprod,
+      activitytype
     } = req.body;
 
     // Validate required fields
@@ -271,6 +289,13 @@ exports.create = async (req, res) => {
     }
 
     const PLANT_SSB = process.env.PLANT_SSB;
+    const normalizedActivityType = inferActivityType({
+      id_unprod,
+      activitytype,
+      operation_text,
+      order_no,
+      operation_no
+    });
 
     const result = await db.query(
       `INSERT INTO timesheet_transaction
@@ -294,7 +319,7 @@ exports.create = async (req, res) => {
         workcenterdescription,
         planhours,
         PLANT_SSB,
-        id_unprod
+        normalizedActivityType
       ]
     );
 
@@ -369,7 +394,14 @@ exports.checkoutUnprod = async (req, res) => {
            )
        WHERE serialnumber = $1
          AND date_checkout IS NULL
-         AND activitytype IS NOT NULL AND activitytype <> ''
+         AND (
+           NULLIF(TRIM(activitytype), '') IS NOT NULL
+           OR (
+             order_no IS NULL
+             AND operation_no IS NULL
+             AND operation_text ~ '^\\s*\\d{4}'
+           )
+         )
        RETURNING *`,
       [serialnumber]
     );
@@ -973,6 +1005,7 @@ exports.postToSap = async (req, res) => {
       t.operation_no,
       t.workcentercode,
       t.activitytype,
+      t.operation_text,
       t.plant,
       TO_CHAR(t.longdate_checkin  AT TIME ZONE $2, 'YYYYMMDD') AS isdd,
       TO_CHAR(t.longdate_checkin  AT TIME ZONE $2, 'HH24MISS') AS isdz,
@@ -1005,7 +1038,8 @@ exports.postToSap = async (req, res) => {
   const results = [];
 
   for (const row of rows) {
-    const isUnprod = !!row.activitytype;
+    const activityType = inferActivityType(row);
+    const isUnprod = Boolean(activityType);
     const payload = {
       ZTIMESHEETID: formatZTIMESHEETID(row.tsnumber),
       PERNR:        String(row.serialnumber || '').padStart(8, '0'),
@@ -1022,7 +1056,7 @@ exports.postToSap = async (req, res) => {
                   : parseInt(row.operation_no, 10) > 5000             ? 'RW'
                   : 'RG',
       ARBPL:        String(row.workcentercode || ''),
-      LSTAR:        String(row.activitytype || ''),
+      LSTAR:        String(activityType || ''),
       ISDD:         String(row.isdd || ''),
       ISDZ:         String(row.isdz || ''),
       IEDD:         String(row.iedd || ''),

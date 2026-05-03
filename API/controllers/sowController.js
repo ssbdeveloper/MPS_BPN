@@ -3,6 +3,91 @@ const path = require('path');
 const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
+const SOW_HISTORY_COLUMNS = `
+  customer,
+  order_no,
+  ssbr_id,
+  operation_no,
+  operation_text,
+  workcenterdescription AS operation_name,
+  planhours,
+  wct_group,
+  workcenter,
+  status,
+  part_number,
+  part_name,
+  model
+`;
+
+const EDITABLE_SOW_COLUMNS = [
+  "order_no",
+  "operation_no",
+  "ssbr_id",
+  "part_number",
+  "part_name",
+  "model",
+  "customer",
+  "location",
+  "wct_group",
+  "workcenter",
+  "operation_text",
+  "workcenterdescription",
+  "planhours",
+  "systemstatus",
+  "confirmation",
+  "status",
+  "finish_date",
+  "weight",
+  "created_by",
+  "type",
+  "group",
+  "category",
+  "remark",
+  "sync",
+  "plan_start",
+  "plan_finish",
+  "actual_start",
+  "actual_finish",
+  "actual_progress",
+  "actual_hours",
+  "progress",
+];
+
+async function ensureSowRevisionHistoryTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS sow_revision_history (
+      id BIGSERIAL PRIMARY KEY,
+      order_no TEXT NOT NULL,
+      revision_no INTEGER NOT NULL,
+      action TEXT NOT NULL DEFAULT 'edit',
+      before_data JSONB,
+      after_data JSONB,
+      changed_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (order_no, revision_no)
+    )
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_sow_revision_history_order_created
+      ON sow_revision_history (order_no, created_at DESC)
+  `);
+}
+
+function normalizeSowOperation(row, fallbackOrderNo) {
+  const item = {};
+  EDITABLE_SOW_COLUMNS.forEach((column) => {
+    item[column] = row?.[column] ?? null;
+  });
+  item.order_no = item.order_no || fallbackOrderNo;
+  item.operation_no = item.operation_no === "" || item.operation_no == null ? null : Number(item.operation_no);
+  item.planhours = item.planhours === "" || item.planhours == null ? null : Number(item.planhours);
+  item.weight = item.weight === "" || item.weight == null ? null : Number(item.weight);
+  item.actual_progress = item.actual_progress === "" || item.actual_progress == null ? null : Number(item.actual_progress);
+  item.actual_hours = item.actual_hours === "" || item.actual_hours == null ? null : Number(item.actual_hours);
+  item.progress = item.progress === "" || item.progress == null ? null : Number(item.progress);
+  return item;
+}
+
 const normalizeOrderNo = (value) => {
   const text = String(value ?? '').trim();
   return text ? text.replace(/-/g, '000') : '';
@@ -48,6 +133,184 @@ exports.getGrouped = async (req, res) => {
       totalPages: Math.ceil(total / limit),
     });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getSowHistoryRows = async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const offset = (page - 1) * limit;
+
+    const params = [];
+    let where = "";
+    if (search) {
+      params.push(`%${search}%`);
+      where = `WHERE order_no ILIKE $1 OR ssbr_id ILIKE $1`;
+    }
+
+    const count = await db.query(`SELECT COUNT(*)::int AS total FROM sow ${where}`, params);
+    params.push(limit, offset);
+    const result = await db.query(
+      `SELECT ${SOW_HISTORY_COLUMNS}
+       FROM sow
+       ${where}
+       ORDER BY order_no ASC, operation_no ASC NULLS LAST
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+
+    res.json({
+      data: result.rows,
+      pagination: {
+        page,
+        limit,
+        total: count.rows[0]?.total || 0,
+        totalPages: Math.max(1, Math.ceil((count.rows[0]?.total || 0) / limit)),
+      },
+    });
+  } catch (err) {
+    console.error("getSowHistoryRows error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getSowOrderOptions = async (req, res) => {
+  try {
+    const search = String(req.query.search || "").trim();
+    const params = [];
+    let where = "";
+    if (search) {
+      params.push(`%${search}%`);
+      where = `WHERE order_no ILIKE $1 OR ssbr_id ILIKE $1`;
+    }
+
+    const result = await db.query(
+      `SELECT order_no,
+              MAX(ssbr_id) AS ssbr_id,
+              MAX(customer) AS customer,
+              MAX(part_name) AS part_name,
+              COUNT(*)::int AS operation_count
+       FROM sow
+       ${where}
+       GROUP BY order_no
+       ORDER BY MAX(idsow) DESC
+       LIMIT 100`,
+      params,
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("getSowOrderOptions error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getSowOrderForRevision = async (req, res) => {
+  try {
+    await ensureSowRevisionHistoryTable();
+    const { orderNo } = req.params;
+    const rows = await db.query(
+      `SELECT *
+       FROM sow
+       WHERE order_no = $1
+       ORDER BY operation_no ASC NULLS LAST, idsow ASC`,
+      [orderNo],
+    );
+    const rev = await db.query(
+      `SELECT COALESCE(MAX(revision_no), 0)::int AS current_revision
+       FROM sow_revision_history
+       WHERE order_no = $1`,
+      [orderNo],
+    );
+    res.json({
+      order_no: orderNo,
+      current_revision: rev.rows[0]?.current_revision || 0,
+      rows: rows.rows,
+    });
+  } catch (err) {
+    console.error("getSowOrderForRevision error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.saveSowOrderRevision = async (req, res) => {
+  const { orderNo } = req.params;
+  const operations = Array.isArray(req.body?.operations) ? req.body.operations : [];
+  const changedBy = req.body?.changed_by || req.user?.username || "web";
+
+  if (!orderNo) return res.status(400).json({ error: "orderNo wajib diisi" });
+  if (operations.length === 0) return res.status(400).json({ error: "operations tidak boleh kosong" });
+
+  try {
+    await ensureSowRevisionHistoryTable();
+    await db.query("BEGIN");
+
+    const before = await db.query(
+      `SELECT *
+       FROM sow
+       WHERE order_no = $1
+       ORDER BY operation_no ASC NULLS LAST, idsow ASC`,
+      [orderNo],
+    );
+    const revision = await db.query(
+      `SELECT COALESCE(MAX(revision_no), 0)::int + 1 AS next_revision
+       FROM sow_revision_history
+       WHERE order_no = $1`,
+      [orderNo],
+    );
+    const revisionNo = revision.rows[0]?.next_revision || 1;
+
+    await db.query(`DELETE FROM sow WHERE order_no = $1`, [orderNo]);
+
+    const inserted = [];
+    for (const operation of operations) {
+      const row = normalizeSowOperation(operation, orderNo);
+      const values = EDITABLE_SOW_COLUMNS.map((column) => row[column]);
+      const placeholders = EDITABLE_SOW_COLUMNS.map((_, index) => `$${index + 1}`).join(", ");
+      const result = await db.query(
+        `INSERT INTO sow (${EDITABLE_SOW_COLUMNS.map((column) => `"${column}"`).join(", ")})
+         VALUES (${placeholders})
+         RETURNING *`,
+        values,
+      );
+      inserted.push(result.rows[0]);
+    }
+
+    const history = await db.query(
+      `INSERT INTO sow_revision_history
+       (order_no, revision_no, action, before_data, after_data, changed_by)
+       VALUES ($1, $2, 'edit', $3::jsonb, $4::jsonb, $5)
+       RETURNING *`,
+      [orderNo, revisionNo, JSON.stringify(before.rows), JSON.stringify(inserted), changedBy],
+    );
+
+    await db.query("COMMIT");
+    res.json({ revision: history.rows[0], rows: inserted });
+  } catch (err) {
+    await db.query("ROLLBACK").catch(() => {});
+    console.error("saveSowOrderRevision error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getSowRevisionHistory = async (req, res) => {
+  try {
+    await ensureSowRevisionHistoryTable();
+    const { orderNo } = req.params;
+    const result = await db.query(
+      `SELECT id, order_no, revision_no, action, changed_by, created_at,
+              jsonb_array_length(COALESCE(before_data, '[]'::jsonb)) AS before_count,
+              jsonb_array_length(COALESCE(after_data, '[]'::jsonb)) AS after_count
+       FROM sow_revision_history
+       WHERE order_no = $1
+       ORDER BY revision_no DESC`,
+      [orderNo],
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("getSowRevisionHistory error:", err);
     res.status(500).json({ error: err.message });
   }
 };

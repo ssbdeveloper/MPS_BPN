@@ -60,6 +60,15 @@ router.get("/getrow/:id", controller.getRowById);
 router.post("/create", controller.createFromBuilder);
 
 // ============================================
+// SOW HISTORY / REVISION EDITOR
+// ============================================
+router.get("/history-rows", controller.getSowHistoryRows);
+router.get("/history-orders", controller.getSowOrderOptions);
+router.get("/history-order/:orderNo", controller.getSowOrderForRevision);
+router.put("/history-order/:orderNo", controller.saveSowOrderRevision);
+router.get("/revision-history/:orderNo", controller.getSowRevisionHistory);
+
+// ============================================
 // PROGRESS UPDATE HISTORY
 // ============================================
 router.get("/progress-history/:idsow", controller.getProgressHistory);
