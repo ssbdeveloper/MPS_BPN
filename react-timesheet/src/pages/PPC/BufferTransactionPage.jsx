@@ -801,8 +801,6 @@ export default function BufferTransactionPage() {
 
   const handleDragEnd = async ({ active, over }) => {
     const source = active.data?.current;
-    const overId = String(over?.id || '');
-    const isZoneDrop = overId.startsWith('zone-');
 
     setActiveDrag(null);
     if (!source || !focusedMachine || !over) return;
@@ -814,7 +812,6 @@ export default function BufferTransactionPage() {
         return;
       }
 
-      if (!isZoneDrop) return;
       const targetType = getTargetType(over);
       if (!targetType) return;
       if (targetType === 'moving') {
@@ -828,7 +825,6 @@ export default function BufferTransactionPage() {
       return;
     }
 
-    if (!isZoneDrop) return;
     const targetType = getTargetType(over);
     if (!targetType) return;
     if (targetType === 'moving') {
@@ -855,7 +851,7 @@ export default function BufferTransactionPage() {
       setBufferHistory((prev) => prev.map((item) => (item.id === saved.id ? { ...item, ...saved } : item)));
       setNoteItem((prev) => (prev ? { ...prev, ...saved } : prev));
       if (showHistory) {
-        const rows = await fetchBufferHistory(saved.order_no, saved.operation_no);
+        const rows = await fetchBufferHistory(saved.order_no);
         setHistoryRows(rows.map(normalizeBuffer));
       }
     } catch (err) {
@@ -870,7 +866,7 @@ export default function BufferTransactionPage() {
     setShowHistory(true);
     setLoadingHistory(true);
     try {
-      const rows = await fetchBufferHistory(noteItem.order_no, noteItem.operation_no);
+      const rows = await fetchBufferHistory(noteItem.order_no);
       setHistoryRows(rows.map(normalizeBuffer));
     } catch (err) {
       setError(err.message || 'Gagal mengambil history.');

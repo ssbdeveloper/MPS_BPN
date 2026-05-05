@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { goBackOrFallback } from '../../utils/navigation';
 import {
   AlertCircle,
   CheckCircle2,
@@ -18,6 +17,8 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const SUBMITTED_STORAGE_KEY = 'machine_hours_validation_submitted';
+const FILTER_STORAGE_KEY = 'machineHoursValidationShowFilters';
+const POST_SAP_STORAGE_KEY = 'machineHoursValidationPostSap';
 
 const PALETTE = {
   deepTwilight: '#03045e',
@@ -160,17 +161,17 @@ function formatDurationStacked(hours) {
   };
 }
 
-function loadSubmittedKeys() {
+function loadSubmittedKeys(storageKey = SUBMITTED_STORAGE_KEY) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(SUBMITTED_STORAGE_KEY) || '[]');
+    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]');
     return new Set(Array.isArray(parsed) ? parsed : []);
   } catch {
     return new Set();
   }
 }
 
-function saveSubmittedKeys(keys) {
-  localStorage.setItem(SUBMITTED_STORAGE_KEY, JSON.stringify(Array.from(keys)));
+function saveSubmittedKeys(keys, storageKey = SUBMITTED_STORAGE_KEY) {
+  localStorage.setItem(storageKey, JSON.stringify(Array.from(keys)));
 }
 
 const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, isSubmitted }) => {
@@ -362,7 +363,14 @@ const MachineGroup = React.memo(({
   );
 });
 
-const MachineHoursValidationPage = () => {
+const MachineHoursValidationPage = ({
+  apiPrefix = '/machine-hours-validation',
+  title = 'Machine Hours Validation',
+  submittedStorageKey = SUBMITTED_STORAGE_KEY,
+  filterStorageKey = FILTER_STORAGE_KEY,
+  postSapStorageKey = POST_SAP_STORAGE_KEY,
+  emptyMessage = 'Tidak ada data machine hours untuk divalidasi',
+} = {}) => {
   const navigate = useNavigate();
   const [groups, setGroups] = useState([]);
   const [stats, setStats] = useState({
@@ -383,12 +391,12 @@ const MachineHoursValidationPage = () => {
     operatorid: '',
     jobid: '',
   });
-  const [showFilters, setShowFilters] = useState(() => localStorage.getItem('machineHoursValidationShowFilters') !== 'false');
-  const [postToSapEnabled, setPostToSapEnabled] = useState(() => localStorage.getItem('machineHoursValidationPostSap') !== 'false');
+  const [showFilters, setShowFilters] = useState(() => localStorage.getItem(filterStorageKey) !== 'false');
+  const [postToSapEnabled, setPostToSapEnabled] = useState(() => localStorage.getItem(postSapStorageKey) !== 'false');
   const [loading, setLoading] = useState(true);
   const [groupRecords, setGroupRecords] = useState({});
   const [expandedGroups, setExpandedGroups] = useState(new Set());
-  const [submittedKeys, setSubmittedKeys] = useState(loadSubmittedKeys);
+  const [submittedKeys, setSubmittedKeys] = useState(() => loadSubmittedKeys(submittedStorageKey));
   const [sapPendingKeys, setSapPendingKeys] = useState(new Set());
   const [sapStatus, setSapStatus] = useState(null);
   const [error, setError] = useState('');
@@ -399,7 +407,7 @@ const MachineHoursValidationPage = () => {
     if (!silent) setLoading(true);
     setError('');
     try {
-      const response = await fetch(apiUrl('/machine-hours-validation/validation-stats', queryFilters));
+      const response = await fetch(apiUrl(`${apiPrefix}/validation-stats`, queryFilters));
       const json = await response.json();
       if (!response.ok || json.success === false) throw new Error(json.error || 'Gagal load machine hours validation');
       setStats(json.stats || {});
@@ -411,7 +419,7 @@ const MachineHoursValidationPage = () => {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [queryFilters]);
+  }, [apiPrefix, queryFilters]);
 
   useEffect(() => {
     loadValidationData();
@@ -426,7 +434,7 @@ const MachineHoursValidationPage = () => {
     }));
 
     try {
-      const response = await fetch(apiUrl(`/machine-hours-validation/validation-group/${encodeURIComponent(machineno)}`, queryFilters));
+      const response = await fetch(apiUrl(`${apiPrefix}/validation-group/${encodeURIComponent(machineno)}`, queryFilters));
       const json = await response.json();
       if (!response.ok || json.success === false) throw new Error(json.error || 'Gagal load detail machine');
       const records = Array.isArray(json.data) ? json.data : [];
@@ -437,7 +445,7 @@ const MachineHoursValidationPage = () => {
       toast.error('Gagal load detail machine', { description: err.message });
       return [];
     }
-  }, [groupRecords, queryFilters]);
+  }, [apiPrefix, groupRecords, queryFilters]);
 
   const toggleGroup = useCallback((machineno) => {
     setExpandedGroups((prev) => {
@@ -464,7 +472,7 @@ const MachineHoursValidationPage = () => {
     setSubmittedKeys((prev) => {
       const next = new Set(prev);
       keys.forEach((key) => next.add(key));
-      saveSubmittedKeys(next);
+      saveSubmittedKeys(next, submittedStorageKey);
       return next;
     });
     setSapPendingKeys((prev) => {
@@ -472,7 +480,7 @@ const MachineHoursValidationPage = () => {
       keys.forEach((key) => next.delete(key));
       return next;
     });
-  }, []);
+  }, [submittedStorageKey]);
 
   const submitRecords = useCallback(async (records, label) => {
     const pendingRecords = records.filter((record) => !submittedKeys.has(record.record_key));
@@ -531,7 +539,8 @@ const MachineHoursValidationPage = () => {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `machine_hours_validation_${filters.start}_to_${filters.end}.csv`;
+    const filePrefix = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'machine_hours';
+    anchor.download = `${filePrefix}_${filters.start}_to_${filters.end}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -562,19 +571,19 @@ const MachineHoursValidationPage = () => {
   return (
     <div className="h-dvh w-screen flex flex-col overflow-hidden bg-slate-50">
       <header className="flex-shrink-0 flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
-        <button onClick={() => goBackOrFallback(navigate)} className={btnOutline}>
+        <button onClick={() => navigate('/operations-hub')} className={btnOutline}>
           {Icon.back} Back
         </button>
 
         <h1 className="text-base sm:text-lg font-extrabold tracking-wide text-slate-800">
-          Machine Hours Validation
+          {title}
         </h1>
 
         <div className="flex gap-2">
           <button
             onClick={() => setShowFilters((prev) => {
               const next = !prev;
-              localStorage.setItem('machineHoursValidationShowFilters', next.toString());
+              localStorage.setItem(filterStorageKey, next.toString());
               return next;
             })}
             className={btnOutline}
@@ -629,7 +638,7 @@ const MachineHoursValidationPage = () => {
             <button
               onClick={() => setPostToSapEnabled((prev) => {
                 const next = !prev;
-                localStorage.setItem('machineHoursValidationPostSap', next);
+                localStorage.setItem(postSapStorageKey, next);
                 return next;
               })}
               title={postToSapEnabled ? 'Post ke SAP aktif - klik untuk nonaktifkan' : 'Post ke SAP nonaktif - klik untuk aktifkan'}
@@ -721,7 +730,7 @@ const MachineHoursValidationPage = () => {
         ) : groups.length === 0 ? (
           <div className="flex flex-col items-center justify-center mt-16 gap-2 text-slate-400">
             <FileText className="w-12 h-12 opacity-30" />
-            <p className="text-sm">Tidak ada data machine hours untuk divalidasi</p>
+            <p className="text-sm">{emptyMessage}</p>
           </div>
         ) : (
           <div className="space-y-3">

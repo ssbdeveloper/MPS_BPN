@@ -13,7 +13,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
-      - ./database/local_schema.sql:/docker-entrypoint-initdb.d/01-local-schema.sql:ro
     ports:
       - "5433:5432"
     restart: unless-stopped

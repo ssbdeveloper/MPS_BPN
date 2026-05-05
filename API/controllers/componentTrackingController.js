@@ -513,13 +513,19 @@ exports.updateBufferNote = async (req, res) => {
 
 exports.getBufferHistory = async (req, res) => {
   const orderNo = String(req.query.orderNo || "").trim();
-  const operationNo = Number(req.query.operationNo);
+  const operationNoRaw = String(req.query.operationNo || "").trim();
+  const operationNo = Number(operationNoRaw);
+  const hasOperationNo = operationNoRaw !== "" && Number.isFinite(operationNo);
 
-  if (!orderNo || !Number.isFinite(operationNo)) {
-    return res.status(400).json({ error: "orderNo and operationNo are required" });
+  if (!orderNo) {
+    return res.status(400).json({ error: "orderNo is required" });
   }
 
   try {
+    const params = [orderNo];
+    const operationFilter = hasOperationNo ? "AND operation_no = $2" : "";
+    if (hasOperationNo) params.push(operationNo);
+
     const result = await db.query(
       `SELECT
          id,
@@ -539,9 +545,9 @@ exports.getBufferHistory = async (req, res) => {
          updated_at
        FROM buffer_transaction
        WHERE order_no = $1
-         AND operation_no = $2
+         ${operationFilter}
        ORDER BY created_at DESC, id DESC`,
-      [orderNo, operationNo]
+      params
     );
 
     res.json({ data: result.rows });

@@ -69,10 +69,8 @@ export async function updateBufferNote(id, note) {
 }
 
 export async function fetchBufferHistory(orderNo, operationNo) {
-  const params = new URLSearchParams({
-    orderNo: orderNo || '',
-    operationNo: String(operationNo || ''),
-  });
+  const params = new URLSearchParams({ orderNo: orderNo || '' });
+  if (operationNo) params.set('operationNo', String(operationNo));
   const payload = await request(`/component-tracking/buffer-history?${params.toString()}`);
   return payload.data || [];
 }

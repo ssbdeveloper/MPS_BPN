@@ -55,15 +55,18 @@ function parseDateParam(value) {
 }
 
 function applyFilters(request, filters = {}) {
-  const where = ["p.startdatetime IS NOT NULL"];
+  const where = [
+    "p.startdatetime IS NOT NULL",
+    "(p.enddatetime IS NULL OR DATEDIFF(SECOND, p.startdatetime, p.enddatetime) <> 0)",
+  ];
 
-  const from = parseDateParam(filters.from);
+  const from = parseDateParam(filters.from || filters.start);
   if (from) {
     request.input("from", sql.Date, from);
     where.push("CAST(p.startdatetime AS DATE) >= @from");
   }
 
-  const to = parseDateParam(filters.to);
+  const to = parseDateParam(filters.to || filters.end);
   if (to) {
     request.input("to", sql.Date, to);
     where.push("CAST(p.startdatetime AS DATE) <= @to");
@@ -91,6 +94,18 @@ function applyFilters(request, filters = {}) {
     where.push("p.jobid = @jobid");
   }
 
+  if (filters.search && String(filters.search).trim()) {
+    request.input("search", sql.VarChar(128), `%${String(filters.search).trim().toLowerCase()}%`);
+    where.push(`(
+      LOWER(COALESCE(m.machineid, '')) LIKE @search
+      OR LOWER(COALESCE(m.machinename, '')) LIKE @search
+      OR LOWER(COALESCE(m.description, '')) LIKE @search
+      OR LOWER(COALESCE(st.description, '')) LIKE @search
+      OR LOWER(COALESCE(p.operatorid, '')) LIKE @search
+      OR LOWER(COALESCE(p.jobid, '')) LIKE @search
+    )`);
+  }
+
   return where.join(" AND ");
 }
 
@@ -107,6 +122,59 @@ function normalizeRow(row) {
     event_count: row.event_count == null ? 0 : Number(row.event_count),
     open_event_count: row.open_event_count == null ? 0 : Number(row.open_event_count),
   };
+}
+
+function normalizeValidationRow(row) {
+  return {
+    ...normalizeRow(row),
+    record_key: String(row.record_key || ""),
+    min_proddataid: row.min_proddataid == null ? "" : row.min_proddataid,
+    activitytype: row.activitytype || "",
+    order_no: row.order_no || "",
+    operation_no: row.operation_no || "",
+    sequence_category: row.sequence_category || "",
+    sequence_number: row.sequence_number || "",
+    ph3_sequence_number: row.ph3_sequence_number || "",
+    branch_operation_no: row.branch_operation_no || "",
+    return_operation_no: row.return_operation_no || "",
+    work_center: row.work_center || "",
+  };
+}
+
+function buildSapPayload(row) {
+  const startDateTime = row.first_startdatetime;
+  const endDateTime = row.last_enddatetime || row.first_startdatetime;
+  const datePart = (value) => String(value || "").slice(0, 10).replaceAll("-", "");
+  const timePart = (value) => String(value || "").slice(11, 19).replaceAll(":", "");
+
+  return {
+    ZTIMESHEETID: String(row.min_proddataid || ""),
+    PERNR: String(row.operatorid || ""),
+    RUECK: String(row.jobid || ""),
+    AUFNR: String(row.order_no || row.jobid || ""),
+    VORNR: String(row.operation_no || ""),
+    FLGAT: row.sequence_category || "",
+    PLNFL: row.ph3_sequence_number || "",
+    VORNR_B: row.branch_operation_no || "",
+    VORNR_R: row.return_operation_no || "",
+    ZCONF_TYPE: row.activitytype || "",
+    ARBPL: row.machineid || row.work_center || "",
+    LSTAR: "",
+    ISDD: datePart(startDateTime),
+    ISDZ: timePart(startDateTime),
+    IEDD: datePart(endDateTime),
+    IEDZ: timePart(endDateTime),
+    WERKS: "",
+    AUERU: "",
+    ZBARCODEID: row.status_description || "",
+  };
+}
+
+function withSapPayload(rows) {
+  return rows.map((row) => ({
+    ...row,
+    sap_payload: buildSapPayload(row),
+  }));
 }
 
 async function fetchMachineHoursRows(filters = {}) {
@@ -170,6 +238,133 @@ async function fetchMachineHoursRows(filters = {}) {
   return result.recordset.map(normalizeRow);
 }
 
+async function fetchValidationGroups(filters = {}) {
+  const pool = await getPool();
+  const request = pool.request();
+  const where = applyFilters(request, filters);
+
+  const result = await request.query(`
+    WITH filtered AS (
+      SELECT
+        p.proddataid AS min_proddataid,
+        CAST(DATEADD(HOUR, -8, p.startdatetime) AS DATE) AS work_date,
+        p.machineno,
+        m.machineid,
+        m.machinename,
+        COALESCE(NULLIF(m.description, ''), m.machinename, CONCAT('Machine ', p.machineno)) AS machine_description,
+        m.plantid,
+        p.statusid,
+        COALESCE(st.description, 'Unknown') AS status_description,
+        '' AS activitytype,
+        p.operatorid,
+        p.jobid,
+        CASE WHEN p.enddatetime IS NULL THEN 1 ELSE 0 END AS open_event_count,
+        DATEADD(HOUR, -8, p.startdatetime) AS first_startdatetime,
+        DATEADD(HOUR, -8, p.enddatetime) AS last_enddatetime,
+        CASE
+          WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 0
+            THEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
+          ELSE 0
+        END AS duration_seconds
+      FROM dbo.ProductionData p
+      LEFT JOIN dbo.Machines m ON m.machineno = p.machineno
+      LEFT JOIN dbo.StatusTypes st ON st.statusid = p.statusid
+      WHERE ${where}
+    ),
+    grouped AS (
+      SELECT
+        machineno,
+        MAX(machineid) AS machineid,
+        MAX(machinename) AS machinename,
+        MAX(machine_description) AS machine_description,
+        MAX(plantid) AS plantid,
+        COUNT(*) AS record_count,
+        COUNT(*) AS event_count,
+        SUM(open_event_count) AS open_event_count,
+        SUM(duration_seconds) AS duration_seconds,
+        ROUND(CAST(SUM(duration_seconds) AS NUMERIC(18, 4)) / 3600.0, 4) AS duration_hours,
+        MAX(first_startdatetime) AS latest_startdatetime
+      FROM filtered
+      GROUP BY machineno
+    )
+    SELECT
+      *,
+      SUM(record_count) OVER () AS g_total_records,
+      COUNT(*) OVER () AS g_total_machines,
+      SUM(event_count) OVER () AS g_total_events,
+      SUM(open_event_count) OVER () AS g_total_open_events,
+      ROUND(CAST(SUM(duration_seconds) OVER () AS NUMERIC(18, 4)) / 3600.0, 4) AS g_total_hours
+    FROM grouped
+    ORDER BY latest_startdatetime DESC, machineno ASC
+  `);
+
+  return result.recordset;
+}
+
+async function fetchValidationGroupRecords(machineno, filters = {}) {
+  const limit = parseIntParam(filters.limit, 500, 1, 1000);
+  const pool = await getPool();
+  const request = pool.request();
+  request.input("limit", sql.Int, limit);
+
+  const where = applyFilters(request, { ...filters, machineno });
+
+  const result = await request.query(`
+    SELECT TOP (@limit)
+      CONCAT(
+        CAST(p.proddataid AS varchar(32)), '|',
+        CAST(p.machineno AS varchar(32)), '|',
+        CONVERT(varchar(19), p.startdatetime, 120)
+      ) AS record_key,
+      p.proddataid AS min_proddataid,
+      CONVERT(varchar(10), CAST(DATEADD(HOUR, -8, p.startdatetime) AS DATE), 23) AS work_date,
+      p.machineno,
+      COALESCE(m.machineid, '') AS machineid,
+      COALESCE(m.machinename, '') AS machinename,
+      COALESCE(NULLIF(m.description, ''), m.machinename, CONCAT('Machine ', p.machineno)) AS machine_description,
+      m.plantid,
+      p.statusid,
+      COALESCE(st.description, 'Unknown') AS status_description,
+      '' AS activitytype,
+      p.operatorid,
+      p.jobid,
+      '' AS order_no,
+      '' AS operation_no,
+      '' AS sequence_category,
+      '' AS sequence_number,
+      '' AS ph3_sequence_number,
+      '' AS branch_operation_no,
+      '' AS return_operation_no,
+      COALESCE(m.machineid, '') AS work_center,
+      1 AS event_count,
+      CASE WHEN p.enddatetime IS NULL THEN 1 ELSE 0 END AS open_event_count,
+      CONVERT(varchar(19), DATEADD(HOUR, -8, p.startdatetime), 126) AS first_startdatetime,
+      CONVERT(varchar(19), DATEADD(HOUR, -8, p.enddatetime), 126) AS last_enddatetime,
+      CASE
+        WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 0
+          THEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
+        ELSE 0
+      END AS duration_seconds,
+      ROUND(
+        CAST(
+          CASE
+            WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 0
+              THEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
+            ELSE 0
+          END AS NUMERIC(18, 4)
+        ) / 3600.0,
+        4
+      ) AS duration_hours
+    FROM dbo.ProductionData p
+    LEFT JOIN dbo.Machines m ON m.machineno = p.machineno
+    LEFT JOIN dbo.StatusTypes st ON st.statusid = p.statusid
+    WHERE ${where}
+    ORDER BY p.startdatetime DESC, p.statusid ASC, p.operatorid ASC, p.jobid ASC
+  `);
+
+  return result.recordset.map(normalizeValidationRow);
+}
+
 async function getMachineHours(req, res) {
   try {
     const rows = await fetchMachineHoursRows(req.query);
@@ -183,6 +378,80 @@ async function getMachineHours(req, res) {
     });
   } catch (err) {
     console.error("SQL Server machine hours error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      source: "sqlserver",
+      connection: getSafeConnectionInfo(),
+    });
+  }
+}
+
+async function validationStats(req, res) {
+  try {
+    const rows = await fetchValidationGroups(req.query);
+    const first = rows[0];
+
+    res.json({
+      success: true,
+      meta: {
+        start: req.query.start || req.query.from || "",
+        end: req.query.end || req.query.to || "",
+        source: "sqlserver",
+        generated_at: new Date().toISOString(),
+      },
+      stats: first ? {
+        totalRecords: Number(first.g_total_records || 0),
+        totalMachines: Number(first.g_total_machines || 0),
+        totalEvents: Number(first.g_total_events || 0),
+        totalOpenEvents: Number(first.g_total_open_events || 0),
+        totalHours: Number(first.g_total_hours || 0).toFixed(2),
+        totalPending: Number(first.g_total_records || 0),
+        totalValidated: 0,
+      } : {
+        totalRecords: 0,
+        totalMachines: 0,
+        totalEvents: 0,
+        totalOpenEvents: 0,
+        totalHours: "0.00",
+        totalPending: 0,
+        totalValidated: 0,
+      },
+      groups: rows.map(({
+        g_total_records,
+        g_total_machines,
+        g_total_events,
+        g_total_open_events,
+        g_total_hours,
+        ...row
+      }) => row),
+    });
+  } catch (err) {
+    console.error("SQL Server machine hours validationStats error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      source: "sqlserver",
+      connection: getSafeConnectionInfo(),
+    });
+  }
+}
+
+async function validationGroupRecords(req, res) {
+  try {
+    const rows = await fetchValidationGroupRecords(req.params.machineno, req.query);
+    res.json({
+      success: true,
+      meta: {
+        start: req.query.start || req.query.from || "",
+        end: req.query.end || req.query.to || "",
+        source: "sqlserver",
+        generated_at: new Date().toISOString(),
+      },
+      data: withSapPayload(rows),
+    });
+  } catch (err) {
+    console.error("SQL Server machine hours validationGroupRecords error:", err);
     res.status(500).json({
       success: false,
       error: err.message,
@@ -216,4 +485,6 @@ module.exports = {
   fetchMachineHoursRows,
   getHealth,
   getMachineHours,
+  validationGroupRecords,
+  validationStats,
 };

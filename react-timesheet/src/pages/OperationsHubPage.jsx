@@ -77,6 +77,17 @@ function formatDateLabel(value) {
   return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function formatTodayClock(value) {
+  return value.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function formatDateTimeLabel(value) {
   if (!value) return '-';
   const date = new Date(value);
@@ -610,6 +621,7 @@ function OperationsHubPage() {
   const [hubData, setHubData] = useState(emptyHubData);
   const [authUser, setAuthUser] = useState(readAuthUser);
   const [showPasswordPanel, setShowPasswordPanel] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [kpiStatus, setKpiStatus] = useState(() => (
     sessionStorage.getItem('isVerified') === 'true' ? 'loading' : 'idle'
   ));
@@ -618,6 +630,12 @@ function OperationsHubPage() {
     if (!isVerified && inputRef.current) {
       inputRef.current.focus();
     }
+  }, [isVerified]);
+
+  useEffect(() => {
+    if (!isVerified) return undefined;
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
   }, [isVerified]);
 
   useEffect(() => {
@@ -794,7 +812,7 @@ function OperationsHubPage() {
             <div>
               <h1 className="text-xl font-extrabold text-slate-950">Operations Hub</h1>
               <p className="mt-0.5 text-xs font-semibold text-slate-500">
-                Machine {formatDateLabel(hubData.basis_dates.machine_date)} · Labor {formatDateLabel(hubData.basis_dates.labor_date)}
+                {formatTodayClock(currentTime)}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

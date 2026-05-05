@@ -691,7 +691,7 @@ const TimesheetValidationPage = () => {
       {/* ══ HEADER ══════════════════════════════════════════════════════════ */}
       <header className="flex-shrink-0 flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200 shadow-sm">
 
-        <button onClick={goBack} className={btnOutline}>
+        <button onClick={() => navigate('/operations-hub')} className={btnOutline}>
           {Icon.back} Back
         </button>
 

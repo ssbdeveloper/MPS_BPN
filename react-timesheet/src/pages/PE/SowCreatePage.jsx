@@ -1898,7 +1898,7 @@ const SowCreatePage = () => {
 
       {/* ── Page title bar ──────────────────────────────────────────────── */}
       <div className="flex-shrink-0 px-4 md:px-6 py-3 bg-white border-b border-slate-200">
-        <h2 className="text-sm font-bold text-slate-700">Buat SOW dari Receiving</h2>
+        <h2 className="text-sm font-bold text-slate-700">Buat SOW</h2>
         <p className="text-[11px] text-slate-400 mt-0.5">
           Pilih part → centang proses → review &amp; edit → buat SOW
         </p>
