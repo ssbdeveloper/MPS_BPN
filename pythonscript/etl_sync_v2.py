@@ -515,8 +515,6 @@ def sync_sow(tgt_cur, rows: list[dict]) -> None:
 
 def run_cycle(target: TargetRuntime) -> CycleResult:
     started_at = time.monotonic()
-    src_pool = None
-    tgt_pool = None
     src_conn = None
     tgt_conn = None
     stage = "start"
@@ -524,8 +522,7 @@ def run_cycle(target: TargetRuntime) -> CycleResult:
 
     try:
         stage = "connect source"
-        src_pool = _get_src_pool()
-        src_conn = src_pool.getconn()
+        src_conn = _get_src_conn()
         src_conn.autocommit = False
         _apply_transaction_limits(src_conn)
 
@@ -545,8 +542,7 @@ def run_cycle(target: TargetRuntime) -> CycleResult:
         ]
 
         stage = "connect target"
-        tgt_pool = _get_tgt_pool(target)
-        tgt_conn = tgt_pool.getconn()
+        tgt_conn = _get_tgt_conn(target)
         tgt_conn.autocommit = False
         _apply_transaction_limits(tgt_conn)
 
@@ -570,6 +566,9 @@ def run_cycle(target: TargetRuntime) -> CycleResult:
         stage = "commit source"
         src_conn.commit()
 
+        global _SRC_POOL_CONSECUTIVE_FAILURES
+        _SRC_POOL_CONSECUTIVE_FAILURES = 0
+
         elapsed = time.monotonic() - started_at
         batch_full = len(raw_rows) == BATCH_LIMIT
         log.info(
@@ -588,6 +587,13 @@ def run_cycle(target: TargetRuntime) -> CycleResult:
             target_checked=True,
         )
 
+    except psycopg2.pool.PoolError as exc:
+        _rollback(src_conn, "source")
+        _rollback(tgt_conn, "target")
+        should_reset_target_pool = _stage_touched_target(stage)
+        log.error("[%s] Pool exhausted at stage '%s': %s", target.name, stage, exc)
+        return CycleResult(ok=False, error=str(exc))
+
     except psycopg2.Error as exc:
         _rollback(src_conn, "source")
         _rollback(tgt_conn, "target")
@@ -603,8 +609,8 @@ def run_cycle(target: TargetRuntime) -> CycleResult:
         return CycleResult(ok=False, error=str(exc))
 
     finally:
-        _safe_putconn(tgt_pool, tgt_conn, f"{target.name} target")
-        _safe_putconn(src_pool, src_conn, "source")
+        _return_tgt_conn(target, tgt_conn)
+        _return_src_conn(src_conn)
         if should_reset_target_pool:
             _close_target_pool(target)
 
