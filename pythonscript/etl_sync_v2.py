@@ -124,6 +124,8 @@ TARGET_MAX_BACKOFF_SECONDS = env_int("TARGET_MAX_BACKOFF_SECONDS", 300)
 STATEMENT_TIMEOUT_MS = env_int("ETL_STATEMENT_TIMEOUT_MS", 120_000)
 LOCK_TIMEOUT_MS = env_int("ETL_LOCK_TIMEOUT_MS", 10_000)
 NOTIFY_CHANNEL = os.environ.get("ETL_NOTIFY_CHANNEL", "etl_new_row")
+SRC_POOL_TIMEOUT_SECONDS = env_int("SRC_POOL_TIMEOUT_SECONDS", 30)
+TGT_POOL_TIMEOUT_SECONDS = env_int("TGT_POOL_TIMEOUT_SECONDS", 30)
 
 if BATCH_LIMIT < 1:
     raise ValueError("BATCH_LIMIT must be at least 1")
@@ -261,13 +263,29 @@ UPDATE_SOURCE_SQL = build_update_source_query()
 # Connection pools
 # ---------------------------------------------------------------------------
 _src_pool: Optional[pool.ThreadedConnectionPool] = None
-_pool_lock = threading.Lock()
+_src_pool_lock = threading.Lock()
+
+_SRC_POOL_ERROR_PAUSE = env_int("SRC_POOL_ERROR_PAUSE_SECONDS", 30)
+_SRC_POOL_CONSECUTIVE_FAILURES = 0
+_SRC_POOL_LAST_FAILURE_TIME = 0.0
+
+
+def _close_src_pool() -> None:
+    global _src_pool
+    with _src_pool_lock:
+        p = _src_pool
+        _src_pool = None
+    if p is not None:
+        try:
+            p.closeall()
+        except Exception as exc:
+            log.debug("Failed to close source pool: %s", exc)
 
 
 def _get_src_pool() -> pool.ThreadedConnectionPool:
-    global _src_pool
+    global _src_pool, _SRC_POOL_CONSECUTIVE_FAILURES, _SRC_POOL_LAST_FAILURE_TIME
     if _src_pool is None:
-        with _pool_lock:
+        with _src_pool_lock:
             if _src_pool is None:
                 _src_pool = pool.ThreadedConnectionPool(
                     SRC_POOL_MIN_CONNECTIONS,
@@ -277,9 +295,40 @@ def _get_src_pool() -> pool.ThreadedConnectionPool:
     return _src_pool
 
 
+def _get_src_conn():
+    src_pool = _get_src_pool()
+    try:
+        return src_pool.getconn()
+    except Exception as exc:
+        global _SRC_POOL_CONSECUTIVE_FAILURES, _SRC_POOL_LAST_FAILURE_TIME
+        _SRC_POOL_CONSECUTIVE_FAILURES += 1
+        now = time.monotonic()
+        if (
+            _SRC_POOL_CONSECUTIVE_FAILURES >= 3
+            and now - _SRC_POOL_LAST_FAILURE_TIME > _SRC_POOL_ERROR_PAUSE
+        ):
+            log.warning(
+                "Source pool exhausted (%d consecutive failures). Resetting pool.",
+                _SRC_POOL_CONSECUTIVE_FAILURES,
+            )
+            _close_src_pool()
+            _SRC_POOL_CONSECUTIVE_FAILURES = 0
+            _SRC_POOL_LAST_FAILURE_TIME = 0.0
+        else:
+            _SRC_POOL_LAST_FAILURE_TIME = now
+        raise psycopg2.pool.PoolError(
+            f"source connection pool exhausted after {_SRC_POOL_CONSECUTIVE_FAILURES} failure(s)"
+        ) from exc
+
+
+def _return_src_conn(conn) -> None:
+    src_pool = _get_src_pool()
+    _safe_putconn(src_pool, conn, "source")
+
+
 def _get_tgt_pool(target: TargetRuntime) -> pool.ThreadedConnectionPool:
     if target.pool is None:
-        with _pool_lock:
+        with target.state_lock:
             if target.pool is None:
                 target.pool = pool.ThreadedConnectionPool(
                     TARGET_POOL_MIN_CONNECTIONS,
@@ -289,8 +338,29 @@ def _get_tgt_pool(target: TargetRuntime) -> pool.ThreadedConnectionPool:
     return target.pool
 
 
+def _get_tgt_conn(target: TargetRuntime):
+    tgt_pool = _get_tgt_pool(target)
+    try:
+        return tgt_pool.getconn()
+    except Exception as exc:
+        raise psycopg2.pool.PoolError(
+            f"[{target.name}] target connection pool exhausted"
+        ) from exc
+
+
+def _return_tgt_conn(target: TargetRuntime, conn) -> None:
+    if target.pool is None:
+        if conn and not conn.closed:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return
+    _safe_putconn(target.pool, conn, f"{target.name} target")
+
+
 def _close_target_pool(target: TargetRuntime) -> None:
-    with _pool_lock:
+    with target.state_lock:
         target_pool = target.pool
         target.pool = None
     if target_pool is not None:
@@ -301,26 +371,9 @@ def _close_target_pool(target: TargetRuntime) -> None:
 
 
 def _close_all_pools() -> None:
-    global _src_pool
-    with _pool_lock:
-        src_pool = _src_pool
-        _src_pool = None
-        target_pools = [(target, target.pool) for target in TARGETS]
-        for target in TARGETS:
-            target.pool = None
-
-    if src_pool is not None:
-        try:
-            src_pool.closeall()
-        except Exception as exc:
-            log.debug("Failed to close source pool: %s", exc)
-
-    for target, target_pool in target_pools:
-        if target_pool is not None:
-            try:
-                target_pool.closeall()
-            except Exception as exc:
-                log.debug("[%s] Failed to close target pool: %s", target.name, exc)
+    _close_src_pool()
+    for target in TARGETS:
+        _close_target_pool(target)
 
 
 def _safe_putconn(conn_pool, conn, label: str) -> None:
