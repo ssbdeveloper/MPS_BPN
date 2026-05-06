@@ -8,6 +8,4 @@ RUN pip install --no-cache-dir \
     python-dotenv \
     filelock
 
-
-#CMD ["python", "export_csv.py"]
 CMD ["python", "export_txt.py"]

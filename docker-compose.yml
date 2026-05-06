@@ -25,7 +25,9 @@ services:
       - timesheet-network
 
   api:
-    build: ./API
+    build:
+      context: ./API
+      dockerfile: Dockerfile
     container_name: timesheet-api
     expose:
       - "3001"
@@ -92,8 +94,8 @@ services:
 
   sow_exporter:          
     build:
-      context: .
-      dockerfile: pythonscript/Dockerfile
+      context: ./pythonscript
+      dockerfile: Dockerfile
     container_name: sow-exporter
     env_file:
       - .env
