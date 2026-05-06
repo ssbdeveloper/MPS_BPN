@@ -12,13 +12,11 @@ function parseInterval(value) {
   return Math.min(60000, Math.max(3000, interval));
 }
 
-function initMachineHoursSqlServerSocket(server) {
-  const wss = new WebSocketServer({
-    server,
-    path: "/machine-hours-sqlserver/ws",
-  });
-
+function initMachineHoursSqlServerSocket(wss) {
   wss.on("connection", (socket, request) => {
+    const { pathname } = new URL(request.url, "http://localhost");
+    if (pathname !== "/machine-hours-sqlserver/ws") return;
+
     let filters = paramsFromUrl(request.url);
     let timer;
 
@@ -75,8 +73,6 @@ function initMachineHoursSqlServerSocket(server) {
     sendSnapshot();
     startPolling();
   });
-
-  return wss;
 }
 
 module.exports = initMachineHoursSqlServerSocket;

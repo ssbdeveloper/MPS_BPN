@@ -750,118 +750,324 @@ const isLandscape = useOrientation();
  
  
 ---
- 
+
 ## Tech Stack
- 
-| Layer | Technology |
-|-------|-----------|
-| Framework | React 18 + Vite |
-| Language | JavaScript (JSX) |
-| Styling | Tailwind CSS v3 |
-| Router | React Router v6 |
-| Server state | TanStack React Query v5 |
-| Toast | sonner |
-| PWA | vite-plugin-pwa + Workbox |
-| API | fetch (native) |
-| Dev port | 5173 |
- 
+
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Frontend Framework | React 19.2 + Vite 7 | ESM (`"type": "module"`) |
+| Language | JavaScript (JSX) | No TypeScript |
+| Styling | Tailwind CSS v3.4 | + inline `bg-[#xxx]` for dynamic brand colors |
+| Router | React Router v7.13 | `createBrowserRouter` |
+| State Management | useState + useCallback | No Redux/Zustand/MobX — logic stays in components |
+| Notifications | sonner v2 | `Toaster` in `App.jsx` with `richColors` |
+| PWA | vite-plugin-pwa + Workbox v7 | Runtime caching: Google Fonts (CacheFirst), /api/* (NetworkFirst 5min) |
+| Charts | ECharts v6 + Recharts v3 | Both used across dashboard |
+| Drag & Drop | @dnd-kit (core, sortable, modifiers) | |
+| Icons | lucide-react v1 | |
+| Animations | framer-motion v12 | |
+| Backend API | Express.js 4 (Node 20, CommonJS) | In `API/server.js` |
+| Backend Python | FastAPI (Python 3.11, uvicorn) | In `API/FastAPI/main.py` — MS Project sync |
+| Database | PostgreSQL 15 | + Microsoft SQL Server (SSB_OEE for machine hours) |
+| Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, routes `/api/`, `/fastapi/`, `/uploads/` |
+| Containerization | Docker Compose | 6 services: db, api, frontend, nginx, sow_exporter, fastapi |
+| API Client | fetch (native) | No Axios |
+| Dev port (frontend) | 5173 | Proxied `/api` → `http://localhost:3001` |
+| API port | 3001 | |
+
 ---
- 
+
 ## Key Commands
- 
+
 ```bash
-# Dev server
+# === Frontend (react-timesheet/) ===
+cd react-timesheet
 npm run dev              # → http://localhost:5173
- 
-# Type check (jika ada TS)
-npx tsc --noEmit
- 
-# Production build
-npm run build
- 
-# Preview production build
-npm run preview
+npm run build            # Production build → dist/
+npm run preview          # Preview production build
+npm run lint             # ESLint
+
+# === Backend API (API/) ===
+cd API
+node server.js           # Express API on port 3001
+# or with nodemon:
+npx nodemon server.js
+
+# === PostgreSQL (local/dev) ===
+"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb
+
+# === Docker (production) ===
+./deploy.sh build        # Build all containers
+./deploy.sh start        # Start all services
+./deploy.sh stop         # Stop all services
+./deploy.sh restart      # Restart all services
+./deploy.sh status       # Check service status
+./deploy.sh logs api     # View API logs
 ```
- 
+
 ---
- 
-## Repository Structure
- 
+
+## Monorepo Structure
+
 ```
-react-timesheet/
-├── CLAUDE.md                     ← File ini — AI context + design system
-├── README.md                     ← Quick start & project overview
-├── tailwind.config.js            ← Tailwind config (extend colors di sini)
-├── vite.config.js                ← Vite + PWA config
-├── public/                       ← Static assets
-└── src/
-    ├── api/                      ← API calls (fetch)
-    ├── components/
-    │   ├── auth/ProtectedRoute.jsx
-    │   ├── ui/                   ← Reusable UI components
-    │   ├── layout/               ← PageContainer, AppHeader
-    │   ├── forms/                ← Input, Select, FormRow
-    │   └── tables/               ← Gallery, Table
-    ├── pages/
-    │   ├── TimesheetValidationPage.jsx    ← Original (V1)
-    │   ├── TimesheetValidationPageV2.jsx  ← Redesign APPROVED — referensi design system
-    │   ├── TimesheetEditPage.jsx
-    │   ├── TimesheetListPage.jsx
-    │   ├── TimesheetMainMenuPage.jsx
-    │   ├── TimesheetPage.jsx
-    │   ├── LandingPage.jsx
-    │   ├── DashboardPage.jsx
-    │   ├── LoginTimesheetPage.jsx
-    │   └── ... (halaman lainnya)
-    ├── router/index.jsx          ← Semua route didefinisikan di sini
-    ├── App.jsx                   ← Root: RouterProvider
-    └── main.jsx                  ← Entry point
+MPS2/
+├── CLAUDE.md                          ← This file — AI context + design system
+├── .env                               ← Shared env (DB, CORS, SAP, etc.)
+├── docker-compose.yml                 ← 6-service orchestration
+├── deploy.sh                          ← Docker deployment script
+├── package.json                       ← Root: pg + xlsx (seed scripts)
+├── nginx/                             ← Nginx reverse proxy config + SSL
+│
+├── react-timesheet/                   ← FRONTEND: React + Vite SPA
+│   ├── package.json                   ← Dependencies (React 19, Vite 7, etc.)
+│   ├── vite.config.js                 ← Vite + PWA + proxy config
+│   ├── tailwind.config.js             ← Tailwind theme (primary/success/danger/warning)
+│   ├── postcss.config.js              ← Tailwind + autoprefixer
+│   ├── eslint.config.js               ← ESLint flat config
+│   ├── Dockerfile                     ← 2-stage: node:20-alpine build + nginx serve
+│   ├── index.html
+│   ├── public/                        ← Static assets + CSV dummy data
+│   └── src/
+│       ├── App.jsx                    ← RouterProvider + Toaster
+│       ├── main.jsx                   ← createRoot entry
+│       ├── index.css                  ← Tailwind directives + :root CSS vars
+│       ├── router/index.jsx           ← All routes (createBrowserRouter)
+│       ├── assets/                    ← Images (ssb.png, teamklu.png, etc.)
+│       ├── components/
+│       │   ├── index.js              ← Barrel export
+│       │   ├── auth/                 ← ProtectedRoute, PasswordPrompt
+│       │   ├── ui/                   ← Button, Card, Modal, ConfirmationModal, Switch
+│       │   ├── layout/               ← PageContainer, AppHeader, StatusBar, Container*, MenuGrid
+│       │   ├── forms/                ← Input, TextArea, SearchRow, FormRow, Select
+│       │   ├── tables/               ← Gallery, TimesheetTable, MachineGallery, TextBox
+│       │   └── dashboard/            ← KpiCard, DashboardFilters, 9 chart components
+│       ├── pages/
+│       │   ├── WelcomePage.jsx                  ← Landing
+│       │   ├── OperationsHubPage.jsx            ← Main hub / navigation
+│       │   ├── DashboardPage.jsx                ← KPI dashboard
+│       │   ├── SettingPage.jsx
+│       │   ├── DownloadPage.jsx
+│       │   ├── OrderListPage.jsx                ← SOW orders list
+│       │   ├── editorimage.jsx
+│       │   ├── TIMESHEET/                        ← Timesheet module
+│       │   │   ├── LoginTimesheetPage.jsx
+│       │   │   ├── TimesheetPage.jsx
+│       │   │   ├── TimesheetMainMenuPage.jsx
+│       │   │   ├── TimesheetListPage.jsx
+│       │   │   ├── TimesheetValidationPage.jsx  ← Original (V1)
+│       │   │   ├── TimesheetEditPage.jsx
+│       │   │   ├── LogTimesheetPage.jsx
+│       │   │   ├── SelectJobPage.jsx
+│       │   │   ├── SelectMachinePage.jsx
+│       │   │   ├── NfcUserListPage.jsx
+│       │   │   ├── CreateEditNfcPage.jsx
+│       │   │   └── UnproductiveMenuPage.jsx
+│       │   ├── MACHINE_H/                        ← Machine hours module
+│       │   │   ├── ProcessControlPage.jsx
+│       │   │   ├── EditParameterPage.jsx
+│       │   │   ├── MachineHoursSqlServerPage.jsx
+│       │   │   └── MachineHoursValidationPage.jsx
+│       │   ├── PPC/                              ← Production Planning Control
+│       │   │   ├── ComponentTrackingPage.jsx
+│       │   │   ├── BufferTransactionPage.jsx
+│       │   │   ├── ReceivingShipmentPage.jsx
+│       │   │   ├── ManageUserPage.jsx
+│       │   │   └── ManageUsersPage.jsx
+│       │   ├── PE/                               ← Production Engineering
+│       │   │   ├── SowManagementPage.jsx         ← Parent layout
+│       │   │   ├── SowStandardListPage.jsx
+│       │   │   ├── SowCreatePage.jsx
+│       │   │   ├── SowEditPage.jsx
+│       │   │   └── SowHistoryPage.jsx
+│       │   └── WAREHOUSE/
+│       │       ├── ConsumableRequestPage.jsx
+│       │       └── ConsumableControlPage.jsx
+│       ├── services/
+│       │   └── machineTrackingService.js  ← API fetch functions for machine tracking
+│       ├── hooks/
+│       │   └── useMachineTracking.js      ← Polling + smart merge + elapsed time
+│       ├── utils/
+│       │   └── navigation.js              ← goBackOrFallback helper
+│       └── templates/                     ← HTML templates (operation-card, etc.)
+│
+├── API/                                ← BACKEND: Express.js API
+│   ├── server.js                       ← Main Express server + DB pool
+│   ├── pcsserver.js                    ← Process Control server variant
+│   ├── db.js                           ← DB pool helper
+│   ├── package.json                    ← express, cors, pg, mssql, multer, exceljs, etc.
+│   ├── Dockerfile                      ← node:20-alpine
+│   ├── controllers/                    ← Business logic (14 controllers)
+│   │   ├── timesheet_transactionController.js   ← Timesheet CRUD + SAP posting
+│   │   ├── sowController.js                     ← SOW CRUD + history + reports
+│   │   ├── processControlController.js          ← Parameter management
+│   │   ├── dashboardController.js               ← KPI + chart data
+│   │   ├── componentTrackingController.js       ← Machine + buffer tracking
+│   │   ├── machineHoursSqlServerController.js   ← SQL Server machine hours
+│   │   ├── machineHoursValidationController.js
+│   │   ├── receivingShipmentController.js
+│   │   ├── consumableController.js
+│   │   ├── authController.js                    ← Login + user management
+│   │   ├── usernfcController.js
+│   │   ├── workcenterController.js
+│   │   ├── production_operationsController.js
+│   │   ├── tokencontroller.js
+│   │   └── authMiddleware.js
+│   ├── routes/                         ← Express routers (14 files)
+│   ├── websocket/                      ← WebSocket for real-time machine hours
+│   ├── FastAPI/                        ← Python FastAPI for MS Project sync
+│   │   ├── main.py
+│   │   ├── Dockerfile
+│   │   └── requirements.txt
+│   └── uploads/                        ← File uploads (sow-pdf/, consumable/)
+│
+├── database/                           ← Database schemas + migrations
+│   ├── schema.sql                      ← Full production schema dump (1505 lines)
+│   ├── init_database.sql               ← Initial table creation
+│   ├── migrate_*.sql                   ← Various migration scripts
+│   ├── machinehours/                   ← Machine hours seed data
+│   └── paket_kumplit/
+│
+└── pythonscript/                       ← SOW export Python scripts
 ```
- 
+
 ---
- 
-## Routes
- 
-| Path | Component | Auth |
-|------|-----------|------|
-| `/` | `LoginTimesheetPage` | — |
-| `/login-timesheet` | `LoginTimesheetPage` | — |
-| `/timesheet` | `TimesheetPage` | — |
-| `/timesheet-mainmenu` | `TimesheetMainMenuPage` | — |
-| `/view-timesheet` | `TimesheetListPage` | — |
-| `/timesheet-validation` | `TimesheetValidationPage` | ✅ ProtectedRoute |
-| `/timesheet-validation-v2` | `TimesheetValidationPageV2` | ✅ ProtectedRoute |
-| `/timesheet-edit/:tsnumber` | `TimesheetEditPage` | — |
-| `/dashboard` | `DashboardPage` | — |
-| `/setting` | `SettingPage` | — |
-| `/process-control` | `ProcessControlPage` | — |
-| `/select-job` | `SelectJobPage` | — |
-| `/select-machine` | `SelectMachinePage` | — |
-| `/component-tracking` | `ComponentTrackingPage` | — |
-| `/edit-parameter` | `EditParameterPage` | — |
-| `/nfc-users` | `NfcUserListPage` | — |
-| `/create-edit-nfc` | `CreateEditNfcPage` | — |
-| `/unproductive` | `UnproductiveMenuPage` | — |
-| `/download` | `DownloadPage` | — |
-| `/sow-orders` | `OrderListPage` | — |
-| `/sow-edit/:id` | `SowEditPage` | — |
- 
+
+## Frontend Routes (Current)
+
+| Path | Component | Protected | Module |
+|------|-----------|-----------|--------|
+| `/` | `WelcomePage` | No | Core |
+| `/welcome` | `WelcomePage` | No | Core |
+| `/LandingPage` | `OperationsHubPage` | No | Core |
+| `/operations-hub` | `OperationsHubPage` | No | Core |
+| `/login-timesheet` | `LoginTimesheetPage` | No | TIMESHEET |
+| `/timesheet` | `TimesheetPage` | No | TIMESHEET |
+| `/timesheet-mainmenu` | `TimesheetMainMenuPage` | No | TIMESHEET |
+| `/view-timesheet` | `TimesheetListPage` | No | TIMESHEET |
+| `/timesheet-validation` | `TimesheetValidationPage` | **Yes** | TIMESHEET |
+| `/timesheet-edit/:tsnumber` | `TimesheetEditPage` | No | TIMESHEET |
+| `/log-timesheet` | `LogTimesheetPage` | No | TIMESHEET |
+| `/select-job` | `SelectJobPage` | No | TIMESHEET |
+| `/select-machine` | `SelectMachinePage` | No | TIMESHEET |
+| `/nfc-users` | `NfcUserListPage` | No | TIMESHEET |
+| `/create-edit-nfc` | `CreateEditNfcPage` | No | TIMESHEET |
+| `/unproductive` | `UnproductiveMenuPage` | No | TIMESHEET |
+| `/dashboard` | `DashboardPage` | No | Core |
+| `/setting` | `SettingPage` | No | Core |
+| `/download` | `DownloadPage` | No | Core |
+| `/editor-image` | `EditorImage` | No | Core |
+| `/process-control` | `ProcessControlPage` | No | MACHINE_H |
+| `/edit-parameter` | `EditParameterPage` | No | MACHINE_H |
+| `/machine-hours-sqlserver` | `MachineHoursSqlServerPage` | No | MACHINE_H |
+| `/machine-hours-validation` | `MachineHoursValidationPage` | **Yes** | MACHINE_H |
+| `/component-tracking` | `ComponentTrackingPage` | No | PPC |
+| `/buffer-transaction` | `BufferTransactionPage` | No | PPC |
+| `/receiving-shipment` | `ReceivingShipmentPage` | No | PPC |
+| `/manage-user` | `ManageUserPage` | **Yes** | PPC |
+| `/manage-users` | `ManageUsersPage` | **Yes** | PPC |
+| `/sow-orders` | `OrderListPage` | No | PE |
+| `/sow-edit/:id` | `SowEditPage` | No | PE |
+| `/sow-management` (parent) | `SowManagementPage` | No | PE |
+| `/sow-management/list` | `SowStandardListPage` | No | PE |
+| `/sow-management/create` | `SowCreatePage` | No | PE |
+| `/sow-management/history` | `SowHistoryPage` | No | PE |
+| `/consumable-request` | `ConsumableRequestPage` | No | WAREHOUSE |
+| `/consumable-control` | `ConsumableControlPage` | **Yes** | WAREHOUSE |
+| `*` | 404 Page | No | — |
+
+> `ProtectedRoute` checks `sessionStorage.getItem("isVerified") === "true"`; redirects to `/` if not verified.
+
 ---
- 
+
+## Backend API Routes
+
+| Base Path | # Endpoints | Description |
+|-----------|-------------|-------------|
+| `/timesheet` | 18 | CRUD, search, validation stats, bulk validation, SAP posting, CSV/Excel export, checkout |
+| `/sow` | 45+ | Standard CRUD, grouped orders, parts/operations, history, reports, planhours |
+| `/process-control` | 20 | Categories, parameters, choices, items, controls CRUD + validation |
+| `/dashboard` | 11 | KPI, order status, workload, daily hours, operator efficiency, on-time, progress, validation rate, heatmap |
+| `/component-tracking` | 8 | Machines, SOW operations, buffer transactions (CRUD + priorities + notes) |
+| `/machine-hours-sqlserver` | 4 | Machine hours from SQL Server, validation stats, health + WebSocket |
+| `/machine-hours-validation` | 2 | Validation stats, group records |
+| `/receiving-shipment` | 8 | Lookups, components, CRUD |
+| `/consumable` | 10 | History, stock search, control tickets, approve/close/adjust/reject |
+| `/auth` | 6 | Login, change password, user CRUD |
+| `/usernfc` | 10 | NFC user CRUD, search by NFC ID/SN/name |
+| `/workcenter` | 1 | List all workcenters |
+| `/production-operations` | 3 | List all, lookup, get by ID |
+
+### Important Backend Details
+- **PostgreSQL pool:** `.env` loaded from root `D:\website\MPS2\.env`, pool max 20 connections, `timezone=Asia/Jakarta`
+- **Timestamp handling:** OID 1114/1184 forced to string (no JS Date conversion)
+- **WebSocket:** At `/machine-hours-sqlserver/ws` for real-time machine data streaming
+- **File uploads:** multer middleware, stored in `API/uploads/` (sow-pdf/, consumable/)
+- **SAP Integration:** POST to SAP CPI inbound URL (from env `SAP_INBOUND_URL`)
+- **CORS:** `*` origin (all origins allowed)
+
+---
+
+## Database Schema (Key Tables — PostgreSQL)
+
+| Table | Description |
+|-------|-------------|
+| `timesheet_transaction` | Core timesheet (tsnumber PK, check-in/out, validation, SAP status) |
+| `sow` | Scope of Work orders + operations |
+| `sow_standard` | Standard SOW operation templates |
+| `order` | Materialized view aggregating SOW by order_no |
+| `usernfc` | NFC user master data |
+| `workcenter` | Workcenter definitions |
+| `mst_job` | Job/master data (order_no, workcenter, status, progress) |
+| `parts` | Part master data |
+| `operations` | Operation definitions |
+| `components` | Component definitions |
+| `process_category` | Process parameter categories |
+| `process_parameter` | Process parameters with choice/number flags |
+| `process_parameter_choicebase` | Parameter choice options |
+| `processcontroldata` | Process control data records (linked to timesheet) |
+| `processcontroldata_item` | Process control data item values |
+| `production_operations` | Production operations from SAP/ETL |
+| `log_timesheet_sap` | SAP posting audit log |
+| `progress_update_history` | Progress update tracking |
+
+- **Trigam indexes** on `full_name`, `order_no`, `serialnumber`, `part_name` (pg_trgm extension)
+- **Foreign keys:** process control → timesheet, SOW ↔ parts/operations
+
+---
+
+## Docker Compose Services
+
+| Service | Image | Port | Notes |
+|---------|-------|------|-------|
+| `db` | `postgres:15-alpine` | 5433→5432 | Healthcheck enabled, volume: `postgres_data` |
+| `api` | Node 20 Alpine | 3001 (internal) | Express.js, depends on db healthy |
+| `frontend` | nginx:alpine (serving built React) | 80 (internal) | SPA fallback config |
+| `nginx` | nginx:alpine | 80, 443 | Reverse proxy, SSL, routes: `/api/`, `/fastapi/`, `/uploads/` |
+| `sow_exporter` | Python | — | SOW export |
+| `fastapi` | Python 3.11 slim | 8000 (internal) | FastAPI for MS Project sync |
+
+---
+
 ## Critical Rules
- 
-1. **Ikuti Corporate Color System** — Semua halaman dan komponen baru HARUS menggunakan
-   aturan warna di atas. `TimesheetValidationPageV2.jsx` adalah referensi yang disetujui.
- 
+
+1. **Ikuti Corporate Color System** — Semua halaman dan komponen baru HARUS menggunakan aturan warna di atas. Referensi: `TimesheetValidationPage.jsx`.
+
 2. **Light theme only** — Jangan gunakan dark background sebagai surface utama.
- 
-3. **Logic tetap di komponen** — Tidak ada library state management eksternal saat ini
-   (tidak ada Redux/Zustand). Gunakan useState + useCallback + React Query.
- 
-4. **FormData upload via fetch native** — Jika ada upload file/form multipart,
-   jangan gunakan Axios untuk FormData (transformRequest bisa corrupt payload).
- 
-5. **Daftarkan route baru di `src/router/index.jsx`** — Selalu import page baru
-   dan tambahkan entri route di sana.
+
+3. **Logic tetap di komponen** — Tidak ada library state management eksternal (tidak ada Redux/Zustand). Gunakan useState + useCallback + fetch ke API.
+
+4. **FormData upload via fetch native** — Jangan gunakan Axios untuk FormData (transformRequest bisa corrupt payload).
+
+5. **Daftarkan route baru di `src/router/index.jsx`** — Selalu import page baru dan tambahkan entri route.
+
+6. **Work in `react-timesheet/` for frontend** — Semua perintah npm (dev, build, lint) dijalankan dari direktori `react-timesheet/`.
+
+7. **Backend di `API/`** — Express.js CommonJS. Nodemon untuk development.
+
+8. **`.env` di root `MPS2/`** — Dibaca oleh backend (`API/server.js`) dan frontend (`vite.config.js` envDir points to `..`).
+
+9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
+
+10. **Environment variables key names:** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER` (postgres), `DB_PASSWORD`, `DB_PORT` (5432), `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (Asia/Jakarta)
  
  

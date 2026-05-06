@@ -70,15 +70,54 @@ const StatusBadge = ({ isValidated, isSapPending }) => {
   return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">Pending</span>;
 };
 
-function getActivityBadge(activityType) {
-  const normalized = String(activityType || '').trim().toUpperCase();
-  if (normalized === 'M2') {
+function normalizeStatusDescription(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getActivityTypeFromStatus(statusDescription) {
+  const normalized = normalizeStatusDescription(statusDescription);
+  if (!normalized) return '';
+
+  if (normalized === 'productive') return 'M1';
+
+  if (
+    normalized === 'load' ||
+    normalized === 'loading' ||
+    normalized === 'setting' ||
+    normalized === 'measure' ||
+    normalized === 'meassure' ||
+    normalized === 'unload' ||
+    normalized === 'unloading' ||
+    normalized === 'preventive'
+  ) {
+    return 'M2';
+  }
+
+  return '';
+}
+
+function normalizeActivityType(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'M1' || normalized === 'VA') return 'M1';
+  if (normalized === 'M2' || normalized === 'NNVA') return 'M2';
+  return '';
+}
+
+function getActivityBadge(activityType, statusDescription) {
+  const effectiveType = normalizeActivityType(activityType) || getActivityTypeFromStatus(statusDescription);
+  if (effectiveType === 'M2') {
     return {
       label: 'NNVA',
       className: 'bg-blue-50 text-blue-700 border-blue-200',
     };
   }
-  if (normalized === 'M1') {
+  if (effectiveType === 'M1') {
     return {
       label: 'VA',
       className: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -90,9 +129,11 @@ function getActivityBadge(activityType) {
   };
 }
 
-const ActivityBadge = ({ activityType }) => {
-  const badge = getActivityBadge(activityType);
-  const title = activityType ? `Activity type: ${activityType}` : 'Activity type: empty';
+const ActivityBadge = ({ activityType, statusDescription }) => {
+  const badge = getActivityBadge(activityType, statusDescription);
+  const title = activityType
+    ? `Activity type: ${activityType}`
+    : `Status: ${statusDescription || '-'}`;
 
   return (
     <span
@@ -222,7 +263,7 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
         </div>
 
         <div className="text-[11px] text-center">
-          <ActivityBadge activityType={record.activitytype} />
+          <ActivityBadge activityType={record.activitytype} statusDescription={record.status_description} />
         </div>
 
         <div className="flex items-center justify-center">
@@ -370,6 +411,7 @@ const MachineHoursValidationPage = ({
   filterStorageKey = FILTER_STORAGE_KEY,
   postSapStorageKey = POST_SAP_STORAGE_KEY,
   emptyMessage = 'Tidak ada data machine hours untuk divalidasi',
+  detailLimit = 500,
 } = {}) => {
   const navigate = useNavigate();
   const [groups, setGroups] = useState([]);
@@ -401,7 +443,7 @@ const MachineHoursValidationPage = ({
   const [sapStatus, setSapStatus] = useState(null);
   const [error, setError] = useState('');
 
-  const queryFilters = useMemo(() => ({ ...filters, limit: 500 }), [filters]);
+  const queryFilters = useMemo(() => ({ ...filters, limit: detailLimit }), [detailLimit, filters]);
 
   const loadValidationData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);

@@ -330,7 +330,7 @@ const LoginTimesheetPage = () => {
       setStatus('Login berhasil, redirect...');
       setTimeout(() => {
         isProcessingRef.current = false;
-        navigate('/consumable-request');
+        navigate('/tools-consumable-request');
       }, 500);
     }
   };

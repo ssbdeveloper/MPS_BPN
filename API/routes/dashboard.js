@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/dashboardController");
+const mpsController = require("../controllers/mpsDashboardController");
 
 router.get("/kpi", controller.getKpi);
 router.get("/order-status", controller.getOrderStatus);
@@ -13,5 +14,12 @@ router.get("/validation-rate", controller.getValidationRate);
 router.get("/operator-heatmap", controller.getOperatorHeatmap);
 router.get("/workcenter-list", controller.getWorkcenterList);
 router.get("/operations-hub", controller.getOperationsHub);
+
+router.get("/mps-oee-summary", mpsController.getOeeSummary);
+router.get("/mps-oee-trend", mpsController.getOeeTrend);
+router.get("/mps-loss-breakdown", mpsController.getLossBreakdown);
+router.get("/mps-pareto-loss", mpsController.getParetoLoss);
+router.get("/mps-lean-distribution", mpsController.getLeanDistribution);
+router.get("/mps-snapshot", mpsController.getSnapshot);
 
 module.exports = router;

@@ -14,6 +14,7 @@ import ProcessControlPage from '../pages/MACHINE_H/ProcessControlPage';
 import SelectJobPage from '../pages/TIMESHEET/SelectJobPage';
 import SelectMachinePage from '../pages/TIMESHEET/SelectMachinePage';
 import DashboardPage from '../pages/DashboardPage';
+import MPDashboardPage from '../pages/MPDashboardPage';
 import SettingPage from '../pages/SettingPage';
 import ComponentTrackingPage from '../pages/PPC/ComponentTrackingPage';
 import BufferTransactionPage from '../pages/PPC/BufferTransactionPage';
@@ -36,6 +37,9 @@ import MachineHoursSqlServerPage from '../pages/MACHINE_H/MachineHoursSqlServerP
 import MachineHoursValidationPage from '../pages/MACHINE_H/MachineHoursValidationPage';
 import ConsumableRequestPage from '../pages/WAREHOUSE/ConsumableRequestPage';
 import ConsumableControlPage from '../pages/WAREHOUSE/ConsumableControlPage';
+import ToolsManagementPage from '../pages/TOOLS/ToolsManagementPage';
+import ToolsRequestHubPage from '../pages/TOOLS/ToolsRequestHubPage';
+import ToolsRequestPage from '../pages/TOOLS/ToolsRequestPage';
 import ProtectedRoute from "../components/auth/ProtectedRoute";
 
 /**
@@ -60,10 +64,26 @@ const router = createBrowserRouter([
     element: <ConsumableRequestPage />,
   },
   {
+    path: '/tools-consumable-request',
+    element: <ToolsRequestHubPage />,
+  },
+  {
+    path: '/tools-request',
+    element: <ToolsRequestPage />,
+  },
+  {
     path: '/consumable-control',
     element: (
       <ProtectedRoute>
         <ConsumableControlPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/tools-management',
+    element: (
+      <ProtectedRoute>
+        <ToolsManagementPage />
       </ProtectedRoute>
     ),
   },
@@ -131,6 +151,10 @@ const router = createBrowserRouter([
   {
     path: '/dashboard',
     element: <DashboardPage />,
+  },
+  {
+    path: '/mps-dashboard',
+    element: <MPDashboardPage />,
   },
   {
     path: '/setting',

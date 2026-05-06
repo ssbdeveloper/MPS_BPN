@@ -49,6 +49,11 @@ function parseIntParam(value, fallback, min, max) {
   return Math.min(max, Math.max(min, parsed));
 }
 
+function parseOptionalLimit(value, fallback, min, max) {
+  if (String(value || "").trim().toLowerCase() === "all") return null;
+  return parseIntParam(value, fallback, min, max);
+}
+
 function parseDateParam(value) {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   return value;
@@ -124,12 +129,51 @@ function normalizeRow(row) {
   };
 }
 
+function normalizeStatusDescription(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getActivityTypeFromStatus(statusDescription) {
+  const normalized = normalizeStatusDescription(statusDescription);
+  if (!normalized) return "";
+
+  if (normalized === "productive") return "M1";
+
+  if (
+    normalized === "load" ||
+    normalized === "loading" ||
+    normalized === "setting" ||
+    normalized === "measure" ||
+    normalized === "meassure" ||
+    normalized === "unload" ||
+    normalized === "unloading" ||
+    normalized === "preventive"
+  ) {
+    return "M2";
+  }
+
+  return "";
+}
+
+function normalizeActivityType(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "M1" || normalized === "VA") return "M1";
+  if (normalized === "M2" || normalized === "NNVA") return "M2";
+  return "";
+}
+
 function normalizeValidationRow(row) {
   return {
     ...normalizeRow(row),
     record_key: String(row.record_key || ""),
     min_proddataid: row.min_proddataid == null ? "" : row.min_proddataid,
-    activitytype: row.activitytype || "",
+    activitytype: normalizeActivityType(row.activitytype) || getActivityTypeFromStatus(row.status_description),
     order_no: row.order_no || "",
     operation_no: row.operation_no || "",
     sequence_category: row.sequence_category || "",
@@ -302,15 +346,16 @@ async function fetchValidationGroups(filters = {}) {
 }
 
 async function fetchValidationGroupRecords(machineno, filters = {}) {
-  const limit = parseIntParam(filters.limit, 500, 1, 1000);
+  const limit = parseOptionalLimit(filters.limit, 500, 1, 1000);
   const pool = await getPool();
   const request = pool.request();
-  request.input("limit", sql.Int, limit);
+  if (limit != null) request.input("limit", sql.Int, limit);
 
   const where = applyFilters(request, { ...filters, machineno });
+  const selectClause = limit == null ? "SELECT" : "SELECT TOP (@limit)";
 
   const result = await request.query(`
-    SELECT TOP (@limit)
+    ${selectClause}
       CONCAT(
         CAST(p.proddataid AS varchar(32)), '|',
         CAST(p.machineno AS varchar(32)), '|',

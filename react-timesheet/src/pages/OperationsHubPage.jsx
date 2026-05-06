@@ -21,6 +21,7 @@ import {
   TimerReset,
   Truck,
   Users,
+  Wrench,
   X,
 } from 'lucide-react';
 
@@ -33,9 +34,10 @@ const sidebarItems = [
   { title: 'Component Tracking', icon: Package, path: '/component-tracking' },
   { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment' },
   { title: 'Consumable Control', icon: ClipboardCheck, path: '/consumable-control' },
+  { title: 'Tools Management', icon: Wrench, path: '/tools-management' },
   { title: 'Manage User', icon: Users, path: '/manage-user' },
   { title: 'Validation', icon: ShieldCheck, path: '/timesheet-validation' },
-  { title: 'Machine Hours', icon: TimerReset, path: '/machine-hours-validation' },
+  { title: 'Machine Hours', icon: TimerReset, path: '/machine-hours-sqlserver' },
 ];
 
 const emptyHubData = {

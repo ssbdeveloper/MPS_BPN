@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const { WebSocketServer } = require('ws');
 
 // ========================================
 // ENVIRONMENT SETUP
@@ -140,9 +141,17 @@ app.use('/component-tracking', require('./routes/componentTracking'));
 app.use('/machine-hours-sqlserver', require('./routes/machineHoursSqlServer'));
 app.use('/machine-hours-validation', require('./routes/machineHoursValidation'));
 app.use('/consumable', require('./routes/consumable'));
+app.use('/tools', require('./routes/tools'));
 app.use('/auth', require('./routes/auth'));
 
-require('./websocket/machineHoursSqlServerSocket')(server);
+const wss = new WebSocketServer({ noServer: true });
+server.on("upgrade", (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit("connection", ws, request);
+  });
+});
+require('./websocket/machineHoursSqlServerSocket')(wss);
+require('./websocket/mpsDashboardSocket')(wss);
 
 // ========================================
 // ERROR HANDLERS
