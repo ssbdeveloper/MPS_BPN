@@ -1,4 +1,34 @@
 const sql = require("mssql");
+let pgPool = null;
+try { pgPool = global.pool; } catch (_) { pgPool = null; }
+
+function _stripZero(v) {
+  const s = String(v || "").lstrip("0");
+  return s || "0";
+}
+
+async function _bulkLookupOperationText(jobids) {
+  if (!pgPool || !jobids.length) return {};
+  const stripped = [...new Set(jobids.filter(Boolean).map(j => _stripZero(j)))];
+  if (!stripped.length) return {};
+  try {
+    const result = await pgPool.query(
+      `SELECT confirmation_number, operation_short_text
+       FROM ph3_order
+       WHERE LTRIM(confirmation_number, '0') = ANY($1)`,
+      [stripped]
+    );
+    const map = {};
+    result.rows.forEach(r => {
+      const k = _stripZero(r.confirmation_number);
+      if (!map[k]) map[k] = r.operation_short_text || "";
+    });
+    return map;
+  } catch (err) {
+    console.error("bulkLookupOperationText PG error:", err.message);
+    return {};
+  }
+}
 
 const sqlServerConfig = {
   server: process.env.SQLSERVER_HOST || "10.169.13.13",
@@ -17,7 +47,7 @@ const sqlServerConfig = {
     enableArithAbort: true,
   },
   connectionTimeout: 10000,
-  requestTimeout: 30000,
+  requestTimeout: 120000,
 };
 
 function getSafeConnectionInfo() {
@@ -62,19 +92,29 @@ function parseDateParam(value) {
 function applyFilters(request, filters = {}) {
   const where = [
     "p.startdatetime IS NOT NULL",
-    "(p.enddatetime IS NULL OR DATEDIFF(SECOND, p.startdatetime, p.enddatetime) <> 0)",
+    "(p.enddatetime IS NULL OR DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 1)",
   ];
+
+  let hasDateFilter = false;
 
   const from = parseDateParam(filters.from || filters.start);
   if (from) {
     request.input("from", sql.Date, from);
-    where.push("CAST(p.startdatetime AS DATE) >= @from");
+    where.push("CAST(DATEADD(HOUR, -8, p.startdatetime) AS DATE) >= @from");
+    hasDateFilter = true;
   }
 
   const to = parseDateParam(filters.to || filters.end);
   if (to) {
     request.input("to", sql.Date, to);
-    where.push("CAST(p.startdatetime AS DATE) <= @to");
+    where.push("CAST(DATEADD(HOUR, -8, p.startdatetime) AS DATE) <= @to");
+    hasDateFilter = true;
+  }
+
+  // Default to last 7 days to prevent full table scan on unfiltered requests
+  if (!hasDateFilter) {
+    request.input("defaultFrom", sql.Date, new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
+    where.push("CAST(DATEADD(HOUR, -8, p.startdatetime) AS DATE) >= @defaultFrom");
   }
 
   const statusId = filters.statusid ? parseInt(filters.statusid, 10) : null;
@@ -279,17 +319,28 @@ async function fetchMachineHoursRows(filters = {}) {
     ORDER BY MIN(p.startdatetime) DESC, p.machineno ASC, p.operatorid ASC, p.jobid ASC
   `);
 
-  return result.recordset.map(normalizeRow);
+  const rows = result.recordset.map(normalizeRow);
+  const jobids = [...new Set(rows.map(r => r.jobid).filter(Boolean))];
+  if (jobids.length) {
+    const opMap = await _bulkLookupOperationText(jobids);
+    rows.forEach(r => {
+      const k = _stripZero(r.jobid);
+      r.operation_short_text = opMap[k] || "";
+    });
+  }
+  return rows;
 }
 
 async function fetchValidationGroups(filters = {}) {
   const pool = await getPool();
   const request = pool.request();
   const where = applyFilters(request, filters);
+  const groupLimit = parseIntParam(filters.groupLimit, 10000, 1000, 50000);
+  request.input("groupLimit", sql.Int, groupLimit);
 
   const result = await request.query(`
     WITH filtered AS (
-      SELECT
+      SELECT TOP (@groupLimit)
         p.proddataid AS min_proddataid,
         CAST(DATEADD(HOUR, -8, p.startdatetime) AS DATE) AS work_date,
         p.machineno,
@@ -306,7 +357,7 @@ async function fetchValidationGroups(filters = {}) {
         DATEADD(HOUR, -8, p.startdatetime) AS first_startdatetime,
         DATEADD(HOUR, -8, p.enddatetime) AS last_enddatetime,
         CASE
-          WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 0
+          WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 1
             THEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
           ELSE 0
         END AS duration_seconds
@@ -314,6 +365,7 @@ async function fetchValidationGroups(filters = {}) {
       LEFT JOIN dbo.Machines m ON m.machineno = p.machineno
       LEFT JOIN dbo.StatusTypes st ON st.statusid = p.statusid
       WHERE ${where}
+      ORDER BY p.startdatetime DESC, p.machineno ASC
     ),
     grouped AS (
       SELECT
@@ -386,14 +438,14 @@ async function fetchValidationGroupRecords(machineno, filters = {}) {
       CONVERT(varchar(19), DATEADD(HOUR, -8, p.startdatetime), 126) AS first_startdatetime,
       CONVERT(varchar(19), DATEADD(HOUR, -8, p.enddatetime), 126) AS last_enddatetime,
       CASE
-        WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 0
+        WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 1
           THEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
         ELSE 0
       END AS duration_seconds,
       ROUND(
         CAST(
           CASE
-            WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 0
+            WHEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 1
               THEN DATEDIFF(SECOND, p.startdatetime, p.enddatetime)
             ELSE 0
           END AS NUMERIC(18, 4)
@@ -407,7 +459,16 @@ async function fetchValidationGroupRecords(machineno, filters = {}) {
     ORDER BY p.startdatetime DESC, p.statusid ASC, p.operatorid ASC, p.jobid ASC
   `);
 
-  return result.recordset.map(normalizeValidationRow);
+  const rows = result.recordset.map(normalizeValidationRow);
+  const jobids = [...new Set(rows.map(r => r.jobid).filter(Boolean))];
+  if (jobids.length) {
+    const opMap = await _bulkLookupOperationText(jobids);
+    rows.forEach(r => {
+      const k = _stripZero(r.jobid);
+      r.operation_short_text = opMap[k] || "";
+    });
+  }
+  return rows;
 }
 
 async function getMachineHours(req, res) {

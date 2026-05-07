@@ -223,7 +223,7 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
 
   return (
     <div className={`px-3 py-2.5 transition-colors duration-100 ${rowBg}`}>
-      <div className="grid gap-2" style={{ gridTemplateColumns: '0.75fr 1fr 0.85fr 1fr 1fr 0.7fr 0.55fr 0.8fr 0.7fr 44px' }}>
+      <div className="grid gap-2" style={{ gridTemplateColumns: '0.75fr 1fr 0.85fr 1.1fr 1fr 0.7fr 0.8fr 0.7fr 44px' }}>
         <div className="text-[11px] text-center">
           <div className="font-semibold" style={{ color: PALETTE.frenchBlue }}>{formatDateShort(record.work_date)}</div>
           <div className="text-[10px]" style={{ color: PALETTE.brightTealBlue }}>{record.machineid || '-'}</div>
@@ -239,8 +239,10 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
         </div>
 
         <div className="text-[11px] text-center">
-          <div className="font-semibold" style={{ color: PALETTE.frenchBlue }}>{record.jobid || '-'}</div>
-          {record.order_no ? <div className="text-[10px]" style={{ color: PALETTE.brightTealBlue }}>{record.order_no}</div> : null}
+          {record.operation_short_text ? (
+            <div className="text-[10px] font-semibold leading-tight text-slate-600">{record.operation_short_text}</div>
+          ) : null}
+          <div className="font-semibold leading-tight" style={{ color: PALETTE.frenchBlue }}>{record.jobid || '-'}</div>
         </div>
 
         <div className="text-[11px] text-center">
@@ -256,10 +258,6 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
         <div className="text-[11px] text-center flex flex-col items-center leading-tight">
           <span className="font-bold" style={{ color: PALETTE.frenchBlue }}>{jam} jam</span>
           <span style={{ color: PALETTE.brightTealBlue }}>{menit} mnt</span>
-        </div>
-
-        <div className="text-[11px] text-center font-semibold text-gray-700">
-          {fmtNumber(record.event_count)}
         </div>
 
         <div className="text-[11px] text-center">
@@ -364,14 +362,13 @@ const MachineGroup = React.memo(({
         <div>
           <div className="px-3 py-2 border-b" style={{ background: PALETTE.lightCyan, borderColor: PALETTE.frostedBlue }}>
             <div className="grid gap-2 text-[10px] font-bold text-center uppercase tracking-wide"
-              style={{ gridTemplateColumns: '0.75fr 1fr 0.85fr 1fr 1fr 0.7fr 0.55fr 0.8fr 0.7fr 44px', color: PALETTE.frenchBlue }}>
+              style={{ gridTemplateColumns: '0.75fr 1fr 0.85fr 1.1fr 1fr 0.7fr 0.8fr 0.7fr 44px', color: PALETTE.frenchBlue }}>
               <div>Date</div>
               <div>Status</div>
               <div>Operator</div>
               <div>Job</div>
               <div>Time</div>
               <div>Duration</div>
-              <div>Events</div>
               <div>Activity</div>
               <div>Status</div>
               <div>Act</div>

@@ -3,6 +3,8 @@ etl_machine_conf.py
 Update SQL Server ProductionData.JobID using confirmation_number
 looked up from PostgreSQL via timesheet_transaction → ph3_order chain.
 
+Performa: bulk lookup — hanya 2 query PostgreSQL per batch, bukan 20.000.
+
 Usage:
     python etl_machine_conf.py              # live run
     python etl_machine_conf.py --dry-run    # preview only, no updates
@@ -35,7 +37,7 @@ POSTGRES_CONFIG = {
     "password": "@dminta9",
 }
 
-BATCH_SIZE = 200
+BATCH_SIZE = 5000
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -67,19 +69,15 @@ def connect_postgres():
 
 
 # ---------------------------------------------------------------------------
-# Core ETL
+# Core ETL — bulk lookup strategy
 # ---------------------------------------------------------------------------
 def fetch_production_data(cursor: pyodbc.Cursor, offset: int) -> list[dict]:
-    """
-    Fetch a batch of ProductionData rows where:
-      - JobID <> ''
-      - JobID starts with '1' or '3'
-    """
     sql = """
         SELECT ProdDataID, JobID, StartDateTime
         FROM ProductionData
         WHERE JobID <> ''
           AND (JobID LIKE '1%' OR JobID LIKE '3%')
+          AND StartDateTime >= '2026-01-01'
         ORDER BY ProdDataID
         OFFSET ? ROWS
         FETCH NEXT ? ROWS ONLY
@@ -89,59 +87,158 @@ def fetch_production_data(cursor: pyodbc.Cursor, offset: int) -> list[dict]:
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
-def lookup_timesheet(pg_cursor, job_id: str, start_dt: datetime | None) -> dict | None:
+def _make_naive(dt):
+    """Strip timezone so offset-naive and offset-aware datetimes can be compared."""
+    if dt is None:
+        return None
+    if hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
+def bulk_lookup_timesheet(pg_cursor, rows: list[dict]) -> dict:
     """
-    Find the timesheet_transaction row whose longdate_checkin is
-    closest to start_dt among rows where order_no = job_id.
+    Given ProductionData rows [ {ProdDataID, JobID, StartDateTime}, ... ],
+    find the closest timesheet_transaction per JobID in ONE query.
+    Returns { ProdDataID: {"order_no": ..., "operation_no": ...} }
     """
+    if not rows:
+        return {}
+
+    job_ids = list({r["JobID"].strip() for r in rows if r.get("JobID")})
+
+    if not job_ids:
+        return {}
+
     sql = """
         SELECT order_no, operation_no, longdate_checkin
         FROM timesheet_transaction
-        WHERE order_no = %s
+        WHERE order_no = ANY(%s)
           AND longdate_checkin IS NOT NULL
-        ORDER BY ABS(
-            EXTRACT(EPOCH FROM (longdate_checkin - %s::timestamptz))
-        )
-        LIMIT 1
+        ORDER BY order_no, longdate_checkin
     """
-    ts_value = start_dt.isoformat() if start_dt else None
-    pg_cursor.execute(sql, (job_id, ts_value))
-    row = pg_cursor.fetchone()
-    if not row:
-        return None
-    return {"order_no": row[0], "operation_no": row[1]}
+    pg_cursor.execute(sql, (job_ids,))
+    pg_rows = pg_cursor.fetchall()
+
+    by_order: dict[str, list[tuple]] = {}
+    for r in pg_rows:
+        order_no = (r[0] or "").strip()
+        op_no = r[1]
+        ts = _make_naive(r[2])
+        by_order.setdefault(order_no, []).append((op_no, ts))
+
+    result: dict[int, dict] = {}
+    for row in rows:
+        pid = row["ProdDataID"]
+        order_no = (row["JobID"] or "").strip()
+        start_dt = _make_naive(row["StartDateTime"])
+
+        candidates = by_order.get(order_no)
+        if not candidates:
+            continue
+
+        if start_dt and isinstance(start_dt, datetime):
+            target = start_dt
+            closest = min(
+                candidates,
+                key=lambda c: abs((c[1] - target).total_seconds()) if c[1] else float("inf"),
+            )
+        else:
+            closest = candidates[0]
+
+        result[pid] = {"order_no": order_no, "operation_no": closest[0]}
+
+    return result
 
 
-def lookup_confirmation(pg_cursor, order_no: str, operation_no: str | int | None) -> str | None:
-    """Lookup confirmation_number from ph3_order."""
-    sql = """
-        SELECT confirmation_number
+def _strip_zero(v):
+    """Strip leading zeros, keep at least '0' if result would be empty."""
+    s = str(v).lstrip("0")
+    return s if s else "0"
+
+
+def bulk_lookup_confirmation(pg_cursor, ts_map: dict[int, dict]) -> dict[int, str]:
+    """
+    Given { ProdDataID: {order_no, operation_no} },
+    bulk lookup confirmation_number from ph3_order.
+    Both order_no and operation_no have leading zeros stripped
+    before matching because ph3_order stores them zero-padded.
+    Returns { ProdDataID: confirmation_number }
+    """
+    if not ts_map:
+        return {}
+
+    pairs = list({
+        (v["order_no"], str(v["operation_no"]))
+        for v in ts_map.values()
+        if v.get("operation_no") is not None
+    })
+
+    if not pairs:
+        return {}
+
+    values_clause = ", ".join(
+        f"({pg_cursor.mogrify('%s', (o,)).decode()}, {pg_cursor.mogrify('%s', (op,)).decode()})"
+        for o, op in pairs
+    )
+
+    sql = f"""
+        SELECT order_no, operation_no, confirmation_number
         FROM ph3_order
-        WHERE order_no = %s
-          AND operation_no = %s::integer
-        LIMIT 1
+        WHERE (LTRIM(order_no, '0'), LTRIM(operation_no, '0')) IN ({values_clause})
     """
-    pg_cursor.execute(sql, (order_no, operation_no))
-    row = pg_cursor.fetchone()
-    return row[0] if row else None
+    pg_cursor.execute(sql)
+    pg_rows = pg_cursor.fetchall()
+
+    confirmation_by_key: dict[tuple, str] = {}
+    for r in pg_rows:
+        key = (
+            _strip_zero(r[0]) if r[0] is not None else "",
+            _strip_zero(r[1]) if r[1] is not None else "",
+        )
+        val = r[2]
+        if val:
+            confirmation_by_key[key] = str(val)
+
+    result: dict[int, str] = {}
+    for pid, ts in ts_map.items():
+        key = (
+            _strip_zero(ts["order_no"]),
+            _strip_zero(ts["operation_no"]) if ts["operation_no"] is not None else "",
+        )
+        conf = confirmation_by_key.get(key)
+        if conf:
+            result[pid] = conf
+
+    return result
 
 
 def update_jobid(cursor: pyodbc.Cursor, prod_data_id: int, new_jobid: str) -> None:
-    sql = "UPDATE ProductionData SET JobID = ? WHERE ProdDataID = ?"
-    cursor.execute(sql, (new_jobid, prod_data_id))
+    cursor.execute(
+        "UPDATE ProductionData SET JobID = ? WHERE ProdDataID = ?",
+        (new_jobid, prod_data_id),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ETL: Update ProductionData.JobID from PostgreSQL lookup")
-    parser.add_argument("--dry-run", action="store_true", help="Preview mode, no actual updates")
+    parser = argparse.ArgumentParser(
+        description="ETL: Update ProductionData.JobID from PostgreSQL lookup"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview mode, no actual updates"
+    )
     args = parser.parse_args()
 
     dry_run: bool = args.dry_run
 
-    log.info("Starting ETL machine confirmation%s", " (DRY RUN)" if dry_run else "")
+    log.info(
+        "Starting ETL machine confirmation%s (BATCH_SIZE=%d)",
+        " (DRY RUN)" if dry_run else "",
+        BATCH_SIZE,
+    )
     log.info("SQL Server: %s/%s", SQLSERVER_CONFIG["server"], SQLSERVER_CONFIG["database"])
     log.info("PostgreSQL:  %s:%s/%s", POSTGRES_CONFIG["host"], POSTGRES_CONFIG["port"], POSTGRES_CONFIG["dbname"])
 
@@ -172,62 +269,55 @@ def main() -> None:
 
             log.info("Processing batch offset=%d, count=%d ...", offset, len(rows))
 
+            ts_lookup_start = datetime.now()
+            ts_map = bulk_lookup_timesheet(pg_cursor, rows)
+            ts_elapsed = (datetime.now() - ts_lookup_start).total_seconds()
+            log.debug("  timesheet bulk lookup: %.1fs (%d matches)", ts_elapsed, len(ts_map))
+
+            conf_start = datetime.now()
+            conf_map = bulk_lookup_confirmation(pg_cursor, ts_map)
+            conf_elapsed = (datetime.now() - conf_start).total_seconds()
+            log.debug("  confirmation bulk lookup: %.1fs (%d matches)", conf_elapsed, len(conf_map))
+
             for row in rows:
                 total_rows += 1
                 prod_id = row["ProdDataID"]
                 job_id = row["JobID"]
-                start_dt = row["StartDateTime"]
 
-                # Step 1: Lookup closest timesheet_transaction
-                ts = lookup_timesheet(pg_cursor, job_id, start_dt)
+                ts = ts_map.get(prod_id)
                 if not ts:
                     skipped_no_timesheet += 1
-                    log.debug(
-                        "SKIP ProdDataID=%d JobID=%r — no matching timesheet_transaction",
-                        prod_id, job_id,
-                    )
                     continue
 
-                # Step 2: Lookup confirmation_number from ph3_order
-                order_no = ts["order_no"]
-                operation_no = ts["operation_no"]
-                confirmation = lookup_confirmation(pg_cursor, order_no, operation_no)
-
+                confirmation = conf_map.get(prod_id)
                 if not confirmation:
                     skipped_no_confirmation += 1
-                    log.debug(
-                        "SKIP ProdDataID=%d JobID=%r order_no=%s op=%s — "
-                        "no confirmation_number in ph3_order",
-                        prod_id, job_id, order_no, operation_no,
-                    )
                     continue
 
-                # Step 3: Update
-                confirmation_str = str(confirmation)
                 if dry_run:
                     updated += 1
                     log.info(
                         "DRY-RUN ProdDataID=%d JobID %r -> %s  (order_no=%s op=%s)",
-                        prod_id, job_id, confirmation_str, order_no, operation_no,
+                        prod_id, job_id, confirmation, ts["order_no"], ts["operation_no"],
                     )
                 else:
                     try:
-                        update_jobid(mssql_cursor, prod_id, confirmation_str)
+                        update_jobid(mssql_cursor, prod_id, confirmation)
                         updated += 1
                         log.info(
-                            "UPDATED ProdDataID=%d JobID %r -> %s  (order_no=%s op=%s)",
-                            prod_id, job_id, confirmation_str, order_no, operation_no,
+                            "UPDATED ProdDataID=%d JobID %r -> %s",
+                            prod_id, job_id, confirmation,
                         )
                     except Exception as exc:
                         failed += 1
-                        log.error(
-                            "FAILED ProdDataID=%d JobID=%r: %s",
-                            prod_id, job_id, exc,
-                        )
+                        log.error("FAILED ProdDataID=%d JobID=%r: %s", prod_id, job_id, exc)
 
-            if not dry_run and updated > 0:
+            if not dry_run:
                 mssql_conn.commit()
-                log.debug("Committed batch at offset %d.", offset)
+                log.info(
+                    "Committed batch offset=%d (updated=%d, skipped_ts=%d, skipped_conf=%d, failed=%d)",
+                    offset, updated, skipped_no_timesheet, skipped_no_confirmation, failed,
+                )
 
             offset += BATCH_SIZE
 
