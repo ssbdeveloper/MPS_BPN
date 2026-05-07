@@ -4,12 +4,19 @@ import {
   Search, Loader2, X, Plus, AlertCircle, Package, ClipboardList,
   BookmarkPlus, Check, ChevronRight, GripVertical, Trash2,
   ChevronDown, PenLine, ArrowRight, ArrowLeft, Printer, Info,
+  Paperclip, Eye, Image as ImageIcon, FileText, Save,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
+import * as pdfjsLib from 'pdfjs-dist';
 import ssbLogo from '../../assets/ssb.png';
 import travelCardHtml from '../../templates/travel-card.html?raw';
 import operationCardHtml from '../../templates/operation-card.html?raw';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url
+).toString();
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
@@ -20,7 +27,54 @@ const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 
 const OP_MAIN_BOX_W = 700;
 const OP_MAIN_BOX_H = 560;
-const TRAVEL_CARD_ROWS_PER_PAGE = 27;
+
+// ─── PDF Renderer ──────────────────────────────────────────────────────────
+async function renderPdfToDataUrl(url) {
+  const pdf = await pdfjsLib.getDocument(url).promise;
+  const page = await pdf.getPage(1);
+  const viewport = page.getViewport({ scale: 1.5 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas.toDataURL('image/png');
+}
+
+function PdfPreview({ url, style }) {
+  const canvasRef = useRef(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(null);
+    pdfjsLib.getDocument(url).promise
+      .then(async (pdf) => {
+        if (cancelled) return;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = canvasRef.current;
+        if (!canvas || cancelled) return;
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport }).promise;
+      })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [url]);
+
+  if (error) {
+    return (
+      <div style={{ ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fef2f2', color: '#dc2626', fontSize: 12 }}>
+        PDF render error
+      </div>
+    );
+  }
+
+  return <canvas ref={canvasRef} style={{ ...style, display: 'block' }} />;
+}
+const TRAVEL_CARD_ROWS_PER_PAGE = 25;
 
 const makeOperationCardKey = (op) => op?._key || `${op?.operation_no || 'op'}-${op?.machineid || ''}`;
 const operationCardStyle = operationCardHtml.match(/<style>([\s\S]*?)<\/style>/i)?.[1] || '';
@@ -1165,27 +1219,71 @@ function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData }) {
 function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef }) {
   const [srcDoc, setSrcDoc] = useState('');
   const qrRef = useRef(null);
+  const [nnvaMap, setNnvaMap] = useState({});
+
+  // Fetch NNVA for all operations
+  useEffect(() => {
+    let cancelled = false;
+    const fetchAll = async () => {
+      const results = {};
+      await Promise.all(editOps.map(async (op) => {
+        const stdId = op._srcId || op.id;
+        if (!stdId) return;
+        try {
+          const res = await fetch(`${API_BASE}/sow/nnva/standard/${stdId}`);
+          const json = await res.json();
+          results[stdId] = (json.data || []).filter(n => (n.standard_hours || 0) > 0);
+        } catch { results[stdId] = []; }
+      }));
+      if (!cancelled) setNnvaMap(results);
+    };
+    fetchAll();
+    return () => { cancelled = true; };
+  }, [editOps]);
 
   const today    = new Date();
   const dateStr  = today.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
   const qrValue  = cardInfo.productionOrder || selectedPart?.part_number || 'TRAVEL-CARD';
-  const totalHrs = editOps.reduce((sum, op) => sum + (parseFloat(op.std_hours) || 0), 0);
+
+  // Calculate total hours including NNVA
+  const directHrs = editOps.reduce((sum, op) => sum + (parseFloat(op.std_hours) || 0), 0);
+  const nnvaHrs = Object.values(nnvaMap).flat().reduce((sum, n) => sum + (parseFloat(n.standard_hours) || 0), 0);
+  const totalHrs = directHrs + nnvaHrs;
   const totalHoursDisplay = totalHrs % 1 === 0 ? String(totalHrs) : totalHrs.toFixed(2);
 
   useEffect(() => {
-    // QRCodeCanvas renders in a RAF; wait one tick before reading toDataURL()
     const timer = setTimeout(() => {
       const canvas    = qrRef.current?.querySelector('canvas');
       const qrDataUrl = canvas ? canvas.toDataURL('image/png') : '';
 
-      const opsRows = editOps.map((op, i) => `
-        <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
-          <td class="ops-no">${op.operation_no}</td>
-          <td>${esc(op.operation_text)}</td>
-          <td class="tc">${esc(op.machineid || '—')}</td>
-          <td class="tc">${op.std_hours !== '' && op.std_hours != null ? parseFloat(op.std_hours) : '—'}</td>
-          <td></td><td></td><td></td>
-        </tr>`);
+      // Generate rows including NNVA children
+      const opsRows = [];
+      editOps.forEach((op) => {
+        const machineId = esc(op.machineid || '—');
+        opsRows.push(
+          `<tr class="op-row">
+            <td class="ops-no-tc">${op.operation_no}</td>
+            <td>${esc(op.operation_text)}</td>
+            <td class="tc">${machineId}</td>
+            <td class="hrs-col">${op.std_hours !== '' && op.std_hours != null ? parseFloat(op.std_hours) : '—'}</td>
+            <td></td><td></td><td></td>
+          </tr>`
+        );
+        // NNVA child rows
+        const stdId = op._srcId || op.id;
+        const nnvaList = nnvaMap[stdId] || [];
+        nnvaList.forEach((n) => {
+          opsRows.push(
+            `<tr class="nnva-row">
+              <td class="ops-no"> - </td>
+              <td class="ops-no">${esc(n.nnva_name || '')}</td>
+              <td class="tc">${machineId}</td>
+              <td class="hrs-col">${n.standard_hours != null ? parseFloat(n.standard_hours) : '—'}</td>
+              <td></td><td></td><td></td>
+            </tr>`
+          );
+        });
+      });
 
       let html = travelCardHtml
         .replace('{{qrCodeDataUrl}}',   qrDataUrl)
@@ -1298,7 +1396,12 @@ function OperationCardPreview({
   const [srcDoc, setSrcDoc] = useState('');
   const [selectedImageId, setSelectedImageId] = useState(null);
   const fileInputRef = useRef(null);
+  const attachInputRef = useRef(null);
   const qrRef = useRef(null);
+  const [loadingAttach, setLoadingAttach] = useState(false);
+  const [savingCard, setSavingCard] = useState(false);
+  const [attachModal, setAttachModal] = useState(null); // { list, selected: Set }
+  const [attachPreviewIdx, setAttachPreviewIdx] = useState(0);
 
   const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const selectedOps = useMemo(
@@ -1317,6 +1420,27 @@ function OperationCardPreview({
       onActiveOperationChange(makeOperationCardKey(editOps[0]));
     }
   }, [activeOperationKey, editOps, onActiveOperationChange]);
+
+  // Auto-load saved operation card images when switching to an operation
+  useEffect(() => {
+    if (!activeKey || !activeOp) return;
+    const stdId = activeOp._srcId || activeOp.id;
+    if (!stdId) return;
+    const alreadyHas = imagesByKey[activeKey] && imagesByKey[activeKey].length > 0;
+    if (alreadyHas) return;
+    fetch(`${API_BASE}/sow/operationcard/${stdId}`)
+      .then(r => r.json())
+      .then(json => {
+        const saved = json.data;
+        if (saved && Array.isArray(saved.images) && saved.images.length > 0) {
+          onImagesByKeyChange(prev => ({
+            ...prev,
+            [activeKey]: saved.images,
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [activeKey]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1383,6 +1507,77 @@ function OperationCardPreview({
     event.target.value = '';
   }, [activeKey, onImagesByKeyChange, readImageFile]);
 
+  // Fetch attachments and open picker modal
+  const handleFetchAttachments = useCallback(async () => {
+    const standardId = activeOp?._srcId || activeOp?.id || activeOp?.standard_id;
+    if (!activeKey || !standardId) return;
+    setLoadingAttach(true);
+    try {
+      const res = await fetch(`${API_BASE}/sow/standard/operation/${standardId}/attachments`);
+      if (!res.ok) throw new Error('Gagal fetch attachments');
+      const attachments = await res.json();
+      const list = (Array.isArray(attachments) ? attachments : []).filter(
+        att => /\.(png|jpe?g|gif|webp|pdf)$/i.test(att.original_name || '')
+      );
+      if (list.length === 0) {
+        toast.error('Tidak ada attachment image/PDF untuk operation ini');
+        return;
+      }
+      setAttachPreviewIdx(0);
+      setAttachModal({ list, selected: new Set() });
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setLoadingAttach(false);
+    }
+  }, [activeKey, activeOp]);
+
+  const handleAddSelectedAttachments = useCallback(async () => {
+    if (!attachModal || !activeKey) return;
+    const selectedList = attachModal.list.filter(att => attachModal.selected.has(att.id));
+    if (selectedList.length === 0) { toast.error('Pilih minimal satu attachment'); return; }
+
+    setLoadingAttach(true);
+    try {
+      const additions = [];
+      for (let i = 0; i < selectedList.length; i++) {
+        const att = selectedList[i];
+        const fileUrl = `${API_BASE}${att.file_path}`;
+        const isPdf = /\.pdf$/i.test(att.original_name || '');
+        let src = fileUrl;
+        if (isPdf) {
+          try {
+            src = await renderPdfToDataUrl(fileUrl);
+          } catch (e) {
+            toast.error(`Gagal render PDF: ${att.original_name}`);
+            continue;
+          }
+        }
+        additions.push({
+          id: `att-${att.id}`,
+          src,
+          type: isPdf ? 'pdf-image' : 'image',
+          name: att.original_name,
+          x: Math.min(20 + additions.length * 20, OP_MAIN_BOX_W - 280),
+          y: Math.min(20 + additions.length * 20, OP_MAIN_BOX_H - 200),
+          width: 260, height: 180,
+        });
+      }
+
+      if (additions.length === 0) return;
+
+      onImagesByKeyChange(prev => ({
+        ...prev,
+        [activeKey]: [...(prev[activeKey] || []), ...additions],
+      }));
+      setSelectedImageId(additions[additions.length - 1]?.id || null);
+      setAttachModal(null);
+      toast.success(`${additions.length} attachment ditambahkan`);
+    } finally {
+      setLoadingAttach(false);
+    }
+  }, [activeKey, attachModal, onImagesByKeyChange]);
+
   const updateImage = useCallback((imageId, patch) => {
     if (!activeKey) return;
     onImagesByKeyChange((prev) => ({
@@ -1402,8 +1597,45 @@ function OperationCardPreview({
     setSelectedImageId(null);
   }, [activeKey, onImagesByKeyChange, selectedImageId]);
 
+  // Keyboard: Delete key removes selected image
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Delete' && selectedImageId && activeKey) {
+        e.preventDefault();
+        onImagesByKeyChange((prev) => ({
+          ...prev,
+          [activeKey]: (prev[activeKey] || []).filter((img) => img.id !== selectedImageId),
+        }));
+        setSelectedImageId(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [activeKey, onImagesByKeyChange, selectedImageId]);
+
+  // Save operation card images to DB
+  const handleSaveOperationCard = useCallback(async () => {
+    if (!activeKey || !activeOp) return;
+    const stdId = activeOp._srcId || activeOp.id;
+    if (!stdId) return;
+    setSavingCard(true);
+    try {
+      const images = imagesByKey[activeKey] || [];
+      await fetch(`${API_BASE}/sow/operationcard/${stdId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images, card_key: activeKey }),
+      });
+      toast.success('Operation card tersimpan');
+    } catch (err) {
+      toast.error('Gagal simpan operation card');
+    } finally {
+      setSavingCard(false);
+    }
+  }, [activeKey, activeOp, imagesByKey]);
+
   return (
-    <div className="grid min-h-full grid-cols-[390px_minmax(0,1fr)] bg-slate-100">
+    <div className="h-full grid grid-cols-[390px_minmax(0,1fr)] bg-slate-100 overflow-hidden">
       <div className="flex min-h-0 flex-col border-r border-slate-200 bg-white">
         <div className="border-b border-slate-100 px-4 py-3">
           <div className="flex items-center gap-1.5">
@@ -1527,12 +1759,30 @@ function OperationCardPreview({
             </button>
             <button
               type="button"
+              onClick={handleFetchAttachments}
+              disabled={!activeKey || loadingAttach}
+              className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-2 text-xs font-semibold text-white transition-all hover:bg-purple-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {loadingAttach ? <Loader2 size={12} className="animate-spin" /> : <Paperclip size={12} />}
+              Attachment
+            </button>
+            <button
+              type="button"
               onClick={removeSelectedImage}
               disabled={!selectedImageId}
               className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Trash2 size={12} />
               Remove
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveOperationCard}
+              disabled={!activeKey || savingCard}
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-all hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {savingCard ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              Save Card
             </button>
           </div>
         </div>
@@ -1636,7 +1886,7 @@ function OperationCardPreview({
                 >
                   <img
                     src={img.src}
-                    alt=""
+                    alt={img.name || ''}
                     style={{
                       width: '100%',
                       height: '100%',
@@ -1663,6 +1913,83 @@ function OperationCardPreview({
           }}
         />
       </div>
+
+      {/* Attachment Picker Modal */}
+      {attachModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setAttachModal(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Pilih Attachment</h3>
+                <p className="text-xs text-slate-500">{attachModal.list.length} file · {attachModal.selected.size} dipilih</p>
+              </div>
+              <button onClick={() => setAttachModal(null)} className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 hover:text-slate-600 hover:bg-slate-50">
+                <X size={14} />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 flex">
+              {/* File list */}
+              <div className="w-72 border-r border-slate-200 overflow-y-auto p-3 space-y-1 flex-shrink-0">
+                {attachModal.list.map((att, idx) => {
+                  const isSel = attachModal.selected.has(att.id);
+                  const isPdf = /\.pdf$/i.test(att.original_name || '');
+                  return (
+                    <button
+                      key={att.id}
+                      onClick={() => {
+                        setAttachPreviewIdx(idx);
+                        setAttachModal(prev => {
+                          if (!prev) return prev;
+                          const next = new Set(prev.selected);
+                          next.has(att.id) ? next.delete(att.id) : next.add(att.id);
+                          return { ...prev, selected: next };
+                        });
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-xs transition-all border ${
+                        isSel ? 'bg-[#caf0f8] border-[#90e0ef]' : 'bg-white border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input type="checkbox" checked={isSel} onChange={() => {}} className="w-3.5 h-3.5 rounded accent-[#0096c7] flex-shrink-0" />
+                      {isPdf ? <FileText size={14} className="text-red-400 flex-shrink-0" /> : <ImageIcon size={14} className="text-emerald-500 flex-shrink-0" />}
+                      <span className="truncate flex-1 text-slate-700">{att.original_name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Preview */}
+              <div className="flex-1 min-w-0 bg-slate-100 flex items-center justify-center p-4 overflow-hidden">
+                {attachModal.list[attachPreviewIdx] ? (
+                  (() => {
+                    const preview = attachModal.list[attachPreviewIdx];
+                    const url = `${API_BASE}${preview.file_path}`;
+                    const isPdf = /\.pdf$/i.test(preview.original_name || '');
+                    return isPdf ? (
+                      <div className="w-full h-full flex items-center justify-center overflow-hidden">
+                        <PdfPreview url={url} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} />
+                      </div>
+                    ) : (
+                      <img src={url} alt={preview.original_name} className="max-w-full max-h-full object-contain rounded-lg shadow-sm" />
+                    );
+                  })()
+                ) : (
+                  <p className="text-xs text-slate-400">Pilih file untuk preview</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between px-5 py-3 border-t border-slate-200 flex-shrink-0">
+              <span className="text-xs text-slate-400">Klik untuk select/deselect · Preview otomatis</span>
+              <div className="flex gap-2">
+                <button onClick={() => setAttachModal(null)} className="px-4 py-2 rounded-lg text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50">Batal</button>
+                <button onClick={handleAddSelectedAttachments} disabled={attachModal.selected.size === 0}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold bg-[#0096c7] hover:bg-[#0077b6] text-white disabled:opacity-40">Add Selected ({attachModal.selected.size})</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1910,7 +2237,7 @@ const SowCreatePage = () => {
           <TravelCardPreview selectedPart={selectedPart} editOps={editOps} cardInfo={cardInfo} printRef={printRef} />
         </div>
       ) : activeStep === 'operation-card' ? (
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden">
           <OperationCardPreview
             selectedPart={selectedPart}
             editOps={editOps}

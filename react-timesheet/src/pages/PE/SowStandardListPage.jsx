@@ -352,6 +352,11 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
               </div>
             </div>
 
+            {/* ── NNVA section (edit only) ── */}
+            {mode === 'edit' && (
+              <NnvaPanel standardId={initial.id} operationText={`${initial.operation_no} — ${initial.operation_text}`} />
+            )}
+
             {/* ── Attachment section (edit only) ── */}
             {mode === 'edit' && (
               <div className="mt-6">
@@ -604,56 +609,339 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
   );
 }
 
-// ─── OperationRow ─────────────────────────────────────────────────────────────
-function OperationRow({ op, onEdit, onDelete, deleting }) {
+// ─── NnvaPanel (inline, for OperationFormModal) ─────────────────────────────
+function NnvaPanel({ standardId, operationText }) {
+  const [nnvaBase, setNnvaBase] = useState([]);
+  const [selected, setSelected] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      fetch(`${API_BASE}/sow/nnva/base`).then(r => r.json()),
+      fetch(`${API_BASE}/sow/nnva/standard/${standardId}`).then(r => r.json()),
+    ])
+      .then(([baseJson, assignedJson]) => {
+        setNnvaBase(baseJson.data || []);
+        const sel = {};
+        (assignedJson.data || []).forEach(a => {
+          sel[a.nnva_base_id] = { checked: true, standard_hours: a.standard_hours || 0 };
+        });
+        setSelected(sel);
+      })
+      .catch(() => toast.error('Gagal load NNVA'))
+      .finally(() => setLoading(false));
+  }, [standardId]);
+
+  const toggle = (id) => {
+    setSelected(prev => {
+      const next = { ...prev };
+      if (next[id]) { delete next[id]; }
+      else { next[id] = { checked: true, standard_hours: 0 }; }
+      return next;
+    });
+  };
+
+  const setHours = (id, v) => {
+    setSelected(prev => {
+      if (!prev[id]) return prev;
+      return { ...prev, [id]: { ...prev[id], standard_hours: parseFloat(v) || 0 } };
+    });
+  };
+
+  const handleSaveNnva = async () => {
+    const items = Object.entries(selected).map(([nnva_base_id, data]) => ({
+      nnva_base_id: parseInt(nnva_base_id), standard_hours: data.standard_hours,
+    }));
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/sow/nnva/standard/${standardId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      if (!res.ok) throw new Error('Gagal simpan NNVA');
+      toast.success('NNVA disimpan');
+    } catch (err) {
+      toast.error(err.message);
+    } finally { setSaving(false); }
+  };
+
   return (
-    <tr
-      className="hover:bg-slate-50 cursor-pointer transition-colors"
-      onClick={() => onEdit(op)}
-    >
-      <td className="px-3 py-2 font-mono text-xs text-slate-700 whitespace-nowrap">
-        {op.operation_no}
-      </td>
-      <td className="px-3 py-2 text-xs text-slate-800">{op.operation_text}</td>
-      <td className="px-3 py-2 text-xs text-slate-500 hidden md:table-cell whitespace-nowrap">
-        {op.machineid || '—'}
-      </td>
-      <td className="px-3 py-2 text-xs text-right font-mono text-slate-700 whitespace-nowrap">
-        {fmtHours(op.std_hours)}
-      </td>
-      <td className="px-3 py-2">
-        <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-          {op.attachments?.length > 0 && (
-            <span className="flex items-center gap-1 text-[10px] font-semibold text-[#0077b6]
-                             bg-[#caf0f8] border border-[#90e0ef] px-1.5 py-0.5 rounded-full">
-              <Paperclip size={9} />
-              {op.attachments.length}
-            </span>
-          )}
-          <button
-            onClick={() => onEdit(op)}
-            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
-                       border border-slate-200 text-slate-500 hover:bg-slate-50
-                       hover:border-slate-300 transition-all"
-            title="Edit"
-          >
-            <Pencil size={12} />
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-3">
+        <div className="flex-1 h-px bg-slate-100" />
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">NNVA</span>
+        <div className="flex-1 h-px bg-slate-100" />
+      </div>
+      {loading ? (
+        <div className="py-3 flex justify-center"><Loader2 size={14} className="animate-spin text-[#0096c7]" /></div>
+      ) : (
+        <>
+          <div className="space-y-1.5">
+            {nnvaBase.map(nnva => {
+              const sel = selected[nnva.id];
+              return (
+                <label key={nnva.id}
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border cursor-pointer transition-all
+                    ${sel ? 'bg-[#caf0f8] border-[#90e0ef]' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                  <input type="checkbox" checked={!!sel} onChange={() => toggle(nnva.id)}
+                    className="w-3.5 h-3.5 rounded accent-[#0096c7] flex-shrink-0" />
+                  <span className="flex-1 text-xs font-medium text-slate-700">{nnva.name}</span>
+                  {sel && (
+                    <input type="number" step="0.01" min="0" value={sel.standard_hours}
+                      onChange={e => setHours(nnva.id, e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                      className="w-16 px-1.5 py-1 text-xs text-right border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
+                  )}
+                </label>
+              );
+            })}
+          </div>
+          <button onClick={handleSaveNnva} disabled={saving}
+            className="mt-3 flex items-center gap-1 text-[11px] font-semibold text-white px-3 py-1.5 rounded-lg
+                       bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95 disabled:opacity-50">
+            {saving && <Loader2 size={11} className="animate-spin" />}
+            Simpan NNVA
           </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── NnvaModal ────────────────────────────────────────────────────────────────
+function NnvaModal({ standardId, operationText, onClose }) {
+  const [nnvaBase, setNnvaBase] = useState([]);
+  const [selected, setSelected] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      fetch(`${API_BASE}/sow/nnva/base`).then(r => r.json()),
+      fetch(`${API_BASE}/sow/nnva/standard/${standardId}`).then(r => r.json()),
+    ])
+      .then(([baseJson, assignedJson]) => {
+        const baseList = baseJson.data || [];
+        setNnvaBase(baseList);
+        const sel = {};
+        (assignedJson.data || []).forEach(a => {
+          sel[a.nnva_base_id] = {
+            checked: true,
+            standard_hours: a.standard_hours || 0,
+            id: a.id,
+          };
+        });
+        setSelected(sel);
+      })
+      .catch(() => toast.error('Gagal load data NNVA'))
+      .finally(() => setLoading(false));
+  }, [standardId]);
+
+  const toggle = (nnvaBaseId) => {
+    setSelected(prev => {
+      const next = { ...prev };
+      if (next[nnvaBaseId]) {
+        delete next[nnvaBaseId];
+      } else {
+        next[nnvaBaseId] = { checked: true, standard_hours: 0 };
+      }
+      return next;
+    });
+  };
+
+  const setHours = (nnvaBaseId, value) => {
+    setSelected(prev => {
+      if (!prev[nnvaBaseId]) return prev;
+      return { ...prev, [nnvaBaseId]: { ...prev[nnvaBaseId], standard_hours: parseFloat(value) || 0 } };
+    });
+  };
+
+  const handleSave = async () => {
+    const items = Object.entries(selected).map(([nnva_base_id, data]) => ({
+      nnva_base_id: parseInt(nnva_base_id),
+      standard_hours: data.standard_hours,
+    }));
+    setSaving(true);
+    try {
+      const res = await fetch(`${API_BASE}/sow/nnva/standard/${standardId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      if (!res.ok) throw new Error('Gagal simpan NNVA');
+      toast.success('NNVA disimpan');
+      onClose();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm">
+      <div className="bg-white w-full md:max-w-lg rounded-t-2xl md:rounded-2xl shadow-xl p-6 max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-800">NNVA Activities</h2>
+            <p className="text-xs text-slate-500 mt-0.5 truncate max-w-xs">{operationText}</p>
+          </div>
           <button
-            onClick={() => onDelete(op.id)}
-            disabled={deleting === op.id}
-            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
-                       border border-slate-200 text-red-400 hover:bg-red-50
-                       hover:border-red-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Hapus"
+            onClick={onClose}
+            className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
           >
-            {deleting === op.id
-              ? <Loader2 size={12} className="animate-spin" />
-              : <Trash2 size={12} />}
+            <X size={14} />
           </button>
         </div>
-      </td>
-    </tr>
+
+        {loading ? (
+          <div className="py-8 flex justify-center">
+            <Loader2 size={20} className="animate-spin text-[#0096c7]" />
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {nnvaBase.map(nnva => {
+              const sel = selected[nnva.id];
+              return (
+                <label
+                  key={nnva.id}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-all
+                    ${sel ? 'bg-[#caf0f8] border-[#90e0ef]' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!sel}
+                    onChange={() => toggle(nnva.id)}
+                    className="w-4 h-4 rounded accent-[#0096c7] flex-shrink-0"
+                  />
+                  <span className="flex-1 text-sm font-medium text-slate-700">{nnva.name}</span>
+                  {sel && (
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={sel.standard_hours}
+                      onChange={e => setHours(nnva.id, e.target.value)}
+                      onClick={e => e.stopPropagation()}
+                      className="w-20 px-2 py-1 text-xs text-right border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
+                    />
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex gap-2 justify-end mt-6">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all active:scale-95"
+          >
+            Batal
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving || loading}
+            className="px-4 py-2 rounded-lg text-sm font-semibold bg-[#0096c7] hover:bg-[#0077b6] text-white transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── OperationRow ─────────────────────────────────────────────────────────────
+function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNnva }) {
+  const nnva = op._nnva || [];
+  const hasNnva = nnva.length > 0;
+
+  return (
+    <>
+      <tr
+        className={`hover:bg-slate-50 cursor-pointer transition-colors ${nnvaExpanded ? 'bg-[#caf0f8]/30' : ''}`}
+        onClick={() => onEdit(op)}
+      >
+        <td className="px-3 py-2 font-mono text-xs text-slate-700 whitespace-nowrap">
+          {op.operation_no}
+        </td>
+        <td className="px-3 py-2 text-xs text-slate-800">
+          <span>{op.operation_text}</span>
+          {hasNnva && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleNnva(op.id); }}
+              className={`ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold border transition-all
+                ${nnvaExpanded
+                  ? 'bg-purple-100 text-purple-700 border-purple-300'
+                  : 'bg-purple-50 text-purple-500 border-purple-200 hover:bg-purple-100'}`}
+            >
+              NNVA {nnva.length}
+              {nnvaExpanded ? <ChevronUp size={9} /> : <ChevronDown size={9} />}
+            </button>
+          )}
+        </td>
+        <td className="px-3 py-2 text-xs text-slate-500 hidden md:table-cell whitespace-nowrap">
+          {op.machineid || '—'}
+        </td>
+        <td className="px-3 py-2 text-xs text-right font-mono text-slate-700 whitespace-nowrap">
+          {fmtHours(op.std_hours)}
+        </td>
+        <td className="px-3 py-2">
+          <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+            {op.attachments?.length > 0 && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-[#0077b6]
+                               bg-[#caf0f8] border border-[#90e0ef] px-1.5 py-0.5 rounded-full">
+                <Paperclip size={9} />
+                {op.attachments.length}
+              </span>
+            )}
+            <button
+              onClick={() => onEdit(op)}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                         border border-slate-200 text-slate-500 hover:bg-slate-50
+                         hover:border-slate-300 transition-all"
+              title="Edit"
+            >
+              <Pencil size={12} />
+            </button>
+            <button
+              onClick={() => onDelete(op.id)}
+              disabled={deleting === op.id}
+              className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                         border border-slate-200 text-red-400 hover:bg-red-50
+                         hover:border-red-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Hapus"
+            >
+              {deleting === op.id
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Trash2 size={12} />}
+            </button>
+          </div>
+        </td>
+      </tr>
+
+      {/* NNVA expand row */}
+      {nnvaExpanded && hasNnva && (
+        <tr>
+          <td colSpan={5} className="px-3 py-2 bg-purple-50/40 border-t border-purple-100">
+            <div className="flex flex-wrap gap-2">
+              {nnva.map((n) => (
+                <div key={n.id} className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-purple-200 rounded-lg text-xs">
+                  <span className="font-semibold text-purple-700">{n.nnva_name}</span>
+                  <span className="text-purple-400">|</span>
+                  <span className="font-mono text-slate-600">{fmtHours(n.standard_hours)} h</span>
+                </div>
+              ))}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -663,7 +951,9 @@ function ComponentGroup({ group }) {
   const [operations, setOperations] = useState([]);
   const [loadingOps, setLoadingOps] = useState(false);
   const [modal, setModal]           = useState(null);
+  const [nnvaModal, setNnvaModal]   = useState(null);
   const [deleting, setDeleting]     = useState(null);
+  const [nnvaExpanded, setNnvaExpanded] = useState(new Set());
   const fetched = useRef(false);
 
   const loadOperations = useCallback(async () => {
@@ -671,7 +961,22 @@ function ComponentGroup({ group }) {
     try {
       const res  = await fetch(`${API_BASE}/sow/standard/component/${group.component_id}`);
       const json = await res.json();
-      setOperations(Array.isArray(json) ? json : []);
+      const ops = Array.isArray(json) ? json : [];
+      // Fetch NNVA for all operations
+      if (ops.length) {
+        const nnvaResults = await Promise.all(
+          ops.map(op =>
+            fetch(`${API_BASE}/sow/nnva/standard/${op.id}`)
+              .then(r => r.json())
+              .then(j => ({ id: op.id, data: j.data || [] }))
+              .catch(() => ({ id: op.id, data: [] }))
+          )
+        );
+        const nnvaMap = {};
+        nnvaResults.forEach(r => { nnvaMap[r.id] = r.data; });
+        ops.forEach(op => { op._nnva = nnvaMap[op.id] || []; });
+      }
+      setOperations(ops);
     } catch {
       setOperations([]);
     } finally {
@@ -787,6 +1092,12 @@ function ComponentGroup({ group }) {
                       onEdit={(o) => setModal({ mode: 'edit', op: o })}
                       onDelete={handleDelete}
                       deleting={deleting}
+                      nnvaExpanded={nnvaExpanded.has(op.id)}
+                      onToggleNnva={(id) => setNnvaExpanded(prev => {
+                        const next = new Set(prev);
+                        next.has(id) ? next.delete(id) : next.add(id);
+                        return next;
+                      })}
                     />
                   ))}
                 </tbody>
@@ -796,7 +1107,7 @@ function ComponentGroup({ group }) {
         </div>
       )}
 
-      {/* Modal */}
+      {/* Operation Modal */}
       {modal && (
         <OperationFormModal
           mode={modal.mode}
@@ -804,6 +1115,15 @@ function ComponentGroup({ group }) {
           componentId={group.component_id}
           onClose={() => setModal(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {/* NNVA Modal */}
+      {nnvaModal && (
+        <NnvaModal
+          standardId={nnvaModal.id}
+          operationText={`${nnvaModal.operation_no} — ${nnvaModal.operation_text}`}
+          onClose={() => setNnvaModal(null)}
         />
       )}
     </div>

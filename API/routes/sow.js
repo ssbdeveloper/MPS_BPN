@@ -52,6 +52,22 @@ router.get("/standard/operation/:id/attachments",               controller.getAt
 router.post("/standard/operation/:id/attachments", upload.array('files', 10), controller.uploadAttachments);
 router.delete("/standard/attachment/:attachmentId",             controller.deleteAttachment);
 
+// ── NNVA (Non-Value-Added Activity) ────────────────────────────────────────────
+router.get("/nnva/base",                          controller.getNnvaBase);
+router.post("/nnva/base",                         controller.createNnvaBase);
+router.put("/nnva/base/:id",                      controller.updateNnvaBase);
+router.delete("/nnva/base/:id",                   controller.deleteNnvaBase);
+router.get("/nnva/standard/:standardId",          controller.getNnvaByStandard);
+router.put("/nnva/standard/:standardId",          controller.saveNnvaToStandard);
+
+// ── Dropdown lookups ───────────────────────────────────────────────────────────
+router.get("/customers",                          controller.getCustomers);
+router.get("/components",                         controller.getComponents);
+
+// ── Operation Card persistence ─────────────────────────────────────────────────
+router.get("/operationcard/:standardId",          controller.getOperationCard);
+router.post("/operationcard/:standardId",         controller.saveOperationCard);
+
 // ============================================
 // GROUPED ORDERS VIEW (for OrderListPage)
 // ============================================
@@ -65,6 +81,7 @@ router.post("/create", controller.createFromBuilder);
 router.get("/history-rows", controller.getSowHistoryRows);
 router.get("/history-orders", controller.getSowOrderOptions);
 router.get("/history-order/:orderNo", controller.getSowOrderForRevision);
+router.put("/history-order/:orderNo/info", controller.saveSowOrderInfo);
 router.put("/history-order/:orderNo", controller.saveSowOrderRevision);
 router.get("/revision-history/:orderNo", controller.getSowRevisionHistory);
 

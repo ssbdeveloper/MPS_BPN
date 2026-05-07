@@ -45,3 +45,7 @@ docker-compose up -d
 docker-compose exec nginx nginx -t
 
 # Fix syntax error, lalu test lagi
+
+sudo docker exec timesheet-nginx nginx -s reload
+docker compose build frontend api
+docker compose up -d --no-deps frontend api

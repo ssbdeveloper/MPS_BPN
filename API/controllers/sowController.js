@@ -235,6 +235,92 @@ exports.getSowOrderForRevision = async (req, res) => {
   }
 };
 
+// GET /sow/customers — distinct customers for dropdown
+exports.getCustomers = async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT DISTINCT customer FROM sow WHERE customer IS NOT NULL AND customer != '' ORDER BY customer`
+    );
+    res.json({ data: result.rows.map(r => r.customer) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /sow/components — all components for model/part dropdowns
+exports.getComponents = async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT component_id, model, part_number, part_name FROM components ORDER BY model, part_number`
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /sow/operationcard/:standardId — load saved operation card images
+exports.getOperationCard = async (req, res) => {
+  try {
+    const { standardId } = req.params;
+    const result = await db.query(
+      "SELECT * FROM sow_operationcard WHERE sow_standard_id = $1",
+      [standardId]
+    );
+    res.json({ data: result.rows[0] || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/operationcard/:standardId — save operation card images
+exports.saveOperationCard = async (req, res) => {
+  try {
+    const { standardId } = req.params;
+    const { images, card_key } = req.body || {};
+    if (!Array.isArray(images)) return res.status(400).json({ error: "images array required" });
+
+    const result = await db.query(
+      `INSERT INTO sow_operationcard (sow_standard_id, card_key, images)
+       VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (sow_standard_id)
+       DO UPDATE SET images = EXCLUDED.images, card_key = EXCLUDED.card_key, updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [standardId, card_key || null, JSON.stringify(images)]
+    );
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    console.error("saveOperationCard error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PUT /sow/history-order/:orderNo/info — update shared detail info across all rows
+exports.saveSowOrderInfo = async (req, res) => {
+  const { orderNo } = req.params;
+  const { customer, ssbr_id, part_number, part_name, model } = req.body || {};
+
+  if (!orderNo) return res.status(400).json({ error: "orderNo wajib diisi" });
+
+  try {
+    const result = await db.query(
+      `UPDATE sow
+       SET customer    = COALESCE($2, customer),
+           ssbr_id     = COALESCE($3, ssbr_id),
+           part_number = COALESCE($4, part_number),
+           part_name   = COALESCE($5, part_name),
+           model       = COALESCE($6, model)
+       WHERE order_no = $1
+       RETURNING *`,
+      [orderNo, customer, ssbr_id, part_number, part_name, model]
+    );
+    res.json({ updated: result.rowCount, rows: result.rows });
+  } catch (err) {
+    console.error("saveSowOrderInfo error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.saveSowOrderRevision = async (req, res) => {
   const { orderNo } = req.params;
   const operations = Array.isArray(req.body?.operations) ? req.body.operations : [];
@@ -2351,6 +2437,148 @@ exports.deleteAttachment = async (req, res) => {
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+// ============================================
+// NNVA (Non-Value-Added Activity) Module
+// ============================================
+
+// GET /sow/nnva/base — list all NNVA base activities
+exports.getNnvaBase = async (req, res) => {
+  try {
+    const result = await db.query(
+      "SELECT * FROM sow_nnva_base ORDER BY id"
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/nnva/base — create new NNVA base
+exports.createNnvaBase = async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    const result = await db.query(
+      "INSERT INTO sow_nnva_base (name) VALUES ($1) RETURNING *",
+      [String(name).trim()]
+    );
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "Name already exists" });
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PUT /sow/nnva/base/:id — update NNVA base name
+exports.updateNnvaBase = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    const result = await db.query(
+      "UPDATE sow_nnva_base SET name = $1 WHERE id = $2 RETURNING *",
+      [String(name).trim(), id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Not found" });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "Name already exists" });
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE /sow/nnva/base/:id — delete NNVA base
+exports.deleteNnvaBase = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      "DELETE FROM sow_nnva_base WHERE id = $1 RETURNING id",
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Not found" });
+    res.json({ deleted: true });
+  } catch (err) {
+    if (err.code === "23503") return res.status(409).json({ error: "NNVA is in use by operations" });
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /sow/nnva/standard/:standardId — get NNVA assigned to a standard operation
+exports.getNnvaByStandard = async (req, res) => {
+  try {
+    const { standardId } = req.params;
+    const result = await db.query(
+      `SELECT ns.id, ns.sow_standard_id, ns.nnva_base_id, ns.standard_hours,
+              nb.name AS nnva_name
+       FROM sow_nnva_standard ns
+       JOIN sow_nnva_base nb ON nb.id = ns.nnva_base_id
+       WHERE ns.sow_standard_id = $1
+       ORDER BY nb.id`,
+      [standardId]
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PUT /sow/nnva/standard/:standardId — bulk save NNVA for a standard operation
+// Body: { items: [{ nnva_base_id, standard_hours }, ...] }
+exports.saveNnvaToStandard = async (req, res) => {
+  const client = await db.connect();
+  try {
+    const { standardId } = req.params;
+    const { items } = req.body;
+
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ error: "items array is required" });
+    }
+
+    await client.query("BEGIN");
+
+    // Delete existing assignments
+    await client.query(
+      "DELETE FROM sow_nnva_standard WHERE sow_standard_id = $1",
+      [standardId]
+    );
+
+    // Insert new assignments
+    const inserted = [];
+    for (const item of items) {
+      const hours = parseFloat(item.standard_hours) || 0;
+      const result = await client.query(
+        `INSERT INTO sow_nnva_standard (sow_standard_id, nnva_base_id, standard_hours)
+         VALUES ($1, $2, $3) RETURNING *`,
+        [standardId, item.nnva_base_id, hours]
+      );
+      inserted.push(result.rows[0]);
+    }
+
+    await client.query("COMMIT");
+
+    // Return enriched data
+    const result = await db.query(
+      `SELECT ns.id, ns.sow_standard_id, ns.nnva_base_id, ns.standard_hours,
+              nb.name AS nnva_name
+       FROM sow_nnva_standard ns
+       JOIN sow_nnva_base nb ON nb.id = ns.nnva_base_id
+       WHERE ns.sow_standard_id = $1
+       ORDER BY nb.id`,
+      [standardId]
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 };
 

@@ -28,7 +28,7 @@ const SowManagementPage = () => {
   const location = useLocation();
 
   return (
-    <div className="h-dvh w-screen flex flex-col overflow-hidden bg-slate-50">
+    <div className="h-screen h-dvh w-screen flex flex-col bg-slate-50">
       {/* Header */}
       <header className="flex-shrink-0 flex items-center justify-between px-4 md:px-6 py-2.5
                          bg-white border-b border-slate-200 shadow-sm">
@@ -49,7 +49,7 @@ const SowManagementPage = () => {
       </header>
 
       {/* Body */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row min-h-0">
         {/* Sidebar */}
         <aside className="flex-shrink-0 bg-white border-b border-slate-200
                           md:border-b-0 md:border-r md:w-56 md:overflow-y-auto">

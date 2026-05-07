@@ -24,9 +24,15 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
+import sapLogo from '../assets/sap.svg';
 
 const ADMIN_PASSWORD = 'adminssbuye';
 const API_BASE = import.meta.env.VITE_API_URL || '';
+const SAP_LINKS = {
+  PH3: 'https://fiori.abm-investama.co.id/',
+  QH3: 'https://fioriqa-rise.abm-investama.co.id:44380/fiori',
+};
+const SAP_ENV_STORAGE_KEY = 'operationsHubSapEnv';
 
 const sidebarItems = [
   { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
@@ -111,6 +117,15 @@ function readAuthUser() {
     return JSON.parse(sessionStorage.getItem('authUser') || 'null');
   } catch {
     return null;
+  }
+}
+
+function readSapEnv() {
+  try {
+    const savedEnv = localStorage.getItem(SAP_ENV_STORAGE_KEY);
+    return savedEnv === 'QH3' ? 'QH3' : 'PH3';
+  } catch {
+    return 'PH3';
   }
 }
 
@@ -624,6 +639,7 @@ function OperationsHubPage() {
   const [authUser, setAuthUser] = useState(readAuthUser);
   const [showPasswordPanel, setShowPasswordPanel] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [sapEnv, setSapEnv] = useState(readSapEnv);
   const [kpiStatus, setKpiStatus] = useState(() => (
     sessionStorage.getItem('isVerified') === 'true' ? 'loading' : 'idle'
   ));
@@ -639,6 +655,14 @@ function OperationsHubPage() {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, [isVerified]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SAP_ENV_STORAGE_KEY, sapEnv);
+    } catch {
+      // Ignore storage failures so the button still works.
+    }
+  }, [sapEnv]);
 
   useEffect(() => {
     if (!isVerified) return;
@@ -737,6 +761,14 @@ function OperationsHubPage() {
     navigate('/sow-orders');
   }, [navigate]);
 
+  const handleOpenSap = useCallback(() => {
+    window.open(SAP_LINKS[sapEnv], '_blank', 'noopener,noreferrer');
+  }, [sapEnv]);
+
+  const handleToggleSapEnv = useCallback(() => {
+    setSapEnv((current) => (current === 'PH3' ? 'QH3' : 'PH3'));
+  }, []);
+
   const statusLabel = kpiStatus === 'ready'
     ? 'Live'
     : kpiStatus === 'error'
@@ -820,17 +852,35 @@ function OperationsHubPage() {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => navigate('/dashboard')}
-                className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                onClick={handleOpenSap}
+                className="flex h-[34px] w-[52px] items-center justify-center rounded-md border border-slate-200 bg-white transition hover:bg-slate-50"
+                title={`Open SAP ${sapEnv}`}
+                aria-label={`Open SAP ${sapEnv}`}
               >
-                Analytics
+                <img src={sapLogo} alt="" className="h-4 w-auto" aria-hidden="true" />
               </button>
               <button
                 type="button"
-                onClick={handleReviewValidation}
-                className="rounded-md bg-[#0096c7] px-3 py-2 text-xs font-bold text-white hover:bg-[#0077b6]"
+                onClick={handleToggleSapEnv}
+                role="switch"
+                aria-checked={sapEnv === 'QH3'}
+                aria-label={`Switch SAP environment, current ${sapEnv}`}
+                title={`Current SAP ${sapEnv}. Click to switch to ${sapEnv === 'PH3' ? 'QH3' : 'PH3'}`}
+                className={`relative flex h-[34px] w-[84px] items-center rounded-full border px-3 text-[11px] font-extrabold transition ${
+                  sapEnv === 'PH3'
+                    ? 'border-cyan-200 bg-cyan-50 text-[#0077b6]'
+                    : 'border-amber-200 bg-amber-50 text-amber-700'
+                }`}
               >
-                Validate
+                <span
+                  aria-hidden="true"
+                  className={`absolute left-2 top-1/2 h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform ${
+                    sapEnv === 'PH3'
+                      ? '-translate-y-1/2 translate-x-0'
+                      : '-translate-y-1/2 translate-x-[50px]'
+                  }`}
+                />
+                <span className="relative z-10 w-full text-center">{sapEnv}</span>
               </button>
               <span className={`rounded-md border px-2.5 py-2 text-xs font-bold ${
                 kpiStatus === 'error'

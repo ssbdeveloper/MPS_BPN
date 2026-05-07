@@ -142,7 +142,7 @@ const SowEditPage = () => {
   // ── Loading ──────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className="h-dvh w-screen bg-white flex items-center justify-center">
+      <div className="h-screen h-dvh w-screen bg-white flex items-center justify-center">
         <div className="text-center">
           <div className="w-10 h-10 border-4 border-blue-900 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
           <p className="text-blue-900 font-medium">Loading...</p>
@@ -154,7 +154,7 @@ const SowEditPage = () => {
   if (!form) return null;
 
   return (
-    <div className="h-dvh w-screen bg-white flex flex-col overflow-hidden">
+    <div className="h-screen h-dvh w-screen bg-white flex flex-col">
 
       {/* ── Header ─────────────────────────────────────────────── */}
       <header className="flex justify-between items-center bg-blue-900 px-3 py-2.5 shadow-md flex-shrink-0">
