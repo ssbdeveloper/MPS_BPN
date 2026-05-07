@@ -3,7 +3,7 @@ let pgPool = null;
 try { pgPool = global.pool; } catch (_) { pgPool = null; }
 
 function _stripZero(v) {
-  const s = String(v || "").lstrip("0");
+  const s = String(v || "").replace(/^0+/, "");
   return s || "0";
 }
 
@@ -93,6 +93,7 @@ function applyFilters(request, filters = {}) {
   const where = [
     "p.startdatetime IS NOT NULL",
     "(p.enddatetime IS NULL OR DATEDIFF(SECOND, p.startdatetime, p.enddatetime) > 1)",
+    "p.statusid <> 2",
   ];
 
   let hasDateFilter = false;

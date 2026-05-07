@@ -223,7 +223,7 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
 
   return (
     <div className={`px-3 py-2.5 transition-colors duration-100 ${rowBg}`}>
-      <div className="grid gap-2" style={{ gridTemplateColumns: '0.75fr 1fr 0.85fr 1.1fr 1fr 0.7fr 0.8fr 0.7fr 44px' }}>
+      <div className="grid gap-2" style={{ gridTemplateColumns: '0.65fr 0.75fr 0.7fr 1.2fr 0.8fr 0.85fr 0.65fr 0.65fr 0.65fr 44px' }}>
         <div className="text-[11px] text-center">
           <div className="font-semibold" style={{ color: PALETTE.frenchBlue }}>{formatDateShort(record.work_date)}</div>
           <div className="text-[10px]" style={{ color: PALETTE.brightTealBlue }}>{record.machineid || '-'}</div>
@@ -231,18 +231,21 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
 
         <div className="text-[11px] text-left">
           <div className="font-medium text-gray-800 break-words leading-snug">{record.status_description || '-'}</div>
-          <div className="text-[10px] text-gray-400">Status {record.statusid ?? '-'}</div>
+          <div className="text-[10px] text-gray-400">STAGE {record.statusid ?? '-'}</div>
         </div>
 
         <div className="text-[11px] text-center font-semibold text-gray-700">
           {record.operatorid || '-'}
         </div>
 
+        <div className="text-[11px] text-left">
+          <div className="text-[10px] font-semibold leading-tight break-words" style={{ color: PALETTE.frenchBlue }}>
+            {record.operation_short_text || '-'}
+          </div>
+        </div>
+
         <div className="text-[11px] text-center">
-          {record.operation_short_text ? (
-            <div className="text-[10px] font-semibold leading-tight text-slate-600">{record.operation_short_text}</div>
-          ) : null}
-          <div className="font-semibold leading-tight" style={{ color: PALETTE.frenchBlue }}>{record.jobid || '-'}</div>
+          <div className="font-mono text-[10px] leading-tight text-slate-600">{record.jobid || '-'}</div>
         </div>
 
         <div className="text-[11px] text-center">
@@ -362,11 +365,12 @@ const MachineGroup = React.memo(({
         <div>
           <div className="px-3 py-2 border-b" style={{ background: PALETTE.lightCyan, borderColor: PALETTE.frostedBlue }}>
             <div className="grid gap-2 text-[10px] font-bold text-center uppercase tracking-wide"
-              style={{ gridTemplateColumns: '0.75fr 1fr 0.85fr 1.1fr 1fr 0.7fr 0.8fr 0.7fr 44px', color: PALETTE.frenchBlue }}>
+              style={{ gridTemplateColumns: '0.65fr 0.75fr 0.7fr 1.2fr 0.8fr 0.85fr 0.65fr 0.65fr 0.65fr 44px', color: PALETTE.frenchBlue }}>
               <div>Date</div>
-              <div>Status</div>
+              <div>Stage</div>
               <div>Operator</div>
               <div>Job</div>
+              <div>Job ID</div>
               <div>Time</div>
               <div>Duration</div>
               <div>Activity</div>
