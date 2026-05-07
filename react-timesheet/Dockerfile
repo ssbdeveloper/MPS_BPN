@@ -1,9 +1,7 @@
-# syntax=docker/dockerfile:1.7
-
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app
