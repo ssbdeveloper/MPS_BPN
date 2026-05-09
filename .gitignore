@@ -1,41 +1,41 @@
-# Environment
+# Environment - NEVER commit .env files (contain passwords/keys)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
 
 # Python
 *.pyc
 *.pyo
 *.pyd
-_pycache/
-.psycache/
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
 venv/
 ENV/
 env/
-
-# FastAPI / tools
-*.log
-instance/
-.coverage
-htmlcov/
+.venv/
 
 # Node / React / Vite
 node_modules/
+react-timesheet/dist/
+react-timesheet/dev-dist/
 /build
 /dist
-/.pnp
-.pnp.js
+
+# Logs
+*.log
+*.out.log
+*.err.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
+
+# Uploads - user-uploaded files (served via volume mount)
+uploads/
+API/uploads/
+
+# Build artifacts & cache
+.cache/
+.turbo/
+*.tsbuildinfo
 
 # IDE
 .vscode/*
@@ -51,11 +51,20 @@ pnpm-debug.log*
 # Claude
 .claude/
 
-# Temporary files
+# Temporary / Backup / Export
 *.tmp
 *.temp
-*.md
+backups/
+export/
+database/*.sql
+!database/init_database.sql
+!database/schema.sql
+!database/migrate_*.sql
 
 # OS files
 .DS_Store
 Thumbs.db
+
+# Docker - keep ignore files, ignore compose override
+docker-compose.override.yml
+docker-compose.override.yaml

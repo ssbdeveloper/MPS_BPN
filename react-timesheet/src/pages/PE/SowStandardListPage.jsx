@@ -8,6 +8,11 @@ import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const GROUP_LIMIT = 20;
+const fileUrl = (filePath) => {
+  if (!filePath) return '#';
+  if (filePath.startsWith('/uploads/')) return filePath;
+  return `${API_BASE}${filePath}`;
+};
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 const fmtHours = (v) => (v != null ? parseFloat(v).toFixed(2) : '—');
@@ -440,7 +445,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
                           </div>
                           <div className="flex items-center gap-0.5 flex-shrink-0">
                             <a
-                              href={`${API_BASE}${a.file_path}`}
+                              href={fileUrl(a.file_path)}
                               target="_blank"
                               rel="noopener noreferrer"
                               onClick={(e) => e.stopPropagation()}
@@ -553,7 +558,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
 
               {/* Open in new tab */}
               <a
-                href={`${API_BASE}${currentFile.file_path}`}
+                href={fileUrl(currentFile.file_path)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg bg-white
@@ -569,7 +574,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
             {isPdf(currentFile.original_name) && (
               <iframe
                 key={currentFile.file_path}
-                src={`${API_BASE}${currentFile.file_path}#toolbar=1&view=FitH`}
+                src={`${fileUrl(currentFile.file_path)}#toolbar=1&view=FitH`}
                 title={currentFile.original_name}
                 className="flex-1 w-full border-0 block"
               />
@@ -578,7 +583,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
               <div className="flex-1 flex items-center justify-center bg-slate-50 p-4 overflow-auto">
                 <img
                   key={currentFile.file_path}
-                  src={`${API_BASE}${currentFile.file_path}`}
+                  src={fileUrl(currentFile.file_path)}
                   alt={currentFile.original_name}
                   className="max-w-full max-h-full object-contain rounded-lg shadow-sm"
                 />
@@ -591,7 +596,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
                   <p className="text-sm font-semibold text-slate-700 mb-1">{currentFile.original_name}</p>
                   <p className="text-xs text-slate-400 mb-5">{fmtSize(currentFile.file_size)}</p>
                   <a
-                    href={`${API_BASE}${currentFile.file_path}`}
+                    href={fileUrl(currentFile.file_path)}
                     download={currentFile.original_name}
                     className="inline-flex items-center gap-2 bg-[#0096c7] hover:bg-[#0077b6] text-white
                                px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95"
