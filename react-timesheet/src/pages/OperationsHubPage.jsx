@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertCircle,
+  AlertTriangle,
   BarChart2,
   BookOpen,
   CheckCircle2,
@@ -37,6 +38,7 @@ const SAP_ENV_STORAGE_KEY = 'operationsHubSapEnv';
 const sidebarItems = [
   { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
   { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list' },
+  { title: 'SOW Scheduling', icon: ClipboardCheck, path: '/sow-scheduling' },
   { title: 'Component Tracking', icon: Package, path: '/component-tracking' },
   { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment' },
   { title: 'Consumable Control', icon: ClipboardCheck, path: '/consumable-control' },
@@ -525,6 +527,309 @@ function ProgressStatusCards({ items }) {
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Order Progress Dashboard — plan vs actual with weight-based progress
+// ══════════════════════════════════════════════════════════════════════
+function OrderProgressDashboard() {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedOrder, setExpandedOrder] = useState(null);
+  const [activityDetail, setActivityDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [filter, setFilter] = useState('all');
+  const [tsHistory, setTsHistory] = useState(null);
+  const [tsLoading, setTsLoading] = useState(false);
+  const LIMIT = 20;
+
+  const fetchOrders = useCallback(async (p = 1, silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const status = (filter === 'ongoing') ? 'ongoing' : 'all';
+      const filterParam = (filter === 'red' || filter === 'yellow') ? `&filter=${filter}` : '';
+      const res = await fetch(`${API_BASE}/dashboard/order-progress?limit=${isExpanded ? LIMIT : 5}&page=${p}&status=${status}${filterParam}`);
+      const json = await res.json();
+      setOrders(json.data || []);
+      setTotal(json.pagination?.total || 0);
+    } catch { if (!silent) setOrders([]); }
+    finally { if (!silent) setLoading(false); }
+  }, [isExpanded, filter]);
+
+  useEffect(() => {
+    (async () => {
+      try { await fetch(`${API_BASE}/dashboard/refresh-order-matviews`, { method: 'POST' }); } catch {}
+      fetchOrders(1);
+    })();
+  }, [fetchOrders]);
+
+  // Auto-refresh every 5 seconds (silent — no flicker)
+  useEffect(() => {
+    let active = true;
+    const timer = setInterval(async () => {
+      if (!active) return;
+      try {
+        await fetch(`${API_BASE}/dashboard/refresh-order-matviews`, { method: 'POST' });
+      } catch {}
+      if (active) fetchOrders(page, true);
+    }, 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [fetchOrders, page]);
+
+  const fetchDetail = async (orderNo) => {
+    if (expandedOrder === orderNo) { setExpandedOrder(null); return; }
+    setExpandedOrder(orderNo);
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/order-activity-detail/${encodeURIComponent(orderNo)}`);
+      const json = await res.json();
+      setActivityDetail(json.data || []);
+    } catch { setActivityDetail([]); }
+    finally { setDetailLoading(false); }
+  };
+
+  // Sort: collapsed = by actual hours desc, expanded = already sorted by API
+  const sortedOrders = isExpanded
+    ? orders
+    : [...orders].sort((a, b) => (b.total_actual_hours || 0) - (a.total_actual_hours || 0));
+
+  const totalPlan = sortedOrders.reduce((s, o) => s + (o.total_planhours || 0), 0);
+  const totalActual = sortedOrders.reduce((s, o) => s + (o.total_actual_hours || 0), 0);
+
+  return (
+    <DashboardCard className="overflow-hidden">
+      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+        <div className="flex items-center gap-3">
+          <button onClick={() => { setIsExpanded(v => !v); if (!isExpanded) setPage(1); }}>
+            <ChevronRight size={16} className={`text-slate-400 transition ${isExpanded ? 'rotate-90' : ''}`} />
+          </button>
+          <div>
+            <h2 className="text-sm font-extrabold text-slate-900">Order Progress</h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Plan {formatNumber(totalPlan)}h / Actual {formatNumber(totalActual)}h
+              {total > 0 && <span className="ml-2">· {total} orders</span>}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {isExpanded && (
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 mr-1">
+              {[
+                ['all', 'All'],
+                ['ongoing', 'Ongoing'],
+                ['red', 'Red'],
+                ['yellow', 'Yellow'],
+              ].map(([key, label]) => (
+                <button key={key} onClick={() => setFilter(key)}
+                  className={`rounded-md px-2.5 py-1 text-[10px] font-extrabold uppercase transition ${
+                    filter === key
+                      ? 'bg-[#0096c7] text-white'
+                      : key === 'red' ? 'text-red-500 hover:bg-red-50'
+                      : key === 'yellow' ? 'text-amber-500 hover:bg-amber-50'
+                      : key === 'ongoing' ? 'text-emerald-500 hover:bg-emerald-50'
+                      : 'text-slate-500 hover:bg-slate-50'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <button onClick={() => fetchOrders(page)} disabled={loading} className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+            {loading ? 'Loading...' : 'Refresh'}
+          </button>
+          <span className="text-[10px] text-slate-400">auto 5s</span>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[900px] text-left text-sm">
+          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-3 py-3 font-bold w-8"></th>
+              <th className="px-2 py-3 font-bold">SSBR ID</th>
+              <th className="px-2 py-3 font-bold">Order No</th>
+              <th className="px-2 py-3 font-bold">Part / Customer</th>
+              <th className="px-2 py-3 font-bold w-[180px] text-center">Plan vs Actual</th>
+              <th className="px-2 py-3 font-bold w-[140px] text-center">Progress</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {loading && sortedOrders.length === 0 ? (
+              <tr><td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-400">Loading...</td></tr>
+            ) : sortedOrders.map((o) => {
+              const actualPct = Math.min(200, o.actual_pct || 0);
+              const progPct = o.weighted_progress || 0;
+              const isExpandedRow = expandedOrder === o.order_no;
+              const barColor = o.is_exceeded ? 'bg-red-500' : actualPct >= 90 ? 'bg-amber-500' : 'bg-[#0096c7]';
+              return (
+                <React.Fragment key={o.order_no}>
+                  <tr className={`hover:bg-slate-50 cursor-pointer ${isExpandedRow ? 'bg-[#caf0f8]/30' : ''}`}
+                    onClick={() => fetchDetail(o.order_no)}>
+                    <td className="px-3 py-2.5 text-center">
+                      <ChevronRight size={14} className={`inline text-slate-400 transition ${isExpandedRow ? 'rotate-90' : ''}`} />
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <span className="text-[10px] font-bold text-slate-500 truncate max-w-[80px] block">{o.ssbr_id || '-'}</span>
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <span className="font-mono text-xs font-bold text-slate-700">{o.order_no}</span>
+                      <span className="ml-1.5 text-[10px] text-slate-400">{o.operation_count} ops</span>
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <p className="text-xs font-semibold text-slate-800 truncate max-w-[200px]">{o.part_name || '-'}</p>
+                      <p className="text-[10px] text-slate-400 truncate max-w-[200px]">{o.customer || '-'}</p>
+                    </td>
+                    <td className="px-2 py-2.5">
+                      {/* Merged: bar + hours + icon in one container */}
+                      <div className="flex flex-col gap-1">
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                            style={{ width: `${Math.min(100, actualPct)}%` }} />
+                        </div>
+                        <div className="flex items-center justify-center whitespace-nowrap">
+                          <span className={`text-[11px] w-12 text-center font-semibold ${o.is_exceeded ? 'text-red-600' : actualPct >= 90 ? 'text-amber-600' : 'text-[#0096c7]'}`}>
+                            {formatNumber(o.total_actual_hours)}
+                          </span>
+                          <span className="text-[10px] text-slate-300 w-2 text-center">/</span>
+                          <span className="text-[11px] w-12 text-center font-semibold text-slate-800">{formatNumber(o.total_planhours)}</span>
+                          <span className="text-[10px] text-slate-400 w-3 ml-0.5">h</span>
+                          
+                          <span className="relative inline-flex items-center justify-center ml-0.5" style={{width:14,height:14}}>
+                            <span key={`alert-${o.is_exceeded ? 'red' : actualPct >= 90 ? 'yellow' : 'none'}`}
+                              className={`absolute inset-0 flex items-center justify-center transition-all duration-500 ease-out ${
+                                o.is_exceeded || actualPct >= 90 ? 'opacity-100 scale-100' : 'opacity-0 scale-0'
+                              }`}>
+                              {o.is_exceeded
+                                ? <AlertCircle size={14} className="text-red-500 animate-pulse" />
+                                : actualPct >= 90
+                                ? <AlertTriangle size={14} className="text-amber-500 animate-pulse" />
+                                : <span className="w-3 h-3" />
+                              }
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-2 py-2.5">
+                      {/* Merged: progress bar + percentage */}
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                          <div className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                            style={{ width: `${Math.min(100, progPct)}%` }} />
+                        </div>
+                        <span className="text-[10px] font-bold text-slate-600 w-10 text-right">{progPct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                  {isExpandedRow && (
+                    <tr>
+                      <td colSpan={6} className="bg-slate-50 px-4 py-2">
+                        {detailLoading ? (
+                          <div className="flex items-center justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-[#0096c7]" /></div>
+                        ) : activityDetail && activityDetail.length > 0 ? (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead><tr className="text-slate-500">
+                                <th className="px-2 py-1.5 text-left">Op.No</th>
+                                <th className="px-2 py-1.5 text-left">Operation Text</th>
+                                <th className="px-2 py-1.5 text-left">WC</th>
+                                <th className="px-2 py-1.5 text-right">Actual Hrs</th>
+                                <th className="px-2 py-1.5 text-right">Plan Hrs</th>
+                                <th className="px-2 py-1.5 text-right">Weight</th>
+                                <th className="px-2 py-1.5 text-right">Progress</th>
+                              </tr></thead>
+                              <tbody className="divide-y divide-slate-200">
+                                {activityDetail.map(a => {
+                                  const tsHrs = a.actual_hours || 0;
+                                  const pHrs = a.planhours || 0;
+                                  const actColor = tsHrs > pHrs ? 'text-red-600' : tsHrs >= pHrs * 0.9 ? 'text-amber-600' : 'text-[#0096c7]';
+                                  const histKey = `${a.order_no}-${a.operation_no}`;
+                                  const showHist = tsHistory?.key === histKey;
+                                  return (
+                                    <React.Fragment key={histKey}>
+                                      <tr className={`cursor-pointer hover:bg-sky-50 ${showHist ? 'bg-sky-50' : ''}`}
+                                        onClick={async () => {
+                                          if (showHist) { setTsHistory(null); return; }
+                                          setTsHistory({ key: histKey, data: [] });
+                                          setTsLoading(true);
+                                          try {
+                                            const res = await fetch(`${API_BASE}/dashboard/operation-timesheet-history?orderNo=${encodeURIComponent(a.order_no)}&operationNo=${encodeURIComponent(a.operation_no)}`);
+                                            const json = await res.json();
+                                            setTsHistory({ key: histKey, data: json.data || [] });
+                                          } catch { setTsHistory({ key: histKey, data: [] }); }
+                                          finally { setTsLoading(false); }
+                                        }}>
+                                        <td className="px-2 py-1 font-mono font-bold">{a.operation_no}</td>
+                                        <td className="px-2 py-1 truncate max-w-[300px]" title={a.operation_text}>{a.operation_text || '-'}</td>
+                                        <td className="px-2 py-1">{a.workcenter || '-'}</td>
+                                        <td className={`px-2 py-1 text-right font-bold ${actColor}`}>{formatNumber(tsHrs)}</td>
+                                        <td className="px-2 py-1 text-right font-semibold">{a.planhours > 0 ? formatNumber(a.planhours) : '-'}</td>
+                                        <td className="px-2 py-1 text-right">{a.weight != null ? `${Math.round((a.weight || 0) * 100)}%` : '-'}</td>
+                                        <td className="px-2 py-1 text-right font-bold">{a.progress != null ? `${(a.progress || 0) * 100}%` : '-'}</td>
+                                      </tr>
+                                      {showHist && (
+                                        <tr>
+                                          <td colSpan={7} className="bg-white px-4 py-2 border-t border-slate-100">
+                                            {tsLoading ? (
+                                              <Loader2 className="h-4 w-4 mx-auto animate-spin text-[#0096c7]" />
+                                            ) : tsHistory.data.length > 0 ? (
+                                              <table className="w-full text-[10px]">
+                                                <thead><tr className="text-slate-400 uppercase">
+                                                  <th className="px-2 py-1 text-left">Date</th>
+                                                  <th className="px-2 py-1 text-left">Serial No</th>
+                                                  <th className="px-2 py-1 text-left">Operator</th>
+                                                  <th className="px-2 py-1 text-right">Hours</th>
+                                                  <th className="px-2 py-1 text-right">Entries</th>
+                                                </tr></thead>
+                                                <tbody className="divide-y divide-slate-100">{tsHistory.data.map((r, i) => (
+                                                  <tr key={i} className="text-slate-600">
+                                                    <td className="px-2 py-1">{r.work_date}</td>
+                                                    <td className="px-2 py-1 font-mono">{r.serialnumber || '-'}</td>
+                                                    <td className="px-2 py-1 font-semibold">{r.full_name || '-'}</td>
+                                                    <td className="px-2 py-1 text-right font-bold text-[#0096c7]">{formatNumber(r.total_hours)}</td>
+                                                    <td className="px-2 py-1 text-right">{r.entry_count}</td>
+                                                  </tr>
+                                                ))}</tbody>
+                                              </table>
+                                            ) : (
+                                              <p className="text-center text-slate-400 py-2">No timesheet records</p>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </React.Fragment>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p className="py-2 text-center text-xs text-slate-400">No activity data</p>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {isExpanded && total > LIMIT && (
+        <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
+          <button disabled={page <= 1} onClick={() => { setPage(p => Math.max(1, p - 1)); fetchOrders(page - 1); }}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 disabled:opacity-40">Prev</button>
+          <span className="text-xs text-slate-400">Page {page} / {Math.ceil(total / LIMIT)}</span>
+          <button disabled={page >= Math.ceil(total / LIMIT)} onClick={() => { setPage(p => p + 1); fetchOrders(page + 1); }}
+            className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 disabled:opacity-40">Next</button>
+        </div>
+      )}
+    </DashboardCard>
+  );
+}
+
 function OrderSummaryTable({ items, onView }) {
   return (
     <DashboardCard className="overflow-hidden">
@@ -921,6 +1226,8 @@ function OperationsHubPage() {
               <StatCard key={card.title} {...card} />
             ))}
           </section>
+
+          <OrderProgressDashboard />
 
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
             <div className="xl:col-span-8">

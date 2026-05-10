@@ -38,7 +38,8 @@ const { Pool, types } = require('pg');
 
 // Force pg to return timestamptz as raw string (no JS Date conversion)
 // Ini mencegah pg driver convert timezone pakai Node.js local TZ yang bisa beda
-// OID 1114 = timestamp, 1184 = timestamptz
+// OID 1082 = date, 1114 = timestamp, 1184 = timestamptz
+types.setTypeParser(1082, (str) => str); // date -> string
 types.setTypeParser(1114, (str) => str); // timestamp → string
 types.setTypeParser(1184, (str) => str); // timestamptz → string
 
@@ -88,7 +89,7 @@ app.use(
 
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-role'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-user-role', 'x-user-id', 'x-user-name'],
     credentials: false,
   })
 );
@@ -130,6 +131,7 @@ if (process.env.DRAWINGS_PATH) {
 
 // API Routes
 app.use('/sow', require('./routes/sow'));
+app.use('/sow-schedule', require('./routes/sowSchedule'));
 app.use('/usernfc', require('./routes/usernfc'));
 app.use('/workcenter', require('./routes/workcenter'));
 app.use('/timesheet', require('./routes/timesheet_transaction'));

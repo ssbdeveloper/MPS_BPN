@@ -191,15 +191,18 @@ function formatDateShort(value) {
 
 function formatTime(value) {
   if (!value) return '-';
-  return String(value).replace('T', ' ').slice(11, 16);
+  const text = String(value).replace('T', ' ');
+  const timeMatch = text.match(/\b(\d{2}:\d{2}(?::\d{2})?)/);
+  if (!timeMatch) return text;
+  return timeMatch[1].length === 5 ? `${timeMatch[1]}:00` : timeMatch[1];
 }
 
-function formatDurationStacked(hours) {
-  const total = Number(hours || 0);
-  return {
-    jam: Math.floor(total),
-    menit: Math.round((total - Math.floor(total)) * 60),
-  };
+function formatDurationHms(hours) {
+  const totalSeconds = Math.max(0, Math.round(Number(hours || 0) * 3600));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return [h, m, s].map((part) => String(part).padStart(2, '0')).join(':');
 }
 
 function loadSubmittedKeys(storageKey = SUBMITTED_STORAGE_KEY) {
@@ -216,7 +219,7 @@ function saveSubmittedKeys(keys, storageKey = SUBMITTED_STORAGE_KEY) {
 }
 
 const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, isSubmitted }) => {
-  const { jam, menit } = formatDurationStacked(record.duration_hours);
+  const durationHms = formatDurationHms(record.duration_hours);
   const rowBg = isSubmitted
     ? 'bg-emerald-50/50 hover:bg-emerald-100/60 opacity-75'
     : 'bg-white hover:bg-sky-50/60';
@@ -259,8 +262,7 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
         </div>
 
         <div className="text-[11px] text-center flex flex-col items-center leading-tight">
-          <span className="font-bold" style={{ color: PALETTE.frenchBlue }}>{jam} jam</span>
-          <span style={{ color: PALETTE.brightTealBlue }}>{menit} mnt</span>
+          <span className="font-mono text-[12px] font-bold" style={{ color: PALETTE.frenchBlue }}>{durationHms}</span>
         </div>
 
         <div className="text-[11px] text-center">
@@ -328,15 +330,15 @@ const MachineGroup = React.memo(({
             <div className="text-[11px] leading-[17px] font-mono text-right">
               <div className="font-bold text-white/90">
                 Total: {recordCount} Act&nbsp;
-                <span className="text-white/70">[{fmtHours(groupHours, 1)} hrs]</span>
+                <span className="text-white/70">[{formatDurationHms(groupHours)}]</span>
               </div>
               <div className="font-bold text-amber-300">
                 Pending: {pendingCount} Act&nbsp;
-                <span className="text-amber-200">[{fmtHours(groupHours, 1)} hrs]</span>
+                <span className="text-amber-200">[{formatDurationHms(groupHours)}]</span>
               </div>
               <div className="font-bold text-emerald-300">
                 Validated: {validatedCount} Act&nbsp;
-                <span className="text-emerald-200">[{fmtHours(0, 1)} hrs]</span>
+                <span className="text-emerald-200">[{formatDurationHms(0)}]</span>
               </div>
             </div>
 

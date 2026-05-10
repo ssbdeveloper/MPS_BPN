@@ -19,7 +19,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
+export const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
 
 const fmtHours = (v) => (v != null && v !== '' ? parseFloat(v).toFixed(2) : '—');
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -27,6 +27,49 @@ const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 
 const OP_MAIN_BOX_W = 700;
 const OP_MAIN_BOX_H = 560;
+
+function resolveAssetUrl(src) {
+  if (!src) return '';
+  if (String(src).startsWith('/uploads/')) return `${API_BASE}${src}`;
+  return src;
+}
+
+function loadCanvasImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = resolveAssetUrl(src);
+  });
+}
+
+export async function generateOperationCardBoxImage(images = []) {
+  if (!images.length) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = OP_MAIN_BOX_W;
+  canvas.height = OP_MAIN_BOX_H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, OP_MAIN_BOX_W, OP_MAIN_BOX_H);
+
+  for (const item of images) {
+    try {
+      const img = await loadCanvasImage(item.src);
+      ctx.drawImage(
+        img,
+        Number(item.x) || 0,
+        Number(item.y) || 0,
+        Number(item.width) || 0,
+        Number(item.height) || 0,
+      );
+    } catch {
+      continue;
+    }
+  }
+
+  return canvas.toDataURL('image/png');
+}
 
 // ─── PDF Renderer ──────────────────────────────────────────────────────────
 async function renderPdfToDataUrl(url) {
@@ -76,7 +119,7 @@ function PdfPreview({ url, style }) {
 }
 const TRAVEL_CARD_ROWS_PER_PAGE = 25;
 
-const makeOperationCardKey = (op) => op?._key || `${op?.operation_no || 'op'}-${op?.machineid || ''}`;
+export const makeOperationCardKey = (op) => op?._key || `${op?.operation_no || 'op'}-${op?.machineid || ''}`;
 const operationCardStyle = operationCardHtml.match(/<style>([\s\S]*?)<\/style>/i)?.[1] || '';
 const operationCardBody = operationCardHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || operationCardHtml;
 
@@ -101,7 +144,7 @@ function renderOperationCardImages(images = []) {
     return `
       <img
         class="main-box-image"
-        src="${escAttr(img.src)}"
+        src="${escAttr(resolveAssetUrl(img.src))}"
         alt=""
         style="left:${left.toFixed(4)}%; top:${top.toFixed(4)}%; width:${width.toFixed(4)}%; height:${height.toFixed(4)}%;"
       >`;
@@ -199,7 +242,7 @@ function chunkRowsByPage(rows, rowsPerPage) {
   return chunks.length ? chunks : [[]];
 }
 
-function useWorkcenterData() {
+export function useWorkcenterData() {
   const [rows, setRows]       = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -657,7 +700,7 @@ function PreviewField({ label, value, mono }) {
   );
 }
 
-function ComponentMasterPicker({ selectedPart, onSelect }) {
+export function ComponentMasterPicker({ selectedPart, onSelect }) {
   const [inputValue, setInputValue] = useState('');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
@@ -765,7 +808,7 @@ function ComponentMasterPicker({ selectedPart, onSelect }) {
   );
 }
 
-function ChecklistPanel({ componentId, selectedPart, checked, onToggle, onToggleAll, onResolveComponent }) {
+export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, onToggleAll, onResolveComponent }) {
   const [ops, setOps]         = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState(null);
@@ -923,7 +966,7 @@ function WorkcenterSelect({ value, onChange, machineIds, loading, className }) {
 }
 
 // ─── EditPanel ────────────────────────────────────────────────────────────────
-function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData }) {
+export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData }) {
   const { machineIds, loading: wcLoading } = wcData;
 
   const [dragKey, setDragKey]         = useState(null);
@@ -1216,7 +1259,7 @@ function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData }) {
 }
 
 // ─── TravelCardPreview ────────────────────────────────────────────────────────
-function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef }) {
+export function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef }) {
   const [srcDoc, setSrcDoc] = useState('');
   const qrRef = useRef(null);
   const [nnvaMap, setNnvaMap] = useState({});
@@ -1381,7 +1424,7 @@ function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef }) {
 }
 
 // ─── SowCreatePage ─────────────────────────────────────────────────────────────
-function OperationCardPreview({
+export function OperationCardPreview({
   selectedPart,
   editOps,
   cardInfo,
@@ -1392,6 +1435,8 @@ function OperationCardPreview({
   onActiveOperationChange,
   imagesByKey,
   onImagesByKeyChange,
+  revisionNo = 'Original',
+  allowDirectSave = true,
 }) {
   const [srcDoc, setSrcDoc] = useState('');
   const [selectedImageId, setSelectedImageId] = useState(null);
@@ -1424,11 +1469,11 @@ function OperationCardPreview({
   // Auto-load saved operation card images when switching to an operation
   useEffect(() => {
     if (!activeKey || !activeOp) return;
-    const stdId = activeOp._srcId || activeOp.id;
+    const stdId = activeOp._cardSourceId || activeOp._srcId || activeOp.id;
     if (!stdId) return;
     const alreadyHas = imagesByKey[activeKey] && imagesByKey[activeKey].length > 0;
     if (alreadyHas) return;
-    fetch(`${API_BASE}/sow/operationcard/${stdId}`)
+    fetch(`${API_BASE}/sow/operationcard/${stdId}?revision_no=${encodeURIComponent(revisionNo)}`)
       .then(r => r.json())
       .then(json => {
         const saved = json.data;
@@ -1440,7 +1485,7 @@ function OperationCardPreview({
         }
       })
       .catch(() => {});
-  }, [activeKey]);
+  }, [activeKey, revisionNo]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1616,23 +1661,40 @@ function OperationCardPreview({
   // Save operation card images to DB
   const handleSaveOperationCard = useCallback(async () => {
     if (!activeKey || !activeOp) return;
-    const stdId = activeOp._srcId || activeOp.id;
+    const stdId = activeOp._cardSourceId || activeOp._srcId || activeOp.id;
     if (!stdId) return;
     setSavingCard(true);
     try {
       const images = imagesByKey[activeKey] || [];
-      await fetch(`${API_BASE}/sow/operationcard/${stdId}`, {
+      const orderNo = normalizeProductionOrder(cardInfo.productionOrder || selectedPart?.production_order || '');
+      const boxImageData = await generateOperationCardBoxImage(images);
+      const response = await fetch(`${API_BASE}/sow/operationcard/${stdId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ images, card_key: activeKey }),
+        body: JSON.stringify({
+          images,
+          card_key: activeKey,
+          order_no: orderNo,
+          operation_no: activeOp.operation_no,
+          revision_no: revisionNo,
+          box_image_data: boxImageData,
+        }),
       });
+      if (!response.ok) throw new Error('Gagal simpan operation card');
+      const payload = await response.json().catch(() => null);
+      if (payload?.data?.images) {
+        onImagesByKeyChange(prev => ({
+          ...prev,
+          [activeKey]: payload.data.images,
+        }));
+      }
       toast.success('Operation card tersimpan');
-    } catch (err) {
+    } catch {
       toast.error('Gagal simpan operation card');
     } finally {
       setSavingCard(false);
     }
-  }, [activeKey, activeOp, imagesByKey]);
+  }, [activeKey, activeOp, cardInfo, imagesByKey, onImagesByKeyChange, revisionNo, selectedPart]);
 
   return (
     <div className="h-full grid grid-cols-[390px_minmax(0,1fr)] bg-slate-100 overflow-hidden">
@@ -1775,15 +1837,17 @@ function OperationCardPreview({
               <Trash2 size={12} />
               Remove
             </button>
-            <button
-              type="button"
-              onClick={handleSaveOperationCard}
-              disabled={!activeKey || savingCard}
-              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-all hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {savingCard ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              Save Card
-            </button>
+            {allowDirectSave && (
+              <button
+                type="button"
+                onClick={handleSaveOperationCard}
+                disabled={!activeKey || savingCard}
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition-all hover:bg-emerald-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {savingCard ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                Save Card
+              </button>
+            )}
           </div>
         </div>
 
@@ -1885,7 +1949,7 @@ function OperationCardPreview({
                   }}
                 >
                   <img
-                    src={img.src}
+                    src={resolveAssetUrl(img.src)}
                     alt={img.name || ''}
                     style={{
                       width: '100%',
@@ -2199,10 +2263,46 @@ const SowCreatePage = () => {
         throw new Error(j.error || `Server ${res.status}`);
       }
 
+      const result = await res.json().catch(() => ({}));
+      const createdRows = Array.isArray(result.data) ? result.data : [];
+      const rowsByOperationNo = new Map(
+        createdRows.map((row) => [String(row.operation_no), row])
+      );
+      let savedOperationCards = 0;
+
+      for (const op of editOps) {
+        const key = makeOperationCardKey(op);
+        const images = operationCardImages[key] || [];
+        if (!images.length) continue;
+
+        const createdRow = rowsByOperationNo.get(String(op.operation_no));
+        const sowId = createdRow?.idsow;
+        if (!sowId) continue;
+
+        const boxImageData = await generateOperationCardBoxImage(images);
+        const cardResponse = await fetch(`${API_BASE}/sow/operationcard/${sowId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            images,
+            card_key: key,
+            order_no: orderNo,
+            operation_no: op.operation_no,
+            revision_no: 'Original',
+            box_image_data: boxImageData,
+          }),
+        });
+        if (!cardResponse.ok) {
+          const payload = await cardResponse.json().catch(() => ({}));
+          throw new Error(payload.error || `Gagal simpan operation card ops ${op.operation_no}`);
+        }
+        savedOperationCards += 1;
+      }
+
       toast.success(
         saveAsTemplate
-          ? 'SOW dibuat & disimpan sebagai template!'
-          : 'SOW berhasil dibuat!'
+          ? `SOW dibuat & disimpan sebagai template${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
+          : `SOW berhasil dibuat${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
       );
 
       // Reset
@@ -2546,7 +2646,7 @@ const SowCreatePage = () => {
 };
 
 // ── Helper: build editOp entry from a standard operation ──────────────────────
-function makeEditEntry(op, operation_no) {
+export function makeEditEntry(op, operation_no) {
   return {
     _key:           `std-${op.id}`,
     _isNew:         false,

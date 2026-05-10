@@ -7,6 +7,118 @@ function num(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+async function refreshOrderMatviews() {
+  try {
+    await pool.query("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_order_plan_vs_actual");
+    await pool.query("REFRESH MATERIALIZED VIEW CONCURRENTLY mv_order_activity_detail");
+  } catch (err) {
+    console.error("refreshOrderMatviews error:", err.message);
+  }
+}
+
+// GET /dashboard/order-progress — plan vs actual per order with weight-based progress
+async function getOrderProgress(req, res) {
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const offset = (page - 1) * limit;
+    const status = req.query.status || 'all';
+    const filter = req.query.filter || '';
+
+    const where = [];
+    if (status === 'ongoing') {
+      where.push(`m.order_no NOT IN (
+        SELECT LTRIM(order_no, '0') FROM ph3_order WHERE order_description ILIKE '%TECO%'
+      )`);
+    }
+    if (filter === 'red') {
+      where.push("m.total_actual_hours >= m.total_planhours");
+    } else if (filter === 'yellow') {
+      where.push("m.total_actual_hours >= m.total_planhours * 0.9 AND m.total_actual_hours < m.total_planhours");
+    }
+
+    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const baseQuery = `SELECT m.* FROM mv_order_plan_vs_actual m ${whereClause}`;
+    const countQuery = `SELECT COUNT(*)::int AS total FROM mv_order_plan_vs_actual m ${whereClause}`;
+
+    const [totalResult, rowsResult] = await Promise.all([
+      pool.query(countQuery),
+      pool.query(`${baseQuery} ORDER BY actual_pct DESC NULLS LAST, total_planhours DESC LIMIT $1 OFFSET $2`, [limit, offset]),
+    ]);
+
+    res.json({
+      data: rowsResult.rows.map(r => ({
+        ...r,
+        total_planhours: num(r.total_planhours),
+        total_actual_hours: num(r.total_actual_hours),
+        weighted_progress: num(r.weighted_progress),
+        actual_pct: num(r.actual_pct, 0),
+      })),
+      pagination: { page, limit, total: totalResult.rows[0]?.total || 0 },
+      meta: meta(),
+    });
+  } catch (err) {
+    console.error("order-progress error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/order-activity-detail — per-activity breakdown for an order
+async function getOrderActivityDetail(req, res) {
+  try {
+    const { orderNo } = req.params;
+    if (!orderNo) return res.status(400).json({ error: "orderNo required" });
+
+    const result = await pool.query(
+      `SELECT * FROM mv_order_activity_detail WHERE order_no = $1 ORDER BY operation_no`,
+      [orderNo]
+    );
+
+    res.json({
+      data: result.rows.map(r => ({
+        ...r,
+        planhours: num(r.planhours),
+        actual_hours: num(r.actual_hours),
+        weight: num(r.weight),
+        progress: num(r.progress),
+      })),
+      meta: meta(),
+    });
+  } catch (err) {
+    console.error("order-activity-detail error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/operation-timesheet-history — timesheet history per operation
+async function getOperationTimesheetHistory(req, res) {
+  try {
+    const { orderNo, operationNo } = req.query;
+    if (!orderNo || !operationNo) return res.status(400).json({ error: "orderNo and operationNo required" });
+
+    const result = await pool.query(
+      `SELECT
+         serialnumber, full_name,
+         DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta'))::text AS work_date,
+         ROUND(SUM(duration)::numeric, 2) AS total_hours,
+         COUNT(*)::int AS entry_count
+       FROM timesheet_transaction
+       WHERE order_no = $1
+         AND operation_no::integer = $2::integer
+         AND state_flag != 5
+         AND duration IS NOT NULL
+       GROUP BY serialnumber, full_name, DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta'))
+       ORDER BY work_date ASC, serialnumber ASC`,
+      [orderNo, operationNo]
+    );
+
+    res.json({ data: result.rows, meta: meta() });
+  } catch (err) {
+    console.error("operation-timesheet-history error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 async function getOperationsHub(req, res) {
   try {
     const [
@@ -555,4 +667,8 @@ module.exports = {
   getOperatorHeatmap,
   getWorkcenterList,
   getOperationsHub,
+  getOrderProgress,
+  getOrderActivityDetail,
+  getOperationTimesheetHistory,
+  refreshOrderMatviews,
 };

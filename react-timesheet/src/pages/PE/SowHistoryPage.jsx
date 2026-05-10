@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { Plus, RefreshCw, Save, Search, Trash2, X, ChevronDown, FileText, Printer, Loader2 } from 'lucide-react';
+import { RefreshCw, Save, Search, Trash2, X, ChevronDown, FileText, Printer, Loader2, ArrowRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
 import ssbLogo from '../../assets/ssb.png';
@@ -14,6 +15,11 @@ const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 
 const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
+const resolveAssetUrl = (src) => {
+  if (!src) return '';
+  if (String(src).startsWith('/uploads/')) return `${API_BASE}${src}`;
+  return src;
+};
 
 function buildOpCardPreviewHtml({ orderNo, operations, detailInfo, imagesByOpNo, logoDataUrl }) {
   const cards = operations.map((op) => {
@@ -23,7 +29,7 @@ function buildOpCardPreviewHtml({ orderNo, operations, detailInfo, imagesByOpNo,
       const top = (img.y / 560) * 100;
       const width = (img.width / 700) * 100;
       const height = (img.height / 560) * 100;
-      return `<img class="main-box-image" src="${escAttr(img.src)}" alt="" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${width.toFixed(2)}%;height:${height.toFixed(2)}%;" />`;
+      return `<img class="main-box-image" src="${escAttr(resolveAssetUrl(img.src))}" alt="" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${width.toFixed(2)}%;height:${height.toFixed(2)}%;" />`;
     }).join('');
 
     return `
@@ -123,6 +129,7 @@ const SelectWrapper = ({ children }) => (
 );
 
 export default function SowHistoryPage() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
@@ -131,6 +138,8 @@ export default function SowHistoryPage() {
   const [selectedOrder, setSelectedOrder] = useState('');
   const [editRows, setEditRows] = useState([]);
   const [currentRevision, setCurrentRevision] = useState(0);
+  const [selectedRevision, setSelectedRevision] = useState(0);
+  const [revisionOptions, setRevisionOptions] = useState([]);
   const [saving, setSaving] = useState(false);
   const [savingInfo, setSavingInfo] = useState(false);
   const [showOpCard, setShowOpCard] = useState(false);
@@ -167,13 +176,17 @@ export default function SowHistoryPage() {
     } catch (err) { toast.error(err.message); setRows([]); } finally { setLoading(false); }
   }, [pagination.limit, pagination.page, search]);
 
-  const loadOrderDetail = useCallback(async (orderNo) => {
+  const loadOrderDetail = useCallback(async (orderNo, revisionNo = null) => {
     if (!orderNo) return;
     try {
-      const data = await request(`/sow/history-order/${encodeURIComponent(orderNo)}`);
+      const params = new URLSearchParams();
+      if (revisionNo) params.set('revision_no', String(revisionNo));
+      const data = await request(`/sow/history-order/${encodeURIComponent(orderNo)}${params.toString() ? `?${params.toString()}` : ''}`);
       setSelectedOrder(orderNo);
       setEditRows((data.rows || []).map(r => ({ ...r, operation_name: r.workcenterdescription || '' })));
       setCurrentRevision(data.current_revision || 0);
+      setSelectedRevision(data.selected_revision || data.current_revision || 0);
+      setRevisionOptions(data.revisions || []);
       const first = (data.rows || [])[0] || {};
       setDetailInfo({ customer: first.customer || '', ssbr_id: first.ssbr_id || '', part_number: first.part_number || '', part_name: first.part_name || '', model: first.model || '' });
     } catch (err) { toast.error(err.message); setEditRows([]); }
@@ -326,12 +339,29 @@ export default function SowHistoryPage() {
                 <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 flex-shrink-0">
                   <div className="text-sm font-semibold text-slate-700">{editRows.length} operation</div>
                   <div className="flex gap-2">
+                    <SelectWrapper>
+                      <select
+                        value={selectedRevision || 0}
+                        onChange={(e) => loadOrderDetail(selectedOrder, Number(e.target.value))}
+                        className={`${SELECT_CLS} min-h-[38px] w-36`}
+                      >
+                        <option value={0}>Latest</option>
+                        {revisionOptions.map((rev) => (
+                          <option key={rev.revision_no} value={rev.revision_no}>Revision {rev.revision_no}</option>
+                        ))}
+                      </select>
+                    </SelectWrapper>
                     <button onClick={handleOpenOpCard} disabled={!selectedOrder || editRows.length === 0 || opCardLoading}
                       className="inline-flex min-h-[38px] items-center gap-2 rounded-lg border border-purple-200 bg-white px-3 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-40">
                       {opCardLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} Op Card
                     </button>
-                    <button onClick={addOperation} disabled={!selectedOrder} className="inline-flex min-h-[38px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 disabled:opacity-40"><Plus className="h-4 w-4" /> Add</button>
-                    <button onClick={saveRevision} disabled={!selectedOrder || saving} className="inline-flex min-h-[38px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white disabled:opacity-40"><Save className="h-4 w-4" /> {saving ? 'Saving...' : 'Save Revision'}</button>
+                    <button
+                      onClick={() => navigate(`/sow-edit/revision/${encodeURIComponent(selectedOrder)}${selectedRevision ? `?revision_no=${selectedRevision}` : ''}`)}
+                      disabled={!selectedOrder}
+                      className="inline-flex min-h-[38px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white disabled:opacity-40"
+                    >
+                      <ArrowRight className="h-4 w-4" /> Create Revision
+                    </button>
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">

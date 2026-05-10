@@ -51,6 +51,7 @@ const EDITABLE_SOW_COLUMNS = [
   "actual_progress",
   "actual_hours",
   "progress",
+  "revision_no",
 ];
 
 async function ensureSowRevisionHistoryTable() {
@@ -71,6 +72,7 @@ async function ensureSowRevisionHistoryTable() {
     CREATE INDEX IF NOT EXISTS idx_sow_revision_history_order_created
       ON sow_revision_history (order_no, created_at DESC)
   `);
+  await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0`);
 }
 
 function normalizeSowOperation(row, fallbackOrderNo) {
@@ -85,6 +87,7 @@ function normalizeSowOperation(row, fallbackOrderNo) {
   item.actual_progress = item.actual_progress === "" || item.actual_progress == null ? null : Number(item.actual_progress);
   item.actual_hours = item.actual_hours === "" || item.actual_hours == null ? null : Number(item.actual_hours);
   item.progress = item.progress === "" || item.progress == null ? null : Number(item.progress);
+  item.revision_no = item.revision_no === "" || item.revision_no == null ? 0 : Number(item.revision_no);
   return item;
 }
 
@@ -92,6 +95,148 @@ const normalizeOrderNo = (value) => {
   const text = String(value ?? '').trim();
   return text ? text.replace(/-/g, '000') : '';
 };
+
+const OPERATION_CARD_REVISION_ORIGINAL = "Original";
+
+function safePathSegment(value, fallback = "unknown") {
+  const text = String(value ?? "").trim();
+  return (text || fallback).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
+}
+
+async function ensureSowOperationCardTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS public.sow_operationcard (
+      id BIGSERIAL PRIMARY KEY,
+      sow_standard_id INTEGER,
+      card_key TEXT,
+      order_no TEXT,
+      operation_no INTEGER,
+      revision_no TEXT NOT NULL DEFAULT 'Original',
+      image_path TEXT,
+      images JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS sow_standard_id INTEGER`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS card_key TEXT`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS order_no TEXT`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS operation_no INTEGER`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS revision_no TEXT NOT NULL DEFAULT 'Original'`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS image_path TEXT`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await db.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'sow_operationcard'
+          AND column_name = 'images'
+          AND data_type <> 'jsonb'
+      ) THEN
+        ALTER TABLE public.sow_operationcard
+          ALTER COLUMN images TYPE JSONB
+          USING CASE
+            WHEN images IS NULL OR btrim(images::text) = '' THEN '[]'::jsonb
+            WHEN left(btrim(images::text), 1) IN ('[', '{') THEN images::jsonb
+            ELSE jsonb_build_array(jsonb_build_object('src', images::text))
+          END;
+      END IF;
+    END $$;
+  `);
+  await db.query(`ALTER TABLE public.sow_operationcard ALTER COLUMN images SET DEFAULT '[]'::jsonb`);
+  await db.query(`ALTER TABLE public.sow_operationcard ALTER COLUMN images SET NOT NULL`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.query(`ALTER TABLE public.sow_operationcard ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.query(`
+    DO $$
+    DECLARE
+      constraint_row RECORD;
+    BEGIN
+      FOR constraint_row IN
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'public'
+          AND t.relname = 'sow_operationcard'
+          AND c.contype = 'u'
+          AND (
+            SELECT array_agg(a.attname::text ORDER BY u.ord)
+            FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+          ) = ARRAY['sow_standard_id']
+      LOOP
+        EXECUTE format('ALTER TABLE public.sow_operationcard DROP CONSTRAINT %I', constraint_row.conname);
+      END LOOP;
+    END $$;
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sow_operationcard_standard_revision
+      ON public.sow_operationcard (sow_standard_id, revision_no)
+  `);
+  await db.query(`
+    CREATE INDEX IF NOT EXISTS idx_sow_operationcard_order_operation_revision
+      ON public.sow_operationcard (order_no, operation_no, revision_no)
+  `);
+}
+
+function saveOperationCardDataUrl(dataUrl, { orderNo, operationNo, revisionNo, prefix = "image" }) {
+  if (!dataUrl) return null;
+  const match = String(dataUrl).match(/^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i);
+  if (!match) return null;
+
+  const ext = match[1].toLowerCase().replace("jpeg", "jpg");
+  const uploadsRoot = path.join(__dirname, "../uploads");
+  const safeOrder = safePathSegment(orderNo, "no-order");
+  const safeOp = safePathSegment(operationNo, "no-op");
+  const safeRevision = safePathSegment(revisionNo || OPERATION_CARD_REVISION_ORIGINAL, "Original");
+  const dir = path.join(uploadsRoot, "operation-card", safeOrder, safeOp, safeRevision);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const filename = `${safePathSegment(prefix, "image")}-${uuidv4()}.${ext}`;
+  fs.writeFileSync(path.join(dir, filename), Buffer.from(match[2], "base64"));
+  return `/uploads/operation-card/${safeOrder}/${safeOp}/${safeRevision}/${filename}`;
+}
+
+function normalizeStoredImagePath(src) {
+  if (!src) return src;
+  const text = String(src);
+  if (text.startsWith("/uploads/")) return text;
+  try {
+    const parsed = new URL(text);
+    if (parsed.pathname.startsWith("/uploads/")) return parsed.pathname;
+  } catch (_) {}
+  return text;
+}
+
+function normalizeOperationNumber(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeRevisionNo(value) {
+  const text = String(value ?? "").trim();
+  return text || OPERATION_CARD_REVISION_ORIGINAL;
+}
+
+async function persistOperationCardImages(images, context) {
+  return Promise.all(images.map(async (img, index) => {
+    const next = { ...img };
+    if (typeof next.src === "string" && next.src.startsWith("data:image/")) {
+      next.src = saveOperationCardDataUrl(next.src, {
+        ...context,
+        prefix: next.id || `placed-${index + 1}`,
+      });
+    } else {
+      next.src = normalizeStoredImagePath(next.src);
+    }
+    next.image_path = next.src || null;
+    return next;
+  }));
+}
 
 // GET grouped orders from view — paginated (for OrderListPage)
 exports.getGrouped = async (req, res) => {
@@ -211,23 +356,55 @@ exports.getSowOrderForRevision = async (req, res) => {
   try {
     await ensureSowRevisionHistoryTable();
     const { orderNo } = req.params;
-    const rows = await db.query(
-      `SELECT *
-       FROM sow
-       WHERE order_no = $1
-       ORDER BY operation_no ASC NULLS LAST, idsow ASC`,
-      [orderNo],
-    );
     const rev = await db.query(
       `SELECT COALESCE(MAX(revision_no), 0)::int AS current_revision
        FROM sow_revision_history
        WHERE order_no = $1`,
       [orderNo],
     );
+    const currentRevision = rev.rows[0]?.current_revision || 0;
+    const requestedRevision = Number.parseInt(req.query.revision_no, 10);
+    let rows = null;
+    let selectedRevision = currentRevision;
+
+    if (Number.isFinite(requestedRevision) && requestedRevision > 0) {
+      const history = await db.query(
+        `SELECT after_data
+         FROM sow_revision_history
+         WHERE order_no = $1 AND revision_no = $2
+         LIMIT 1`,
+        [orderNo, requestedRevision],
+      );
+      if (!history.rows.length) {
+        return res.status(404).json({ error: "Revision tidak ditemukan" });
+      }
+      rows = Array.isArray(history.rows[0]?.after_data) ? history.rows[0].after_data : [];
+      selectedRevision = requestedRevision;
+    } else {
+      const result = await db.query(
+        `SELECT *
+         FROM sow
+         WHERE order_no = $1
+         ORDER BY operation_no ASC NULLS LAST, idsow ASC`,
+        [orderNo],
+      );
+      rows = result.rows;
+    }
+
+    const revisions = await db.query(
+      `SELECT revision_no, changed_by, created_at
+       FROM sow_revision_history
+       WHERE order_no = $1
+       ORDER BY revision_no DESC`,
+      [orderNo],
+    );
+
     res.json({
       order_no: orderNo,
-      current_revision: rev.rows[0]?.current_revision || 0,
-      rows: rows.rows,
+      current_revision: currentRevision,
+      selected_revision: selectedRevision,
+      revisions: revisions.rows,
+      rows,
     });
   } catch (err) {
     console.error("getSowOrderForRevision error:", err);
@@ -262,10 +439,16 @@ exports.getComponents = async (req, res) => {
 // GET /sow/operationcard/:standardId — load saved operation card images
 exports.getOperationCard = async (req, res) => {
   try {
+    await ensureSowOperationCardTable();
     const { standardId } = req.params;
+    const revisionNo = normalizeRevisionNo(req.query.revision_no);
     const result = await db.query(
-      "SELECT * FROM sow_operationcard WHERE sow_standard_id = $1",
-      [standardId]
+      `SELECT *
+       FROM sow_operationcard
+       WHERE sow_standard_id = $1 AND revision_no = $2
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [standardId, revisionNo]
     );
     res.json({ data: result.rows[0] || null });
   } catch (err) {
@@ -276,18 +459,78 @@ exports.getOperationCard = async (req, res) => {
 // POST /sow/operationcard/:standardId — save operation card images
 exports.saveOperationCard = async (req, res) => {
   try {
+    await ensureSowOperationCardTable();
     const { standardId } = req.params;
-    const { images, card_key } = req.body || {};
+    const { images, card_key, order_no, operation_no, revision_no, box_image_data, image_path } = req.body || {};
     if (!Array.isArray(images)) return res.status(400).json({ error: "images array required" });
 
-    const result = await db.query(
-      `INSERT INTO sow_operationcard (sow_standard_id, card_key, images)
-       VALUES ($1, $2, $3::jsonb)
-       ON CONFLICT (sow_standard_id)
-       DO UPDATE SET images = EXCLUDED.images, card_key = EXCLUDED.card_key, updated_at = CURRENT_TIMESTAMP
-       RETURNING *`,
-      [standardId, card_key || null, JSON.stringify(images)]
+    const revisionNo = normalizeRevisionNo(revision_no);
+    const operationNo = normalizeOperationNumber(operation_no);
+    const normalizedImages = await persistOperationCardImages(images, {
+      orderNo: order_no || standardId,
+      operationNo,
+      revisionNo,
+    });
+    const savedBoxPath = saveOperationCardDataUrl(box_image_data, {
+      orderNo: order_no || standardId,
+      operationNo,
+      revisionNo,
+      prefix: "main-box",
+    }) || normalizeStoredImagePath(image_path);
+
+    const existing = await db.query(
+      `SELECT image_path
+       FROM sow_operationcard
+       WHERE sow_standard_id = $1 AND revision_no = $2
+       LIMIT 1`,
+      [standardId, revisionNo]
     );
+
+    const result = existing.rows.length
+      ? await db.query(
+        `UPDATE sow_operationcard
+         SET card_key = $3,
+             order_no = $4,
+             operation_no = $5,
+             revision_no = $6,
+             image_path = COALESCE($7, image_path),
+             images = $8::jsonb,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE sow_standard_id = $1 AND revision_no = $2
+         RETURNING *`,
+        [
+          standardId,
+          revisionNo,
+          card_key || null,
+          order_no || null,
+          operationNo,
+          revisionNo,
+          savedBoxPath || null,
+          JSON.stringify(normalizedImages),
+        ]
+      )
+      : await db.query(
+        `INSERT INTO sow_operationcard (
+           sow_standard_id,
+           card_key,
+           order_no,
+           operation_no,
+           revision_no,
+           image_path,
+           images
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+         RETURNING *`,
+        [
+          standardId,
+          card_key || null,
+          order_no || null,
+          operationNo,
+          revisionNo,
+          savedBoxPath || null,
+          JSON.stringify(normalizedImages),
+        ]
+      );
     res.json({ data: result.rows[0] });
   } catch (err) {
     console.error("saveOperationCard error:", err);
@@ -353,6 +596,7 @@ exports.saveSowOrderRevision = async (req, res) => {
     const inserted = [];
     for (const operation of operations) {
       const row = normalizeSowOperation(operation, orderNo);
+      row.revision_no = revisionNo;
       const values = EDITABLE_SOW_COLUMNS.map((column) => row[column]);
       const placeholders = EDITABLE_SOW_COLUMNS.map((_, index) => `$${index + 1}`).join(", ");
       const result = await db.query(

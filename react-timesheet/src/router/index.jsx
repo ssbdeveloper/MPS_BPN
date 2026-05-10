@@ -18,6 +18,7 @@ import MPDashboardPage from '../pages/MPDashboardPage';
 import SettingPage from '../pages/SettingPage';
 import ComponentTrackingPage from '../pages/PPC/ComponentTrackingPage';
 import BufferTransactionPage from '../pages/PPC/BufferTransactionPage';
+import SowSchedulingPage from '../pages/PPC/SowSchedulingPage';
 import EditParameterPage from '../pages/MACHINE_H/EditParameterPage';
 import NfcUserListPage from '../pages/TIMESHEET/NfcUserListPage';
 import CreateEditNfcPage from '../pages/TIMESHEET/CreateEditNfcPage';
@@ -27,6 +28,7 @@ import UnproductiveMenuPage from '../pages/TIMESHEET/UnproductiveMenuPage';
 import DownloadPage from '../pages/DownloadPage';
 import OrderListPage from '../pages/OrderListPage';
 import SowEditPage from '../pages/PE/SowEditPage';
+import SowRevisionEditPage from '../pages/PE/SowRevisionEditPage';
 import SowManagementPage from '../pages/PE/SowManagementPage';
 import SowStandardListPage from '../pages/PE/SowStandardListPage';
 import SowCreatePage from '../pages/PE/SowCreatePage';
@@ -169,6 +171,10 @@ const router = createBrowserRouter([
     element: <BufferTransactionPage />,
   },
   {
+    path: '/sow-scheduling',
+    element: <SowSchedulingPage />,
+  },
+  {
     path: '/edit-parameter',
     element: <EditParameterPage />,
   },
@@ -207,6 +213,10 @@ const router = createBrowserRouter([
   {
     path: '/sow-orders',
     element: <OrderListPage />,
+  },
+  {
+    path: '/sow-edit/revision/:orderNo',
+    element: <SowRevisionEditPage />,
   },
   {
     path: '/sow-edit/:id',

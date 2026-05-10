@@ -22,4 +22,12 @@ router.get("/mps-pareto-loss", mpsController.getParetoLoss);
 router.get("/mps-lean-distribution", mpsController.getLeanDistribution);
 router.get("/mps-snapshot", mpsController.getSnapshot);
 
+router.get("/order-progress", controller.getOrderProgress);
+router.get("/order-activity-detail/:orderNo", controller.getOrderActivityDetail);
+router.get("/operation-timesheet-history", controller.getOperationTimesheetHistory);
+router.post("/refresh-order-matviews", async (req, res) => {
+  try { await controller.refreshOrderMatviews(); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
