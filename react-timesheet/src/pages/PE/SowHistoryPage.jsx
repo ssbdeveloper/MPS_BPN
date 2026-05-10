@@ -17,7 +17,18 @@ const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
 const resolveAssetUrl = (src) => {
   if (!src) return '';
-  if (String(src).startsWith('/uploads/')) return `${API_BASE}${src}`;
+  if (String(src).startsWith('/uploads/')) {
+    const base = API_BASE.replace(/\/$/, '');
+    if (base === '/api') return src;
+    if (base.endsWith('/api')) {
+      try {
+        return `${new URL(base, window.location.origin).origin}${src}`;
+      } catch {
+        return src;
+      }
+    }
+    return `${base}${src}`;
+  }
   return src;
 };
 

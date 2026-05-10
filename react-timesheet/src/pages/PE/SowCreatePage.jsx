@@ -30,7 +30,18 @@ const OP_MAIN_BOX_H = 560;
 
 function resolveAssetUrl(src) {
   if (!src) return '';
-  if (String(src).startsWith('/uploads/')) return `${API_BASE}${src}`;
+  if (String(src).startsWith('/uploads/')) {
+    const base = API_BASE.replace(/\/$/, '');
+    if (base === '/api') return src;
+    if (base.endsWith('/api')) {
+      try {
+        return `${new URL(base, window.location.origin).origin}${src}`;
+      } catch {
+        return src;
+      }
+    }
+    return `${base}${src}`;
+  }
   return src;
 }
 
@@ -1587,7 +1598,7 @@ export function OperationCardPreview({
       const additions = [];
       for (let i = 0; i < selectedList.length; i++) {
         const att = selectedList[i];
-        const fileUrl = `${API_BASE}${att.file_path}`;
+        const fileUrl = resolveAssetUrl(att.file_path);
         const isPdf = /\.pdf$/i.test(att.original_name || '');
         let src = fileUrl;
         if (isPdf) {
@@ -2027,7 +2038,7 @@ export function OperationCardPreview({
                 {attachModal.list[attachPreviewIdx] ? (
                   (() => {
                     const preview = attachModal.list[attachPreviewIdx];
-                    const url = `${API_BASE}${preview.file_path}`;
+                    const url = resolveAssetUrl(preview.file_path);
                     const isPdf = /\.pdf$/i.test(preview.original_name || '');
                     return isPdf ? (
                       <div className="w-full h-full flex items-center justify-center overflow-hidden">
