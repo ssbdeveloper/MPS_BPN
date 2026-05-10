@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   AlertCircle,
@@ -21,7 +21,8 @@ function apiUrl(path) {
 
 export default function WelcomePage() {
   const navigate = useNavigate();
-  const [showLoginPanel, setShowLoginPanel] = useState(false);
+  const [searchParams] = useSearchParams();
+  const [showLoginPanel, setShowLoginPanel] = useState(() => searchParams.get('login') === 'admin');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Activity,
@@ -6,28 +6,27 @@ import {
   AlertTriangle,
   BarChart2,
   BookOpen,
+  Boxes,
+  CalendarClock,
   CheckCircle2,
   ChevronRight,
-  ClipboardCheck,
-  Eye,
-  EyeOff,
   Factory,
+  Gauge,
+  Hammer,
   LayoutDashboard,
-  Lock,
-  LogOut,
   Loader2,
-  Package,
+  LogOut,
+  ClipboardList,
   Settings,
   ShieldCheck,
   TimerReset,
   Truck,
+  UserCog,
   Users,
-  Wrench,
   X,
 } from 'lucide-react';
 import sapLogo from '../assets/sap.svg';
 
-const ADMIN_PASSWORD = 'adminssbuye';
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const SAP_LINKS = {
   PH3: 'https://fiori.abm-investama.co.id/',
@@ -38,14 +37,14 @@ const SAP_ENV_STORAGE_KEY = 'operationsHubSapEnv';
 const sidebarItems = [
   { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
   { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list' },
-  { title: 'SOW Scheduling', icon: ClipboardCheck, path: '/sow-scheduling' },
-  { title: 'Component Tracking', icon: Package, path: '/component-tracking' },
+  { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling' },
+  { title: 'Component Tracking', icon: Boxes, path: '/component-tracking' },
   { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment' },
-  { title: 'Consumable Control', icon: ClipboardCheck, path: '/consumable-control' },
-  { title: 'Tools Management', icon: Wrench, path: '/tools-management' },
-  { title: 'Manage User', icon: Users, path: '/manage-user' },
+  { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control' },
+  { title: 'Tools Management', icon: Hammer, path: '/tools-management' },
+  { title: 'Manage User', icon: UserCog, path: '/manage-user' },
   { title: 'Validation', icon: ShieldCheck, path: '/timesheet-validation' },
-  { title: 'Machine Hours', icon: TimerReset, path: '/machine-hours-sqlserver' },
+  { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver' },
 ];
 
 const emptyHubData = {
@@ -935,11 +934,7 @@ function MachineStatusPanel({ statuses, machines }) {
 
 function OperationsHubPage() {
   const navigate = useNavigate();
-  const inputRef = useRef(null);
   const [isVerified, setIsVerified] = useState(() => sessionStorage.getItem('isVerified') === 'true');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [hubData, setHubData] = useState(emptyHubData);
   const [authUser, setAuthUser] = useState(readAuthUser);
   const [showPasswordPanel, setShowPasswordPanel] = useState(false);
@@ -950,10 +945,10 @@ function OperationsHubPage() {
   ));
 
   useEffect(() => {
-    if (!isVerified && inputRef.current) {
-      inputRef.current.focus();
+    if (!isVerified) {
+      navigate('/welcome?login=admin', { replace: true });
     }
-  }, [isVerified]);
+  }, [isVerified, navigate]);
 
   useEffect(() => {
     if (!isVerified) return undefined;
@@ -1024,30 +1019,6 @@ function OperationsHubPage() {
     },
   ], [hubData.basis_dates.labor_date, hubData.basis_dates.machine_date, kpi]);
 
-  const handleVerify = useCallback((event) => {
-    event.preventDefault();
-
-    if (!password.trim()) {
-      navigate('/login-timesheet');
-      return;
-    }
-
-    if (password === ADMIN_PASSWORD) {
-      sessionStorage.setItem('isVerified', 'true');
-      const localAdmin = { username: 'admin', name: 'Administrator', roles: 'administrator' };
-      sessionStorage.setItem('authUser', JSON.stringify(localAdmin));
-      setAuthUser(localAdmin);
-      setKpiStatus('loading');
-      setIsVerified(true);
-      setError('');
-      return;
-    }
-
-    setError('Password salah. Anda akan diarahkan ke Timesheet.');
-    setPassword('');
-    setTimeout(() => navigate('/login-timesheet'), 1000);
-  }, [navigate, password]);
-
   const handleLogout = useCallback(() => {
     sessionStorage.removeItem('isVerified');
     sessionStorage.removeItem('authUser');
@@ -1055,7 +1026,6 @@ function OperationsHubPage() {
     setShowPasswordPanel(false);
     setIsVerified(false);
     setKpiStatus('idle');
-    setPassword('');
   }, []);
 
   const handleReviewValidation = useCallback(() => {
@@ -1082,61 +1052,8 @@ function OperationsHubPage() {
 
   if (!isVerified) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-cyan-50 px-4 py-8">
-        <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-          <div className="border-b border-slate-200 bg-white px-6 py-6">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[#0096c7] text-white">
-              <Lock size={24} />
-            </div>
-            <h1 className="text-xl font-extrabold text-slate-900">MPS Main</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              Masukkan password admin, atau kosongkan untuk Timesheet.
-            </p>
-          </div>
-
-          <form onSubmit={handleVerify} className="space-y-4 px-6 py-6">
-            <div>
-              <label className="mb-2 block text-xs font-semibold text-slate-600">
-                Password Admin
-              </label>
-              <div className="relative">
-                <input
-                  ref={inputRef}
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(event) => {
-                    setPassword(event.target.value);
-                    setError('');
-                  }}
-                  placeholder="Masukkan password"
-                  className="h-12 w-full rounded-xl border border-slate-200 bg-white px-4 pr-12 text-sm text-slate-800 placeholder-slate-400 transition-all focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((value) => !value)}
-                  className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
-                  aria-label={showPassword ? 'Sembunyikan password' : 'Tampilkan password'}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="h-12 w-full rounded-xl bg-[#0096c7] text-sm font-bold text-white transition-all hover:bg-[#0077b6] active:scale-[0.98]"
-            >
-              Masuk
-            </button>
-          </form>
-        </div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm font-semibold text-slate-500">
+        Mengarahkan ke login...
       </div>
     );
   }
