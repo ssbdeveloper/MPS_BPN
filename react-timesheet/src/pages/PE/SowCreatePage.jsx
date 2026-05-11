@@ -24,6 +24,31 @@ export const normalizeProductionOrder = (value) => String(value ?? '').trim().re
 const fmtHours = (v) => (v != null && v !== '' ? parseFloat(v).toFixed(2) : '—');
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function readAuthUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem('authUser') || 'null');
+  } catch {
+    return null;
+  }
+}
+
+export function getAuthUserDisplayName(user = readAuthUser()) {
+  return user?.name || user?.full_name || user?.username || '';
+}
+
+export function formatTravelCardIssuedAt(date = new Date()) {
+  return [
+    String(date.getDate()).padStart(2, '0'),
+    MONTH_SHORT[date.getMonth()],
+    String(date.getFullYear()).slice(-2),
+  ].join(' ') + ' ' + [
+    String(date.getHours()).padStart(2, '0'),
+    String(date.getMinutes()).padStart(2, '0'),
+    String(date.getSeconds()).padStart(2, '0'),
+  ].join(':');
+}
 
 const OP_MAIN_BOX_W = 700;
 const OP_MAIN_BOX_H = 560;
@@ -1270,7 +1295,15 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
 }
 
 // ─── TravelCardPreview ────────────────────────────────────────────────────────
-export function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef }) {
+export function TravelCardPreview({
+  selectedPart,
+  editOps,
+  cardInfo,
+  printRef,
+  revisionLabel = '—',
+  issuedByName = getAuthUserDisplayName(),
+  issuedAt = formatTravelCardIssuedAt(),
+}) {
   const [srcDoc, setSrcDoc] = useState('');
   const qrRef = useRef(null);
   const [nnvaMap, setNnvaMap] = useState({});
@@ -1342,6 +1375,8 @@ export function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef })
       let html = travelCardHtml
         .replace('{{qrCodeDataUrl}}',   qrDataUrl)
         .replace('../assets/ssb.png',   ssbLogo)
+        .replace('{{documentNo}}',      esc(cardInfo.documentNo || '—'))
+        .replace('{{revisionLabel}}',   esc(revisionLabel || '—'))
         .replace('{{dateStr}}',         dateStr)
         .replace('{{productionOrder}}', esc(cardInfo.productionOrder || '—'))
         .replace('{{partName}}',        esc(selectedPart?.part_name   || '—'))
@@ -1350,6 +1385,8 @@ export function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef })
         .replace('{{ident}}',           esc(cardInfo.ident            || '—'))
         .replace('{{location}}',        esc(cardInfo.location         || '—'))
         .replace('{{partNumber}}',      esc(selectedPart?.part_number || '—'))
+        .replace('{{issuedByName}}',    esc(issuedByName || '—'))
+        .replace('{{issuedAt}}',        esc(issuedAt || '—'))
         .replace('{{totalHours}}',      totalHoursDisplay);
 
       const { card1, card2, card3, wrapperClass } = splitTravelCardTemplate(html);
@@ -1405,7 +1442,7 @@ export function TravelCardPreview({ selectedPart, editOps, cardInfo, printRef })
       setSrcDoc(html);
     }, 0);
     return () => clearTimeout(timer);
-  }, [qrValue, selectedPart, editOps, cardInfo, dateStr, totalHoursDisplay]);
+  }, [qrValue, selectedPart, editOps, cardInfo, dateStr, totalHoursDisplay, revisionLabel, issuedByName, issuedAt]);
 
   return (
     <div style={{ background: '#e8e6e0', padding: '20px 16px', minHeight: '100%' }}>
@@ -2075,13 +2112,33 @@ const SowCreatePage = () => {
   const [editOps, setEditOps]           = useState([]);
   const [saving, setSaving]             = useState(false);
   const [activeStep, setActiveStep]     = useState('edit');
-  const [cardInfo, setCardInfo]         = useState({ customer: '', productionOrder: '', location: '', ident: '' });
+  const [cardInfo, setCardInfo]         = useState({ customer: '', productionOrder: '', location: '', ident: '', documentNo: '' });
+  const [documentNos, setDocumentNos]   = useState([]);
   const [operationCardKeys, setOperationCardKeys] = useState([]);
   const [activeOperationKey, setActiveOperationKey] = useState(null);
   const [operationCardImages, setOperationCardImages] = useState({});
   const [showInfoPanel, setShowInfoPanel] = useState(false);
   const [printing, setPrinting]           = useState(false);
   const printRef = useRef(null);
+  const issuedByName = getAuthUserDisplayName();
+  const issuedAt = useMemo(() => formatTravelCardIssuedAt(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/sow/documentnos`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (cancelled) return;
+        const rows = Array.isArray(json.data) ? json.data : [];
+        setDocumentNos(rows);
+        const defaultDoc = rows.find((row) => row.default)?.documentno || rows[0]?.documentno || '';
+        if (defaultDoc) {
+          setCardInfo((prev) => ({ ...prev, documentNo: prev.documentNo || defaultDoc }));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const handlePrint = useCallback(() => {
     const iframe = printRef.current;
@@ -2115,12 +2172,13 @@ const SowCreatePage = () => {
     setOperationCardKeys([]);
     setActiveOperationKey(null);
     setOperationCardImages({});
-    setCardInfo({
+    setCardInfo((prev) => ({
       customer: part?.customer_name || '',
       productionOrder: normalizeProductionOrder(part?.production_order || ''),
       location: part?.customer_site_name || part?.customer_site_location || '',
       ident: part?.ssbr_ident || '',
-    });
+      documentNo: prev.documentNo || '',
+    }));
   }, []);
 
   const handleResolveComponent = useCallback((component) => {
@@ -2345,7 +2403,15 @@ const SowCreatePage = () => {
       {/* ── Body ──────────────────────────────────────────────────────────── */}
       {activeStep === 'preview' ? (
         <div className="flex-1 overflow-y-auto">
-          <TravelCardPreview selectedPart={selectedPart} editOps={editOps} cardInfo={cardInfo} printRef={printRef} />
+          <TravelCardPreview
+            selectedPart={selectedPart}
+            editOps={editOps}
+            cardInfo={cardInfo}
+            printRef={printRef}
+            revisionLabel="—"
+            issuedByName={issuedByName}
+            issuedAt={issuedAt}
+          />
         </div>
       ) : activeStep === 'operation-card' ? (
         <div className="flex-1 min-h-0 overflow-hidden">
@@ -2610,6 +2676,25 @@ const SowCreatePage = () => {
               </button>
             </div>
             <div className="flex flex-col gap-3">
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-1">
+                  Document No.
+                </label>
+                <select
+                  value={cardInfo.documentNo || ''}
+                  onChange={(e) => setCardInfo((p) => ({ ...p, documentNo: e.target.value }))}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
+                             rounded-lg text-sm focus:outline-none
+                             focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+                >
+                  <option value="">—</option>
+                  {documentNos.map((item) => (
+                    <option key={item.id || item.documentno} value={item.documentno}>
+                      {item.documentno}{item.default ? ' (Default)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
               {[
                 { key: 'productionOrder', label: 'Production Order', placeholder: '1000XXXXXX' },
                 { key: 'customer',        label: 'Customer',          placeholder: 'PT. ...' },

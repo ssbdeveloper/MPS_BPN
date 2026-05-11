@@ -724,20 +724,21 @@ exports.createBatch = async (req, res) => {
       [machineCode]
     );
     const user = getRequestUser(req);
-    const codeResult = await client.query("SELECT nextval('public.sow_schedule_batch_id_seq')::bigint AS next_id");
-    const nextId = codeResult.rows[0]?.next_id;
+    const codeSuffix = [
+      String(Date.now()).slice(-6),
+      Math.random().toString(36).slice(2, 5).toUpperCase(),
+    ].join("");
     const batchCode = normalizeText(payload.batch_code)
-      || `BATCH-${scheduleDate.replace(/-/g, "")}-${machineCode}-${String(nextId).padStart(4, "0")}`;
+      || `BATCH-${scheduleDate.replace(/-/g, "")}-${machineCode}-${codeSuffix}`;
 
     const result = await client.query(
       `INSERT INTO public.sow_schedule_batch (
-         id, batch_code, machine_code, workcenter, schedule_date, shift_id,
+         batch_code, machine_code, workcenter, schedule_date, shift_id,
          batch_capacity_hours, batch_status, remarks, created_by_user_id
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'OPEN',$8,$9)
+       VALUES ($1,$2,$3,$4,$5,$6,'OPEN',$7,$8)
        RETURNING *`,
       [
-        nextId,
         batchCode,
         machineCode,
         normalizeText(payload.workcenter || machine.rows[0]?.workcenternew) || null,

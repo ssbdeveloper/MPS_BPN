@@ -305,117 +305,32 @@ def strip_zero(value: Any) -> str:
     return text or "0"
 
 
-def bulk_lookup_order_metadata(pg_cursor, jobids: list[str]) -> dict[str, dict[str, str]]:
+def bulk_lookup_operation_text(pg_cursor, jobids: list[str]) -> dict[str, str]:
     if not jobids:
         return {}
-    raw_values = sorted({str(jobid).strip() for jobid in jobids if str(jobid or "").strip()})
-    stripped = sorted({strip_zero(jobid) for jobid in raw_values})
+    stripped = sorted({strip_zero(jobid) for jobid in jobids if jobid})
     if not stripped:
         return {}
 
     try:
         pg_cursor.execute(
             """
-            WITH qh3_match AS (
-              SELECT DISTINCT ON (lookup_key)
-                lookup_key,
-                confirmation_number::text AS confirmation_number,
-                COALESCE(operation_short_text, '') AS operation_short_text,
-                COALESCE(order_no::text, '') AS order_no,
-                COALESCE(operation_no::text, '') AS operation_no,
-                COALESCE(sequence_category::text, '') AS sequence_category,
-                COALESCE(sequence_number::text, '') AS sequence_number,
-                COALESCE(branch_operation_no::text, '') AS branch_operation_no,
-                COALESCE(return_operation_no::text, '') AS return_operation_no,
-                COALESCE(work_center::text, '') AS work_center
-              FROM (
-                SELECT
-                  LTRIM(q.confirmation_number::text, '0') AS lookup_key,
-                  q.*,
-                  0 AS match_priority
-                FROM public.qh3_order q
-                WHERE LTRIM(q.confirmation_number::text, '0') = ANY(%s)
-
-                UNION ALL
-
-                SELECT
-                  LTRIM(q.order_no::text, '0') AS lookup_key,
-                  q.*,
-                  1 AS match_priority
-                FROM public.qh3_order q
-                WHERE LTRIM(q.order_no::text, '0') = ANY(%s)
-              ) matched
-              ORDER BY lookup_key, match_priority, id DESC
-            ),
-            ph3_match AS (
-              SELECT DISTINCT ON (LTRIM(confirmation_number::text, '0'))
-                LTRIM(confirmation_number::text, '0') AS lookup_key,
-                COALESCE(sequence_number::text, '') AS ph3_sequence_number,
-                COALESCE(operation_short_text, '') AS ph3_operation_short_text
-              FROM public.ph3_order
-              WHERE LTRIM(confirmation_number::text, '0') = ANY(%s)
-              ORDER BY LTRIM(confirmation_number::text, '0'), id DESC
-            )
-            SELECT
-              q.lookup_key,
-              q.confirmation_number,
-              q.operation_short_text,
-              q.order_no,
-              q.operation_no,
-              q.sequence_category,
-              q.sequence_number,
-              COALESCE(p.ph3_sequence_number, '') AS ph3_sequence_number,
-              q.branch_operation_no,
-              q.return_operation_no,
-              q.work_center,
-              COALESCE(NULLIF(q.operation_short_text, ''), p.ph3_operation_short_text, '') AS resolved_operation_short_text
-            FROM qh3_match q
-            LEFT JOIN ph3_match p ON p.lookup_key = q.lookup_key
+            SELECT confirmation_number, operation_short_text
+            FROM public.ph3_order
+            WHERE LTRIM(confirmation_number::text, '0') = ANY(%s)
             """,
-            (stripped, stripped, stripped),
+            (stripped,),
         )
     except psycopg2.Error as exc:
         pg_cursor.connection.rollback()
-        log.warning("Skip order metadata lookup: %s", exc)
+        log.warning("Skip operation_short_text lookup: %s", exc)
         return {}
 
-    result: dict[str, dict[str, str]] = {}
-    for row in pg_cursor.fetchall():
-        (
-            lookup_key,
-            confirmation_number,
-            operation_short_text,
-            order_no,
-            operation_no,
-            sequence_category,
-            sequence_number,
-            ph3_sequence_number,
-            branch_operation_no,
-            return_operation_no,
-            work_center,
-            resolved_operation_short_text,
-        ) = row
-        metadata = {
-            "confirmation_number": confirmation_number or "",
-            "operation_short_text": resolved_operation_short_text or operation_short_text or "",
-            "order_no": order_no or "",
-            "operation_no": operation_no or "",
-            "sequence_category": sequence_category or "",
-            "sequence_number": sequence_number or "",
-            "ph3_sequence_number": ph3_sequence_number or "",
-            "branch_operation_no": branch_operation_no or "",
-            "return_operation_no": return_operation_no or "",
-            "work_center": work_center or "",
-        }
-        key = strip_zero(lookup_key)
-        if key:
-            result[key] = metadata
-        confirmation_key = strip_zero(confirmation_number)
-        if confirmation_key:
-            result[confirmation_key] = metadata
-        order_key = strip_zero(order_no)
-        if order_key and order_key not in result:
-            result[order_key] = metadata
+    result: dict[str, str] = {}
+    for confirmation_number, operation_short_text in pg_cursor.fetchall():
+        key = strip_zero(confirmation_number)
+        if key and key not in result:
+            result[key] = operation_short_text or ""
     return result
 
 
@@ -424,8 +339,7 @@ def row_to_dict(cursor: pyodbc.Cursor, row) -> dict[str, Any]:
     return dict(zip(columns, row))
 
 
-def to_pg_tuple(row: dict[str, Any], order_metadata: dict[str, str] | None = None) -> tuple:
-    order_metadata = order_metadata or {}
+def to_pg_tuple(row: dict[str, Any], operation_short_text: str) -> tuple:
     duration_seconds = int(row.get("duration_seconds") or 0)
     duration_hours = row.get("duration_hours")
     if duration_hours is None:
@@ -445,15 +359,15 @@ def to_pg_tuple(row: dict[str, Any], order_metadata: dict[str, str] | None = Non
         normalize_activity_type(row.get("status_description")),
         row.get("operatorid") or "",
         row.get("jobid") or "",
-        order_metadata.get("order_no") or row.get("order_no") or "",
-        order_metadata.get("operation_no") or row.get("operation_no") or "",
-        order_metadata.get("sequence_category") or row.get("sequence_category") or "",
-        order_metadata.get("sequence_number") or row.get("sequence_number") or "",
-        order_metadata.get("ph3_sequence_number") or row.get("ph3_sequence_number") or "",
-        order_metadata.get("branch_operation_no") or row.get("branch_operation_no") or "",
-        order_metadata.get("return_operation_no") or row.get("return_operation_no") or "",
-        order_metadata.get("work_center") or row.get("work_center") or row.get("machineid") or "",
-        order_metadata.get("operation_short_text") or "",
+        row.get("order_no") or "",
+        row.get("operation_no") or "",
+        row.get("sequence_category") or "",
+        row.get("sequence_number") or "",
+        row.get("ph3_sequence_number") or "",
+        row.get("branch_operation_no") or "",
+        row.get("return_operation_no") or "",
+        row.get("work_center") or row.get("machineid") or "",
+        operation_short_text or "",
         int(row.get("event_count") or 1),
         int(row.get("open_event_count") or 0),
         row.get("first_startdatetime"),
@@ -518,10 +432,10 @@ def sync_machine_hours(args: argparse.Namespace) -> None:
             rows = [row_to_dict(sql_cursor, row) for row in fetched]
             jobids = [row.get("jobid") for row in rows if row.get("jobid")]
             with pg_conn.cursor() as pg_cursor:
-                order_map = bulk_lookup_order_metadata(pg_cursor, jobids)
+                op_map = bulk_lookup_operation_text(pg_cursor, jobids)
 
             values = [
-                to_pg_tuple(row, order_map.get(strip_zero(row.get("jobid")), {}))
+                to_pg_tuple(row, op_map.get(strip_zero(row.get("jobid")), ""))
                 for row in rows
             ]
 

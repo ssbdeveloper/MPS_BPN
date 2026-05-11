@@ -7,6 +7,7 @@ import TimesheetMainMenuPage from '../pages/TIMESHEET/TimesheetMainMenuPage';
 import TimesheetListPage from '../pages/TIMESHEET/TimesheetListPage';
 import TimesheetValidationPage from '../pages/TIMESHEET/TimesheetValidationPage';
 import LogTimesheetPage from '../pages/TIMESHEET/LogTimesheetPage';
+import TtsAudioTestPage from '../pages/TIMESHEET/TtsAudioTestPage';
 
 
 import TimesheetEditPage from '../pages/TIMESHEET/TimesheetEditPage';
@@ -243,6 +244,10 @@ const router = createBrowserRouter([
 {
   path: '/log-timesheet',
   element: <LogTimesheetPage />,
+},
+{
+  path: '/tts-audio-test',
+  element: <TtsAudioTestPage />,
 },
 {
   path: '/editor-image',

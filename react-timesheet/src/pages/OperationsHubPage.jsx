@@ -43,7 +43,7 @@ const sidebarItems = [
   { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control' },
   { title: 'Tools Management', icon: Hammer, path: '/tools-management' },
   { title: 'Manage User', icon: UserCog, path: '/manage-user' },
-  { title: 'Validation', icon: ShieldCheck, path: '/timesheet-validation' },
+  { title: 'TimeSheet', icon: ShieldCheck, path: '/timesheet-validation' },
   { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver' },
 ];
 

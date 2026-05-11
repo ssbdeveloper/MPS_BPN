@@ -98,6 +98,42 @@ const normalizeOrderNo = (value) => {
 
 const OPERATION_CARD_REVISION_ORIGINAL = "Original";
 
+async function ensureSowDocumentNoTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS public.sow_documentno (
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      documentno TEXT NOT NULL UNIQUE,
+      "default" BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS documentno TEXT`);
+  await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS "default" BOOLEAN NOT NULL DEFAULT false`);
+  await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sow_documentno_default
+      ON public.sow_documentno ("default")
+      WHERE "default" = true
+  `);
+}
+
+exports.getSowDocumentNos = async (req, res) => {
+  try {
+    await ensureSowDocumentNoTable();
+    const result = await db.query(
+      `SELECT id, documentno, "default"
+       FROM public.sow_documentno
+       ORDER BY "default" DESC, documentno ASC`
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error("getSowDocumentNos error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 function safePathSegment(value, fallback = "unknown") {
   const text = String(value ?? "").trim();
   return (text || fallback).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
@@ -1008,25 +1044,75 @@ exports.update = async (req, res) => {
 };
 //========================//
 exports.finish = async (req, res) => {
+  let client = null;
   try {
     const { selectedactivity } = req.body;
-    const { order_no, operation_no } = selectedactivity;
+    const {
+      order_no,
+      ssbr_id,
+      operation_no,
+      operation_text,
+      machine_id,
+    } = selectedactivity || {};
     const status = "FINISH";
     const longdate_checkout = new Date();
+    const operationNo = Number.parseInt(operation_no, 10);
 
-    const result = await db.query(
+    if (!order_no || !Number.isFinite(operationNo)) {
+      return res.status(400).json({ error: "order_no and operation_no are required" });
+    }
+
+    if (!machine_id) {
+      return res.status(400).json({ error: "machine_id is required for buffer transaction" });
+    }
+
+    client = typeof db.connect === "function" ? await db.connect() : null;
+    const query = client ? client.query.bind(client) : db.query.bind(db);
+    if (client) await query("BEGIN");
+
+    const result = await query(
       `UPDATE sow
          SET status = $1,
              finish_date = $2
        WHERE order_no = $3 AND operation_no = $4
        RETURNING *`,
-      [status, longdate_checkout, order_no, operation_no]
+      [status, longdate_checkout, order_no, operationNo]
     );
 
-    res.json(result.rows[0]);
+    if (result.rowCount === 0) {
+      const error = new Error("SOW activity not found");
+      error.status = 404;
+      throw error;
+    }
+
+    const bufferResult = await query(
+      `INSERT INTO public.buffer_transaction (
+         type,
+         machine_id,
+         order_no,
+         ssbr_id,
+         operation_no,
+         operation_text
+       )
+       VALUES ('out', $1, $2, NULLIF($3, ''), $4, NULLIF($5, ''))
+       RETURNING *`,
+      [
+        machine_id,
+        order_no,
+        ssbr_id || "",
+        operationNo,
+        operation_text || "",
+      ]
+    );
+
+    if (client) await query("COMMIT");
+    res.json({ ...result.rows[0], buffer_transaction: bufferResult.rows[0] });
   } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 };
 

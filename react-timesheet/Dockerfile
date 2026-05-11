@@ -8,7 +8,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG VITE_API_URL=/api
+ARG VITE_TTS_API_URL=
 ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_TTS_API_URL=$VITE_TTS_API_URL
 RUN npm run build
 
 FROM nginx:alpine

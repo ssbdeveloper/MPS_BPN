@@ -63,6 +63,7 @@ router.put("/nnva/standard/:standardId",          controller.saveNnvaToStandard)
 // ── Dropdown lookups ───────────────────────────────────────────────────────────
 router.get("/customers",                          controller.getCustomers);
 router.get("/components",                         controller.getComponents);
+router.get("/documentnos",                        controller.getSowDocumentNos);
 
 // ── Operation Card persistence ─────────────────────────────────────────────────
 router.get("/operationcard/:standardId",          controller.getOperationCard);

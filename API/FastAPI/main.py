@@ -1,19 +1,30 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import psycopg2
+import psycopg2.extras
 from psycopg2 import pool
 import os
 from pathlib import Path
+
+from tts_announcement import (
+    generate_announcement_mp3,
+    make_announcement_filename,
+)
 
 
 # ====================================================
 # LOAD ENV (optional, only for local dev)
 # ====================================================
 BASE_DIR = Path(__file__).resolve().parent
-if (BASE_DIR / ".env").exists():
+ROOT_DIR = BASE_DIR.parents[1]
+API_DIR = ROOT_DIR / "API"
+
+if (ROOT_DIR / ".env").exists() or (BASE_DIR / ".env").exists():
     from dotenv import load_dotenv
-    load_dotenv(BASE_DIR / ".env")
+    load_dotenv(ROOT_DIR / ".env")
+    load_dotenv(BASE_DIR / ".env", override=True)
 
 # ====================================================
 # CONFIG
@@ -28,6 +39,11 @@ DB_CONFIG = {
 }
 
 PORT = int(os.getenv("PORTFLASK", "8000"))
+TTS_UPLOAD_ROOT = Path(os.getenv("TTS_UPLOAD_ROOT", API_DIR / "uploads"))
+TTS_ANNOUNCEMENT_DIR = TTS_UPLOAD_ROOT / "announcement"
+TTS_ANNOUNCEMENT_PUBLIC_PREFIX = "/uploads/announcement"
+TTS_LEGACY_ANNOUNCEMENT_DIR = BASE_DIR / "upload" / "announcement"
+TTS_LEGACY_ANNOUNCEMENT_PUBLIC_PREFIX = "/upload/announcement"
 
 # ====================================================
 # CONNECTION POOL 
@@ -77,6 +93,221 @@ class KeyRequest(BaseModel):
 class MissingRequest(BaseModel):
     order_no: str
     codenumber: List[str]
+
+
+class TtsGenerateRequest(BaseModel):
+    ssbr_id: str
+
+
+def ensure_tts_notification_order_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS public.tts_notification_order (
+                id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                path_mp3 TEXT NOT NULL,
+                status BOOLEAN NOT NULL DEFAULT false,
+                log_audio JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tts_notification_order_status_created
+            ON public.tts_notification_order (status, created_at)
+        """)
+    conn.commit()
+
+
+def announcement_file_from_path(path_mp3: str) -> Path:
+    if not path_mp3:
+        raise HTTPException(status_code=404, detail="Path audio kosong")
+
+    path_options = (
+        (f"{TTS_ANNOUNCEMENT_PUBLIC_PREFIX}/", TTS_ANNOUNCEMENT_DIR),
+        (f"{TTS_LEGACY_ANNOUNCEMENT_PUBLIC_PREFIX}/", TTS_LEGACY_ANNOUNCEMENT_DIR),
+    )
+    for prefix, base_dir in path_options:
+        if not path_mp3.startswith(prefix):
+            continue
+
+        filename = Path(path_mp3.removeprefix(prefix)).name
+        file_path = base_dir / filename
+        try:
+            file_path.resolve().relative_to(base_dir.resolve())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Path audio tidak valid")
+
+        return file_path
+
+    raise HTTPException(status_code=400, detail="Path audio tidak valid")
+
+
+# ====================================================
+# TTS ANNOUNCEMENT
+# ====================================================
+@app.post("/tts/generate")
+def generate_tts_announcement(data: TtsGenerateRequest):
+    ssbr_id = (data.ssbr_id or "").strip()
+    if not ssbr_id:
+        raise HTTPException(status_code=400, detail="ssbr_id wajib diisi")
+
+    filename = make_announcement_filename(ssbr_id)
+    file_path = TTS_ANNOUNCEMENT_DIR / filename
+    public_path = f"{TTS_ANNOUNCEMENT_PUBLIC_PREFIX}/{filename}"
+
+    try:
+        audio_log = generate_announcement_mp3(ssbr_id, file_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Gagal generate audio: {exc}") from exc
+
+    conn = get_conn()
+    cur = None
+    try:
+        ensure_tts_notification_order_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO public.tts_notification_order (path_mp3, status, log_audio)
+            VALUES (%s, false, %s)
+            RETURNING id, path_mp3, status, log_audio
+            """,
+            (
+                public_path,
+                psycopg2.extras.Json({
+                    **audio_log,
+                    "path_mp3": public_path,
+                }),
+            ),
+        )
+        row = cur.fetchone()
+        conn.commit()
+
+        return {
+            "id": row[0],
+            "path_mp3": row[1],
+            "status": row[2],
+            "log_audio": row[3],
+            "audio_url": f"/tts/audio/{row[0]}",
+        }
+    except Exception as exc:
+        conn.rollback()
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except OSError:
+                pass
+        raise HTTPException(status_code=500, detail=f"Gagal simpan notif audio: {exc}") from exc
+    finally:
+        if cur:
+            cur.close()
+        release_conn(conn)
+
+
+@app.get("/tts/audio/next")
+def get_next_tts_audio():
+    conn = get_conn()
+    cur = None
+    try:
+        ensure_tts_notification_order_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, path_mp3
+            FROM public.tts_notification_order
+            WHERE status = false
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Tidak ada audio announcement yang pending")
+
+        notification_id, path_mp3 = row
+        file_path = announcement_file_from_path(path_mp3)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File audio tidak ditemukan")
+
+        cur.execute(
+            """
+            UPDATE public.tts_notification_order
+            SET status = true,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (notification_id,),
+        )
+        conn.commit()
+
+        return FileResponse(
+            path=file_path,
+            media_type="audio/mpeg",
+            filename=file_path.name,
+            headers={"X-TTS-Notification-Id": str(notification_id)},
+        )
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Gagal ambil audio: {exc}") from exc
+    finally:
+        if cur:
+            cur.close()
+        release_conn(conn)
+
+
+@app.get("/tts/audio/{notification_id}")
+def get_tts_audio(notification_id: int):
+    conn = get_conn()
+    cur = None
+    try:
+        ensure_tts_notification_order_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, path_mp3
+            FROM public.tts_notification_order
+            WHERE id = %s
+            """,
+            (notification_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Notif audio tidak ditemukan")
+
+        file_path = announcement_file_from_path(row[1])
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File audio tidak ditemukan")
+
+        cur.execute(
+            """
+            UPDATE public.tts_notification_order
+            SET status = true,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (notification_id,),
+        )
+        conn.commit()
+
+        return FileResponse(
+            path=file_path,
+            media_type="audio/mpeg",
+            filename=file_path.name,
+            headers={"X-TTS-Notification-Id": str(notification_id)},
+        )
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Gagal ambil audio: {exc}") from exc
+    finally:
+        if cur:
+            cur.close()
+        release_conn(conn)
 
 
 # ====================================================

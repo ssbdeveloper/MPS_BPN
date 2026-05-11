@@ -237,18 +237,24 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
           <div className="text-[10px] text-gray-400">STAGE {record.statusid ?? '-'}</div>
         </div>
 
-        <div className="text-[11px] text-center font-semibold text-gray-700">
-          {record.operatorid || '-'}
+        <div className="text-[11px] text-center leading-tight">
+          <div className="font-semibold text-gray-700 break-words">{record.full_name || '-'}</div>
+          <div className="text-[10px] font-mono text-gray-400">{record.sn_employee || '-'}</div>
         </div>
 
         <div className="text-[11px] text-left">
           <div className="text-[10px] font-semibold leading-tight break-words" style={{ color: PALETTE.frenchBlue }}>
             {record.operation_short_text || '-'}
           </div>
+          <div className="mt-0.5 flex flex-wrap gap-1 text-[9px] font-mono text-slate-500">
+            <span>{record.order_no || '-'}</span>
+            <span>/</span>
+            <span>{record.operation_no || '-'}</span>
+          </div>
         </div>
 
         <div className="text-[11px] text-center">
-          <div className="font-mono text-[10px] leading-tight text-slate-600">{record.jobid || '-'}</div>
+          <div className="font-mono text-[10px] leading-tight text-slate-600">{record.confirmation_no || record.jobid || '-'}</div>
         </div>
 
         <div className="text-[11px] text-center">
@@ -263,6 +269,7 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
 
         <div className="text-[11px] text-center flex flex-col items-center leading-tight">
           <span className="font-mono text-[12px] font-bold" style={{ color: PALETTE.frenchBlue }}>{durationHms}</span>
+          <span className="text-[9px] text-slate-400">{fmtHours(record.duration_hours, 4)} h</span>
         </div>
 
         <div className="text-[11px] text-center">
@@ -370,9 +377,9 @@ const MachineGroup = React.memo(({
               style={{ gridTemplateColumns: '0.65fr 0.75fr 0.7fr 1.2fr 0.8fr 0.85fr 0.65fr 0.65fr 0.65fr 44px', color: PALETTE.frenchBlue }}>
               <div>Date</div>
               <div>Stage</div>
-              <div>Operator</div>
+              <div>Employee</div>
               <div>Job</div>
-              <div>Job ID</div>
+              <div>Confirmation</div>
               <div>Time</div>
               <div>Duration</div>
               <div>Activity</div>
@@ -433,8 +440,8 @@ const MachineHoursValidationPage = ({
     search: '',
     machineno: '',
     statusid: '',
-    operatorid: '',
-    jobid: '',
+    employee: '',
+    confirmation_no: '',
   });
   const [showFilters, setShowFilters] = useState(() => localStorage.getItem(filterStorageKey) !== 'false');
   const [postToSapEnabled, setPostToSapEnabled] = useState(() => localStorage.getItem(postSapStorageKey) !== 'false');
@@ -565,8 +572,8 @@ const MachineHoursValidationPage = ({
       search: '',
       machineno: '',
       statusid: '',
-      operatorid: '',
-      jobid: '',
+      employee: '',
+      confirmation_no: '',
     });
   };
 
@@ -653,7 +660,7 @@ const MachineHoursValidationPage = ({
               type="text"
               value={filters.search}
               onChange={(e) => setFilters((prev) => ({ ...prev, search: e.target.value }))}
-              placeholder="Search by machine, status, operator, job..."
+              placeholder="Search by machine, status, employee, job..."
               className={`w-full pl-9 pr-9 py-2 ${inputCls}`}
             />
             {filters.search && (
@@ -674,8 +681,8 @@ const MachineHoursValidationPage = ({
             />
             <input value={filters.machineno} onChange={(e) => setFilters((prev) => ({ ...prev, machineno: e.target.value }))} placeholder="Machine No" className={`w-32 px-2.5 py-1.5 ${inputCls}`} />
             <input value={filters.statusid} onChange={(e) => setFilters((prev) => ({ ...prev, statusid: e.target.value }))} placeholder="Status ID" className={`w-28 px-2.5 py-1.5 ${inputCls}`} />
-            <input value={filters.operatorid} onChange={(e) => setFilters((prev) => ({ ...prev, operatorid: e.target.value }))} placeholder="Operator" className={`w-36 px-2.5 py-1.5 ${inputCls}`} />
-            <input value={filters.jobid} onChange={(e) => setFilters((prev) => ({ ...prev, jobid: e.target.value }))} placeholder="Job" className={`w-36 px-2.5 py-1.5 ${inputCls}`} />
+            <input value={filters.employee} onChange={(e) => setFilters((prev) => ({ ...prev, employee: e.target.value }))} placeholder="Employee / SN" className={`w-36 px-2.5 py-1.5 ${inputCls}`} />
+            <input value={filters.confirmation_no} onChange={(e) => setFilters((prev) => ({ ...prev, confirmation_no: e.target.value }))} placeholder="Confirmation / Order" className={`w-44 px-2.5 py-1.5 ${inputCls}`} />
 
             <div className="flex-1" />
 

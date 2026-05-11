@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Play, ClipboardList, Monitor, Settings, Clock, Wrench, AlertTriangle, CheckCircle } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+const TTS_API_BASE = import.meta.env.VITE_TTS_API_URL || '';
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -170,7 +171,7 @@ const TimesheetMainMenuPage = () => {
     }
   };
 
-  const goHome           = () => goBackOrFallback(navigate);
+  const goHome           = () => navigate('/login-timesheet');
   const gotojob          = () => navigate('/select-job');
   const gotomesin        = () => navigate('/select-machine');
   const gotoparameter    = () => navigate('/process-control');
@@ -236,6 +237,7 @@ const TimesheetMainMenuPage = () => {
 
   const finish = async () => {
     const selectedactivity = JSON.parse(sessionStorage.getItem('selectedactivity'));
+    const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
     if (!selectedactivity) {
       toast.error('Tidak ada activity yang dipilih');
       return;
@@ -247,8 +249,11 @@ const TimesheetMainMenuPage = () => {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
           selectedactivity: {
-            order_no:     selectedactivity.order,
+            order_no:     selectedactivity.order || selectedactivity.order_no,
+            ssbr_id:      selectedactivity.ssbr_id,
             operation_no: selectedactivity.operation_no,
+            operation_text: selectedactivity.operationtext || selectedactivity.operation_text,
+            machine_id:   datakaryawan.machineid,
           },
         }),
       });
@@ -261,6 +266,31 @@ const TimesheetMainMenuPage = () => {
       const updated = await postRes.json();
       console.log('Update sukses:', updated);
       toast.success('Update FINISH berhasil!');
+
+      const ssbrId = selectedactivity.ssbr_id;
+      if (ssbrId) {
+        try {
+          const ttsRes = await fetch(`${TTS_API_BASE}/tts/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ssbr_id: ssbrId }),
+          });
+
+          if (!ttsRes.ok) {
+            const error = await ttsRes.json().catch(() => ({}));
+            throw new Error(error.detail || error.error || 'Gagal generate audio announcement');
+          }
+
+          const ttsData = await ttsRes.json();
+          console.log('TTS announcement generated:', ttsData);
+          toast.success('Audio announcement berhasil dibuat');
+        } catch (ttsErr) {
+          console.error('Error generate TTS announcement:', ttsErr);
+          toast.warning('Finish berhasil, tapi audio announcement gagal dibuat', {
+            description: ttsErr.message,
+          });
+        }
+      }
 
       sessionStorage.removeItem('selectedactivity');
       setUserData(prev => ({ ...prev, order: '-', ident: '-', partName: '-', activityText: '-', activitySeq: '-' }));

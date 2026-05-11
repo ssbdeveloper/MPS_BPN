@@ -8,7 +8,9 @@ import {
   EditPanel,
   OperationCardPreview,
   TravelCardPreview,
+  formatTravelCardIssuedAt,
   generateOperationCardBoxImage,
+  getAuthUserDisplayName,
   makeEditEntry,
   makeOperationCardKey,
   normalizeProductionOrder,
@@ -66,7 +68,8 @@ export default function SowRevisionEditPage() {
   const [saving, setSaving] = useState(false);
   const [activeStep, setActiveStep] = useState('edit');
   const [selectedPart, setSelectedPart] = useState(null);
-  const [cardInfo, setCardInfo] = useState({ customer: '', productionOrder: '', location: '', ident: '' });
+  const [cardInfo, setCardInfo] = useState({ customer: '', productionOrder: '', location: '', ident: '', documentNo: '' });
+  const [documentNos, setDocumentNos] = useState([]);
   const [editOps, setEditOps] = useState([]);
   const [checkedOps, setCheckedOps] = useState(new Set());
   const [currentRevision, setCurrentRevision] = useState(0);
@@ -81,9 +84,26 @@ export default function SowRevisionEditPage() {
   const [showPartPicker, setShowPartPicker] = useState(false);
   const [printing, setPrinting] = useState(false);
   const printRef = useRef(null);
+  const issuedByName = getAuthUserDisplayName();
+  const issuedAt = useMemo(() => formatTravelCardIssuedAt(), []);
   const wcData = useWorkcenterData();
 
   const opCardRevision = selectedRevision > 0 ? String(selectedRevision) : 'Original';
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/sow/documentnos`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (cancelled) return;
+        const rows = Array.isArray(json.data) ? json.data : [];
+        setDocumentNos(rows);
+        const defaultDoc = rows.find((row) => row.default)?.documentno || rows[0]?.documentno || '';
+        if (defaultDoc) setCardInfo((prev) => ({ ...prev, documentNo: prev.documentNo || defaultDoc }));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const loadOrder = useCallback(async (revisionNo = requestedRevision) => {
     if (!decodedOrderNo) return;
@@ -104,12 +124,13 @@ export default function SowRevisionEditPage() {
       const keys = ops.map(makeOperationCardKey);
 
       setSelectedPart(part);
-      setCardInfo({
+      setCardInfo((prev) => ({
         customer: first.customer || '',
         productionOrder: normalizeProductionOrder(first.order_no || decodedOrderNo),
         location: first.location || '',
         ident: first.ssbr_id || '',
-      });
+        documentNo: first.document_no || first.documentno || prev.documentNo || '',
+      }));
       setEditOps(ops);
       setOperationCardKeys(keys);
       setActiveOperationKey(keys[0] || null);
@@ -372,7 +393,15 @@ export default function SowRevisionEditPage() {
 
       {activeStep === 'preview' ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <TravelCardPreview selectedPart={selectedPart} editOps={editOps} cardInfo={cardInfo} printRef={printRef} />
+          <TravelCardPreview
+            selectedPart={selectedPart}
+            editOps={editOps}
+            cardInfo={cardInfo}
+            printRef={printRef}
+            revisionLabel={selectedRevision > 0 ? String(selectedRevision) : '—'}
+            issuedByName={issuedByName}
+            issuedAt={issuedAt}
+          />
         </div>
       ) : activeStep === 'operation-card' ? (
         <div className="min-h-0 flex-1 overflow-hidden">
@@ -485,6 +514,18 @@ export default function SowRevisionEditPage() {
           <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-4 text-sm font-bold text-slate-800">Informasi SOW</h3>
             <div className="space-y-3 text-xs">
+              <select
+                value={cardInfo.documentNo || ''}
+                onChange={(e) => setCardInfo((p) => ({ ...p, documentNo: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none"
+              >
+                <option value="">Document No. —</option>
+                {documentNos.map((item) => (
+                  <option key={item.id || item.documentno} value={item.documentno}>
+                    {item.documentno}{item.default ? ' (Default)' : ''}
+                  </option>
+                ))}
+              </select>
               <input value={cardInfo.customer} onChange={(e) => setCardInfo((p) => ({ ...p, customer: e.target.value }))} className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none" placeholder="Customer" />
               <input value={cardInfo.ident} onChange={(e) => setCardInfo((p) => ({ ...p, ident: e.target.value }))} className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none" placeholder="SSBR ID" />
               <input value={cardInfo.location} onChange={(e) => setCardInfo((p) => ({ ...p, location: e.target.value }))} className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none" placeholder="Location" />

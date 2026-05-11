@@ -58,12 +58,14 @@ function buildSapPayload(row) {
   const zconfType = getConfType(row);
   const startDateTime = row.first_startdatetime;
   const endDateTime = row.last_enddatetime || row.first_startdatetime;
+  const confirmationNo = row.confirmation_no || row.jobid || "";
+  const orderNo = row.order_no || confirmationNo;
 
   return {
     ZTIMESHEETID: `${PLANT_SSB}${row.min_proddataid || ""}`,
-    PERNR: String(row.operatorid || ""),
-    RUECK: zconfType === "M1" || zconfType === "M2" ? padLeft(row.jobid, 10) : "",
-    AUFNR: padLeft(row.order_no || row.jobid, 12),
+    PERNR: String(row.sn_employee || ""),
+    RUECK: zconfType === "M1" || zconfType === "M2" ? padLeft(confirmationNo, 10) : "",
+    AUFNR: padLeft(orderNo, 12),
     VORNR: padLeft(row.operation_no, 4),
     FLGAT: row.sequence_category || "",
     PLNFL: row.ph3_sequence_number || "",
@@ -94,46 +96,57 @@ function buildFilters(query, offset = 1) {
   const params = [start, end];
   let paramIdx = offset + 2;
   const clauses = [
-    `p.startdatetime >= $${offset}::date`,
-    `p.startdatetime < ($${offset + 1}::date + interval '1 day')`,
-    "p.startdatetime IS NOT NULL",
+    `v.startdatetime >= $${offset}::date`,
+    `v.startdatetime < ($${offset + 1}::date + interval '1 day')`,
+    "v.startdatetime IS NOT NULL",
   ];
 
   if (query.search && query.search.trim()) {
     const searchLike = `%${query.search.trim().toLowerCase()}%`;
     clauses.push(`(
-      LOWER(COALESCE(m.machineid, '')) LIKE $${paramIdx}
-      OR LOWER(COALESCE(m.machinename, '')) LIKE $${paramIdx}
-      OR LOWER(COALESCE(m.description, '')) LIKE $${paramIdx}
-      OR LOWER(COALESCE(st.description, '')) LIKE $${paramIdx}
-      OR LOWER(COALESCE(p.operatorid, '')) LIKE $${paramIdx}
-      OR LOWER(COALESCE(p.jobid, '')) LIKE $${paramIdx}
+      LOWER(COALESCE(v.machineid, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.machinename, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.status_description, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.full_name, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.sn_employee, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.confirmation_number, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.order_no, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.operation_no::text, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.operation_short_text, '')) LIKE $${paramIdx}
     )`);
     params.push(searchLike);
     paramIdx += 1;
   }
 
   if (query.machineno) {
-    clauses.push(`p.machineno = $${paramIdx}::int`);
+    clauses.push(`v.machineno = $${paramIdx}::int`);
     params.push(query.machineno);
     paramIdx += 1;
   }
 
   if (query.statusid) {
-    clauses.push(`p.statusid = $${paramIdx}::int`);
+    clauses.push(`v.statusid = $${paramIdx}::int`);
     params.push(query.statusid);
     paramIdx += 1;
   }
 
-  if (query.operatorid && query.operatorid.trim()) {
-    clauses.push(`p.operatorid = $${paramIdx}`);
-    params.push(query.operatorid.trim());
+  const employeeFilter = query.employee || query.operatorid;
+  if (employeeFilter && employeeFilter.trim()) {
+    clauses.push(`(
+      LOWER(COALESCE(v.full_name, '')) LIKE $${paramIdx}
+      OR LOWER(COALESCE(v.sn_employee, '')) LIKE $${paramIdx}
+    )`);
+    params.push(`%${employeeFilter.trim().toLowerCase()}%`);
     paramIdx += 1;
   }
 
-  if (query.jobid && query.jobid.trim()) {
-    clauses.push(`p.jobid = $${paramIdx}`);
-    params.push(query.jobid.trim());
+  const confirmationFilter = query.confirmation_no || query.jobid;
+  if (confirmationFilter && confirmationFilter.trim()) {
+    clauses.push(`(
+      v.confirmation_number = $${paramIdx}
+      OR v.order_no = $${paramIdx}
+    )`);
+    params.push(confirmationFilter.trim());
   }
 
   return {
@@ -147,104 +160,68 @@ function buildFilters(query, offset = 1) {
 const groupedSelect = `
   SELECT
     concat_ws('|',
-      p.machineno::text,
-      p.statusid::text,
-      COALESCE(p.operatorid, ''),
-      COALESCE(p.jobid, ''),
-      to_char(p.startdatetime::date, 'YYYY-MM-DD')
+      v.machineno::text,
+      v.statusid::text,
+      COALESCE(v.sn_employee, ''),
+      COALESCE(v.confirmation_number, ''),
+      COALESCE(v.order_no, ''),
+      COALESCE(v.operation_no::text, ''),
+      to_char(v.startdatetime::date, 'YYYY-MM-DD')
     ) AS record_key,
-    MIN(p.proddataid) AS min_proddataid,
-    to_char(p.startdatetime::date, 'YYYY-MM-DD') AS work_date,
-    p.machineno,
-    COALESCE(m.machineid, '') AS machineid,
-    COALESCE(m.machinename, '') AS machinename,
-    COALESCE(NULLIF(m.description, ''), m.machinename, m.machineid, 'Machine ' || p.machineno::text) AS machine_description,
-    m.plantid,
-    p.statusid,
-    COALESCE(st.description, 'Unknown') AS status_description,
-    COALESCE(st.activitytype, '') AS activitytype,
-    p.operatorid,
-    p.jobid,
-    COALESCE(q.order_no, '') AS order_no,
-    COALESCE(q.operation_no, '') AS operation_no,
-    COALESCE(q.sequence_category, '') AS sequence_category,
-    COALESCE(q.sequence_number, '') AS sequence_number,
-    COALESCE(ph3.sequence_number, '') AS ph3_sequence_number,
-    COALESCE(q.branch_operation_no, '') AS branch_operation_no,
-    COALESCE(q.return_operation_no, '') AS return_operation_no,
-    COALESCE(q.work_center, '') AS work_center,
+    MIN(v.proddataid) AS min_proddataid,
+    to_char(v.startdatetime::date, 'YYYY-MM-DD') AS work_date,
+    v.machineno,
+    COALESCE(v.machineid, '') AS machineid,
+    COALESCE(v.machinename, '') AS machinename,
+    COALESCE(NULLIF(v.machinename, ''), v.machineid, 'Machine ' || v.machineno::text) AS machine_description,
+    v.machine_plantid AS plantid,
+    v.statusid,
+    COALESCE(v.status_description, 'Unknown') AS status_description,
+    COALESCE(v.status_activitytype, '') AS activitytype,
+    COALESCE(v.full_name, '') AS full_name,
+    COALESCE(v.sn_employee, '') AS sn_employee,
+    COALESCE(v.confirmation_number, '') AS confirmation_no,
+    COALESCE(v.confirmation_number, '') AS jobid,
+    COALESCE(v.order_no, '') AS order_no,
+    COALESCE(v.operation_no::text, '') AS operation_no,
+    COALESCE(v.operation_short_text, '') AS operation_short_text,
+    COALESCE(v.sequence_category, '') AS sequence_category,
+    COALESCE(v.sequence_number, '') AS sequence_number,
+    COALESCE(v.sequence_number, '') AS ph3_sequence_number,
+    COALESCE(v.branch_operation_no, '') AS branch_operation_no,
+    COALESCE(v.return_operation_no, '') AS return_operation_no,
+    COALESCE(v.workcentercode, '') AS work_center,
     COUNT(*)::int AS event_count,
-    SUM(CASE WHEN p.enddatetime IS NULL THEN 1 ELSE 0 END)::int AS open_event_count,
-    to_char(MIN(p.startdatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS first_startdatetime,
-    to_char(MAX(p.enddatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS last_enddatetime,
-    SUM(
-      CASE
-        WHEN p.enddatetime IS NULL THEN 0
-        ELSE GREATEST(EXTRACT(EPOCH FROM (p.enddatetime - p.startdatetime)), 0)
-      END
-    )::bigint AS duration_seconds,
-    ROUND(
-      SUM(
-        CASE
-          WHEN p.enddatetime IS NULL THEN 0
-          ELSE GREATEST(EXTRACT(EPOCH FROM (p.enddatetime - p.startdatetime)), 0)
-        END
-      ) / 3600.0,
-      4
-    ) AS duration_hours
-  FROM public.mch_productiondata p
-  LEFT JOIN public.mch_machines m ON m.machineno = p.machineno
-  LEFT JOIN public.mch_statustypes st ON st.statusid = p.statusid
-  LEFT JOIN LATERAL (
-    SELECT
-      q.order_no,
-      q.operation_no,
-      q.sequence_category,
-      q.sequence_number,
-      q.branch_operation_no,
-      q.return_operation_no,
-      q.work_center
-    FROM public.qh3_order q
-    WHERE q.confirmation_number = regexp_replace(COALESCE(p.jobid, ''), '^0+', '')
-       OR q.order_no = p.jobid
-    ORDER BY
-      CASE WHEN q.confirmation_number = regexp_replace(COALESCE(p.jobid, ''), '^0+', '') THEN 0 ELSE 1 END,
-      q.id DESC
-    LIMIT 1
-  ) q ON true
-  LEFT JOIN LATERAL (
-    SELECT ph3.sequence_number
-    FROM public.ph3_order ph3
-    WHERE ph3.confirmation_number = p.jobid
-       OR ph3.confirmation_number = regexp_replace(COALESCE(p.jobid, ''), '^0+', '')
-    ORDER BY
-      CASE WHEN ph3.confirmation_number = p.jobid THEN 0 ELSE 1 END,
-      ph3.id DESC
-    LIMIT 1
-  ) ph3 ON true
+    SUM(CASE WHEN v.enddatetime IS NULL THEN 1 ELSE 0 END)::int AS open_event_count,
+    to_char(MIN(v.startdatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS first_startdatetime,
+    to_char(MAX(v.enddatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS last_enddatetime,
+    COALESCE(SUM(v.duration_seconds), 0)::bigint AS duration_seconds,
+    ROUND(COALESCE(SUM(v.duration_hours), 0), 4) AS duration_hours
+  FROM public.mv_mch_productiondata_detail v
 `;
 
 const groupedBy = `
   GROUP BY
-    p.startdatetime::date,
-    p.machineno,
-    m.machineid,
-    m.machinename,
-    COALESCE(NULLIF(m.description, ''), m.machinename, m.machineid, 'Machine ' || p.machineno::text),
-    m.plantid,
-    p.statusid,
-    st.description,
-    st.activitytype,
-    p.operatorid,
-    p.jobid,
-    q.order_no,
-    q.operation_no,
-    q.sequence_category,
-    q.sequence_number,
-    ph3.sequence_number,
-    q.branch_operation_no,
-    q.return_operation_no,
-    q.work_center
+    v.startdatetime::date,
+    v.machineno,
+    v.machineid,
+    v.machinename,
+    COALESCE(NULLIF(v.machinename, ''), v.machineid, 'Machine ' || v.machineno::text),
+    v.machine_plantid,
+    v.statusid,
+    v.status_description,
+    v.status_activitytype,
+    v.full_name,
+    v.sn_employee,
+    v.confirmation_number,
+    v.order_no,
+    v.operation_no,
+    v.operation_short_text,
+    v.sequence_category,
+    v.sequence_number,
+    v.branch_operation_no,
+    v.return_operation_no,
+    v.workcentercode
 `;
 
 exports.validationStats = async (req, res) => {
@@ -333,7 +310,7 @@ exports.validationGroupRecords = async (req, res) => {
       ${groupedSelect}
       WHERE ${filters.whereSQL}
       ${groupedBy}
-      ORDER BY MIN(p.startdatetime) DESC, p.statusid ASC, p.operatorid ASC, p.jobid ASC
+      ORDER BY MIN(v.startdatetime) DESC, v.statusid ASC, v.full_name ASC, v.confirmation_number ASC
       LIMIT $${params.length}
     `;
 

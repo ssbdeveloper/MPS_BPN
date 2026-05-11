@@ -6,13 +6,16 @@ looked up from PostgreSQL via timesheet_transaction → ph3_order chain.
 Performa: bulk lookup — hanya 2 query PostgreSQL per batch, bukan 20.000.
 
 Usage:
-    python etl_machine_conf.py              # live run
-    python etl_machine_conf.py --dry-run    # preview only, no updates
+    python etl_machine_conf.py                         # live run, from 2026-01-01
+    python etl_machine_conf.py --from 2026-05-01       # live run from selected date
+    python etl_machine_conf.py --from 2026-05-01 --to 2026-05-11
+    python etl_machine_conf.py --dry-run               # preview only, no updates/sync
+    python etl_machine_conf.py --sync-only --from 2026-05-01
 """
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -38,6 +41,9 @@ POSTGRES_CONFIG = {
 }
 
 BATCH_SIZE = 5000
+DEFAULT_FROM_DATE = "2026-01-01"
+MCH_TABLE = "mch_productiondata"
+MCH_DETAIL_MV = "mv_mch_productiondata_detail"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -48,6 +54,61 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("etl_machine_conf")
+
+
+CREATE_MCH_PRODUCTIONDATA_SQL = """
+CREATE TABLE IF NOT EXISTS public.mch_productiondata (
+    proddataid int4 NOT NULL,
+    startdatetime timestamp NOT NULL,
+    enddatetime timestamp NULL,
+    machineno int4 NOT NULL,
+    statusid int2 NOT NULL,
+    previoustatusid int2 NULL,
+    duration int4 NULL,
+    "Notes" varchar(100) NULL,
+    operatorid varchar(100) NULL,
+    jobid varchar(100) NULL,
+    "JobComplete" bool NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mch_productiondata_proddataid
+    ON public.mch_productiondata (proddataid);
+
+CREATE INDEX IF NOT EXISTS idx_mch_productiondata_startdatetime
+    ON public.mch_productiondata (startdatetime);
+
+CREATE INDEX IF NOT EXISTS idx_mch_productiondata_machine_start
+    ON public.mch_productiondata (machineno, startdatetime);
+"""
+
+
+UPSERT_MCH_PRODUCTIONDATA_SQL = """
+INSERT INTO public.mch_productiondata (
+    proddataid,
+    startdatetime,
+    enddatetime,
+    machineno,
+    statusid,
+    previoustatusid,
+    duration,
+    "Notes",
+    operatorid,
+    jobid,
+    "JobComplete"
+)
+VALUES %s
+ON CONFLICT (proddataid) DO UPDATE SET
+    startdatetime = EXCLUDED.startdatetime,
+    enddatetime = EXCLUDED.enddatetime,
+    machineno = EXCLUDED.machineno,
+    statusid = EXCLUDED.statusid,
+    previoustatusid = EXCLUDED.previoustatusid,
+    duration = EXCLUDED.duration,
+    "Notes" = EXCLUDED."Notes",
+    operatorid = EXCLUDED.operatorid,
+    jobid = EXCLUDED.jobid,
+    "JobComplete" = EXCLUDED."JobComplete"
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -71,18 +132,62 @@ def connect_postgres():
 # ---------------------------------------------------------------------------
 # Core ETL — bulk lookup strategy
 # ---------------------------------------------------------------------------
-def fetch_production_data(cursor: pyodbc.Cursor, offset: int) -> list[dict]:
-    sql = """
+def fetch_production_data(cursor: pyodbc.Cursor, offset: int, from_dt: datetime, to_dt: datetime | None) -> list[dict]:
+    where = [
+        "JobID <> ''",
+        "(JobID LIKE '1%' OR JobID LIKE '3%')",
+        "StartDateTime >= ?",
+    ]
+    params = [from_dt]
+    if to_dt:
+        where.append("StartDateTime < ?")
+        params.append(to_dt)
+
+    sql = f"""
         SELECT ProdDataID, JobID, StartDateTime
         FROM ProductionData
-        WHERE JobID <> ''
-          AND (JobID LIKE '1%' OR JobID LIKE '3%')
-          AND StartDateTime >= '2026-01-01'
+        WHERE {" AND ".join(where)}
         ORDER BY ProdDataID
         OFFSET ? ROWS
         FETCH NEXT ? ROWS ONLY
     """
-    cursor.execute(sql, (offset, BATCH_SIZE))
+    cursor.execute(sql, (*params, offset, BATCH_SIZE))
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def fetch_production_rows_for_postgres(
+    cursor: pyodbc.Cursor,
+    offset: int,
+    from_dt: datetime,
+    to_dt: datetime | None,
+) -> list[dict]:
+    where = ["StartDateTime >= ?"]
+    params = [from_dt]
+    if to_dt:
+        where.append("StartDateTime < ?")
+        params.append(to_dt)
+
+    sql = f"""
+        SELECT
+            ProdDataID,
+            StartDateTime,
+            EndDateTime,
+            MachineNo,
+            StatusID,
+            PreviousStatusID,
+            Duration,
+            Notes,
+            OperatorID,
+            JobID,
+            JobComplete
+        FROM dbo.ProductionData
+        WHERE {" AND ".join(where)}
+        ORDER BY ProdDataID
+        OFFSET ? ROWS
+        FETCH NEXT ? ROWS ONLY
+    """
+    cursor.execute(sql, (*params, offset, BATCH_SIZE))
     columns = [col[0] for col in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
@@ -220,19 +325,165 @@ def update_jobid(cursor: pyodbc.Cursor, prod_data_id: int, new_jobid: str) -> No
     )
 
 
+def parse_date_arg(value: str, label: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{label} harus format YYYY-MM-DD") from exc
+
+
+def make_date_range(args: argparse.Namespace) -> tuple[datetime, datetime | None]:
+    from_dt = parse_date_arg(args.from_date, "--from")
+    to_dt = None
+    if args.to_date:
+        # Inclusive date input from user, exclusive upper bound for SQL query.
+        to_dt = parse_date_arg(args.to_date, "--to") + timedelta(days=1)
+    if to_dt and from_dt >= to_dt:
+        raise ValueError("--from tidak boleh lebih besar dari --to")
+    return from_dt, to_dt
+
+
+def ensure_mch_productiondata_table(pg_conn) -> None:
+    with pg_conn.cursor() as cursor:
+        cursor.execute(CREATE_MCH_PRODUCTIONDATA_SQL)
+    pg_conn.commit()
+
+
+def clip_text(value, max_len: int = 100):
+    if value is None:
+        return None
+    return str(value)[:max_len]
+
+
+def coerce_bool(value):
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y"}:
+        return True
+    if text in {"0", "false", "f", "no", "n"}:
+        return False
+    return None
+
+
+def to_mch_tuple(row: dict) -> tuple:
+    return (
+        row.get("ProdDataID"),
+        row.get("StartDateTime"),
+        row.get("EndDateTime"),
+        row.get("MachineNo"),
+        row.get("StatusID"),
+        row.get("PreviousStatusID"),
+        row.get("Duration"),
+        clip_text(row.get("Notes")),
+        clip_text(row.get("OperatorID")),
+        clip_text(row.get("JobID")),
+        coerce_bool(row.get("JobComplete")),
+    )
+
+
+def sync_productiondata_to_postgres(
+    mssql_cursor: pyodbc.Cursor,
+    pg_conn,
+    from_dt: datetime,
+    to_dt: datetime | None,
+    dry_run: bool = False,
+) -> int:
+    if not dry_run:
+        ensure_mch_productiondata_table(pg_conn)
+
+    total_synced = 0
+    offset = 0
+    while True:
+        rows = fetch_production_rows_for_postgres(mssql_cursor, offset, from_dt, to_dt)
+        if not rows:
+            log.info("No more ProductionData rows for Postgres sync at offset %d.", offset)
+            break
+
+        values = [to_mch_tuple(row) for row in rows]
+        if dry_run:
+            log.info(
+                "DRY-RUN Postgres sync batch offset=%d count=%d first_proddataid=%s",
+                offset,
+                len(values),
+                values[0][0] if values else "-",
+            )
+        else:
+            with pg_conn.cursor() as pg_cursor:
+                psycopg2.extras.execute_values(
+                    pg_cursor,
+                    UPSERT_MCH_PRODUCTIONDATA_SQL,
+                    values,
+                    page_size=min(BATCH_SIZE, 1000),
+                )
+            pg_conn.commit()
+            log.info("Synced ProductionData batch offset=%d count=%d", offset, len(values))
+
+        total_synced += len(values)
+        offset += BATCH_SIZE
+
+    return total_synced
+
+
+def refresh_mch_detail_materialized_view(pg_conn) -> None:
+    try:
+        with pg_conn.cursor() as cursor:
+            cursor.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY public.{MCH_DETAIL_MV}")
+        pg_conn.commit()
+        log.info("Refreshed materialized view public.%s concurrently.", MCH_DETAIL_MV)
+    except psycopg2.Error as exc:
+        pg_conn.rollback()
+        log.warning("Concurrent refresh failed for public.%s: %s", MCH_DETAIL_MV, exc)
+        try:
+            with pg_conn.cursor() as cursor:
+                cursor.execute(f"REFRESH MATERIALIZED VIEW public.{MCH_DETAIL_MV}")
+            pg_conn.commit()
+            log.info("Refreshed materialized view public.%s.", MCH_DETAIL_MV)
+        except psycopg2.Error as retry_exc:
+            pg_conn.rollback()
+            log.warning(
+                "Skip refresh materialized view public.%s: %s. Jalankan migration "
+                "API/migrations/20260512_create_mch_productiondata_detail_mv.sql dulu jika view belum ada.",
+                MCH_DETAIL_MV,
+                retry_exc,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="ETL: Update ProductionData.JobID from PostgreSQL lookup"
+        description="ETL: Update ProductionData.JobID then sync ProductionData to PostgreSQL mch_productiondata"
     )
     parser.add_argument(
-        "--dry-run", action="store_true", help="Preview mode, no actual updates"
+        "--from",
+        dest="from_date",
+        default=DEFAULT_FROM_DATE,
+        help=f"StartDateTime mulai tanggal YYYY-MM-DD, default {DEFAULT_FROM_DATE}",
+    )
+    parser.add_argument(
+        "--to",
+        dest="to_date",
+        help="StartDateTime sampai tanggal YYYY-MM-DD, inclusive. Jika kosong, sync sampai data terbaru.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview mode, no SQL Server updates and no Postgres inserts"
+    )
+    parser.add_argument(
+        "--sync-only", action="store_true", help="Skip update JobID, hanya kirim ProductionData ke Postgres"
+    )
+    parser.add_argument(
+        "--skip-refresh-mv",
+        action="store_true",
+        help="Skip refresh materialized view public.mv_mch_productiondata_detail setelah sync",
     )
     args = parser.parse_args()
 
     dry_run: bool = args.dry_run
+    from_dt, to_dt = make_date_range(args)
 
     log.info(
         "Starting ETL machine confirmation%s (BATCH_SIZE=%d)",
@@ -241,6 +492,11 @@ def main() -> None:
     )
     log.info("SQL Server: %s/%s", SQLSERVER_CONFIG["server"], SQLSERVER_CONFIG["database"])
     log.info("PostgreSQL:  %s:%s/%s", POSTGRES_CONFIG["host"], POSTGRES_CONFIG["port"], POSTGRES_CONFIG["dbname"])
+    log.info(
+        "Date filter:  StartDateTime >= %s%s",
+        from_dt.strftime("%Y-%m-%d"),
+        f" and <= {args.to_date}" if args.to_date else "",
+    )
 
     mssql_conn = None
     pg_conn = None
@@ -251,6 +507,7 @@ def main() -> None:
     skipped_no_timesheet = 0
     skipped_no_confirmation = 0
     failed = 0
+    synced_to_postgres = 0
 
     try:
         mssql_conn = connect_sqlserver()
@@ -261,65 +518,79 @@ def main() -> None:
         pg_cursor = pg_conn.cursor()
 
         offset = 0
-        while True:
-            rows = fetch_production_data(mssql_cursor, offset)
-            if not rows:
-                log.info("No more rows at offset %d.", offset)
-                break
+        if args.sync_only:
+            log.info("Sync-only mode: skip SQL Server JobID update batch.")
+        else:
+            while True:
+                rows = fetch_production_data(mssql_cursor, offset, from_dt, to_dt)
+                if not rows:
+                    log.info("No more rows at offset %d.", offset)
+                    break
 
-            log.info("Processing batch offset=%d, count=%d ...", offset, len(rows))
+                log.info("Processing batch offset=%d, count=%d ...", offset, len(rows))
 
-            ts_lookup_start = datetime.now()
-            ts_map = bulk_lookup_timesheet(pg_cursor, rows)
-            ts_elapsed = (datetime.now() - ts_lookup_start).total_seconds()
-            log.debug("  timesheet bulk lookup: %.1fs (%d matches)", ts_elapsed, len(ts_map))
+                ts_lookup_start = datetime.now()
+                ts_map = bulk_lookup_timesheet(pg_cursor, rows)
+                ts_elapsed = (datetime.now() - ts_lookup_start).total_seconds()
+                log.debug("  timesheet bulk lookup: %.1fs (%d matches)", ts_elapsed, len(ts_map))
 
-            conf_start = datetime.now()
-            conf_map = bulk_lookup_confirmation(pg_cursor, ts_map)
-            conf_elapsed = (datetime.now() - conf_start).total_seconds()
-            log.debug("  confirmation bulk lookup: %.1fs (%d matches)", conf_elapsed, len(conf_map))
+                conf_start = datetime.now()
+                conf_map = bulk_lookup_confirmation(pg_cursor, ts_map)
+                conf_elapsed = (datetime.now() - conf_start).total_seconds()
+                log.debug("  confirmation bulk lookup: %.1fs (%d matches)", conf_elapsed, len(conf_map))
 
-            for row in rows:
-                total_rows += 1
-                prod_id = row["ProdDataID"]
-                job_id = row["JobID"]
+                for row in rows:
+                    total_rows += 1
+                    prod_id = row["ProdDataID"]
+                    job_id = row["JobID"]
 
-                ts = ts_map.get(prod_id)
-                if not ts:
-                    skipped_no_timesheet += 1
-                    continue
+                    ts = ts_map.get(prod_id)
+                    if not ts:
+                        skipped_no_timesheet += 1
+                        continue
 
-                confirmation = conf_map.get(prod_id)
-                if not confirmation:
-                    skipped_no_confirmation += 1
-                    continue
+                    confirmation = conf_map.get(prod_id)
+                    if not confirmation:
+                        skipped_no_confirmation += 1
+                        continue
 
-                if dry_run:
-                    updated += 1
-                    log.info(
-                        "DRY-RUN ProdDataID=%d JobID %r -> %s  (order_no=%s op=%s)",
-                        prod_id, job_id, confirmation, ts["order_no"], ts["operation_no"],
-                    )
-                else:
-                    try:
-                        update_jobid(mssql_cursor, prod_id, confirmation)
+                    if dry_run:
                         updated += 1
                         log.info(
-                            "UPDATED ProdDataID=%d JobID %r -> %s",
-                            prod_id, job_id, confirmation,
+                            "DRY-RUN ProdDataID=%d JobID %r -> %s  (order_no=%s op=%s)",
+                            prod_id, job_id, confirmation, ts["order_no"], ts["operation_no"],
                         )
-                    except Exception as exc:
-                        failed += 1
-                        log.error("FAILED ProdDataID=%d JobID=%r: %s", prod_id, job_id, exc)
+                    else:
+                        try:
+                            update_jobid(mssql_cursor, prod_id, confirmation)
+                            updated += 1
+                            log.info(
+                                "UPDATED ProdDataID=%d JobID %r -> %s",
+                                prod_id, job_id, confirmation,
+                            )
+                        except Exception as exc:
+                            failed += 1
+                            log.error("FAILED ProdDataID=%d JobID=%r: %s", prod_id, job_id, exc)
 
-            if not dry_run:
-                mssql_conn.commit()
-                log.info(
-                    "Committed batch offset=%d (updated=%d, skipped_ts=%d, skipped_conf=%d, failed=%d)",
-                    offset, updated, skipped_no_timesheet, skipped_no_confirmation, failed,
-                )
+                if not dry_run:
+                    mssql_conn.commit()
+                    log.info(
+                        "Committed batch offset=%d (updated=%d, skipped_ts=%d, skipped_conf=%d, failed=%d)",
+                        offset, updated, skipped_no_timesheet, skipped_no_confirmation, failed,
+                    )
 
-            offset += BATCH_SIZE
+                offset += BATCH_SIZE
+
+        log.info("Start syncing ProductionData to public.%s ...", MCH_TABLE)
+        synced_to_postgres = sync_productiondata_to_postgres(
+            mssql_cursor,
+            pg_conn,
+            from_dt,
+            to_dt,
+            dry_run=dry_run,
+        )
+        if not dry_run and not args.skip_refresh_mv:
+            refresh_mch_detail_materialized_view(pg_conn)
 
     except KeyboardInterrupt:
         log.warning("Interrupted by user.")
@@ -347,6 +618,7 @@ def main() -> None:
     log.info("  Skipped (no timesheet):      %d", skipped_no_timesheet)
     log.info("  Skipped (no confirmation):   %d", skipped_no_confirmation)
     log.info("  Failed updates:              %d", failed)
+    log.info("  Synced to mch_productiondata:%d", synced_to_postgres)
     log.info("=" * 60)
 
 

@@ -54,7 +54,7 @@ services:
       - SQLSERVER_USER=${SQLSERVER_USER}
       - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
     volumes:
-      - uploads_data:/app/uploads
+      - ./API/uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -84,7 +84,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-      - uploads_data:/uploads:ro
+      - ./API/uploads:/uploads:ro
     depends_on:
       - api
       - frontend
@@ -123,6 +123,9 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - PORTFLASK=8000
+      - TTS_UPLOAD_ROOT=/app/uploads
+    volumes:
+      - ./API/uploads:/app/uploads
     networks:
       - timesheet-network
     depends_on:
@@ -135,9 +138,6 @@ services:
 volumes:
   postgres_data:
     driver: local
-  uploads_data:
-    driver: local
-
 networks:
   timesheet-network:
     driver: bridge

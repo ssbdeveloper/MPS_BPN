@@ -168,13 +168,13 @@
   .work-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 7.5pt;
+    font-size: 8.5pt;
     table-layout: fixed;
   }
   .work-table th {
     border: 1px solid #888;
     padding: 1.5mm;
-    font-size: 7pt;
+    font-size: 7.5pt;
     font-weight: 700;
     background: #d9d9d9;
   }
@@ -183,10 +183,15 @@
     padding: 1.5mm;
     word-break: break-word;
   }
-  .row-even { background: #ffffff; }
-  .row-odd  { background: #f4f3f0; }
+  .work-table .hrs-col { font-weight: 700; text-align: center; }
+  .op-row { background: #ffffff; }
   .tc { text-align: center; }
-  .ops-no { text-align: center; font-weight: 600; color: #0a0a0a; }
+  .ops-no { text-align: left; font-weight: 600; color: #0a0a0a; font-size:1.5mm}
+  .ops-no-tc { text-align: center; font-weight: 600; color: #0a0a0a; }
+  .nnva-row { background: #faf8f5; }
+  .nnva-row td { padding: 1.5mm; font-size: 8.5pt; color: #555; word-break: break-word; }
+  .nnva-row .ops-no { padding-left: 6mm; font-weight: 500; color: #777; font-size: 8.5pt; }
+  .nnva-indent { display: inline-block; width: 4mm; }
   .ftr-hdr {
     background: #d9d9d9;
     padding: 1mm 2.5mm;
@@ -256,8 +261,8 @@
         </td>
         <td colspan="2" style="vertical-align:top; padding:0;">
           <table class="meta-table"><tbody>
-            <tr><td class="meta-label">Document No.</td><td class="meta-value">—</td></tr>
-            <tr><td class="meta-label">Revision</td><td class="meta-value">—</td></tr>
+            <tr><td class="meta-label">Document No.</td><td class="meta-value">{{documentNo}}</td></tr>
+            <tr><td class="meta-label">Revision</td><td class="meta-value">{{revisionLabel}}</td></tr>
             <tr><td class="meta-label">Date</td><td class="meta-value">{{dateStr}}</td></tr>
             <tr><td class="meta-label">Responsibility</td><td class="meta-value">Prod. Engineering</td></tr>
             <tr><td class="meta-label">Page</td><td class="meta-value">1 of 1</td></tr>
@@ -296,7 +301,7 @@
           <td style="vertical-align:top;"><div class="ftr-hdr" style="text-align:center;">Total Hours</div><div class="total-hrs-box"><span class="total-hrs-val">{{totalHours}}</span></div></td>
         </tr>
         <tr>
-          <td style="vertical-align:top; border-right:1px solid #bbb;"><div class="ftr-hdr">Issued by (Prod. Eng.)</div><div class="ftr-body" style="min-height:13mm;"><div class="ftr-field"><span class="ftr-lbl" style="min-width:14mm;">Name</span><span class="ftr-sep">:</span><span class="write-line"></span></div><div class="ftr-field"><span class="ftr-lbl" style="min-width:14mm;">Date</span><span class="ftr-sep">:</span><span class="write-line"></span></div></div></td>
+          <td style="vertical-align:top; border-right:1px solid #bbb;"><div class="ftr-hdr">Issued by (Prod. Eng.)</div><div class="ftr-body" style="min-height:13mm;"><div class="ftr-field"><span class="ftr-lbl" style="min-width:14mm;">Name</span><span class="ftr-sep">:</span><span class="write-line">{{issuedByName}}</span></div><div class="ftr-field"><span class="ftr-lbl" style="min-width:14mm;">Date</span><span class="ftr-sep">:</span><span class="write-line">{{issuedAt}}</span></div></div></td>
           <td style="vertical-align:top; border-right:1px solid #bbb;"><div class="ftr-hdr" style="text-align:center;">Signature</div><div style="min-height:13mm;"></div></td>
           <td colspan="2" style="vertical-align:top;"><div class="ftr-hdr">NOTE :</div><div style="min-height:13mm; padding:1.5mm 2.5mm;"></div></td>
         </tr>
