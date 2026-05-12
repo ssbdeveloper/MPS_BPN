@@ -76,12 +76,27 @@ def merge_announcement_audio(
 
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    try:
+        header_audio = AudioSegment.from_file(header)
+    except Exception as exc:
+        raise RuntimeError(f"Gagal decode header audio {header}: {exc}") from exc
+
+    try:
+        body_audio = AudioSegment.from_file(body)
+    except Exception as exc:
+        raise RuntimeError(f"Gagal decode generated body audio {body}: {exc}") from exc
+
+    try:
+        footer_audio = AudioSegment.from_file(footer)
+    except Exception as exc:
+        raise RuntimeError(f"Gagal decode footer audio {footer}: {exc}") from exc
+
     final_audio = (
-        AudioSegment.from_mp3(header)
+        header_audio
         + AudioSegment.silent(duration=gap_after_header_ms)
-        + AudioSegment.from_mp3(body)
+        + body_audio
         + AudioSegment.silent(duration=gap_before_footer_ms)
-        + AudioSegment.from_mp3(footer)
+        + footer_audio
     )
     final_audio.export(output, format="mp3")
 
