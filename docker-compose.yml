@@ -88,6 +88,7 @@ services:
     depends_on:
       - api
       - frontend
+      - fastapi
     restart: unless-stopped
     networks:
       - timesheet-network
@@ -124,8 +125,10 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - PORTFLASK=8000
       - TTS_UPLOAD_ROOT=/app/uploads
+      - TTS_SERVICE_DIR=/tts-service
     volumes:
       - ./API/uploads:/app/uploads
+      - ./TTS Service:/tts-service:ro
     networks:
       - timesheet-network
     depends_on:

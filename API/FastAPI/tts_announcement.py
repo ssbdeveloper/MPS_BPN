@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 import shutil
 import tempfile
@@ -15,8 +16,10 @@ DEFAULT_PITCH = "-2Hz"
 GAP_AFTER_HEADER_MS = 100
 GAP_BEFORE_FOOTER_MS = 500
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-TTS_SERVICE_DIR = ROOT_DIR / "TTS Service"
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_ROOT_DIR = BASE_DIR.parents[1] if len(BASE_DIR.parents) > 1 else BASE_DIR
+ROOT_DIR = Path(os.getenv("PROJECT_ROOT", DEFAULT_ROOT_DIR))
+TTS_SERVICE_DIR = Path(os.getenv("TTS_SERVICE_DIR", ROOT_DIR / "TTS Service"))
 DEFAULT_HEADER_FILE = TTS_SERVICE_DIR / "header.mp3"
 DEFAULT_FOOTER_FILE = TTS_SERVICE_DIR / "footer.mp3"
 

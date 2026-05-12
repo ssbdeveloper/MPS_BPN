@@ -18,8 +18,9 @@ from tts_announcement import (
 # LOAD ENV (optional, only for local dev)
 # ====================================================
 BASE_DIR = Path(__file__).resolve().parent
-ROOT_DIR = BASE_DIR.parents[1]
-API_DIR = ROOT_DIR / "API"
+DEFAULT_ROOT_DIR = BASE_DIR.parents[1] if len(BASE_DIR.parents) > 1 else BASE_DIR
+ROOT_DIR = Path(os.getenv("PROJECT_ROOT", DEFAULT_ROOT_DIR))
+API_DIR = Path(os.getenv("API_DIR", ROOT_DIR / "API"))
 
 if (ROOT_DIR / ".env").exists() or (BASE_DIR / ".env").exists():
     from dotenv import load_dotenv
