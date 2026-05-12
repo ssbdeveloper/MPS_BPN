@@ -4,17 +4,9 @@ from pydantic import BaseModel
 from typing import Optional, List
 import logging
 import psycopg2
-import psycopg2.extras
 from psycopg2 import pool
 import os
 from pathlib import Path
-
-from tts_announcement import (
-    TtsGenerationError,
-    generate_announcement_mp3,
-    make_announcement_filename,
-)
-
 
 # ====================================================
 # LOAD ENV (optional, only for local dev)
@@ -104,21 +96,57 @@ class TtsGenerateRequest(BaseModel):
     ssbr_id: str
 
 
+MAX_TTS_SSBR_ID_LENGTH = 64
+
+
+def validate_tts_ssbr_id(ssbr_id: str) -> str:
+    cleaned = str(ssbr_id or "").strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="ssbr_id wajib diisi")
+    if len(cleaned) > MAX_TTS_SSBR_ID_LENGTH:
+        raise HTTPException(status_code=400, detail=f"ssbr_id maksimal {MAX_TTS_SSBR_ID_LENGTH} karakter")
+    return cleaned
+
+
 def ensure_tts_notification_order_table(conn):
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS public.tts_notification_order (
                 id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                path_mp3 TEXT NOT NULL,
+                path_mp3 TEXT NULL,
+                ssbr_id TEXT,
                 status BOOLEAN NOT NULL DEFAULT false,
+                generation_status TEXT NOT NULL DEFAULT 'queued',
+                error_message TEXT,
+                attempts INT NOT NULL DEFAULT 0,
                 log_audio JSONB,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                generated_at TIMESTAMPTZ
             )
         """)
+        cur.execute('ALTER TABLE public.tts_notification_order ALTER COLUMN path_mp3 DROP NOT NULL')
+        cur.execute('ALTER TABLE public.tts_notification_order ADD COLUMN IF NOT EXISTS ssbr_id TEXT')
+        cur.execute(
+            "ALTER TABLE public.tts_notification_order "
+            "ADD COLUMN IF NOT EXISTS generation_status TEXT NOT NULL DEFAULT 'queued'"
+        )
+        cur.execute('ALTER TABLE public.tts_notification_order ADD COLUMN IF NOT EXISTS error_message TEXT')
+        cur.execute('ALTER TABLE public.tts_notification_order ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0')
+        cur.execute('ALTER TABLE public.tts_notification_order ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ')
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_tts_notification_order_status_created
             ON public.tts_notification_order (status, created_at)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tts_notification_order_generation_status_created
+            ON public.tts_notification_order (generation_status, created_at)
+        """)
+        cur.execute("""
+            UPDATE public.tts_notification_order
+            SET generation_status = 'ready'
+            WHERE path_mp3 IS NOT NULL
+              AND generation_status = 'queued'
         """)
     conn.commit()
 
@@ -152,22 +180,7 @@ def announcement_file_from_path(path_mp3: str) -> Path:
 # ====================================================
 @app.post("/tts/generate")
 def generate_tts_announcement(data: TtsGenerateRequest):
-    ssbr_id = (data.ssbr_id or "").strip()
-    if not ssbr_id:
-        raise HTTPException(status_code=400, detail="ssbr_id wajib diisi")
-
-    filename = make_announcement_filename(ssbr_id)
-    file_path = TTS_ANNOUNCEMENT_DIR / filename
-    public_path = f"{TTS_ANNOUNCEMENT_PUBLIC_PREFIX}/{filename}"
-
-    try:
-        audio_log = generate_announcement_mp3(ssbr_id, file_path)
-    except TtsGenerationError as exc:
-        log.error("TTS generation failed: %s", exc.technical_detail, exc_info=True)
-        raise HTTPException(status_code=exc.status_code, detail=exc.public_detail) from exc
-    except Exception as exc:
-        log.exception("Unexpected TTS generation failure")
-        raise HTTPException(status_code=500, detail="Gagal generate audio. Cek log server.") from exc
+    ssbr_id = validate_tts_ssbr_id(data.ssbr_id)
 
     conn = get_conn()
     cur = None
@@ -176,36 +189,37 @@ def generate_tts_announcement(data: TtsGenerateRequest):
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO public.tts_notification_order (path_mp3, status, log_audio)
-            VALUES (%s, false, %s)
-            RETURNING id, path_mp3, status, log_audio
+            INSERT INTO public.tts_notification_order (
+                ssbr_id,
+                path_mp3,
+                status,
+                generation_status,
+                error_message,
+                attempts,
+                log_audio
+            )
+            VALUES (%s, NULL, false, 'queued', NULL, 0, NULL)
+            RETURNING id, ssbr_id, path_mp3, status, generation_status, attempts, created_at
             """,
-            (
-                public_path,
-                psycopg2.extras.Json({
-                    **audio_log,
-                    "path_mp3": public_path,
-                }),
-            ),
+            (ssbr_id,),
         )
         row = cur.fetchone()
         conn.commit()
 
         return {
             "id": row[0],
-            "path_mp3": row[1],
-            "status": row[2],
-            "log_audio": row[3],
-            "audio_url": f"/tts/audio/{row[0]}",
+            "ssbr_id": row[1],
+            "path_mp3": row[2],
+            "status": row[3],
+            "generation_status": row[4],
+            "attempts": row[5],
+            "created_at": str(row[6]) if row[6] else None,
+            "audio_url": None,
         }
     except Exception as exc:
         conn.rollback()
-        if file_path.exists():
-            try:
-                file_path.unlink()
-            except OSError:
-                pass
-        raise HTTPException(status_code=500, detail=f"Gagal simpan notif audio: {exc}") from exc
+        log.exception("Failed to enqueue TTS announcement")
+        raise HTTPException(status_code=500, detail=f"Gagal enqueue notif audio: {exc}") from exc
     finally:
         if cur:
             cur.close()
@@ -223,7 +237,9 @@ def get_next_tts_audio():
             """
             SELECT id, path_mp3
             FROM public.tts_notification_order
-            WHERE status = false
+            WHERE generation_status = 'ready'
+              AND status = false
+              AND path_mp3 IS NOT NULL
             ORDER BY created_at ASC, id ASC
             LIMIT 1
             FOR UPDATE SKIP LOCKED
@@ -244,6 +260,7 @@ def get_next_tts_audio():
             SET status = true,
                 updated_at = now()
             WHERE id = %s
+            RETURNING id
             """,
             (notification_id,),
         )
@@ -279,6 +296,9 @@ def get_tts_audio(notification_id: int):
             SELECT id, path_mp3
             FROM public.tts_notification_order
             WHERE id = %s
+              AND generation_status = 'ready'
+              AND path_mp3 IS NOT NULL
+            FOR UPDATE
             """,
             (notification_id,),
         )

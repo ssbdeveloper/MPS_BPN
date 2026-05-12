@@ -125,20 +125,44 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - PORTFLASK=8000
       - TTS_UPLOAD_ROOT=/app/uploads
-      - TTS_SERVICE_DIR=/tts-service
-      - PIPER_BIN=piper
-      - PIPER_MODEL_PATH=/tts-service/models/id_ID.onnx
-      - PIPER_CONFIG_PATH=/tts-service/models/id_ID.onnx.json
-      - PIPER_TIMEOUT_SECONDS=30
     volumes:
       - ./API/uploads:/app/uploads
-      - ./TTS Service:/tts-service:ro
     networks:
       - timesheet-network
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
+
+  tts-worker:
+    build:
+      context: ./TTS Service
+      dockerfile: Dockerfile
+    container_name: tts-worker
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - TTS_UPLOAD_ROOT=/uploads
+      - TTS_SERVICE_DIR=/app
+      - PIPER_BIN=piper
+      - PIPER_MODEL_PATH=/app/models/id_ID.onnx
+      - PIPER_CONFIG_PATH=/app/models/id_ID.onnx.json
+      - PIPER_TIMEOUT_SECONDS=30
+      - TTS_WORKER_POLL_SECONDS=3
+      - TTS_WORKER_STUCK_SECONDS=120
+      - TTS_WORKER_MAX_ATTEMPTS=3
+    volumes:
+      - ./TTS Service:/app
+      - ./API/uploads:/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timesheet-network
 
 
 

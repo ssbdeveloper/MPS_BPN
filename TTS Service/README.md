@@ -53,3 +53,34 @@ https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/mediu
 
 wget -O "id_ID.onnx.json" \
 https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx.json
+
+## Queue Worker Audio Announcement
+
+FastAPI `/tts/generate` hanya membuat queue di `tts_notification_order`.
+Audio dibuat oleh worker:
+
+```bash
+docker compose build tts-worker
+docker compose up -d tts-worker
+docker compose logs -f tts-worker
+```
+
+Test enqueue:
+
+```bash
+curl -k -sS -X POST https://localhost/tts/generate \
+  -H "Content-Type: application/json" \
+  -d '{"ssbr_id":"A102"}'
+```
+
+Worker akan mengubah status:
+
+```text
+queued -> processing -> ready
+```
+
+MP3 final tersimpan di:
+
+```text
+API/uploads/announcement
+```
