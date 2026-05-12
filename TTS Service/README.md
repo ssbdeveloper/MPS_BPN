@@ -44,3 +44,12 @@ python refresh_and_notify.py
 | total_actual_hours | NUMERIC | Sum of actual duration |
 | remaining_hours | NUMERIC | planhours - actual_hours |
 | status | TEXT | Default 'pending' |
+
+
+cd ~/MPS2/"TTS Service"/models
+
+wget -O "id_ID.onnx" \
+https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx
+
+wget -O "id_ID.onnx.json" \
+https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium/id_ID-news_tts-medium.onnx.json

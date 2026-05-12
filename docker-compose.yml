@@ -126,6 +126,10 @@ services:
       - PORTFLASK=8000
       - TTS_UPLOAD_ROOT=/app/uploads
       - TTS_SERVICE_DIR=/tts-service
+      - PIPER_BIN=piper
+      - PIPER_MODEL_PATH=/tts-service/models/id_ID.onnx
+      - PIPER_CONFIG_PATH=/tts-service/models/id_ID.onnx.json
+      - PIPER_TIMEOUT_SECONDS=30
     volumes:
       - ./API/uploads:/app/uploads
       - ./TTS Service:/tts-service:ro

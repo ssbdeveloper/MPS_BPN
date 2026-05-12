@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
+import logging
 import psycopg2
 import psycopg2.extras
 from psycopg2 import pool
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 
 from tts_announcement import (
+    TtsGenerationError,
     generate_announcement_mp3,
     make_announcement_filename,
 )
@@ -45,6 +47,8 @@ TTS_ANNOUNCEMENT_DIR = TTS_UPLOAD_ROOT / "announcement"
 TTS_ANNOUNCEMENT_PUBLIC_PREFIX = "/uploads/announcement"
 TTS_LEGACY_ANNOUNCEMENT_DIR = BASE_DIR / "upload" / "announcement"
 TTS_LEGACY_ANNOUNCEMENT_PUBLIC_PREFIX = "/upload/announcement"
+
+log = logging.getLogger("fastapi")
 
 # ====================================================
 # CONNECTION POOL 
@@ -158,8 +162,12 @@ def generate_tts_announcement(data: TtsGenerateRequest):
 
     try:
         audio_log = generate_announcement_mp3(ssbr_id, file_path)
+    except TtsGenerationError as exc:
+        log.error("TTS generation failed: %s", exc.technical_detail, exc_info=True)
+        raise HTTPException(status_code=exc.status_code, detail=exc.public_detail) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Gagal generate audio: {exc}") from exc
+        log.exception("Unexpected TTS generation failure")
+        raise HTTPException(status_code=500, detail="Gagal generate audio. Cek log server.") from exc
 
     conn = get_conn()
     cur = None

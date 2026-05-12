@@ -1,20 +1,18 @@
-import asyncio
+import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-import edge_tts
+log = logging.getLogger("tts_announcement")
 
-
-DEFAULT_VOICE = "id-ID-GadisNeural"
-DEFAULT_RATE = "-10%"
-DEFAULT_PITCH = "-2Hz"
 GAP_AFTER_HEADER_MS = 100
 GAP_BEFORE_FOOTER_MS = 500
+MAX_SSBR_ID_LENGTH = 64
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_ROOT_DIR = BASE_DIR.parents[1] if len(BASE_DIR.parents) > 1 else BASE_DIR
@@ -22,11 +20,32 @@ ROOT_DIR = Path(os.getenv("PROJECT_ROOT", DEFAULT_ROOT_DIR))
 TTS_SERVICE_DIR = Path(os.getenv("TTS_SERVICE_DIR", ROOT_DIR / "TTS Service"))
 DEFAULT_HEADER_FILE = TTS_SERVICE_DIR / "header.mp3"
 DEFAULT_FOOTER_FILE = TTS_SERVICE_DIR / "footer.mp3"
+PIPER_BIN = os.getenv("PIPER_BIN", "piper")
+PIPER_MODEL_PATH = Path(os.getenv("PIPER_MODEL_PATH", TTS_SERVICE_DIR / "models" / "id_ID.onnx"))
+PIPER_CONFIG_PATH = Path(os.getenv("PIPER_CONFIG_PATH", TTS_SERVICE_DIR / "models" / "id_ID.onnx.json"))
+PIPER_TIMEOUT_SECONDS = int(os.getenv("PIPER_TIMEOUT_SECONDS", "30"))
+
+
+class TtsGenerationError(RuntimeError):
+    def __init__(self, public_detail: str, technical_detail: str | None = None, status_code: int = 500):
+        super().__init__(technical_detail or public_detail)
+        self.public_detail = public_detail
+        self.technical_detail = technical_detail or public_detail
+        self.status_code = status_code
 
 
 def spaced_ssbr_id(ssbr_id: str) -> str:
     cleaned = "".join(str(ssbr_id or "").split())
     return " ".join(cleaned)
+
+
+def validate_ssbr_id(ssbr_id: str) -> str:
+    cleaned = str(ssbr_id or "").strip()
+    if not cleaned:
+        raise TtsGenerationError("ssbr_id wajib diisi", status_code=400)
+    if len(cleaned) > MAX_SSBR_ID_LENGTH:
+        raise TtsGenerationError(f"ssbr_id maksimal {MAX_SSBR_ID_LENGTH} karakter", status_code=400)
+    return cleaned
 
 
 def make_announcement_text(ssbr_id: str) -> str:
@@ -48,10 +67,114 @@ def make_announcement_filename(ssbr_id: str) -> str:
 def ensure_audio_tooling_available() -> None:
     missing = [tool for tool in ("ffmpeg", "ffprobe") if not shutil.which(tool)]
     if missing:
-        raise RuntimeError(
+        raise TtsGenerationError(
+            "Gagal generate audio. Cek log server.",
             "Audio merge membutuhkan ffmpeg/ffprobe. "
-            f"Tidak ditemukan di PATH: {', '.join(missing)}"
+            f"Tidak ditemukan di PATH: {', '.join(missing)}",
         )
+
+
+def ensure_piper_available() -> str:
+    piper_bin = shutil.which(PIPER_BIN)
+    if not piper_bin:
+        raise TtsGenerationError(
+            "Gagal generate audio dengan Piper. Cek log server.",
+            f"Piper binary tidak ditemukan di PATH: {PIPER_BIN}",
+        )
+    return piper_bin
+
+
+def ensure_piper_model_available() -> None:
+    missing = [str(path) for path in (PIPER_MODEL_PATH, PIPER_CONFIG_PATH) if not path.exists()]
+    if missing:
+        raise TtsGenerationError(
+            "Model Piper belum tersedia. Cek log server.",
+            f"File model/config Piper tidak ditemukan: {', '.join(missing)}",
+        )
+
+
+def generate_body_audio_with_piper(text: str, output_path: str | Path) -> dict:
+    piper_bin = ensure_piper_available()
+    ensure_piper_model_available()
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        piper_bin,
+        "--model",
+        str(PIPER_MODEL_PATH),
+        "--config",
+        str(PIPER_CONFIG_PATH),
+        "--output_file",
+        str(output),
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=text,
+            text=True,
+            capture_output=True,
+            timeout=PIPER_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        log.error(
+            "Piper timeout after %ss. model=%s config=%s text_length=%s stdout=%r stderr=%r",
+            PIPER_TIMEOUT_SECONDS,
+            PIPER_MODEL_PATH,
+            PIPER_CONFIG_PATH,
+            len(text),
+            exc.stdout,
+            exc.stderr,
+        )
+        raise TtsGenerationError(
+            "Generate audio timeout. Cek log server.",
+            f"Piper timeout setelah {PIPER_TIMEOUT_SECONDS} detik",
+        ) from exc
+
+    if result.returncode != 0:
+        log.error(
+            "Piper failed. returncode=%s model=%s config=%s output=%s text_length=%s stdout=%s stderr=%s",
+            result.returncode,
+            PIPER_MODEL_PATH,
+            PIPER_CONFIG_PATH,
+            output,
+            len(text),
+            result.stdout,
+            result.stderr,
+        )
+        raise TtsGenerationError(
+            "Gagal generate audio dengan Piper. Cek log server.",
+            f"Piper returncode={result.returncode}",
+        )
+
+    if not output.exists() or output.stat().st_size <= 0:
+        log.error(
+            "Piper produced empty output. model=%s config=%s output=%s text_length=%s stdout=%s stderr=%s",
+            PIPER_MODEL_PATH,
+            PIPER_CONFIG_PATH,
+            output,
+            len(text),
+            result.stdout,
+            result.stderr,
+        )
+        raise TtsGenerationError(
+            "Gagal generate audio dengan Piper. Cek log server.",
+            "Piper menghasilkan file output kosong",
+        )
+
+    if result.stderr:
+        log.info("Piper stderr: %s", result.stderr)
+
+    return {
+        "tts_engine": "piper",
+        "piper_bin": piper_bin,
+        "model_path": str(PIPER_MODEL_PATH),
+        "config_path": str(PIPER_CONFIG_PATH),
+        "body_format": "wav",
+        "piper_timeout_seconds": PIPER_TIMEOUT_SECONDS,
+    }
 
 
 def merge_announcement_audio(
@@ -69,7 +192,10 @@ def merge_announcement_audio(
 
     missing = [str(path) for path in (header, body, footer) if not path.exists()]
     if missing:
-        raise FileNotFoundError(f"Audio source tidak ditemukan: {', '.join(missing)}")
+        raise TtsGenerationError(
+            "Gagal merge audio. Cek log server.",
+            f"Audio source tidak ditemukan: {', '.join(missing)}",
+        )
 
     ensure_audio_tooling_available()
     from pydub import AudioSegment
@@ -79,17 +205,26 @@ def merge_announcement_audio(
     try:
         header_audio = AudioSegment.from_file(header)
     except Exception as exc:
-        raise RuntimeError(f"Gagal decode header audio {header}: {exc}") from exc
+        raise TtsGenerationError(
+            "Gagal merge audio. Cek log server.",
+            f"Gagal decode header audio {header}: {exc}",
+        ) from exc
 
     try:
         body_audio = AudioSegment.from_file(body)
     except Exception as exc:
-        raise RuntimeError(f"Gagal decode generated body audio {body}: {exc}") from exc
+        raise TtsGenerationError(
+            "Gagal merge audio. Cek log server.",
+            f"Gagal decode generated body audio {body}: {exc}",
+        ) from exc
 
     try:
         footer_audio = AudioSegment.from_file(footer)
     except Exception as exc:
-        raise RuntimeError(f"Gagal decode footer audio {footer}: {exc}") from exc
+        raise TtsGenerationError(
+            "Gagal merge audio. Cek log server.",
+            f"Gagal decode footer audio {footer}: {exc}",
+        ) from exc
 
     final_audio = (
         header_audio
@@ -98,7 +233,13 @@ def merge_announcement_audio(
         + AudioSegment.silent(duration=gap_before_footer_ms)
         + footer_audio
     )
-    final_audio.export(output, format="mp3")
+    try:
+        final_audio.export(output, format="mp3")
+    except Exception as exc:
+        raise TtsGenerationError(
+            "Gagal export audio final. Cek log server.",
+            f"Gagal export final MP3 {output}: {exc}",
+        ) from exc
 
     return {
         "header_file": str(header),
@@ -111,35 +252,38 @@ def merge_announcement_audio(
     }
 
 
-async def generate_announcement_mp3_async(
+def generate_announcement_mp3(
     ssbr_id: str,
     output_path: str | Path,
-    voice: str = DEFAULT_VOICE,
-    rate: str = DEFAULT_RATE,
-    pitch: str = DEFAULT_PITCH,
 ) -> dict:
+    ssbr_id = validate_ssbr_id(ssbr_id)
     text = make_announcement_text(ssbr_id)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     temp_body_path = None
+    piper_log = {}
 
     try:
         with tempfile.NamedTemporaryFile(
             prefix=f"announcement_body_{safe_filename_part(ssbr_id)}_",
-            suffix=".mp3",
+            suffix=".wav",
             delete=False,
             dir=output.parent,
         ) as temp_body:
             temp_body_path = Path(temp_body.name)
 
-        communicate = edge_tts.Communicate(
-            text=text,
-            voice=voice,
-            rate=rate,
-            pitch=pitch,
-        )
-        await communicate.save(str(temp_body_path))
+        piper_log = generate_body_audio_with_piper(text, temp_body_path)
         merge_log = merge_announcement_audio(temp_body_path, output)
+    except TtsGenerationError:
+        raise
+    except Exception as exc:
+        log.exception(
+            "Unexpected TTS generation error. ssbr_id=%s output=%s text_length=%s",
+            ssbr_id,
+            output,
+            len(text),
+        )
+        raise TtsGenerationError("Gagal generate audio. Cek log server.", str(exc)) from exc
     finally:
         if temp_body_path and temp_body_path.exists():
             try:
@@ -151,27 +295,7 @@ async def generate_announcement_mp3_async(
         "ssbr_id": ssbr_id,
         "ssbr_id_spaced": spaced_ssbr_id(ssbr_id),
         "text": text,
-        "voice": voice,
-        "rate": rate,
-        "pitch": pitch,
         "file": str(output),
+        **piper_log,
         **merge_log,
     }
-
-
-def generate_announcement_mp3(
-    ssbr_id: str,
-    output_path: str | Path,
-    voice: str = DEFAULT_VOICE,
-    rate: str = DEFAULT_RATE,
-    pitch: str = DEFAULT_PITCH,
-) -> dict:
-    return asyncio.run(
-        generate_announcement_mp3_async(
-            ssbr_id=ssbr_id,
-            output_path=output_path,
-            voice=voice,
-            rate=rate,
-            pitch=pitch,
-        )
-    )
