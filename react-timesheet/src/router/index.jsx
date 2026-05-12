@@ -6,6 +6,7 @@ import TimesheetPage from '../pages/TIMESHEET/TimesheetPage';
 import TimesheetMainMenuPage from '../pages/TIMESHEET/TimesheetMainMenuPage';
 import TimesheetListPage from '../pages/TIMESHEET/TimesheetListPage';
 import TimesheetValidationPage from '../pages/TIMESHEET/TimesheetValidationPage';
+import OperatorPerformancePage from '../pages/TIMESHEET/OperatorPerformancePage';
 import LogTimesheetPage from '../pages/TIMESHEET/LogTimesheetPage';
 import TtsAudioTestPage from '../pages/TIMESHEET/TtsAudioTestPage';
 
@@ -20,6 +21,7 @@ import SettingPage from '../pages/SettingPage';
 import ComponentTrackingPage from '../pages/PPC/ComponentTrackingPage';
 import BufferTransactionPage from '../pages/PPC/BufferTransactionPage';
 import SowSchedulingPage from '../pages/PPC/SowSchedulingPage';
+import ShiftDefinitionPage from '../pages/PPC/ShiftDefinitionPage';
 import EditParameterPage from '../pages/MACHINE_H/EditParameterPage';
 import NfcUserListPage from '../pages/TIMESHEET/NfcUserListPage';
 import CreateEditNfcPage from '../pages/TIMESHEET/CreateEditNfcPage';
@@ -57,6 +59,13 @@ const router = createBrowserRouter([
   {
     path: '/operations-hub',
     element: <OperationsHubPage />,
+  },
+  {
+    path: '/order-progress-dashboard',
+    lazy: async () => {
+      const module = await import('../pages/OrderProgressDashboardPage');
+      return { Component: module.default };
+    },
   },
   {
     path: '/receiving-shipment',
@@ -134,6 +143,14 @@ const router = createBrowserRouter([
     </ProtectedRoute>
   ),
 },
+  {
+    path: '/operator-performance',
+    element: (
+      <ProtectedRoute>
+        <OperatorPerformancePage />
+      </ProtectedRoute>
+    ),
+  },
 
   {
     path: '/timesheet-edit/:tsnumber',
@@ -174,6 +191,14 @@ const router = createBrowserRouter([
   {
     path: '/sow-scheduling',
     element: <SowSchedulingPage />,
+  },
+  {
+    path: '/shift-definition',
+    element: (
+      <ProtectedRoute>
+        <ShiftDefinitionPage />
+      </ProtectedRoute>
+    ),
   },
   {
     path: '/edit-parameter',

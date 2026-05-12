@@ -58,7 +58,7 @@ POLL_INTERVAL_SECONDS = float(os.getenv("TTS_WORKER_POLL_SECONDS", "3"))
 STUCK_PROCESSING_SECONDS = int(os.getenv("TTS_WORKER_STUCK_SECONDS", "120"))
 MAX_ATTEMPTS = int(os.getenv("TTS_WORKER_MAX_ATTEMPTS", "3"))
 MAX_SSBR_ID_LENGTH = 64
-GAP_AFTER_HEADER_MS = 100
+GAP_AFTER_HEADER_MS = 400
 GAP_BEFORE_FOOTER_MS = 500
 
 
@@ -193,7 +193,7 @@ def validate_ssbr_id(ssbr_id: str) -> str:
 
 
 def make_text(ssbr_id: str) -> str:
-    return f"Perhatian. Order dengan nomor Aiden {spaced_ssbr_id(ssbr_id)}. Mohon segera dipindahkan ke mesin selanjutnya."
+    return f"Perhatian. Order dengan nomor Aiden, {spaced_ssbr_id(ssbr_id)}. Mohon segera dipindahkan ke mesin selanjutnya."
 
 
 def safe_filename_part(value: str) -> str:

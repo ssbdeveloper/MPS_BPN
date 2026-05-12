@@ -1,12 +1,16 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends espeak-ng ffmpeg libsndfile1 \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+    && apt-get install -y --no-install-recommends \
+        -o Acquire::Retries=5 \
+        espeak-ng \
+        ffmpeg \
+        libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

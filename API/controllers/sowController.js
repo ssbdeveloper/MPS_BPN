@@ -838,15 +838,29 @@ exports.get2data = async (req, res) => {
   try {
     const { search } = req.query;
 
-    let query = 'SELECT * FROM sow WHERE 1=1';
+    let query = `
+      SELECT
+        s.*,
+        latest.remaining_seconds_before
+      FROM sow s
+      LEFT JOIN LATERAL (
+        SELECT v.remaining_seconds_before
+        FROM public.vw_timesheet_std_performance v
+        WHERE v.order_no = s.order_no
+          AND v.operation_no = s.operation_no
+        ORDER BY v.longdate_checkin DESC NULLS LAST, v.tsnumber DESC
+        LIMIT 1
+      ) latest ON TRUE
+      WHERE 1=1
+    `;
     const params = [];
 
     if (search) {
-      query += ` AND (order_no ILIKE $1 OR ssbr_id ILIKE $1)`;
+      query += ` AND (s.order_no ILIKE $1 OR s.ssbr_id ILIKE $1)`;
       params.push(`%${search}%`);
     }
 
-    query += ' ORDER BY operation_no ASC';
+    query += ' ORDER BY s.operation_no ASC';
 
     const result = await db.query(query, params);
 
@@ -892,15 +906,29 @@ exports.getDataJSON = async (req, res) => {
   try {
     const { search } = req.query;
     
-    let query = 'SELECT * FROM sow WHERE 1=1';
+    let query = `
+      SELECT
+        s.*,
+        latest.remaining_seconds_before
+      FROM sow s
+      LEFT JOIN LATERAL (
+        SELECT v.remaining_seconds_before
+        FROM public.vw_timesheet_std_performance v
+        WHERE v.order_no = s.order_no
+          AND v.operation_no = s.operation_no
+        ORDER BY v.longdate_checkin DESC NULLS LAST, v.tsnumber DESC
+        LIMIT 1
+      ) latest ON TRUE
+      WHERE 1=1
+    `;
     const params = [];
 
     if (search) {
-      query += ` AND (order_no ILIKE $1 OR ssbr_id ILIKE $1)`;
+      query += ` AND (s.order_no ILIKE $1 OR s.ssbr_id ILIKE $1)`;
       params.push(`%${search}%`);
     }
 
-    query += ' ORDER BY operation_no ASC';
+    query += ' ORDER BY s.operation_no ASC';
 
     const result = await db.query(query, params);
     

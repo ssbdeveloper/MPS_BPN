@@ -9,6 +9,7 @@ import {
   Clock, Loader2, Plus, Save, Search, Send, User, X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { PageContainer } from '../../components';
 import {
   approveOvertime, createBatch, createOvertime, createSchedule,
@@ -28,6 +29,16 @@ function roleText(user) { return String(user?.roles||user?.role||'').toLowerCase
 function canApproveOvertime(user) { const r=roleText(user).split(/[,\s/;|]+/); return r.includes('supervisor')||r.includes('administrator'); }
 function asNumber(v, f=0) { const n=Number(v); return Number.isFinite(n)?n:f; }
 function formatHours(v) { return asNumber(v).toLocaleString('id-ID',{maximumFractionDigits:2}); }
+function compactBatchCode(batch={}) {
+  const raw = String(batch.batch_code||'').trim();
+  if (/^B-\d+/i.test(raw)) return raw;
+  return batch.id ? `Batch #${batch.id}` : raw || 'Batch';
+}
+function batchOptionLabel(batch={}) {
+  const capacity = asNumber(batch.batch_capacity_hours);
+  const ops = asNumber(batch.operation_count, 0);
+  return `${compactBatchCode(batch)} - max ${formatHours(capacity)}h per op - ${ops} ops`;
+}
 function formatTime(v) { if(!v) return '-'; const t=String(v); const m=t.match(/(\d{2}:\d{2})/); return m?m[1]:t.slice(0,5); }
 function activityIdentity(item={}) { return { sow_id:item.idsow||item.sow_id||null, production_order:item.order_no||item.production_order||'', operation_no:item.operation_no||'', ssbr_id:item.ssbr_id||'', workcenter:item.workcenter||'' }; }
 function capacityKey(mc,sid) { return `${mc||''}::${sid||''}`; }
@@ -46,16 +57,23 @@ function SowActivityCard({ item, dragging=false, source='activity' }) {
   const sc = item.scheduled_hours??0;
   const isUnplanned = source==='unplanned'||item.schedule_status==='UNPLANNED';
   return (
-    <div className={`rounded-lg border bg-white p-2.5 shadow-sm transition ${dragging?'w-80 border-[#0096c7] shadow-xl shadow-[#0096c7]/20':isUnplanned?'border-red-300 bg-red-50':'border-slate-300'}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0 flex-1"><p className="truncate font-mono text-xs font-extrabold text-slate-900">{identity.production_order||'-'}</p><p className="truncate text-[10px] font-semibold text-slate-500">{identity.ssbr_id||'-'}</p></div>
-        <span className="shrink-0 rounded-md bg-slate-900 px-2 py-1 text-[11px] font-extrabold text-white">{identity.operation_no||'-'}</span>
-      </div>
-      <p className="mt-1.5 line-clamp-1 text-[11px] font-semibold text-slate-700">{item.operation_text||item.part_name||'-'} / {identity.workcenter||item.machine_code||'-'}</p>
-      <div className="mt-2 grid grid-cols-3 gap-1.5 text-[10px] font-extrabold">
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-center text-slate-600">Plan {formatHours(ph)}</span>
-        <span className="rounded bg-violet-100 px-1.5 py-0.5 text-center text-violet-700">Done {formatHours(sc)}</span>
-        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-center text-emerald-700">Left {formatHours(rm)}</span>
+    <div className={`rounded-lg border p-2.5 shadow-sm transition ${dragging?'w-80 border-[#0096c7] bg-white shadow-xl shadow-[#0096c7]/20':isUnplanned?'border-rose-200 bg-rose-50/90 hover:border-rose-300':'border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40'}`}>
+      <div className="flex items-start gap-2.5">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${isUnplanned?'bg-rose-500':'bg-[#0096c7]'}`} />
+            <p className="truncate font-mono text-xs font-extrabold text-slate-900">{identity.production_order||'-'}</p>
+          </div>
+          <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-500">{identity.ssbr_id||'-'}</p>
+          <p className="mt-1.5 line-clamp-2 text-[11px] font-semibold leading-snug text-slate-700">{item.operation_text||item.part_name||'-'}</p>
+          <p className="mt-1 truncate text-[10px] font-bold text-slate-400">{identity.workcenter||item.machine_code||'-'}</p>
+        </div>
+        <div className="flex w-[58px] shrink-0 flex-col gap-1">
+          <span className="rounded-md bg-slate-900 px-2 py-1 text-center text-[11px] font-extrabold text-white">{identity.operation_no||'-'}</span>
+          <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-center text-[9px] font-extrabold text-slate-600">Plan {formatHours(ph)}</span>
+          <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-center text-[9px] font-extrabold text-violet-700">Sch {formatHours(sc)}</span>
+          <span className={`rounded-md px-1.5 py-0.5 text-center text-[9px] font-extrabold ${asNumber(rm)>0?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-500'}`}>Left {formatHours(rm)}</span>
+        </div>
       </div>
     </div>
   );
@@ -81,7 +99,7 @@ function BatchBox({ batch, schedules, onDelete, onDeleteBatch }) {
   return (
     <div className="rounded-lg border border-violet-300 bg-violet-50 p-2">
       <button type="button" onClick={()=>setExpanded(v=>!v)} className="flex w-full items-center justify-between gap-2 text-left">
-        <div className="min-w-0"><p className="truncate text-[11px] font-extrabold text-violet-800">{batch.batch_code||'Batch'}</p><p className="text-[10px] font-bold text-violet-600">max {formatHours(batch.batch_capacity_hours)}h/op · {schedules.length} ops</p></div>
+        <div className="min-w-0"><p className="truncate text-[11px] font-extrabold text-violet-800">{compactBatchCode(batch)}</p><p className="text-[10px] font-bold text-violet-600">max {formatHours(batch.batch_capacity_hours)}h/op · {schedules.length} ops</p></div>
         <div className="flex items-center gap-1"><span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-extrabold text-violet-700">{expanded?'Hide':`${schedules.length} ops`}</span><button type="button" onPointerDown={e=>e.stopPropagation()} onClick={e=>{e.stopPropagation();onDeleteBatch(batch.id)}} className="flex h-6 w-6 items-center justify-center rounded-md bg-red-100 text-red-700 hover:bg-red-200"><X className="h-3.5 w-3.5"/></button></div>
       </button>
       {expanded&&<div className="mt-2 space-y-2">{schedules.map(s=><DropScheduleCard key={s.id} schedule={s} onDelete={onDelete}/>)}</div>}
@@ -197,15 +215,32 @@ function ScheduleModal({ pending, capacity, batches=[], saving, onClose, onSubmi
   const [batchId, setBatchId] = useState('');
   const [batchCapacityHours, setBatchCapacityHours] = useState(String(defaultHours));
   const [note, setNote] = useState('');
+  const selectedBatch = batches.find(b=>String(b.id)===String(batchId));
+  const selectedBatchCapacity = asNumber(selectedBatch?.batch_capacity_hours);
+
+  useEffect(()=>{
+    if(mode==='batch'&&!batchId&&batches.length>0) {
+      setBatchId(String(batches[0].id));
+      return;
+    }
+    if(mode==='batch'&&selectedBatch) {
+      const nextHours = Math.max(0.01, Math.min(remainingHours||1, selectedBatchCapacity||remainingHours||1));
+      setHours(String(nextHours));
+      return;
+    }
+    if(mode==='single') setHours(String(defaultHours));
+  },[mode,batchId,batches,selectedBatch,selectedBatchCapacity,remainingHours,defaultHours]);
+
   if(!pending||!item) return null;
   const plannedHours = asNumber(hours);
-  const exceedsCapacity = plannedHours > remainingCapacity;
+  const exceedsCapacity = mode==='single'&&plannedHours > remainingCapacity;
+  const exceedsBatch = mode==='batch'&&selectedBatch&&plannedHours > selectedBatchCapacity;
   const identity = activityIdentity(item);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
-      <form onSubmit={e=>{e.preventDefault();onSubmit({hours:plannedHours,note,scheduleDate,batchId:mode==='batch'?batchId:''})}} className="w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl">
+      <form onSubmit={e=>{e.preventDefault();onSubmit({hours:plannedHours,note,scheduleDate,batchId:mode==='batch'?batchId:''})}} className="flex max-h-[calc(100vh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
         <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4"><div><p className="text-xs font-bold uppercase text-[#0077b6]">Schedule Activity</p><h2 className="mt-1 text-lg font-extrabold text-slate-900">{identity.production_order||'-'}</h2><p className="text-sm font-semibold text-slate-500">{pending.machineCode} / {pending.shift?.shift_name||'-'}</p></div><button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"><X className="h-4 w-4"/></button></div>
-        <div className="space-y-4 p-5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-[11px] font-bold uppercase text-slate-500">Cap Left</p><p className="mt-1 text-lg font-extrabold text-slate-900">{formatHours(remainingCapacity)}h</p></div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3"><p className="text-[11px] font-bold uppercase text-slate-500">Plan Hrs</p><p className="mt-1 text-lg font-extrabold text-slate-900">{formatHours(item.planhours)}h</p></div>
@@ -213,14 +248,24 @@ function ScheduleModal({ pending, capacity, batches=[], saving, onClose, onSubmi
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
             <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">{['single','batch'].map(o=><button key={o} type="button" onClick={()=>setMode(o)} className={`rounded-md px-3 py-1.5 text-xs font-extrabold uppercase ${mode===o?'bg-[#0096c7] text-white':'text-slate-600 hover:bg-slate-50'}`}>{o}</button>)}</div>
-            {mode==='batch'&&<div className="mt-3 grid grid-cols-[1fr_120px_auto] gap-2"><select value={batchId} onChange={e=>setBatchId(e.target.value)} className="h-10 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"><option value="">Select batch</option>{batches.map(b=><option key={b.id} value={b.id}>{b.batch_code}</option>)}</select><input type="number" min="0.01" step="0.01" value={batchCapacityHours} onChange={e=>setBatchCapacityHours(e.target.value)} className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"/><button type="button" onClick={async()=>{const c=await onCreateBatch({batch_capacity_hours:asNumber(batchCapacityHours),schedule_date:scheduleDate});if(c?.id)setBatchId(String(c.id))}} disabled={saving||asNumber(batchCapacityHours)<=0} className="h-10 rounded-lg bg-violet-600 px-3 text-xs font-extrabold text-white hover:bg-violet-500 disabled:opacity-50">Create</button></div>}
+            {mode==='batch'&&<div className="mt-3 space-y-3">
+              <label className="block"><span className="mb-1.5 block text-[11px] font-extrabold uppercase text-slate-500">Use Existing Batch</span><select value={batchId} onChange={e=>setBatchId(e.target.value)} className="h-10 w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"><option value="">Select batch pocket</option>{batches.map(b=><option key={b.id} value={b.id}>{batchOptionLabel(b)}</option>)}</select></label>
+              {selectedBatch&&<div className="grid grid-cols-2 gap-2 text-[10px] font-extrabold"><span className="rounded bg-violet-100 px-2 py-1 text-center text-violet-700">Max {formatHours(selectedBatchCapacity)}h / op</span><span className="rounded bg-slate-100 px-2 py-1 text-center text-slate-600">{asNumber(selectedBatch.operation_count,0)} ops inside</span></div>}
+              <div className="rounded-lg border border-violet-200 bg-white p-3">
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <label className="min-w-0"><span className="mb-1.5 block text-[11px] font-extrabold uppercase text-slate-500">New Batch Pocket Hours</span><input type="number" min="0.01" step="0.01" value={batchCapacityHours} onChange={e=>setBatchCapacityHours(e.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"/></label>
+                  <button type="button" onClick={async()=>{const c=await onCreateBatch({batch_capacity_hours:asNumber(batchCapacityHours),schedule_date:scheduleDate});if(c?.id)setBatchId(String(c.id))}} disabled={saving||asNumber(batchCapacityHours)<=0} className="self-end h-10 rounded-lg bg-violet-600 px-3 text-xs font-extrabold text-white hover:bg-violet-500 disabled:opacity-50">Create Batch</button>
+                </div>
+              </div>
+            </div>}
           </div>
           <label className="block"><span className="mb-2 block text-xs font-extrabold uppercase text-slate-500">Planned Hours</span><input type="number" min="0.01" step="0.01" value={hours} onChange={e=>setHours(e.target.value)} className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800" required/></label>
           <label className="block"><span className="mb-2 block text-xs font-extrabold uppercase text-slate-500">Schedule Date</span><input type="date" value={scheduleDate} onChange={e=>setScheduleDate(e.target.value)} className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800" required/></label>
           {exceedsCapacity&&<div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-bold text-amber-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0"/><span>Exceeds capacity. Extra hours become unplanned.</span></div>}
+          {exceedsBatch&&<div className="flex gap-2 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm font-bold text-violet-700"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0"/><span>Exceeds max hours per operation in this batch. Extra hours become unplanned.</span></div>}
           <label className="block"><span className="mb-2 block text-xs font-extrabold uppercase text-slate-500">Note</span><textarea value={note} onChange={e=>setNote(e.target.value)} className="min-h-24 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-800" placeholder="Optional note"/></label>
         </div>
-        <div className="flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancel</button><button type="submit" disabled={saving||plannedHours<=0||(mode==='batch'&&!batchId)} className="inline-flex items-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-sm font-bold text-white hover:bg-[#0077b6] disabled:opacity-50">{saving?<Loader2 className="h-4 w-4 animate-spin"/>:<Save className="h-4 w-4"/>}Save</button></div>
+        <div className="shrink-0 flex justify-end gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4"><button type="button" onClick={onClose} className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancel</button><button type="submit" disabled={saving||plannedHours<=0||(mode==='batch'&&!batchId)} className="inline-flex items-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-sm font-bold text-white hover:bg-[#0077b6] disabled:opacity-50">{saving?<Loader2 className="h-4 w-4 animate-spin"/>:<Save className="h-4 w-4"/>}Save</button></div>
       </form>
     </div>
   );
@@ -331,7 +376,6 @@ function SowSchedulingPage() {
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [loadingBoard, setLoadingBoard] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeDrag, setActiveDrag] = useState(null);
   const [scheduleModal, setScheduleModal] = useState(null);
@@ -360,11 +404,11 @@ function SowSchedulingPage() {
     return order.map(k=>({order_no:k,items:groups[k],total_plan:groups[k].reduce((s,i)=>s+asNumber(i.planhours),0),total_scheduled:groups[k].reduce((s,i)=>s+asNumber(i.scheduled_hours,0),0),part_name:groups[k][0]?.part_name||''}));
   },[activities,sowFilter]);
 
-  const loadReference = useCallback(async()=>{const[sh,mc,mp]=await Promise.all([fetchShifts(),fetchSchedulingMachines(),fetchManpower()]);setShifts(sh);setMachines(mc);setManpower(mp)},[]);
-  const loadActivities = useCallback(async({page=1,append=false}={})=>{setLoadingActivities(true);setError('');try{const p=await fetchSchedulingActivities({search,page,limit:ACTIVITY_PAGE_SIZE});setActivities(prev=>append?[...prev,...(p.data||[])]:p.data||[]);setActivityPagination(p.pagination||{page,totalPages:1,total:0})}catch(err){setError(err.message||'Failed to load')}finally{setLoadingActivities(false)}},[search]);
-  const loadBoard = useCallback(async()=>{setLoadingBoard(true);setError('');try{const[sc,cap,ot,b]=await Promise.all([fetchSchedules({date,limit:SCHEDULE_LIMIT}),fetchCapacity({date}),fetchOvertime({date,limit:SCHEDULE_LIMIT}),fetchBatches({date})]);setSchedules((sc.data||[]).filter(r=>r.schedule_status!=='CANCELLED'));setCapacityRows(cap||[]);setOvertimeRows((ot||[]).filter(r=>r.request_status!=='CANCELLED'));setBatches(b||[])}catch(err){setError(err.message||'Failed to load')}finally{setLoadingBoard(false)}},[date]);
+  const loadReference = useCallback(async()=>{const[sh,mc,mp]=await Promise.all([fetchShifts({date}),fetchSchedulingMachines(),fetchManpower()]);setShifts(sh);setMachines(mc);setManpower(mp)},[date]);
+  const loadActivities = useCallback(async({page=1,append=false}={})=>{setLoadingActivities(true);try{const p=await fetchSchedulingActivities({search,page,limit:ACTIVITY_PAGE_SIZE});setActivities(prev=>append?[...prev,...(p.data||[])]:p.data||[]);setActivityPagination(p.pagination||{page,totalPages:1,total:0})}catch(err){toast.error('Gagal load activity', { description: err.message||'Failed to load' })}finally{setLoadingActivities(false)}},[search]);
+  const loadBoard = useCallback(async()=>{setLoadingBoard(true);try{const[sc,cap,ot,b]=await Promise.all([fetchSchedules({date,limit:SCHEDULE_LIMIT}),fetchCapacity({date}),fetchOvertime({date,limit:SCHEDULE_LIMIT}),fetchBatches({date})]);setSchedules((sc.data||[]).filter(r=>r.schedule_status!=='CANCELLED'));setCapacityRows(cap||[]);setOvertimeRows((ot||[]).filter(r=>r.request_status!=='CANCELLED'));setBatches(b||[])}catch(err){toast.error('Gagal load schedule board', { description: err.message||'Failed to load' })}finally{setLoadingBoard(false)}},[date]);
 
-  useEffect(()=>{loadReference().catch(e=>setError(e.message||'Failed'))},[loadReference]);
+  useEffect(()=>{loadReference().catch(e=>toast.error('Gagal load reference', { description: e.message||'Failed' }))},[loadReference]);
   useEffect(()=>{loadActivities({page:1,append:false})},[loadActivities,refreshKey]);
   useEffect(()=>{loadBoard()},[loadBoard,refreshKey]);
 
@@ -374,34 +418,33 @@ function SowSchedulingPage() {
   const handleDragEnd = async({active,over})=>{const d=active.data?.current;setActiveDrag(null);if(!d?.item||!over?.id)return;
     // Manpower drag to existing overtime row (drop id: assign-ot-{id})
     if(d.source==='manpower'&&String(over.id).startsWith('assign-ot-')&&over.data?.current?.overtimeId){
-      setSaving(true);setError('');try{await assignManpower(over.data.current.overtimeId,d.item.snssb,d.item.full_name);refresh()}catch(err){setError(err.message||'Failed to assign')}finally{setSaving(false)}return}
+      setSaving(true);try{await assignManpower(over.data.current.overtimeId,d.item.snssb,d.item.full_name);toast.success('Manpower assigned');refresh()}catch(err){toast.error('Gagal assign manpower', { description: err.message||'Failed to assign' })}finally{setSaving(false)}return}
     const drop=parseDropId(over.id);
     if(drop.type==='shift'){const shift=shifts.find(r=>String(r.id)===String(drop.shiftId));const cap=capacityBySlot[capacityKey(drop.machineCode,drop.shiftId)];
-      if(d.source==='planned'&&d.item.id){setSaving(true);setError('');try{const m=machines.find(r=>r.machine_code===drop.machineCode);await updateSchedule(d.item.id,{machine_code:drop.machineCode,workcenter:m?.workcenter||d.item.workcenter||null,schedule_date:date,shift_id:drop.shiftId,batch_id:null});refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}return}
+      if(d.source==='planned'&&d.item.id){setSaving(true);try{const m=machines.find(r=>r.machine_code===drop.machineCode);await updateSchedule(d.item.id,{machine_code:drop.machineCode,workcenter:m?.workcenter||d.item.workcenter||null,schedule_date:date,shift_id:drop.shiftId,batch_id:null});toast.success('Schedule moved');refresh()}catch(err){toast.error('Gagal move schedule', { description: err.message||'Failed' })}finally{setSaving(false)}return}
       setScheduleModal({item:d.item,source:d.source||'activity',machineCode:drop.machineCode,shiftId:drop.shiftId,shift,scheduleDate:date})}
     if(drop.type==='overtime'){if(d.source==='manpower')return;setOvertimeModal({item:d.item,machineCode:drop.machineCode,source:d.source})}};
 
-  const submitSchedule = async({hours,note,scheduleDate,batchId})=>{if(!scheduleModal?.item||!scheduleModal.machineCode||!scheduleModal.shiftId)return;setSaving(true);setError('');try{const iden=activityIdentity(scheduleModal.item);const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);await createSchedule({...iden,schedule_date:scheduleDate||date,shift_id:scheduleModal.shiftId,machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||iden.workcenter,planned_hours:hours,batch_id:batchId||null,remarks:note});if(scheduleModal.source==='unplanned'&&scheduleModal.item.id)await deleteSchedule(scheduleModal.item.id);setScheduleModal(null);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
+  const submitSchedule = async({hours,note,scheduleDate,batchId})=>{if(!scheduleModal?.item||!scheduleModal.machineCode||!scheduleModal.shiftId)return;setSaving(true);try{const iden=activityIdentity(scheduleModal.item);const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);await createSchedule({...iden,schedule_date:scheduleDate||date,shift_id:scheduleModal.shiftId,machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||iden.workcenter,planned_hours:hours,batch_id:batchId||null,remarks:note});if(scheduleModal.source==='unplanned'&&scheduleModal.item.id)await deleteSchedule(scheduleModal.item.id);toast.success('Activity scheduled');setScheduleModal(null);refresh()}catch(err){toast.error('Gagal schedule activity', { description: err.message||'Failed' })}finally{setSaving(false)}};
 
-  const handleCreateBatch = async({batch_capacity_hours,schedule_date})=>{if(!scheduleModal?.machineCode||!scheduleModal?.shiftId)return null;setSaving(true);setError('');try{const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);const c=await createBatch({machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||null,schedule_date:schedule_date||date,shift_id:scheduleModal.shiftId,batch_capacity_hours});const br=await fetchBatches({date:schedule_date||date,machine_code:scheduleModal.machineCode,shift_id:scheduleModal.shiftId});setBatches(p=>[...p.filter(r=>!(r.machine_code===scheduleModal.machineCode&&String(r.schedule_date).slice(0,10)===String(schedule_date||date)&&String(r.shift_id)===String(scheduleModal.shiftId))),...br]);refresh();return c}catch(err){setError(err.message||'Failed');return null}finally{setSaving(false)}};
+  const handleCreateBatch = async({batch_capacity_hours,schedule_date})=>{if(!scheduleModal?.machineCode||!scheduleModal?.shiftId)return null;setSaving(true);try{const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);const c=await createBatch({machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||null,schedule_date:schedule_date||date,shift_id:scheduleModal.shiftId,batch_capacity_hours});const br=await fetchBatches({date:schedule_date||date,machine_code:scheduleModal.machineCode,shift_id:scheduleModal.shiftId});setBatches(p=>[...p.filter(r=>!(r.machine_code===scheduleModal.machineCode&&String(r.schedule_date).slice(0,10)===String(schedule_date||date)&&String(r.shift_id)===String(scheduleModal.shiftId))),...br]);toast.success('Batch created');refresh();return c}catch(err){toast.error('Gagal create batch', { description: err.message||'Failed' });return null}finally{setSaving(false)}};
 
-  const submitOvertime = async({shiftId,startTime,endTime,note,assigned_to,assigned_to_name})=>{if(!overtimeModal?.item||!overtimeModal.machineCode||!shiftId)return;setSaving(true);setError('');try{const iden=activityIdentity(overtimeModal.item);const m=machines.find(r=>r.machine_code===overtimeModal.machineCode);await createOvertime({...iden,overtime_date:date,shift_id:shiftId,machine_code:overtimeModal.machineCode,workcenter:m?.workcenter||iden.workcenter,start_time:startTime,end_time:endTime,note,assigned_to,assigned_to_name});setOvertimeModal(null);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
+  const submitOvertime = async({shiftId,startTime,endTime,note,assigned_to,assigned_to_name})=>{if(!overtimeModal?.item||!overtimeModal.machineCode||!shiftId)return;setSaving(true);try{const iden=activityIdentity(overtimeModal.item);const m=machines.find(r=>r.machine_code===overtimeModal.machineCode);await createOvertime({...iden,overtime_date:date,shift_id:shiftId,machine_code:overtimeModal.machineCode,workcenter:m?.workcenter||iden.workcenter,start_time:startTime,end_time:endTime,note,assigned_to,assigned_to_name});toast.success('Overtime requested');setOvertimeModal(null);refresh()}catch(err){toast.error('Gagal request overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
 
-  const handleApprove = async(id)=>{setSaving(true);setError('');try{await approveOvertime(id);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
-  const handleReject = async(id,rejectionNote='')=>{setSaving(true);setError('');try{await rejectOvertime(id,rejectionNote);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
-  const handleDeleteSchedule = async(id)=>{setSaving(true);setError('');try{await deleteSchedule(id);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
-  const handleDeleteBatch = async(id)=>{if(!confirm('Cancel this batch?'))return;setSaving(true);setError('');try{await deleteBatch(id);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
-  const handleAssignManpower = async(overtimeId, snssb, fullName)=>{setSaving(true);setError('');try{await assignManpower(overtimeId,snssb,fullName);refresh()}catch(err){setError(err.message||'Failed to assign')}finally{setSaving(false)}};
-  const handleDeleteOvertime = async(id)=>{if(!confirm('Delete this overtime?'))return;setSaving(true);setError('');try{await deleteOvertime(id);refresh()}catch(err){setError(err.message||'Failed')}finally{setSaving(false)}};
+  const handleApprove = async(id)=>{setSaving(true);try{await approveOvertime(id);toast.success('Overtime approved');refresh()}catch(err){toast.error('Gagal approve overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  const handleReject = async(id,rejectionNote='')=>{setSaving(true);try{await rejectOvertime(id,rejectionNote);toast.success('Overtime rejected');refresh()}catch(err){toast.error('Gagal reject overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  const handleDeleteSchedule = async(id)=>{setSaving(true);try{await deleteSchedule(id);toast.success('Schedule deleted');refresh()}catch(err){toast.error('Gagal delete schedule', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  const handleDeleteBatch = async(id)=>{if(!confirm('Cancel this batch?'))return;setSaving(true);try{await deleteBatch(id);toast.success('Batch cancelled');refresh()}catch(err){toast.error('Gagal cancel batch', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  const handleAssignManpower = async(overtimeId, snssb, fullName)=>{setSaving(true);try{await assignManpower(overtimeId,snssb,fullName);toast.success('Manpower assigned');refresh()}catch(err){toast.error('Gagal assign manpower', { description: err.message||'Failed to assign' })}finally{setSaving(false)}};
+  const handleDeleteOvertime = async(id)=>{if(!confirm('Delete this overtime?'))return;setSaving(true);try{await deleteOvertime(id);toast.success('Overtime deleted');refresh()}catch(err){toast.error('Gagal delete overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
   const loadMoreActivities = ()=>{if(loadingActivities||activityPagination.page>=activityPagination.totalPages)return;loadActivities({page:activityPagination.page+1,append:true})};
 
   return (<PageContainer className="h-screen gap-4 overflow-hidden bg-slate-50">
     <header className="shrink-0 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm"><div className="flex items-center justify-between gap-4"><div className="flex items-center gap-3"><button onClick={()=>goBackOrFallback(navigate,'/operations-hub')} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4"/>Back</button><div><p className="text-xs font-bold uppercase text-[#0077b6]">Daily Scheduling</p><h1 className="text-xl font-extrabold text-slate-900">SOW Machine Schedule</h1></div></div><div className="flex min-w-0 flex-1 items-end justify-end gap-3"><SummaryBar schedules={schedules} capacityRows={capacityRows} overtimeRows={overtimeRows}/><label className="w-44 shrink-0"><span className="mb-1 block text-[11px] font-bold uppercase text-slate-500">Date</span><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"/></label><button onClick={()=>setShowOvertimeApproval(true)} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-bold text-white hover:bg-[#0077b6]"><Clock className="h-4 w-4"/>OT<span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-extrabold text-[#0077b6]">{pendingOvertimeCount}</span></button></div></div></header>
-    {error&&<div className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">{error}</div>}
     <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToWindowEdges]} onDragStart={handleDragStart} onDragCancel={()=>setActiveDrag(null)} onDragEnd={handleDragEnd}>
       <main className="min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm">
         <section className="flex h-full min-h-0 w-full flex-row overflow-hidden">
-        <aside className="flex min-h-0 w-[340px] shrink-0 flex-col border-r border-slate-300 bg-[#f0fbff]">
+        <aside className="flex min-h-0 w-[340px] shrink-0 flex-col border-r border-slate-300 bg-slate-100">
           {/* SOW Activity List */}
           <div className="p-4 pb-0">
             <button onClick={()=>setSowExpanded(v=>!v)} className="flex w-full items-center justify-between gap-2">
@@ -415,19 +458,21 @@ function SowSchedulingPage() {
           {sowExpanded&&<>
           <div className="px-4 pt-2"><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3"><Search className="h-4 w-4 text-slate-500"/><input value={search} onChange={e=>setSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Search..."/></div></div>
           <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-4 pb-2">
-            {groupedActivities.map(g=>{const exp=expandedOrders.has(g.order_no);return (<div key={g.order_no} className="mb-1"><button onClick={()=>setExpandedOrders(p=>{const n=new Set(p);n.has(g.order_no)?n.delete(g.order_no):n.add(g.order_no);return n})} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-sky-100"><div className="min-w-0 flex-1"><p className="truncate font-mono text-[11px] font-extrabold text-slate-800">{g.order_no}</p><p className="truncate text-[9px] text-slate-400">{g.part_name||''}</p></div><div className="flex items-center gap-2 shrink-0"><span className="text-[9px] font-bold text-slate-500">{formatHours(g.total_plan)}/{formatHours(g.total_scheduled)}h</span><ChevronDown className={`h-3 w-3 text-slate-400 transition ${exp?'rotate-180':''}`}/></div></button>{exp&&<div className="ml-2 space-y-1.5 mt-1">{g.items.map(a=><DraggableActivity key={a.idsow} item={a}/>)}</div>}</div>)})}
+            {groupedActivities.map(g=>{const exp=expandedOrders.has(g.order_no);return (<div key={g.order_no} className={`mb-2 overflow-hidden rounded-xl border shadow-sm transition ${exp?'border-sky-200 bg-sky-50/70':'border-slate-200 bg-white'}`}><button onClick={()=>setExpandedOrders(p=>{const n=new Set(p);n.has(g.order_no)?n.delete(g.order_no):n.add(g.order_no);return n})} className={`flex w-full items-center justify-between px-3 py-2 text-left transition ${exp?'bg-sky-100/80':'hover:bg-slate-50'}`}><div className="min-w-0 flex-1"><p className="truncate font-mono text-[11px] font-extrabold text-slate-800">{g.order_no}</p><p className="truncate text-[9px] font-semibold text-slate-500">{g.part_name||''}</p></div><div className="flex shrink-0 items-center gap-2"><span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold ${exp?'bg-white text-[#0077b6]':'bg-slate-100 text-slate-500'}`}>{formatHours(g.total_plan)}/{formatHours(g.total_scheduled)}h</span><ChevronDown className={`h-3 w-3 text-slate-400 transition ${exp?'rotate-180':''}`}/></div></button>{exp&&<div className="space-y-1.5 border-t border-sky-100 bg-white/75 p-2">{g.items.map(a=><DraggableActivity key={a.idsow} item={a}/>)}</div>}</div>)})}
             {groupedActivities.length===0&&!loadingActivities&&<div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm font-semibold text-slate-500">No activities.</div>}
           </div>
           <button onClick={loadMoreActivities} disabled={loadingActivities||activityPagination.page>=activityPagination.totalPages} className="mx-4 mb-3 mt-1 h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{activityPagination.page>=activityPagination.totalPages?`${activities.length} of ${activityPagination.total}`:`Load more (${activities.length}/${activityPagination.total})`}</button>
           </>}
 
           {/* Manpower List */}
-          <div className="border-t border-slate-200 px-4 py-3"><button onClick={()=>setManpowerExpanded(v=>!v)} className="flex w-full items-center justify-between gap-2"><div className="flex items-center gap-2"><User className="h-4 w-4 text-slate-400"/><span className="text-xs font-bold uppercase text-slate-600">Manpower</span><span className="text-[10px] text-slate-400">{manpower.length} people</span></div><ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition ${manpowerExpanded?'rotate-180':''}`}/></button></div>
-          {manpowerExpanded&&<div className="px-4 pb-3">
-            <div className="mb-2"><div className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2"><Search className="h-3 w-3 text-slate-400"/><input value={manpowerSearch} onChange={e=>setManpowerSearch(e.target.value)} className="w-full bg-transparent text-[11px] font-semibold text-slate-800 outline-none" placeholder="Search name / SN..."/></div></div>
-            <div className="max-h-60 overflow-y-auto space-y-1.5">{filteredManpower.map(p=><DraggableManpower key={p.snssb} person={p}/>)}</div>
-            <p className="mt-2 text-[10px] text-slate-400 italic">Seret Orang ke Box Overtime</p>
-          </div>}
+          <div className={`border-t border-slate-200 ${manpowerExpanded?'flex min-h-0 flex-1 flex-col':'shrink-0'}`}>
+            <div className="px-4 py-3"><button onClick={()=>setManpowerExpanded(v=>!v)} className="flex w-full items-center justify-between gap-2"><div className="flex items-center gap-2"><User className="h-4 w-4 text-slate-400"/><span className="text-xs font-bold uppercase text-slate-600">Manpower</span><span className="text-[10px] text-slate-400">{manpower.length} people</span></div><ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition ${manpowerExpanded?'rotate-180':''}`}/></button></div>
+            {manpowerExpanded&&<div className="flex min-h-0 flex-1 flex-col px-4 pb-3">
+              <div className="mb-2 shrink-0"><div className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2"><Search className="h-3 w-3 text-slate-400"/><input value={manpowerSearch} onChange={e=>setManpowerSearch(e.target.value)} className="w-full bg-transparent text-[11px] font-semibold text-slate-800 outline-none" placeholder="Search name / SN..."/></div></div>
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">{filteredManpower.map(p=><DraggableManpower key={p.snssb} person={p}/>)}</div>
+              <p className="mt-2 shrink-0 text-[10px] text-slate-400 italic">Seret Orang ke Box Overtime</p>
+            </div>}
+          </div>
         </aside>
 
         <section className="min-w-0 flex-1 overflow-auto bg-slate-50 p-4">

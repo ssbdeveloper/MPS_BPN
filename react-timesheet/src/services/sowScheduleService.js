@@ -49,9 +49,34 @@ function queryString(params = {}) {
   return text ? `?${text}` : '';
 }
 
-export async function fetchShifts() {
-  const payload = await request('/sow-schedule/shifts');
+export async function fetchShifts(params = {}) {
+  const payload = await request(`/sow-schedule/shifts${queryString(params)}`);
   return payload.data || [];
+}
+
+export async function fetchShiftRules(params = {}) {
+  const payload = await request(`/sow-schedule/shift-rules${queryString(params)}`);
+  return payload.data || [];
+}
+
+export async function createShiftRule(payload) {
+  const response = await request('/sow-schedule/shift-rules', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function updateShiftRule(id, payload) {
+  const response = await request(`/sow-schedule/shift-rules/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function deleteShiftRule(id) {
+  return request(`/sow-schedule/shift-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function fetchSchedulingMachines() {
@@ -179,6 +204,10 @@ export async function fetchOvertimeSummary(params = {}) {
 
 export default {
   fetchShifts,
+  fetchShiftRules,
+  createShiftRule,
+  updateShiftRule,
+  deleteShiftRule,
   fetchSchedulingMachines,
   fetchSchedulingActivities,
   fetchSchedules,

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { goBackOrFallback } from '../../utils/navigation';
-import { AlertCircle, CheckCircle2, Clock, FileText, Users, Download, RefreshCw, Filter, ChevronLeft, Search, X, ChevronRight } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, FileX2, Users, Download, RefreshCw, Filter, ChevronLeft, Search, X, ChevronRight, Layers3 } from 'lucide-react';
 
 /**
  * TimesheetValidationPage — Modern redesign (Light Theme)
@@ -212,10 +212,12 @@ const EmployeeGroup = React.memo(({
   onToggle, onEdit, onValidateSingle, onValidateGroup, sapPendingTsnumbers
 }) => {
   const pendingCount     = parseInt(group.pending_count);
+  const rejectCount      = parseInt(group.reject_count || 0);
   const validatedCount   = parseInt(group.validated_count);
   const hasSapPending    = records.some(r => sapPendingTsnumbers.has(r.tsnumber));
   const groupHours       = parseFloat(group.total_hours || 0);
   const grpPendingHrs    = parseFloat(group.pending_hours || 0);
+  const grpRejectHrs     = parseFloat(group.reject_hours || 0);
   const grpValidatedHrs  = parseFloat(group.validated_hours || 0);
 
   return (
@@ -250,6 +252,10 @@ const EmployeeGroup = React.memo(({
               <div className="font-bold text-amber-300">
                 Pending: {pendingCount} Act&nbsp;
                 <span className="text-amber-200">[{grpPendingHrs.toFixed(1)} hrs]</span>
+              </div>
+              <div className="font-bold text-red-200">
+                Reject: {rejectCount} Act&nbsp;
+                <span className="text-red-100">[{grpRejectHrs.toFixed(1)} hrs]</span>
               </div>
               <div className="font-bold text-emerald-300">
                 Validated: {validatedCount} Act&nbsp;
@@ -320,14 +326,21 @@ const EmployeeGroup = React.memo(({
 });
 
 // ─── StatCard ─────────────────────────────────────────────────────────────────
-const StatCard = ({ icon, label, primary, secondary, accentColor, bgColor, borderColor }) => (
-  <div className="flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 text-center border shadow-sm"
-    style={{ background: bgColor, borderColor }}>
+const StatCard = ({ icon, label, primary, secondary, accentColor, bgColor, borderColor, active = false, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={!onClick}
+    className={`flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 text-center border shadow-sm transition-all duration-150 ${
+      onClick ? 'cursor-pointer hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]' : 'cursor-default'
+    } ${active ? 'ring-2 ring-offset-1' : ''}`}
+    style={{ background: bgColor, borderColor, '--tw-ring-color': accentColor }}
+  >
     <span style={{ color: accentColor }}>{icon}</span>
     <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: accentColor }}>{label}</div>
     <div className="text-base font-extrabold" style={{ color: accentColor }}>{primary}</div>
     {secondary && <div className="text-[10px] font-medium text-gray-500">{secondary}</div>}
-  </div>
+  </button>
 );
 
 // ─── Icon helpers ─────────────────────────────────────────────────────────────
@@ -335,8 +348,9 @@ const Icon = {
   pending:   <AlertCircle  className="w-5 h-5" />,
   validated: <CheckCircle2 className="w-5 h-5" />,
   clock:     <Clock        className="w-5 h-5" />,
-  file:      <FileText     className="w-5 h-5" />,
+  reject:    <FileX2       className="w-5 h-5" />,
   users:     <Users        className="w-5 h-5" />,
+  component: <Layers3      className="w-4 h-4" />,
   download:  <Download     className="w-4 h-4" />,
   refresh:   <RefreshCw    className="w-4 h-4" />,
   filter:    <Filter       className="w-4 h-4" />,
@@ -353,12 +367,14 @@ const TimesheetValidationPage = () => {
   const [groups,          setGroups]          = useState([]);
   const [stats,           setStats]           = useState({
     totalHours: '0.00', totalRecords: 0, totalEmployees: 0,
-    totalPending: 0, totalValidated: 0, pendingHours: '0.00', validatedHours: '0.00'
+    totalPending: 0, totalReject: 0, totalValidated: 0,
+    pendingHours: '0.00', rejectHours: '0.00', validatedHours: '0.00'
   });
   const [searchQuery,     setSearchQuery]     = useState(searchParams.get('search') || '');
   const [debouncedSearch, setDebouncedSearch] = useState(searchQuery);
   const [startDate,       setStartDate]       = useState(searchParams.get('startDate') || '');
   const [endDate,         setEndDate]         = useState(searchParams.get('endDate') || '');
+  const [statusFilter,    setStatusFilter]    = useState(searchParams.get('status') || '');
   const [expandedGroups,  setExpandedGroups]  = useState(new Set(
     searchParams.get('expanded')?.split(',').filter(Boolean) || []
   ));
@@ -387,16 +403,17 @@ const TimesheetValidationPage = () => {
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [searchQuery]);
 
-  useEffect(() => { loadValidationData(); }, [startDate, endDate, debouncedSearch]);
+  useEffect(() => { loadValidationData(); }, [startDate, endDate, debouncedSearch, statusFilter]);
 
   useEffect(() => {
     const params = {};
     if (searchQuery)          params.search    = searchQuery;
     if (startDate)            params.startDate = startDate;
     if (endDate)              params.endDate   = endDate;
+    if (statusFilter)         params.status    = statusFilter;
     if (expandedGroups.size > 0) params.expanded = Array.from(expandedGroups).join(',');
     setSearchParams(params, { replace: true });
-  }, [searchQuery, startDate, endDate, expandedGroups, setSearchParams]);
+  }, [searchQuery, startDate, endDate, statusFilter, expandedGroups, setSearchParams]);
 
   // Read saved scroll position ONCE on mount — before any data loads.
   // Must be empty-dep so it only runs once, not on every groups refresh.
@@ -440,15 +457,15 @@ const TimesheetValidationPage = () => {
   }, [groups, groupRecords, expandedGroups]);
 
   useEffect(() => {
-    if (debouncedSearch !== lastSearchForGroups) {
+    if (`${debouncedSearch}|${statusFilter}` !== lastSearchForGroups) {
       setGroupRecords({});
-      setLastSearchForGroups(debouncedSearch);
+      setLastSearchForGroups(`${debouncedSearch}|${statusFilter}`);
       if (expandedGroups.size > 0) {
         const current = new Set(expandedGroups);
         setTimeout(() => { for (const sn of current) loadGroupRecords(sn); }, 100);
       }
     }
-  }, [debouncedSearch, expandedGroups]);
+  }, [debouncedSearch, statusFilter, expandedGroups]);
 
   const getDateParams = useCallback(() => {
     if (startDate && endDate) return { start: startDate, end: endDate };
@@ -466,6 +483,7 @@ const TimesheetValidationPage = () => {
       const { start, end } = getDateParams();
       let url = `${API_BASE}/timesheet/validation-group/${encodeURIComponent(serialnumber)}?start=${start}&end=${end}`;
       if (debouncedSearch.trim()) url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
+      if (statusFilter) url += `&status=${encodeURIComponent(statusFilter)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error('Gagal load records');
       const records = await res.json();
@@ -474,7 +492,7 @@ const TimesheetValidationPage = () => {
       console.error('Error loading group records:', err);
       setGroupRecords(prev => ({ ...prev, [serialnumber]: { records: prev[serialnumber]?.records || [], loading: false } }));
     }
-  }, [getDateParams, debouncedSearch]);
+  }, [getDateParams, debouncedSearch, statusFilter]);
 
   const loadValidationData = useCallback(async (keepExpanded = false) => {
     const scrollBefore = keepExpanded && containerRef.current ? containerRef.current.scrollTop : null;
@@ -483,6 +501,7 @@ const TimesheetValidationPage = () => {
       const { start, end } = getDateParams();
       let url = `${API_BASE}/timesheet/validation-stats?start=${start}&end=${end}`;
       if (debouncedSearch.trim()) url += `&search=${encodeURIComponent(debouncedSearch.trim())}`;
+      if (statusFilter) url += `&status=${encodeURIComponent(statusFilter)}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error('Gagal load data validasi');
       const data = await res.json();
@@ -501,7 +520,7 @@ const TimesheetValidationPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [getDateParams, debouncedSearch, expandedGroups, loadGroupRecords]);
+  }, [getDateParams, debouncedSearch, statusFilter, expandedGroups, loadGroupRecords]);
 
   const toggleGroup = useCallback((sn) => {
     setExpandedGroups(prev => {
@@ -522,7 +541,11 @@ const TimesheetValidationPage = () => {
   }, [groups, groupRecords, loadGroupRecords]);
 
   const collapseAll = useCallback(() => setExpandedGroups(new Set()), []);
-  const clearFilters = useCallback(() => { setSearchQuery(''); setStartDate(''); setEndDate(''); }, []);
+  const toggleStatusFilter = useCallback((status) => {
+    setStatusFilter(prev => prev === status ? '' : status);
+    setExpandedGroups(new Set());
+  }, []);
+  const clearFilters = useCallback(() => { setSearchQuery(''); setStartDate(''); setEndDate(''); setStatusFilter(''); }, []);
 
   const handleDownloadExcel = useCallback(async () => {
     if (!startDate || !endDate) { toast.warning('Pilih Start Date dan End Date terlebih dahulu!'); return; }
@@ -623,7 +646,9 @@ const TimesheetValidationPage = () => {
 
   const handleValidateGroup = useCallback(async (sn, records) => {
     const recs = records || groupRecords[sn]?.records || [];
-    const tsnumbers = recs.filter(r => !r.validation_date && String(r.state_flag) !== '5').map(r => r.tsnumber);
+    const tsnumbers = recs
+      .filter(r => !r.validation_date && !['3', '5'].includes(String(r.state_flag)))
+      .map(r => r.tsnumber);
     if (tsnumbers.length === 0) return;
     // Disable all pending buttons immediately
     setSapPendingTsnumbers(prev => new Set([...prev, ...tsnumbers]));
@@ -696,12 +721,15 @@ const TimesheetValidationPage = () => {
         </button>
 
         <h1 className="text-base sm:text-lg font-extrabold tracking-wide text-slate-800">
-          Timesheet Validation
+          Overall Labor Effectiveness
         </h1>
 
         <div className="flex gap-2">
           <button onClick={toggleFilters} className={btnOutline} title={showFilters ? 'Hide filters' : 'Show filters'}>
             {Icon.filter} Filter
+          </button>
+          <button onClick={() => navigate('/operator-performance')} className={`${btnSolid} bg-sky-600 hover:bg-sky-500`}>
+            {Icon.component} By Component
           </button>
           <button onClick={() => loadValidationData(true)} disabled={loading} className={btnPrimary}>
             <span className={loading ? 'animate-spin' : ''}>{Icon.refresh}</span>
@@ -795,22 +823,29 @@ const TimesheetValidationPage = () => {
             primary={`${stats.totalPending} Act`}
             secondary={`${parseFloat(stats.pendingHours || 0).toFixed(1)} hrs`}
             accentColor="#d97706" bgColor="#fffbeb" borderColor="#fde68a"
+            active={statusFilter === 'pending'}
+            onClick={() => toggleStatusFilter('pending')}
+          />
+          <StatCard
+            icon={Icon.reject} label="SAP Reject"
+            primary={`${stats.totalReject || 0} Act`}
+            secondary={`${parseFloat(stats.rejectHours || 0).toFixed(1)} hrs`}
+            accentColor="#dc2626" bgColor="#fef2f2" borderColor="#fecaca"
+            active={statusFilter === 'reject'}
+            onClick={() => toggleStatusFilter('reject')}
           />
           <StatCard
             icon={Icon.validated} label="Validated"
             primary={`${stats.totalValidated} Act`}
             secondary={`${parseFloat(stats.validatedHours || 0).toFixed(1)} hrs`}
             accentColor="#059669" bgColor="#f0fdf4" borderColor="#bbf7d0"
+            active={statusFilter === 'validated'}
+            onClick={() => toggleStatusFilter('validated')}
           />
           <StatCard
             icon={Icon.clock} label="Total Hrs"
             primary={stats.totalHours}
             accentColor={PALETTE.brightTealBlue} bgColor={PALETTE.lightCyan} borderColor={PALETTE.frostedBlue}
-          />
-          <StatCard
-            icon={Icon.file} label="Records"
-            primary={stats.totalRecords}
-            accentColor={PALETTE.frenchBlue} bgColor="#eef2ff" borderColor="#c7d2fe"
           />
           <StatCard
             icon={Icon.users} label="Employees"

@@ -6,6 +6,16 @@ import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+const formatSeconds = (value) => {
+  if (value === null || value === undefined || value === '') return '-';
+  const total = Math.max(0, Math.round(Number(value || 0)));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+};
+
+const isUnavailableRemaining = (value) => value === null || value === undefined || value === '';
+
 const SelectJobPage = () => {
   const navigate = useNavigate();
 
@@ -65,6 +75,10 @@ const SelectJobPage = () => {
 
   // ── Select job ──────────────────────────────────────────────────────────────
   const handleSelectJob = (job) => {
+    if (isUnavailableRemaining(job.remaining_seconds_before)) {
+      toast.error('JOB KEHABISAN JAM');
+    }
+
     const rowData = {
       order:         job.order_no,
       ssbr_id:       job.ssbr_id,
@@ -72,6 +86,7 @@ const SelectJobPage = () => {
       operationtext: job.operation_text,   // DB column: operation_text
       operation_no:  job.operation_no,
       planhours:     job.planhours,
+      remaining_seconds_before: job.remaining_seconds_before,
       workcenter:    job.workcenter,
     };
 
@@ -253,11 +268,12 @@ const SelectJobPage = () => {
       <div className="flex-1 overflow-y-auto">
         <table className="w-full border-collapse">
           <colgroup>
-            <col style={{ width: '18%' }} />
-            <col style={{ width: '38%' }} />
+            <col style={{ width: '17%' }} />
+            <col style={{ width: '35%' }} />
             <col style={{ width: '10%' }} />
             <col style={{ width: '10%' }} />
-            <col style={{ width: '24%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '16%' }} />
           </colgroup>
 
           <thead className="sticky top-0 z-10">
@@ -266,6 +282,7 @@ const SelectJobPage = () => {
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Activity</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Seq</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Hours</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Remaining</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Workcenter</th>
             </tr>
           </thead>
@@ -273,7 +290,7 @@ const SelectJobPage = () => {
           <tbody>
             {jobs.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-12">
+                <td colSpan={6} className="text-center py-12">
                   <div className="flex flex-col items-center gap-2">
                     <svg className="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
@@ -287,18 +304,21 @@ const SelectJobPage = () => {
               jobs.map((job, index) => {
                 const isSelected = selectedJob?.order === job.order_no &&
                                    selectedJob?.operation_no === job.operation_no;
+                const hasPlanHours = Number(job.planhours || 0) > 0;
+                const isOutOfHours = hasPlanHours && isUnavailableRemaining(job.remaining_seconds_before);
                 const rowBg = isSelected
                   ? 'bg-[#caf0f8]'
-                  : index % 2 === 0 ? 'bg-white' : 'bg-slate-50';
+                  : isOutOfHours ? 'bg-red-100' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50';
 
                 return (
                   <tr
                     key={index}
                     onClick={() => handleSelectJob(job)}
-                    className={`${rowBg} border-b border-slate-100 cursor-pointer
-                                hover:bg-[#ade8f4] active:bg-[#90e0ef] transition-colors duration-100`}
+                    style={isOutOfHours ? { backgroundColor: '#fee2e2' } : undefined}
+                    className={`${rowBg} border-b cursor-pointer transition-colors duration-100
+                                ${isOutOfHours ? 'border-l-4 border-l-red-500 border-b-red-200 hover:bg-red-100 active:bg-red-100' : 'border-slate-100 hover:bg-[#ade8f4] active:bg-[#90e0ef]'}`}
                   >
-                    <td className={`${cellBase} text-center`}>
+                    <td className={`${cellBase} text-center ${isOutOfHours ? 'border-l-4 border-red-500' : ''}`}>
                       <div className="font-semibold font-mono" style={{ color: '#0096c7' }}>{job.order_no}</div>
                       {job.ssbr_id && <div className="text-[10px] text-slate-500 leading-tight">{job.ssbr_id}</div>}
                     </td>
@@ -312,7 +332,10 @@ const SelectJobPage = () => {
                       {job.operation_no}
                     </td>
                     <td className={`${cellBase} text-center text-slate-700`}>
-                      {job.planhours}
+                      {formatSeconds(Number(job.planhours || 0) * 3600)}
+                    </td>
+                    <td className={`${cellBase} text-center font-mono ${isOutOfHours ? 'font-bold text-red-700' : 'text-slate-700'}`}>
+                      {formatSeconds(job.remaining_seconds_before)}
                     </td>
                     <td className={`${cellBase} text-center text-slate-800 font-medium`}>
                       {job.workcenter}

@@ -416,7 +416,7 @@ const MachineGroup = React.memo(({
 
 const MachineHoursValidationPage = ({
   apiPrefix = '/machine-hours-validation',
-  title = 'Machine Hours Validation',
+  title = 'Overall Equipment Effectiveness',
   submittedStorageKey = SUBMITTED_STORAGE_KEY,
   filterStorageKey = FILTER_STORAGE_KEY,
   postSapStorageKey = POST_SAP_STORAGE_KEY,
@@ -461,7 +461,7 @@ const MachineHoursValidationPage = ({
     try {
       const response = await fetch(apiUrl(`${apiPrefix}/validation-stats`, queryFilters));
       const json = await response.json();
-      if (!response.ok || json.success === false) throw new Error(json.error || 'Gagal load machine hours validation');
+      if (!response.ok || json.success === false) throw new Error(json.error || 'Gagal load Overall Equipment Effectiveness');
       setStats(json.stats || {});
       setGroups(Array.isArray(json.groups) ? json.groups : []);
       setGroupRecords({});

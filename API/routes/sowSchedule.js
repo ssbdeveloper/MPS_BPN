@@ -3,6 +3,10 @@ const router = express.Router();
 const controller = require("../controllers/sowScheduleController");
 
 router.get("/shifts", controller.getShifts);
+router.get("/shift-rules", controller.getShiftRules);
+router.post("/shift-rules", controller.createShiftRule);
+router.put("/shift-rules/:id", controller.updateShiftRule);
+router.delete("/shift-rules/:id", controller.deleteShiftRule);
 router.get("/machines", controller.getMachines);
 router.get("/sow-activities", controller.getSowActivities);
 router.get("/batches", controller.getBatches);

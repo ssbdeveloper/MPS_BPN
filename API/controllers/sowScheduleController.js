@@ -29,6 +29,15 @@ function toInt(value, fallback = null) {
   return Number.isInteger(number) ? number : fallback;
 }
 
+function toBool(value, fallback = false) {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(text)) return true;
+  if (["false", "0", "no", "n", "off"].includes(text)) return false;
+  return fallback;
+}
+
 function clampLimit(value) {
   return Math.min(MAX_LIMIT, Math.max(1, parseInt(value, 10) || 50));
 }
@@ -174,7 +183,7 @@ function sendError(res, err, fallback = "Request failed") {
 async function fetchShift(client, shiftId) {
   const result = await client.query(
     `SELECT id, shift_code, shift_name, start_time::text, end_time::text,
-            crosses_midnight, default_capacity_hours
+            crosses_midnight, default_capacity_hours, effective_date, is_default
      FROM public.shift_definition
      WHERE id = $1 AND is_active = true`,
     [shiftId]
@@ -186,6 +195,42 @@ async function fetchShift(client, shiftId) {
     throw error;
   }
   return result.rows[0];
+}
+
+function resolvedShiftSql(dateParam = "$1") {
+  return `
+    SELECT *
+    FROM (
+      SELECT
+        sd.id,
+        sd.shift_code,
+        sd.shift_name,
+        sd.effective_date,
+        sd.is_default,
+        sd.start_time,
+        sd.end_time,
+        sd.crosses_midnight,
+        sd.default_capacity_hours,
+        sd.is_active,
+        ROW_NUMBER() OVER (
+          PARTITION BY sd.shift_code
+          ORDER BY
+            CASE
+              WHEN sd.is_default = false AND sd.effective_date = ${dateParam}::date THEN 0
+              WHEN sd.is_default = true THEN 1
+              ELSE 2
+            END,
+            sd.id
+        ) AS rn
+      FROM public.shift_definition sd
+      WHERE sd.is_active = true
+        AND (
+          sd.is_default = true
+          OR sd.effective_date = ${dateParam}::date
+        )
+    ) resolved_shift
+    WHERE rn = 1
+  `;
 }
 
 async function fetchSowActivity(client, payload, required = true) {
@@ -481,16 +526,157 @@ async function queryReportView(req, res, viewName, orderBy) {
 }
 
 exports.getShifts = async (req, res) => {
+  const date = req.query.date ? normalizeDate(req.query.date, "date") : todayDate();
   try {
     const result = await db.query(
-      `SELECT id, shift_code, shift_name, start_time::text, end_time::text,
+      `SELECT id, shift_code, shift_name, effective_date,
+              is_default, start_time::text, end_time::text,
               crosses_midnight, default_capacity_hours, is_active
-       FROM public.shift_definition
-       WHERE ($1::boolean IS false OR is_active = true)
+       FROM (${resolvedShiftSql("$1")}) sd
+       WHERE ($2::boolean IS false OR is_active = true)
        ORDER BY start_time, id`,
-      [String(req.query.includeInactive || "").toLowerCase() !== "true"]
+      [date, String(req.query.includeInactive || "").toLowerCase() !== "true"]
     );
     res.json({ data: result.rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+exports.getShiftRules = async (req, res) => {
+  const includeInactive = String(req.query.includeInactive || "").toLowerCase() === "true";
+  const date = req.query.date ? normalizeDate(req.query.date, "date") : null;
+  const params = [];
+  const filters = [];
+
+  if (!includeInactive) filters.push("is_active = true");
+  if (date) {
+    params.push(date);
+    filters.push(`(effective_date = $${params.length} OR is_default = true)`);
+  }
+
+  try {
+    const result = await db.query(
+      `SELECT id, shift_code, shift_name, effective_date, is_default,
+              start_time::text, end_time::text, crosses_midnight,
+              default_capacity_hours, is_active, created_at, updated_at
+       FROM public.shift_definition
+       ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+       ORDER BY is_default DESC, COALESCE(effective_date, DATE '1900-01-01') DESC, start_time, shift_code`,
+      params
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+exports.createShiftRule = async (req, res) => {
+  const payload = req.body || {};
+  const shiftCode = normalizeText(payload.shift_code).toUpperCase();
+  const shiftName = normalizeText(payload.shift_name);
+  const isDefault = toBool(payload.is_default, true);
+  const ruleDate = isDefault ? null : normalizeDate(payload.effective_date || payload.date, "effective_date");
+
+  if (!shiftCode || !shiftName) return res.status(400).json({ error: "shift_code and shift_name are required" });
+
+  try {
+    const result = await db.query(
+      `INSERT INTO public.shift_definition (
+         shift_code, shift_name, effective_date, is_default, start_time, end_time,
+         crosses_midnight, default_capacity_hours, is_active
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, shift_code, shift_name, effective_date, is_default,
+                 start_time::text, end_time::text, crosses_midnight,
+                 default_capacity_hours, is_active`,
+      [
+        shiftCode,
+        shiftName,
+        ruleDate,
+        isDefault,
+        normalizeTime(payload.start_time, "start_time"),
+        normalizeTime(payload.end_time, "end_time"),
+        toBool(payload.crosses_midnight, false),
+        toPositiveNumber(payload.default_capacity_hours ?? payload.capacity_hours, "default_capacity_hours"),
+        toBool(payload.is_active, true),
+      ]
+    );
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+exports.updateShiftRule = async (req, res) => {
+  const id = toInt(req.params.id, null);
+  if (!id) return res.status(400).json({ error: "valid shift id required" });
+
+  const payload = req.body || {};
+  const isDefault = toBool(payload.is_default, true);
+  const ruleDate = isDefault ? null : normalizeDate(payload.effective_date || payload.date, "effective_date");
+
+  try {
+    const current = await db.query(
+      `SELECT is_default FROM public.shift_definition WHERE id = $1`,
+      [id]
+    );
+    if (current.rowCount === 0) return res.status(404).json({ error: "shift rule not found" });
+    if (Boolean(current.rows[0].is_default) !== isDefault) {
+      const error = new Error("cannot change rule type; create a new date override from the base shift instead");
+      error.status = 400;
+      throw error;
+    }
+
+    const result = await db.query(
+      `UPDATE public.shift_definition
+       SET shift_code = $1,
+           shift_name = $2,
+           effective_date = $3,
+           is_default = $4,
+           start_time = $5,
+           end_time = $6,
+           crosses_midnight = $7,
+           default_capacity_hours = $8,
+           is_active = $9
+       WHERE id = $10
+       RETURNING id, shift_code, shift_name, effective_date, is_default,
+                 start_time::text, end_time::text, crosses_midnight,
+                 default_capacity_hours, is_active`,
+      [
+        normalizeText(payload.shift_code).toUpperCase(),
+        normalizeText(payload.shift_name),
+        ruleDate,
+        isDefault,
+        normalizeTime(payload.start_time, "start_time"),
+        normalizeTime(payload.end_time, "end_time"),
+        toBool(payload.crosses_midnight, false),
+        toPositiveNumber(payload.default_capacity_hours ?? payload.capacity_hours, "default_capacity_hours"),
+        toBool(payload.is_active, true),
+        id,
+      ]
+    );
+
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+exports.deleteShiftRule = async (req, res) => {
+  const id = toInt(req.params.id, null);
+  if (!id) return res.status(400).json({ error: "valid shift id required" });
+
+  try {
+    const result = await db.query(
+      `UPDATE public.shift_definition
+       SET is_active = false
+       WHERE id = $1
+       RETURNING id`,
+      [id]
+    );
+    if (result.rowCount === 0) return res.status(404).json({ error: "shift rule not found" });
+    res.json({ data: result.rows[0] });
   } catch (err) {
     sendError(res, err);
   }
@@ -670,12 +856,7 @@ exports.getBatches = async (req, res) => {
          COALESCE(SUM(sc.planned_hours) FILTER (
            WHERE sc.schedule_status IN ('PLANNED', 'PARTIAL', 'COMPLETED')
          ), 0)::numeric(10,2) AS used_inside_hours,
-         GREATEST(
-           b.batch_capacity_hours - COALESCE(SUM(sc.planned_hours) FILTER (
-             WHERE sc.schedule_status IN ('PLANNED', 'PARTIAL', 'COMPLETED')
-           ), 0),
-           0
-         )::numeric(10,2) AS remaining_inside_hours,
+         b.batch_capacity_hours::numeric(10,2) AS max_operation_hours,
          COUNT(sc.id) FILTER (WHERE sc.schedule_status <> 'CANCELLED')::int AS operation_count
        FROM public.sow_schedule_batch b
        LEFT JOIN public.shift_definition sd ON sd.id = b.shift_id
@@ -724,12 +905,19 @@ exports.createBatch = async (req, res) => {
       [machineCode]
     );
     const user = getRequestUser(req);
-    const codeSuffix = [
-      String(Date.now()).slice(-6),
-      Math.random().toString(36).slice(2, 5).toUpperCase(),
-    ].join("");
+    const seqResult = await client.query(
+      `SELECT COUNT(*)::int + 1 AS next_no
+       FROM public.sow_schedule_batch
+       WHERE machine_code = $1
+         AND schedule_date = $2
+         AND shift_id = $3`,
+      [machineCode, scheduleDate, shiftId]
+    );
+    const dateCode = scheduleDate.replace(/-/g, "").slice(2);
+    const sequenceCode = String(seqResult.rows[0]?.next_no || 1).padStart(2, "0");
+    const uniqueSuffix = Math.random().toString(36).slice(2, 4).toUpperCase();
     const batchCode = normalizeText(payload.batch_code)
-      || `BATCH-${scheduleDate.replace(/-/g, "")}-${machineCode}-${codeSuffix}`;
+      || `B-${dateCode}-${machineCode}-S${shiftId}-${sequenceCode}${uniqueSuffix}`;
 
     const result = await client.query(
       `INSERT INTO public.sow_schedule_batch (
@@ -898,7 +1086,7 @@ exports.getCapacity = async (req, res) => {
     machineWhere = `AND w.machineid = $${params.length}`;
   }
 
-  let shiftWhere = "sd.is_active = true";
+  let shiftWhere = "true";
   if (shiftFilter) {
     params.push(shiftFilter);
     shiftWhere += ` AND sd.id = $${params.length}`;
@@ -944,7 +1132,7 @@ exports.getCapacity = async (req, res) => {
          m.groupname,
          m.categoryhours
        FROM machines m
-       CROSS JOIN public.shift_definition sd
+       CROSS JOIN (${resolvedShiftSql("$1")}) sd
        LEFT JOIN public.sow_machine_capacity cap
          ON cap.machine_code = m.machine_code
         AND cap.schedule_date = $1
@@ -1127,11 +1315,10 @@ exports.createSchedule = async (req, res) => {
     }
     const usedHours = await getUsedNormalHours(client, { machineCode, scheduleDate, shiftId });
     const availableHours = Math.max(toNumber(capacity.total_capacity_hours, 0) - usedHours, 0);
-    let plannedHours = Math.min(requestedHours, availableHours);
-    // Batch caps per-activity hours but doesn't limit total batch usage
-    if (batch && plannedHours > toNumber(batch.batch_capacity_hours, 0)) {
-      plannedHours = toNumber(batch.batch_capacity_hours, 0);
-    }
+    const batchMaxOperationHours = batch ? toNumber(batch.batch_capacity_hours, 0) : null;
+    const plannedHours = batch
+      ? Math.min(requestedHours, batchMaxOperationHours)
+      : Math.min(requestedHours, availableHours);
     const unplannedHours = Math.max(requestedHours - plannedHours, 0);
     const inserted = [];
     const user = getRequestUser(req);
@@ -1141,9 +1328,12 @@ exports.createSchedule = async (req, res) => {
 
     if (plannedHours > 0) {
       const shiftWindow = buildShiftWindow(scheduleDate, shift);
-      const offset = Math.min(usedHours, shiftWindow.hours);
+      const offset = Math.min(
+        batch ? Math.max(usedHours - toNumber(batch.batch_capacity_hours, 0), 0) : usedHours,
+        shiftWindow.hours
+      );
       const plannedStart = addHours(shiftWindow.start, offset);
-      const plannedEnd = addHours(plannedStart, Math.min(plannedHours, Math.max(shiftWindow.hours - offset, 0)) || plannedHours);
+      const plannedEnd = addHours(plannedStart, plannedHours);
       const status = unplannedHours > 0 ? "PARTIAL" : "PLANNED";
 
       const result = await client.query(
@@ -1224,6 +1414,7 @@ exports.createSchedule = async (req, res) => {
         total_capacity_hours: capacity.total_capacity_hours,
         used_normal_planned_hours: usedHours,
         available_before_save: availableHours,
+        batch_max_operation_hours: batchMaxOperationHours,
       },
       warning,
     });

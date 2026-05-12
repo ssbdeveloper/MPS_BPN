@@ -54,8 +54,10 @@ $$ LANGUAGE plpgsql;
 -- 1. shift_definition
 CREATE TABLE IF NOT EXISTS public.shift_definition (
     id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    shift_code             TEXT NOT NULL UNIQUE,
+    shift_code             TEXT NOT NULL,
     shift_name             TEXT NOT NULL,
+    effective_date         DATE,
+    is_default             BOOLEAN NOT NULL DEFAULT true,
     start_time             TIME NOT NULL,
     end_time               TIME NOT NULL,
     crosses_midnight       BOOLEAN NOT NULL DEFAULT false,
@@ -67,12 +69,20 @@ CREATE TABLE IF NOT EXISTS public.shift_definition (
 DROP TRIGGER IF EXISTS trg_shift_definition_updated_at ON shift_definition;
 CREATE TRIGGER trg_shift_definition_updated_at
     BEFORE UPDATE ON shift_definition FOR EACH ROW EXECUTE FUNCTION set_sow_scheduling_updated_at();
+CREATE UNIQUE INDEX IF NOT EXISTS uq_shift_definition_default_code
+    ON shift_definition (lower(shift_code))
+    WHERE is_default = true;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_shift_definition_effective_date_code
+    ON shift_definition (lower(shift_code), effective_date)
+    WHERE is_default = false AND effective_date IS NOT NULL;
 
 -- Seed data
-INSERT INTO shift_definition (shift_code, shift_name, start_time, end_time, default_capacity_hours) VALUES
-    ('SHIFT1', 'Shift 1', '07:00', '16:00', 8),
-    ('SHIFT2', 'Shift 2', '16:00', '23:00', 7)
-ON CONFLICT (shift_code) DO NOTHING;
+INSERT INTO shift_definition (shift_code, shift_name, is_default, start_time, end_time, default_capacity_hours)
+SELECT 'SHIFT1', 'Shift 1', true, '07:00', '16:00', 8
+WHERE NOT EXISTS (SELECT 1 FROM shift_definition WHERE shift_code = 'SHIFT1' AND is_default = true);
+INSERT INTO shift_definition (shift_code, shift_name, is_default, start_time, end_time, default_capacity_hours)
+SELECT 'SHIFT2', 'Shift 2', true, '16:00', '23:00', 7
+WHERE NOT EXISTS (SELECT 1 FROM shift_definition WHERE shift_code = 'SHIFT2' AND is_default = true);
 
 -- 2. sow_machine_capacity
 CREATE TABLE IF NOT EXISTS public.sow_machine_capacity (

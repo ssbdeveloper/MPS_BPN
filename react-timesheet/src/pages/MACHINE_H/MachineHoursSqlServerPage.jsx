@@ -4,7 +4,7 @@ export default function MachineHoursSqlServerPage() {
   return (
     <MachineHoursValidationPage
       apiPrefix="/machine-hours-validation"
-      title="Machine Hours Validation"
+      title="Overall Equipment Effectiveness"
       submittedStorageKey="machine_hours_sqlserver_submitted"
       filterStorageKey="machineHoursSqlServerShowFilters"
       postSapStorageKey="machineHoursSqlServerPostSap"

@@ -12,6 +12,44 @@ const TIMEZONE = process.env.TIMEZONE;  // ✅ Fallback default
 console.log('⚙️ Timesheet Controller Config:');
 console.log('   Plant:', PLANT_SSB);
 console.log('   Timezone:', TIMEZONE);
+const TIMESHEET_EXPORT_FIELDS = [
+  'tsnumber',
+  'activitytype',
+  'operation_text',
+  'confirmationnumber',
+  'ssbr_ident',
+  'date_checkin',
+  'date_checkout',
+  'full_name',
+  'hour_checkin',
+  'hour_checkout',
+  'longdate_checkin',
+  'longdate_checkout',
+  'note',
+  'operation_no',
+  'order_no',
+  'part_name',
+  'planhours',
+  'plant',
+  'serialnumber',
+  'state_flag',
+  'std_foreman_hours',
+  'validation_date',
+  'workcentercode',
+  'workcenterdescription',
+  'duration',
+  'modified_at'
+];
+
+const toTimesheetExportRow = (row) => (
+  TIMESHEET_EXPORT_FIELDS.reduce((acc, field) => {
+    acc[field] = field === 'ssbr_ident'
+      ? (row.ssbr_ident ?? row.ssbr_id ?? null)
+      : (row[field] ?? null);
+    return acc;
+  }, {})
+);
+
 // ============ HELPER FUNCTIONS ============
 
 /**
@@ -662,10 +700,12 @@ const generateExport = async (req, res, format = 'csv') => {
       ? `timesheet_${field}_${start}_to_${end}.${format}`
       : `timesheet_transaction.${format}`;
 
+    const exportRows = result.rows.map(toTimesheetExportRow);
+    const fields = TIMESHEET_EXPORT_FIELDS;
+
     if (format === 'csv') {
-      const fields = Object.keys(result.rows[0]);
       const parser = new Parser({ fields, delimiter: ';' });
-      const csv = parser.parse(result.rows);
+      const csv = parser.parse(exportRows);
 
       res.header('Content-Type', 'text/csv; charset=utf-8');
       res.attachment(filename);
@@ -675,13 +715,12 @@ const generateExport = async (req, res, format = 'csv') => {
     if (format === 'xlsx') {
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Timesheet');
-      const fields = Object.keys(result.rows[0]);
 
       // Add header row
       ws.addRow(fields);
 
       // Add data rows
-      result.rows.forEach(row => {
+      exportRows.forEach(row => {
         ws.addRow(fields.map(f => row[f]));
       });
 
@@ -802,7 +841,7 @@ exports.partialUpdate = async (req, res) => {
  */
 exports.validationStats = async (req, res) => {
   try {
-    let { start, end, search } = req.query;
+    let { start, end, search, status } = req.query;
 
     // Default: last 30 days
     if (!start || !end) {
@@ -831,53 +870,75 @@ exports.validationStats = async (req, res) => {
       paramIdx++;
     }
 
+    const baseWhereClauses = [...whereClauses];
+    const normalizedStatus = String(status || '').toLowerCase();
+    if (normalizedStatus === 'pending') {
+      whereClauses.push(`validation_date IS NULL AND COALESCE(state_flag::text, '') NOT IN ('3', '5')`);
+    } else if (normalizedStatus === 'reject') {
+      whereClauses.push(`state_flag::text = '3'`);
+    } else if (normalizedStatus === 'validated') {
+      whereClauses.push(`validation_date IS NOT NULL AND COALESCE(state_flag::text, '') <> '5'`);
+    }
+
+    const baseWhereSQL = baseWhereClauses.join(' AND ');
     const whereSQL = whereClauses.join(' AND ');
 
-    // Single query: groups + global stats via window functions (eliminates double scan)
-    const mergedQuery = `
+    const statsQuery = `
+      SELECT
+        COUNT(*)                                                               AS total_records,
+        COALESCE(SUM(duration), 0)                                             AS total_hours,
+        COUNT(DISTINCT serialnumber)                                           AS total_employees,
+        COUNT(*) FILTER (WHERE validation_date IS NULL AND COALESCE(state_flag::text, '') NOT IN ('3', '5')) AS total_pending,
+        COUNT(*) FILTER (WHERE state_flag::text = '3')                         AS total_reject,
+        COUNT(*) FILTER (WHERE validation_date IS NOT NULL AND COALESCE(state_flag::text, '') <> '5') AS total_validated,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL AND COALESCE(state_flag::text, '') NOT IN ('3', '5')), 0) AS pending_hours,
+        COALESCE(SUM(duration) FILTER (WHERE state_flag::text = '3'), 0)       AS reject_hours,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL AND COALESCE(state_flag::text, '') <> '5'), 0) AS validated_hours
+      FROM timesheet_transaction
+      WHERE ${baseWhereSQL}
+    `;
+
+    const groupsQuery = `
       SELECT
         serialnumber,
         MAX(full_name)                                                          AS full_name,
         COUNT(*)                                                                AS record_count,
         COALESCE(SUM(duration), 0)                                             AS total_hours,
-        COUNT(*) FILTER (WHERE validation_date IS NULL)                         AS pending_count,
-        COUNT(*) FILTER (WHERE validation_date IS NOT NULL)                     AS validated_count,
-        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL),  0)     AS pending_hours,
-        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL), 0)  AS validated_hours,
-        SUM(COUNT(*)) OVER ()                                                   AS g_total_records,
-        COALESCE(SUM(SUM(duration)) OVER (), 0)                                AS g_total_hours,
-        COUNT(*) OVER ()                                                        AS g_total_employees,
-        SUM(COUNT(*) FILTER (WHERE validation_date IS NULL))  OVER ()          AS g_total_pending,
-        SUM(COUNT(*) FILTER (WHERE validation_date IS NOT NULL)) OVER ()       AS g_total_validated,
-        COALESCE(SUM(SUM(duration) FILTER (WHERE validation_date IS NULL))  OVER (), 0) AS g_pending_hours,
-        COALESCE(SUM(SUM(duration) FILTER (WHERE validation_date IS NOT NULL)) OVER (), 0) AS g_validated_hours
+        COUNT(*) FILTER (WHERE validation_date IS NULL AND COALESCE(state_flag::text, '') NOT IN ('3', '5')) AS pending_count,
+        COUNT(*) FILTER (WHERE state_flag::text = '3')                         AS reject_count,
+        COUNT(*) FILTER (WHERE validation_date IS NOT NULL AND COALESCE(state_flag::text, '') <> '5') AS validated_count,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NULL AND COALESCE(state_flag::text, '') NOT IN ('3', '5')), 0) AS pending_hours,
+        COALESCE(SUM(duration) FILTER (WHERE state_flag::text = '3'), 0)       AS reject_hours,
+        COALESCE(SUM(duration) FILTER (WHERE validation_date IS NOT NULL AND COALESCE(state_flag::text, '') <> '5'), 0) AS validated_hours
       FROM timesheet_transaction
       WHERE ${whereSQL}
       GROUP BY serialnumber
       ORDER BY MAX(full_name) ASC
     `;
-    const mergedResult = await db.query(mergedQuery, params);
-    const rows = mergedResult.rows;
-    const first = rows[0];
+    const [statsResult, groupsResult] = await Promise.all([
+      db.query(statsQuery, params.slice(0, paramIdx - 1)),
+      db.query(groupsQuery, params)
+    ]);
+    const rows = groupsResult.rows;
+    const first = statsResult.rows[0];
 
     res.json({
       stats: first ? {
-        totalRecords:   parseInt(first.g_total_records),
-        totalHours:     parseFloat(first.g_total_hours).toFixed(2),
-        totalEmployees: parseInt(first.g_total_employees),
-        totalPending:   parseInt(first.g_total_pending),
-        totalValidated: parseInt(first.g_total_validated),
-        pendingHours:   parseFloat(first.g_pending_hours).toFixed(2),
-        validatedHours: parseFloat(first.g_validated_hours).toFixed(2)
+        totalRecords:   parseInt(first.total_records),
+        totalHours:     parseFloat(first.total_hours).toFixed(2),
+        totalEmployees: parseInt(first.total_employees),
+        totalPending:   parseInt(first.total_pending),
+        totalReject:    parseInt(first.total_reject),
+        totalValidated: parseInt(first.total_validated),
+        pendingHours:   parseFloat(first.pending_hours).toFixed(2),
+        rejectHours:    parseFloat(first.reject_hours).toFixed(2),
+        validatedHours: parseFloat(first.validated_hours).toFixed(2)
       } : {
         totalRecords: 0, totalHours: '0.00', totalEmployees: 0,
-        totalPending: 0, totalValidated: 0, pendingHours: '0.00', validatedHours: '0.00'
+        totalPending: 0, totalReject: 0, totalValidated: 0,
+        pendingHours: '0.00', rejectHours: '0.00', validatedHours: '0.00'
       },
-      groups: rows.map(({
-        g_total_records, g_total_hours, g_total_employees,
-        g_total_pending, g_total_validated, g_pending_hours, g_validated_hours,
-        ...rest
-      }) => rest)
+      groups: rows
     });
   } catch (err) {
     console.error('validationStats error:', err);
@@ -893,7 +954,7 @@ exports.validationStats = async (req, res) => {
 exports.validationGroupRecords = async (req, res) => {
   try {
     const { serialnumber } = req.params;
-    let { start, end, search } = req.query;
+    let { start, end, search, status } = req.query;
 
     if (!start || !end) {
       const now = new Date();
@@ -928,6 +989,15 @@ exports.validationGroupRecords = async (req, res) => {
       paramIdx++;
     }
 
+    const normalizedStatus = String(status || '').toLowerCase();
+    if (normalizedStatus === 'pending') {
+      whereConditions.push(`t.validation_date IS NULL AND COALESCE(t.state_flag::text, '') NOT IN ('3', '5')`);
+    } else if (normalizedStatus === 'reject') {
+      whereConditions.push(`t.state_flag::text = '3'`);
+    } else if (normalizedStatus === 'validated') {
+      whereConditions.push(`t.validation_date IS NOT NULL AND COALESCE(t.state_flag::text, '') <> '5'`);
+    }
+
     const whereSQL = whereConditions.join(' AND ');
 
     const query = `
@@ -959,6 +1029,193 @@ exports.validationGroupRecords = async (req, res) => {
     res.json(records);
   } catch (err) {
     console.error('validationGroupRecords error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const buildOperatorPerformanceFilter = (alias, params, { start, end, workcenter } = {}) => {
+  const clauses = [];
+  if (start) {
+    params.push(start);
+    clauses.push(`${alias}.longdate_checkin >= $${params.length}::date`);
+  }
+  if (end) {
+    params.push(end);
+    clauses.push(`${alias}.longdate_checkin < ($${params.length}::date + interval '1 day')`);
+  }
+  if (workcenter && String(workcenter).trim()) {
+    params.push(String(workcenter).trim());
+    clauses.push(`${alias}.workcentercode = $${params.length}`);
+  }
+  return clauses.length ? ` AND ${clauses.join(' AND ')}` : '';
+};
+
+/**
+ * GET /timesheet/operator-performance/workcenters
+ */
+exports.operatorPerformanceWorkcenters = async (req, res) => {
+  try {
+    const { start, end } = req.query;
+    const params = [];
+    const filter = buildOperatorPerformanceFilter('v', params, { start, end });
+    const result = await db.query(
+      `SELECT
+         v.workcentercode,
+         MAX(v.workcenterdescription) AS workcenterdescription
+       FROM public.vw_timesheet_std_performance v
+       WHERE v.workcentercode IS NOT NULL
+         AND BTRIM(v.workcentercode) <> ''
+         ${filter}
+       GROUP BY v.workcentercode
+       ORDER BY v.workcentercode ASC`,
+      params
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error('operatorPerformanceWorkcenters error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /timesheet/operator-performance/orders
+ * Grouped SOW table for Operator Performance.
+ */
+exports.operatorPerformanceOrders = async (req, res) => {
+  try {
+    const { search, start, end, workcenter } = req.query;
+    const params = [];
+    const where = [];
+    const metricFilter = buildOperatorPerformanceFilter('v', params, { start, end, workcenter });
+
+    if (search && search.trim()) {
+      params.push(`%${search.trim().toLowerCase()}%`);
+      where.push(`(
+        LOWER(s.order_no) LIKE $${params.length}
+        OR LOWER(COALESCE(s.ssbr_id, '')) LIKE $${params.length}
+        OR LOWER(COALESCE(s.part_name, '')) LIKE $${params.length}
+      )`);
+    }
+
+    const whereSQL = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const query = `
+      WITH metrics AS (
+        SELECT
+          v.order_no,
+          v.operation_no,
+          SUM(v.elapsed_seconds) AS elapsed_seconds,
+          SUM(v.std_performance) AS std_performance
+        FROM public.vw_timesheet_std_performance v
+        WHERE 1=1 ${metricFilter}
+        GROUP BY v.order_no, v.operation_no
+      )
+      SELECT
+        s.order_no,
+        (ARRAY_AGG(s.ssbr_id ORDER BY s.operation_no))[1] AS ssbr_id,
+        (ARRAY_AGG(s.part_name ORDER BY s.operation_no))[1] AS part_name,
+        COUNT(*)::int AS operation_count,
+        COALESCE(SUM(s.planhours), 0) AS planhours,
+        COALESCE(SUM(m.elapsed_seconds), 0) AS elapsed_seconds,
+        COALESCE(SUM(m.std_performance), 0) AS std_performance
+      FROM metrics m
+      JOIN public.sow s
+        ON s.order_no = m.order_no
+       AND s.operation_no = m.operation_no
+      ${whereSQL}
+      GROUP BY s.order_no
+      ORDER BY s.order_no DESC
+      LIMIT 300
+    `;
+
+    const result = await db.query(query, params);
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error('operatorPerformanceOrders error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /timesheet/operator-performance/orders/:orderNo/operations
+ */
+exports.operatorPerformanceOperations = async (req, res) => {
+  try {
+    const { orderNo } = req.params;
+    const { start, end, workcenter } = req.query;
+    const metricParams = [orderNo];
+    const metricFilter = buildOperatorPerformanceFilter('v', metricParams, { start, end, workcenter });
+
+    const query = `
+      WITH metrics AS (
+        SELECT
+          v.order_no,
+          v.operation_no,
+          COUNT(*)::int AS transaction_count,
+          SUM(v.elapsed_seconds) AS elapsed_seconds,
+          SUM(v.std_performance) AS std_performance
+        FROM public.vw_timesheet_std_performance v
+        WHERE v.order_no = $1 ${metricFilter}
+        GROUP BY v.order_no, v.operation_no
+      )
+      SELECT
+        s.idsow,
+        s.order_no,
+        s.operation_no,
+        s.ssbr_id,
+        s.part_name,
+        s.operation_text,
+        s.workcenter,
+        s.workcenterdescription,
+        COALESCE(s.planhours, 0) AS planhours,
+        COALESCE(m.transaction_count, 0) AS transaction_count,
+        COALESCE(m.elapsed_seconds, 0) AS elapsed_seconds,
+        COALESCE(m.std_performance, 0) AS std_performance
+      FROM metrics m
+      JOIN public.sow s
+        ON s.order_no = m.order_no
+       AND s.operation_no = m.operation_no
+      ORDER BY s.operation_no ASC
+    `;
+
+    const result = await db.query(query, metricParams);
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error('operatorPerformanceOperations error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * GET /timesheet/operator-performance/orders/:orderNo/operations/:operationNo/timesheets
+ */
+exports.operatorPerformanceTransactions = async (req, res) => {
+  try {
+    const { orderNo, operationNo } = req.params;
+    const { start, end, workcenter } = req.query;
+    const params = [orderNo, operationNo];
+    const filter = buildOperatorPerformanceFilter('v', params, { start, end, workcenter });
+
+    const query = `
+      SELECT
+        v.tsnumber,
+        v.longdate_checkin,
+        v.full_name,
+        v.serialnumber,
+        v.remaining_seconds_before,
+        v.elapsed_seconds,
+        v.std_performance
+      FROM public.vw_timesheet_std_performance v
+      WHERE v.order_no = $1
+        AND v.operation_no = $2::int
+        ${filter}
+      ORDER BY v.longdate_checkin ASC NULLS LAST, v.tsnumber ASC
+    `;
+
+    const result = await db.query(query, params);
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error('operatorPerformanceTransactions error:', err);
     res.status(500).json({ error: err.message });
   }
 };
