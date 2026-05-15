@@ -284,6 +284,157 @@ def get_next_tts_audio():
         release_conn(conn)
 
 
+@app.get("/tts/audio/pending")
+def get_pending_tts_audio():
+    conn = get_conn()
+    cur = None
+    try:
+        ensure_tts_notification_order_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, path_mp3, ssbr_id, created_at, generated_at
+            FROM public.tts_notification_order
+            WHERE generation_status = 'ready'
+              AND status = false
+              AND path_mp3 IS NOT NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT 20
+            """
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return {"data": None}
+
+        for row in rows:
+            notification_id, path_mp3, ssbr_id, created_at, generated_at = row
+            try:
+                file_path = announcement_file_from_path(path_mp3)
+                if file_path.exists():
+                    return {
+                        "data": {
+                            "id": notification_id,
+                            "path_mp3": path_mp3,
+                            "ssbr_id": ssbr_id,
+                            "created_at": str(created_at) if created_at else None,
+                            "generated_at": str(generated_at) if generated_at else None,
+                            "audio_url": f"/tts/audio/{notification_id}/stream",
+                        }
+                    }
+                error_message = f"File audio tidak ditemukan: {path_mp3}"
+            except HTTPException as exc:
+                error_message = str(exc.detail)
+
+            cur.execute(
+                """
+                UPDATE public.tts_notification_order
+                SET generation_status = 'error',
+                    error_message = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (error_message, notification_id),
+            )
+
+        conn.commit()
+        return {"data": None}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Gagal cek audio pending: {exc}") from exc
+    finally:
+        if cur:
+            cur.close()
+        release_conn(conn)
+
+
+@app.get("/tts/audio/{notification_id}/stream")
+def stream_tts_audio(notification_id: int):
+    conn = get_conn()
+    cur = None
+    try:
+        ensure_tts_notification_order_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, path_mp3
+            FROM public.tts_notification_order
+            WHERE id = %s
+              AND generation_status = 'ready'
+              AND status = false
+              AND path_mp3 IS NOT NULL
+            """,
+            (notification_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Notif audio pending tidak ditemukan")
+
+        file_path = announcement_file_from_path(row[1])
+        if not file_path.exists():
+            cur.execute(
+                """
+                UPDATE public.tts_notification_order
+                SET generation_status = 'error',
+                    error_message = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (f"File audio tidak ditemukan: {row[1]}", notification_id),
+            )
+            conn.commit()
+            raise HTTPException(status_code=404, detail="File audio tidak ditemukan")
+
+        return FileResponse(
+            path=file_path,
+            media_type="audio/mpeg",
+            filename=file_path.name,
+            headers={"X-TTS-Notification-Id": str(notification_id)},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Gagal stream audio: {exc}") from exc
+    finally:
+        if cur:
+            cur.close()
+        release_conn(conn)
+
+
+@app.post("/tts/audio/{notification_id}/played")
+def mark_tts_audio_played(notification_id: int):
+    conn = get_conn()
+    cur = None
+    try:
+        ensure_tts_notification_order_table(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE public.tts_notification_order
+            SET status = true,
+                updated_at = now()
+            WHERE id = %s
+              AND generation_status = 'ready'
+            RETURNING id
+            """,
+            (notification_id,),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        if not row:
+            raise HTTPException(status_code=404, detail="Notif audio tidak ditemukan")
+
+        return {"ok": True, "id": row[0]}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Gagal update status audio: {exc}") from exc
+    finally:
+        if cur:
+            cur.close()
+        release_conn(conn)
+
+
 @app.get("/tts/audio/{notification_id}")
 def get_tts_audio(notification_id: int):
     conn = get_conn()

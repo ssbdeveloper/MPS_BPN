@@ -195,9 +195,11 @@ const groupedSelect = `
     SUM(CASE WHEN v.enddatetime IS NULL THEN 1 ELSE 0 END)::int AS open_event_count,
     to_char(MIN(v.startdatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS first_startdatetime,
     to_char(MAX(v.enddatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS last_enddatetime,
+    to_char(MIN(v.startdatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS startdatetime,
+    to_char(MAX(v.enddatetime), 'YYYY-MM-DD"T"HH24:MI:SS') AS enddatetime,
     COALESCE(SUM(v.duration_seconds), 0)::bigint AS duration_seconds,
     ROUND(COALESCE(SUM(v.duration_hours), 0), 4) AS duration_hours
-  FROM public.mv_mch_productiondata_detail v
+  FROM public.mch_transaction v
 `;
 
 const groupedBy = `
@@ -222,6 +224,43 @@ const groupedBy = `
     v.branch_operation_no,
     v.return_operation_no,
     v.workcentercode
+`;
+
+const detailSelect = `
+  SELECT
+    concat_ws('|', v.proddataid::text) AS record_key,
+    v.proddataid AS min_proddataid,
+    to_char(v.startdatetime::date, 'YYYY-MM-DD') AS work_date,
+    v.machineno,
+    COALESCE(v.machineid, '') AS machineid,
+    COALESCE(v.machinename, '') AS machinename,
+    COALESCE(NULLIF(v.machinename, ''), v.machineid, 'Machine ' || v.machineno::text) AS machine_description,
+    v.machine_plantid AS plantid,
+    v.statusid,
+    COALESCE(v.status_description, 'Unknown') AS status_description,
+    COALESCE(v.status_activitytype, '') AS activitytype,
+    COALESCE(v.full_name, '') AS full_name,
+    COALESCE(v.sn_employee, '') AS sn_employee,
+    COALESCE(v.confirmation_number, '') AS confirmation_no,
+    COALESCE(v.confirmation_number, '') AS jobid,
+    COALESCE(v.order_no, '') AS order_no,
+    COALESCE(v.operation_no::text, '') AS operation_no,
+    COALESCE(v.operation_short_text, '') AS operation_short_text,
+    COALESCE(v.sequence_category, '') AS sequence_category,
+    COALESCE(v.sequence_number, '') AS sequence_number,
+    COALESCE(v.sequence_number, '') AS ph3_sequence_number,
+    COALESCE(v.branch_operation_no, '') AS branch_operation_no,
+    COALESCE(v.return_operation_no, '') AS return_operation_no,
+    COALESCE(v.workcentercode, '') AS work_center,
+    1::int AS event_count,
+    CASE WHEN v.enddatetime IS NULL THEN 1 ELSE 0 END::int AS open_event_count,
+    to_char(v.startdatetime, 'YYYY-MM-DD"T"HH24:MI:SS') AS first_startdatetime,
+    to_char(v.enddatetime, 'YYYY-MM-DD"T"HH24:MI:SS') AS last_enddatetime,
+    to_char(v.startdatetime, 'YYYY-MM-DD"T"HH24:MI:SS') AS startdatetime,
+    to_char(v.enddatetime, 'YYYY-MM-DD"T"HH24:MI:SS') AS enddatetime,
+    COALESCE(v.duration_seconds, 0)::bigint AS duration_seconds,
+    ROUND(COALESCE(v.duration_hours, 0), 4) AS duration_hours
+  FROM public.mch_transaction v
 `;
 
 exports.validationStats = async (req, res) => {
@@ -307,10 +346,9 @@ exports.validationGroupRecords = async (req, res) => {
     const params = [...filters.params, limit];
 
     const query = `
-      ${groupedSelect}
+      ${detailSelect}
       WHERE ${filters.whereSQL}
-      ${groupedBy}
-      ORDER BY MIN(v.startdatetime) DESC, v.statusid ASC, v.full_name ASC, v.confirmation_number ASC
+      ORDER BY v.startdatetime DESC, v.statusid ASC, v.full_name ASC, v.confirmation_number ASC, v.proddataid DESC
       LIMIT $${params.length}
     `;
 

@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  DndContext, DragOverlay, PointerSensor, closestCenter,
+  DndContext, DragOverlay, PointerSensor, TouchSensor, closestCenter,
   useDraggable, useDroppable, useSensor, useSensors,
 } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import {
   AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronUp,
-  Clock, Loader2, Plus, Save, Search, Send, User, X,
+  Clock, GripVertical, Loader2, Plus, Save, Search, Send, User, X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -50,6 +50,28 @@ function clockToMinutes(v) { const [h,m]=String(v||'00:00').split(':').map(p=>Nu
 function minutesToClock(m) { const n=((Math.round(m)%1440)+1440)%1440; return `${String(Math.floor(n/60)).padStart(2,'0')}:${String(n%60).padStart(2,'0')}`; }
 function addHoursToClock(v,h) { return minutesToClock(clockToMinutes(v)+asNumber(h)*60); }
 
+function DragHandle({ listeners, attributes, disabled=false, title='Drag item' }) {
+  return (
+    <button
+      type="button"
+      {...(!disabled ? listeners : {})}
+      {...(!disabled ? attributes : {})}
+      disabled={disabled}
+      // touch-action none keeps mobile browsers from taking over the drag gesture.
+      style={{ touchAction: 'none' }}
+      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition ${
+        disabled
+          ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-300'
+          : 'cursor-grab border-slate-200 bg-white text-slate-500 hover:border-[#0096c7] hover:text-[#0077b6] active:cursor-grabbing active:bg-slate-50'
+      }`}
+      title={title}
+      aria-label={title}
+    >
+      <GripVertical className="h-4 w-4" />
+    </button>
+  );
+}
+
 function SowActivityCard({ item, dragging=false, source='activity' }) {
   const identity = activityIdentity(item);
   const ph = item.planhours??item.original_planhours??item.planned_hours??0;
@@ -82,8 +104,9 @@ function SowActivityCard({ item, dragging=false, source='activity' }) {
 function DropScheduleCard({ schedule, onDelete }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id:`planned-${schedule.id}`, data:{item:schedule,source:'planned'} });
   return (
-    <div ref={setNodeRef} {...listeners} {...attributes} className={`group cursor-grab rounded-lg border border-slate-200 bg-white px-2.5 py-2 shadow-sm transition hover:border-[#90e0ef] hover:shadow active:cursor-grabbing ${isDragging?'opacity-50':''}`}>
+    <div ref={setNodeRef} className={`group rounded-lg border border-slate-200 bg-white px-2.5 py-2 shadow-sm transition hover:border-[#90e0ef] hover:shadow ${isDragging?'opacity-50':''}`}>
       <div className="flex items-center gap-2">
+        <DragHandle listeners={listeners} attributes={attributes} title="Drag schedule" />
         <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-extrabold text-slate-700">{schedule.operation_no||'-'}</span>
         <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-700">{schedule.production_order||schedule.ssbr_id||'-'}</span>
         <span className="shrink-0 text-[11px] font-extrabold text-[#0096c7]">{formatHours(schedule.planned_hours)}h</span>
@@ -110,15 +133,21 @@ function BatchBox({ batch, schedules, onDelete, onDeleteBatch }) {
 function DraggableActivity({ item, source='activity' }) {
   const id = source==='unplanned'?`unplanned-${item.id}`:`activity-${item.idsow}`;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, data:{item,source} });
-  return <div ref={setNodeRef} {...listeners} {...attributes} className={`cursor-grab active:cursor-grabbing ${isDragging?'opacity-50':''}`}><SowActivityCard item={item} source={source}/></div>;
+  return (
+    <div ref={setNodeRef} className={`flex items-stretch gap-1.5 ${isDragging?'opacity-50':''}`}>
+      <DragHandle listeners={listeners} attributes={attributes} title="Drag activity" />
+      <div className="min-w-0 flex-1"><SowActivityCard item={item} source={source}/></div>
+    </div>
+  );
 }
 
 function DraggableManpower({ person }) {
   const id = `manpower-${person.snssb}`;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, data:{item:person, source:'manpower'} });
   return (
-    <div ref={setNodeRef} {...listeners} {...attributes} className={`cursor-grab active:cursor-grabbing rounded-lg border bg-white p-2 shadow-sm transition hover:border-[#0096c7] ${isDragging?'opacity-50':''}`}>
+    <div ref={setNodeRef} className={`rounded-lg border bg-white p-2 shadow-sm transition hover:border-[#0096c7] ${isDragging?'opacity-50':''}`}>
       <div className="flex items-center gap-2">
+        <DragHandle listeners={listeners} attributes={attributes} title="Drag manpower" />
         <User className="h-4 w-4 text-slate-400 shrink-0"/>
         <div className="min-w-0"><p className="truncate text-[11px] font-extrabold text-slate-800">{person.full_name||'-'}</p><p className="text-[10px] text-slate-400">{person.snssb||'-'} · {person.employee_category||'-'}</p></div>
       </div>
@@ -359,7 +388,11 @@ function SummaryBar({ schedules, capacityRows, overtimeRows }) {
 
 function SowSchedulingPage() {
   const navigate = useNavigate();
-  const sensors = useSensors(useSensor(PointerSensor,{activationConstraint:{distance:6}}));
+  // TouchSensor with a short hold keeps scroll usable on tablets/phones.
+  const sensors = useSensors(
+    useSensor(PointerSensor,{activationConstraint:{distance:8}}),
+    useSensor(TouchSensor,{activationConstraint:{delay:250,tolerance:5}})
+  );
   const [authUser] = useState(readAuthUser);
   const [date, setDate] = useState(todayText);
   const [search, setSearch] = useState('');

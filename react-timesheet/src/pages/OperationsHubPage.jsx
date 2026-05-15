@@ -40,6 +40,7 @@ const sidebarItems = [
   { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling' },
   { title: 'Shift Rules', icon: TimerReset, path: '/shift-definition' },
   { title: 'Component Tracking', icon: Boxes, path: '/component-tracking' },
+  { title: 'Kanban Level 1', icon: Factory, path: '/kanban-board' },
   { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment' },
   { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control' },
   { title: 'Tools Management', icon: Hammer, path: '/tools-management' },

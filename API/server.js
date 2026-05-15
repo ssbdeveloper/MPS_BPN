@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const { startKanbanRefreshJob } = require('./jobs/kanbanRefreshJob');
 
 // ========================================
 // ENVIRONMENT SETUP
@@ -140,6 +141,7 @@ app.use('/process-control', require('./routes/processControlRoutes'));
 app.use('/dashboard', require('./routes/dashboard'));
 app.use('/receiving-shipment', require('./routes/receivingShipment'));
 app.use('/component-tracking', require('./routes/componentTracking'));
+app.use('/kanban', require('./routes/kanban'));
 app.use('/machine-hours-sqlserver', require('./routes/machineHoursSqlServer'));
 app.use('/machine-hours-validation', require('./routes/machineHoursValidation'));
 app.use('/consumable', require('./routes/consumable'));
@@ -181,6 +183,7 @@ app.use((err, req, res, next) => {
 // ========================================
 const PORT = process.env.PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
+let kanbanRefreshJob = null;
 async function startServer() {
   let connected = false;
 
@@ -202,6 +205,7 @@ async function startServer() {
     console.log(`📅 Local time: ${new Date().toLocaleString('id-ID', { timeZone: process.env.TIMEZONE })}`);
     console.log(`🌐 Access: http://${HOST}:${PORT}`);
     console.log('================================');
+    kanbanRefreshJob = startKanbanRefreshJob({ pool });
   });
 }
 

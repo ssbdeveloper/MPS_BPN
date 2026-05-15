@@ -2,12 +2,13 @@
   "mcpServers": {
     "db": {
       "type": "stdio",
-      "command": "npx",
+      "command": "powershell",
       "args": [
-        "-y",
-        "@bytebase/dbhub",
-        "--dsn",
-        "postgresql://postgres:%40dminta9@localhost:5432/ptssb"
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/start-postgres-mcp.ps1"
       ],
       "env": {}
     }

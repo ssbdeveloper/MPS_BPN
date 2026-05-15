@@ -3,6 +3,7 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  TouchSensor,
   closestCorners,
   useDraggable,
   useDroppable,
@@ -19,6 +20,7 @@ import {
   Factory,
   FileText,
   GitCommitVertical,
+  GripVertical,
   History,
   Loader2,
   MessageSquare,
@@ -127,7 +129,29 @@ function groupSowByOrder(rows) {
   return Array.from(map.values());
 }
 
-function OperationCard({ operation, selected, dragging = false }) {
+function DragHandle({ listeners, attributes, disabled, title = 'Drag item' }) {
+  return (
+    <button
+      type="button"
+      {...(!disabled ? listeners : {})}
+      {...(!disabled ? attributes : {})}
+      disabled={disabled}
+      // touch-action none keeps mobile browsers from taking over the drag gesture.
+      style={{ touchAction: 'none' }}
+      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
+        disabled
+          ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-300'
+          : 'cursor-grab border-slate-200 bg-white text-slate-500 hover:border-[#0096c7] hover:text-[#0077b6] active:cursor-grabbing active:bg-slate-50'
+      }`}
+      title={title}
+      aria-label={title}
+    >
+      <GripVertical className="h-4 w-4" />
+    </button>
+  );
+}
+
+function OperationCard({ operation, selected, dragging = false, dragHandle = null }) {
   const finished = Boolean(operation.is_finished);
 
   return (
@@ -140,6 +164,7 @@ function OperationCard({ operation, selected, dragging = false }) {
       title={finished ? 'Finished' : undefined}
     >
       <div className="flex items-start justify-between gap-3">
+        {dragHandle}
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className="line-clamp-2 break-words text-sm font-bold text-slate-900 tablet-body">{operation.operation_text || '-'}</div>
           <div className="mt-1 text-xs text-slate-500">
@@ -171,12 +196,14 @@ function DraggableOperation({ operation, selected }) {
   return (
     <div
       ref={setNodeRef}
-      {...(!disabled ? listeners : {})}
-      {...(!disabled ? attributes : {})}
       aria-disabled={disabled}
-      className={`${disabled ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'} ${isDragging ? 'opacity-50' : ''}`}
+      className={`${disabled ? 'cursor-not-allowed' : ''} ${isDragging ? 'opacity-50' : ''}`}
     >
-      <OperationCard operation={operation} selected={selected} />
+      <OperationCard
+        operation={operation}
+        selected={selected}
+        dragHandle={<DragHandle listeners={listeners} attributes={attributes} disabled={disabled} />}
+      />
     </div>
   );
 }
@@ -224,15 +251,10 @@ function SortableBufferItem({ item, onNoteClick, onArriveClick }) {
       className={`group min-w-0 overflow-hidden rounded-lg outline-none transition ${isDragging ? 'opacity-40' : ''}`}
     >
       <div className="flex min-w-0 items-stretch gap-2">
-        <button
-          type="button"
-          {...(!disabled ? listeners : {})}
-          {...(!disabled ? attributes : {})}
-          disabled={disabled}
-          className={`min-w-0 flex-1 text-left ${disabled ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
-        >
+        <DragHandle listeners={listeners} attributes={attributes} disabled={disabled} title="Drag buffer item" />
+        <div className="min-w-0 flex-1 text-left">
           <BufferContent item={item} />
-        </button>
+        </div>
         {item.type === 'moving' && (
           <button
             type="button"
@@ -536,7 +558,11 @@ function NoteModal({ item, noteDraft, setNoteDraft, saving, historyRows, loading
 
 export default function BufferTransactionPage() {
   const navigate = useNavigate();
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+  // TouchSensor with a short hold keeps scroll usable on tablets/phones.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
+  );
   const [sowRows, setSowRows] = useState([]);
   const [machines, setMachines] = useState([]);
   const [bufferHistory, setBufferHistory] = useState([]);

@@ -20,6 +20,7 @@ import MPDashboardPage from '../pages/MPDashboardPage';
 import SettingPage from '../pages/SettingPage';
 import ComponentTrackingPage from '../pages/PPC/ComponentTrackingPage';
 import BufferTransactionPage from '../pages/PPC/BufferTransactionPage';
+import KanbanLevelOnePage from '../pages/PPC/KanbanLevelOnePage';
 import SowSchedulingPage from '../pages/PPC/SowSchedulingPage';
 import ShiftDefinitionPage from '../pages/PPC/ShiftDefinitionPage';
 import EditParameterPage from '../pages/MACHINE_H/EditParameterPage';
@@ -183,6 +184,10 @@ const router = createBrowserRouter([
   {
     path: '/component-tracking',
     element: <ComponentTrackingPage />,
+  },
+  {
+    path: '/kanban-board',
+    element: <KanbanLevelOnePage />,
   },
   {
     path: '/buffer-transaction',

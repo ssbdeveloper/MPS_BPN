@@ -2,7 +2,7 @@ import React from 'react';
 import { RouterProvider } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import router from './router';
-import ProtectedRoute from "./components/auth/ProtectedRoute";
+import TtsAutoAnnouncementPlayer from './components/TtsAutoAnnouncementPlayer';
 
 /**
  * Main App Component
@@ -11,6 +11,7 @@ import ProtectedRoute from "./components/auth/ProtectedRoute";
 function App() {
   return (
     <>
+      <TtsAutoAnnouncementPlayer />
       <RouterProvider router={router} />
       <Toaster
         position="top-right"

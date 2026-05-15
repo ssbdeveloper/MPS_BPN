@@ -182,6 +182,10 @@ function fmtHours(value, digits = 1) {
   });
 }
 
+function secondsToHours(value) {
+  return Number(value || 0) / 3600;
+}
+
 function formatDateShort(value) {
   if (!value) return '-';
   const date = new Date(`${value}T00:00:00`);
@@ -197,11 +201,11 @@ function formatTime(value) {
   return timeMatch[1].length === 5 ? `${timeMatch[1]}:00` : timeMatch[1];
 }
 
-function formatDurationHms(hours) {
-  const totalSeconds = Math.max(0, Math.round(Number(hours || 0) * 3600));
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
+function formatDurationHms(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.round(Number(totalSeconds || 0)));
+  const h = Math.floor(safeSeconds / 3600);
+  const m = Math.floor((safeSeconds % 3600) / 60);
+  const s = safeSeconds % 60;
   return [h, m, s].map((part) => String(part).padStart(2, '0')).join(':');
 }
 
@@ -219,7 +223,8 @@ function saveSubmittedKeys(keys, storageKey = SUBMITTED_STORAGE_KEY) {
 }
 
 const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, isSubmitted }) => {
-  const durationHms = formatDurationHms(record.duration_hours);
+  const durationSeconds = Number(record.duration_seconds || 0);
+  const durationHms = formatDurationHms(durationSeconds);
   const rowBg = isSubmitted
     ? 'bg-emerald-50/50 hover:bg-emerald-100/60 opacity-75'
     : 'bg-white hover:bg-sky-50/60';
@@ -261,15 +266,15 @@ const MachineRecordRow = React.memo(({ record, onValidateSingle, isSapPending, i
           <div className="flex items-center justify-center gap-1.5">
             <span className="font-medium text-gray-700">{formatDateShort(record.work_date)}</span>
             <div className="flex flex-col leading-tight" style={{ color: PALETTE.brightTealBlue }}>
-              <span>{formatTime(record.first_startdatetime)}</span>
-              <span>{formatTime(record.last_enddatetime)}</span>
+              <span>{formatTime(record.startdatetime)}</span>
+              <span>{formatTime(record.enddatetime)}</span>
             </div>
           </div>
         </div>
 
         <div className="text-[11px] text-center flex flex-col items-center leading-tight">
           <span className="font-mono text-[12px] font-bold" style={{ color: PALETTE.frenchBlue }}>{durationHms}</span>
-          <span className="text-[9px] text-slate-400">{fmtHours(record.duration_hours, 4)} h</span>
+          <span className="text-[9px] text-slate-400">{fmtHours(secondsToHours(durationSeconds), 4)} h</span>
         </div>
 
         <div className="text-[11px] text-center">
@@ -310,7 +315,7 @@ const MachineGroup = React.memo(({
   const pendingCount = Math.max(recordCount - loadedSubmitted, 0);
   const validatedCount = loadedSubmitted;
   const hasSapPending = records.some((record) => sapPendingKeys.has(record.record_key));
-  const groupHours = Number(group.duration_hours || 0);
+  const groupDurationSeconds = Number(group.duration_seconds || 0);
 
   return (
     <div className="rounded-xl overflow-hidden shadow-sm border transition-shadow duration-200 hover:shadow-md"
@@ -337,11 +342,11 @@ const MachineGroup = React.memo(({
             <div className="text-[11px] leading-[17px] font-mono text-right">
               <div className="font-bold text-white/90">
                 Total: {recordCount} Act&nbsp;
-                <span className="text-white/70">[{formatDurationHms(groupHours)}]</span>
+                <span className="text-white/70">[{formatDurationHms(groupDurationSeconds)}]</span>
               </div>
               <div className="font-bold text-amber-300">
                 Pending: {pendingCount} Act&nbsp;
-                <span className="text-amber-200">[{formatDurationHms(groupHours)}]</span>
+                <span className="text-amber-200">[{formatDurationHms(groupDurationSeconds)}]</span>
               </div>
               <div className="font-bold text-emerald-300">
                 Validated: {validatedCount} Act&nbsp;
