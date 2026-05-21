@@ -925,10 +925,10 @@ const KanbanLevelOnePage = () => {
               Back
             </button>
             <div>
-              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[#0096c7]">
+              {/* <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-[#0096c7]">
                 <Boxes className="h-4 w-4" />
                 Level 1 Flow
-              </div>
+              </div> */}
               <h1 className="mt-1 text-xl font-extrabold text-slate-900">Kanban Order Board</h1>
             </div>
           </div>
