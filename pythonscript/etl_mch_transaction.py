@@ -330,7 +330,7 @@ def fetch_latest_ph3_by_confirmation(cursor, job_ids: list[str]) -> dict[str, di
 def fetch_timesheet_matches(cursor, source_rows: list[dict], ph3_map: dict[str, dict]) -> dict[int, dict]:
     candidates = []
     for row in source_rows:
-        if row["statusid"] != 1:
+        if row["statusid"] not in ALLOWED_STATUS_IDS:
             continue
         ph3 = ph3_map.get(row.get("jobid"))
         if not ph3:
@@ -506,12 +506,12 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             for row in source_rows
         ]
 
-        status1_count = sum(1 for row in source_rows if row["statusid"] == 1)
+        lookup_status_count = sum(1 for row in source_rows if row["statusid"] in ALLOWED_STATUS_IDS)
         log.info(
-            "Prepared batch offset=%d count=%d statusid_1=%d timesheet_matches=%d",
+            "Prepared batch offset=%d count=%d timesheet_lookup_candidates=%d timesheet_matches=%d",
             offset,
             len(values),
-            status1_count,
+            lookup_status_count,
             len(timesheet_map),
         )
 
@@ -579,7 +579,7 @@ def main() -> None:
             else "incremental by proddataid + reprocess target rows with enddatetime IS NULL",
         )
         log.info("Status filter: %s", ", ".join(str(status_id) for status_id in ALLOWED_STATUS_IDS))
-        log.info("Timesheet lookup scope: only rows with statusid = 1")
+        log.info("Timesheet lookup scope: rows with statusid in %s", ALLOWED_STATUS_IDS)
 
         pg_conn = psycopg2.connect(**pg_config)
         processed = run_etl(pg_conn, from_dt, to_dt, args.full_rebuild, args.dry_run)

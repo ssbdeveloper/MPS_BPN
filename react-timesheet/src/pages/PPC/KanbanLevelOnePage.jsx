@@ -14,9 +14,11 @@ import {
   RefreshCw,
   Search,
   TimerReset,
+  Truck,
   X,
 } from 'lucide-react';
 import { PageContainer } from '../../components';
+import TtsAutoAnnouncementPlayer from '../../components/TtsAutoAnnouncementPlayer';
 import {
   fetchKanbanBoard,
   fetchKanbanCardDetail,
@@ -43,6 +45,7 @@ const LANE_ORDER = [
   'Packing / Ready Dispatch',
   'Support',
   'Unassigned',
+  'Ready To Shipment',
 ];
 
 const STATUS_META = {
@@ -66,6 +69,13 @@ const STATUS_META = {
     dot: 'bg-amber-500',
     badge: 'bg-amber-100 text-amber-700 border-amber-200',
     border: 'border-amber-200',
+  },
+  readyShipment: {
+    title: 'Ready Shipment',
+    icon: Truck,
+    dot: 'bg-violet-500',
+    badge: 'bg-violet-100 text-violet-700 border-violet-200',
+    border: 'border-violet-200',
   },
 };
 
@@ -177,6 +187,10 @@ function laneRank(location) {
   return idx === -1 ? 999 : idx;
 }
 
+function statusRank(status) {
+  return ['running', 'bufferIn', 'bufferOut', 'readyShipment'].indexOf(status);
+}
+
 function buildMachineLocationMap(workcenters) {
   return new Map(
     workcenters
@@ -219,15 +233,15 @@ function normalizeBoardCards(rows, nowMs) {
 
 function normalizeBufferCards(buffers, machineLocationMap, nowMs) {
   return buffers
-    .filter((row) => row.type === 'in' || row.type === 'moving' || row.type === 'out')
+    .filter((row) => row.type === 'in' || row.type === 'moving' || row.type === 'out' || row.type === 'shipment')
     .map((row) => {
-      const status = row.type === 'out' ? 'bufferOut' : 'bufferIn';
+      const status = row.type === 'shipment' ? 'readyShipment' : row.type === 'out' ? 'bufferOut' : 'bufferIn';
       const minutes = minutesSince(row.timestamp, nowMs);
 
       return {
         id: `${status}-${row.id}`,
         status,
-        location: machineLocationMap.get(row.machine_id) || 'Unassigned',
+        location: row.type === 'shipment' ? 'Ready To Shipment' : machineLocationMap.get(row.machine_id) || 'Unassigned',
         order_no: row.order_no || '-',
         operation_no: row.operation_no,
         operation_text: row.operation_text || '-',
@@ -272,8 +286,7 @@ function mergeStableCards(prevCards, nextCards) {
 
 function sortCards(cards) {
   return [...cards].sort((a, b) => {
-    const statusSort = ['running', 'bufferIn', 'bufferOut'].indexOf(a.status)
-      - ['running', 'bufferIn', 'bufferOut'].indexOf(b.status);
+    const statusSort = statusRank(a.status) - statusRank(b.status);
     if (statusSort !== 0) return statusSort;
     const ageSort = asNumber(b.age_minutes, -1) - asNumber(a.age_minutes, -1);
     if (ageSort !== 0) return ageSort;
@@ -286,7 +299,7 @@ function buildLaneGroups(cards) {
   cards.forEach((card) => {
     const key = card.location || 'Unassigned';
     if (!groups.has(key)) {
-      groups.set(key, { location: key, cards: [], running: [], bufferIn: [], bufferOut: [] });
+      groups.set(key, { location: key, cards: [], running: [], bufferIn: [], bufferOut: [], readyShipment: [] });
     }
     const group = groups.get(key);
     group.cards.push(card);
@@ -295,7 +308,7 @@ function buildLaneGroups(cards) {
 
   LANE_ORDER.forEach((location) => {
     if (!groups.has(location) && location !== 'Unassigned') {
-      groups.set(location, { location, cards: [], running: [], bufferIn: [], bufferOut: [] });
+      groups.set(location, { location, cards: [], running: [], bufferIn: [], bufferOut: [], readyShipment: [] });
     }
   });
 
@@ -306,6 +319,7 @@ function buildLaneGroups(cards) {
       running: sortCards(group.running),
       bufferIn: sortCards(group.bufferIn),
       bufferOut: sortCards(group.bufferOut),
+      readyShipment: sortCards(group.readyShipment),
       oldestAge: group.cards.reduce((max, card) => Math.max(max, asNumber(card.age_minutes, 0)), 0),
     }))
     .sort((a, b) => laneRank(a.location) - laneRank(b.location));
@@ -575,13 +589,15 @@ function StatusColumn({ status, cards, changedIds, onCardClick, limit = 5, class
 }
 
 function LanePanel({ lane, changedIds, onCardClick }) {
+  const isShipmentLane = lane.location === 'Ready To Shipment';
+
   return (
     <MotionSection
       layout
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
-      className="flex w-[360px] shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm md:w-[390px]"
+      className={`${isShipmentLane ? 'w-[320px] md:w-[340px]' : 'w-[360px] md:w-[390px]'} flex shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm`}
     >
       <div className="mb-3">
         <div className="min-w-0">
@@ -599,18 +615,30 @@ function LanePanel({ lane, changedIds, onCardClick }) {
           </div>
         </div>
         <div className="mt-2 flex min-w-0 flex-wrap gap-1 overflow-hidden">
-          <StatusCount status="running" value={lane.running.length} />
-          <StatusCount status="bufferIn" value={lane.bufferIn.length} />
-          <StatusCount status="bufferOut" value={lane.bufferOut.length} />
+          {isShipmentLane ? (
+            <StatusCount status="readyShipment" value={lane.readyShipment.length} />
+          ) : (
+            <>
+              <StatusCount status="running" value={lane.running.length} />
+              <StatusCount status="bufferIn" value={lane.bufferIn.length} />
+              <StatusCount status="bufferOut" value={lane.bufferOut.length} />
+            </>
+          )}
         </div>
       </div>
 
       <div className="flex min-w-0 flex-col gap-2 overflow-hidden">
-        <StatusColumn status="running" cards={lane.running} changedIds={changedIds} onCardClick={onCardClick} limit={4} className="border-emerald-100" />
-        <div className="grid min-w-0 grid-cols-2 gap-2 overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5">
-          <StatusColumn status="bufferIn" cards={lane.bufferIn} changedIds={changedIds} onCardClick={onCardClick} limit={5} className="border-sky-100" />
-          <StatusColumn status="bufferOut" cards={lane.bufferOut} changedIds={changedIds} onCardClick={onCardClick} limit={5} className="border-amber-100" />
-        </div>
+        {isShipmentLane ? (
+          <StatusColumn status="readyShipment" cards={lane.readyShipment} changedIds={changedIds} onCardClick={onCardClick} limit={12} className="border-violet-100 bg-violet-50" />
+        ) : (
+          <>
+            <StatusColumn status="running" cards={lane.running} changedIds={changedIds} onCardClick={onCardClick} limit={4} className="border-emerald-100" />
+            <div className="grid min-w-0 grid-cols-2 gap-2 overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5">
+              <StatusColumn status="bufferIn" cards={lane.bufferIn} changedIds={changedIds} onCardClick={onCardClick} limit={5} className="border-sky-100" />
+              <StatusColumn status="bufferOut" cards={lane.bufferOut} changedIds={changedIds} onCardClick={onCardClick} limit={5} className="border-amber-100" />
+            </div>
+          </>
+        )}
       </div>
     </MotionSection>
   );
@@ -850,6 +878,7 @@ const KanbanLevelOnePage = () => {
     running: filteredCards.filter((card) => card.status === 'running').length,
     bufferIn: filteredCards.filter((card) => card.status === 'bufferIn').length,
     bufferOut: filteredCards.filter((card) => card.status === 'bufferOut').length,
+    readyShipment: filteredCards.filter((card) => card.status === 'readyShipment').length,
     red: filteredCards.filter((card) => card.aging_band === 'red').length,
   }), [filteredCards]);
 
@@ -882,6 +911,8 @@ const KanbanLevelOnePage = () => {
 
   return (
     <PageContainer className="h-dvh min-h-dvh gap-3 overflow-hidden bg-slate-50 p-3 md:p-4">
+      <TtsAutoAnnouncementPlayer pollIntervalMs={15000} />
+
       <header className="shrink-0 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
@@ -925,11 +956,12 @@ const KanbanLevelOnePage = () => {
         </div>
       </header>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 md:grid-cols-5">
+      <div className="grid shrink-0 grid-cols-2 gap-2 md:grid-cols-6">
         <StatTile label="Total Card" value={filteredCards.length} icon={Factory} subtext={`${summary?.totals?.total_cards || cards.length} source cards`} />
         <StatTile label="On Going" value={totals.running} icon={Activity} tone="text-emerald-700" />
         <StatTile label="Buffer In" value={totals.bufferIn} icon={Inbox} tone="text-[#0077b6]" />
         <StatTile label="Buffer Out" value={totals.bufferOut} icon={PackageCheck} tone="text-amber-700" />
+        <StatTile label="Ready Ship" value={totals.readyShipment} icon={Truck} tone="text-violet-700" />
         <StatTile
           label="Red Aging"
           value={totals.red}

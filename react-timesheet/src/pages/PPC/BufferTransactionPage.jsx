@@ -28,6 +28,7 @@ import {
   Save,
   Search,
   Send,
+  Truck,
   X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -48,11 +49,20 @@ const BUFFER_TYPES = [
   { type: 'out', title: 'Buffer Out', tone: 'border-amber-200 bg-amber-50', item: 'bg-amber-100 text-amber-900' },
   { type: 'moving', title: 'Moving', tone: 'border-sky-200 bg-sky-50', item: 'bg-sky-100 text-sky-900' },
 ];
+const SHIPMENT_MACHINE_ID = '__SHIPMENT__';
+const SHIPMENT_TYPE = {
+  type: 'shipment',
+  title: 'Ready To Shipment',
+  tone: 'border-violet-200 bg-violet-50',
+  item: 'bg-violet-100 text-violet-900',
+};
+const BUFFER_TYPE_META = [...BUFFER_TYPES, SHIPMENT_TYPE];
 
 const ORDER_STATUS_CLASS = {
   in: 'bg-emerald-100 text-emerald-800 border-emerald-200',
   out: 'bg-amber-100 text-amber-800 border-amber-200',
   moving: 'bg-sky-100 text-sky-800 border-sky-200',
+  shipment: 'bg-violet-100 text-violet-800 border-violet-200',
   none: 'bg-slate-100 text-slate-600 border-slate-200',
 };
 
@@ -138,7 +148,7 @@ function DragHandle({ listeners, attributes, disabled, title = 'Drag item' }) {
       disabled={disabled}
       // touch-action none keeps mobile browsers from taking over the drag gesture.
       style={{ touchAction: 'none' }}
-      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition ${
+      className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border transition ${
         disabled
           ? 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-300'
           : 'cursor-grab border-slate-200 bg-white text-slate-500 hover:border-[#0096c7] hover:text-[#0077b6] active:cursor-grabbing active:bg-slate-50'
@@ -208,8 +218,69 @@ function DraggableOperation({ operation, selected }) {
   );
 }
 
+function OrderCard({ order, latest, dragging = false, dragHandle = null, onSelect }) {
+  const statusType = latest?.type || 'none';
+  const openCount = order.operations.filter((operation) => !operation.is_finished).length;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect?.();
+        }
+      }}
+      className={`w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm outline-none transition hover:border-[#0096c7] hover:shadow-md focus-visible:ring-2 focus-visible:ring-[#0096c7] tablet-card ${
+        dragging ? 'w-80 cursor-grabbing border-[#0096c7] shadow-xl shadow-[#0096c7]/20' : ''
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3 tablet-gap">
+        {dragHandle}
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="truncate text-lg font-bold text-slate-900 tablet-subheading">{order.order_no}</div>
+          <div className="mt-1 line-clamp-1 break-all text-sm text-slate-600 tablet-body">{order.ssbr_id || '-'} / {order.part_name || '-'}</div>
+          <div className="line-clamp-1 break-all text-sm text-slate-500 tablet-body">Model: {order.model || '-'}</div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${ORDER_STATUS_CLASS[statusType] || ORDER_STATUS_CLASS.none}`}>
+              {latest ? `${statusType} / ${latest.machine_id === SHIPMENT_MACHINE_ID ? 'Shipment' : latest.machine_id || '-'}` : 'Belum diproses'}
+            </span>
+            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-bold ${openCount === 0 ? 'border-emerald-200 bg-emerald-100 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-600'}`}>
+              {openCount === 0 ? 'All Finish' : `${openCount} Open`}
+            </span>
+          </div>
+        </div>
+        <div className="shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-right">
+          <div className="text-xs font-bold text-slate-500">Plan</div>
+          <div className="font-mono text-sm font-bold text-slate-900">{formatHours(order.total_planhours)}h</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DraggableOrder({ order, latest, onSelect }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `order-${order.order_no}`,
+    data: { source: 'order', order },
+  });
+
+  return (
+    <div ref={setNodeRef} className={isDragging ? 'opacity-50' : ''}>
+      <OrderCard
+        order={order}
+        latest={latest}
+        onSelect={onSelect}
+        dragHandle={<DragHandle listeners={listeners} attributes={attributes} disabled={false} title="Drag order to shipment" />}
+      />
+    </div>
+  );
+}
+
 function BufferContent({ item }) {
-  const config = BUFFER_TYPES.find((entry) => entry.type === item.type) || BUFFER_TYPES[0];
+  const config = BUFFER_TYPE_META.find((entry) => entry.type === item.type) || BUFFER_TYPES[0];
 
   return (
     <div className={`w-full min-w-0 overflow-hidden rounded-lg px-3 py-2 ${config.item}`}>
@@ -307,6 +378,49 @@ function DropZone({ type, title, items, disabled, onNoteClick, onArriveClick }) 
           )}
         </div>
       </SortableContext>
+    </section>
+  );
+}
+
+function ShipmentDropZone({ items, disabled, onNoteClick }) {
+  const { setNodeRef, isOver } = useDroppable({ id: 'zone-shipment', data: { type: 'shipment' }, disabled });
+  const sortedItems = sortBoxItems(items);
+
+  return (
+    <section
+      ref={setNodeRef}
+      className={`flex min-h-44 min-w-0 flex-col overflow-hidden rounded-xl border p-3 transition duration-200 ${SHIPMENT_TYPE.tone} ${
+        isOver ? 'scale-[1.01] border-violet-500 shadow-lg shadow-violet-500/20 ring-2 ring-violet-400' : ''
+      } ${disabled ? 'opacity-60' : ''}`}
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Truck className="h-5 w-5 text-violet-700" />
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Ready To Shipment</h3>
+            <p className="text-xs font-semibold text-violet-700">Drop order yang semua operation sudah finish.</p>
+          </div>
+        </div>
+        <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold text-slate-700">{sortedItems.length}</span>
+      </div>
+      <div className="min-w-0 space-y-2 overflow-hidden">
+        {sortedItems.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-violet-300 bg-white/70 p-3 text-sm text-violet-700">
+            Drag order_no ke sini untuk status siap kirim.
+          </div>
+        ) : (
+          sortedItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onNoteClick(item)}
+              className="block w-full min-w-0 rounded-lg text-left transition hover:brightness-95"
+            >
+              <BufferContent item={item} />
+            </button>
+          ))
+        )}
+      </div>
     </section>
   );
 }
@@ -586,6 +700,7 @@ export default function BufferTransactionPage() {
   const [pendingOperation, setPendingOperation] = useState(null);
   const [machinePickerMode, setMachinePickerMode] = useState('moving');
   const [selectedArriveMachine, setSelectedArriveMachine] = useState('');
+  const [showShipmentZone, setShowShipmentZone] = useState(false);
 
   const loadData = useCallback(async () => {
     setError('');
@@ -695,6 +810,10 @@ export default function BufferTransactionPage() {
     () => (focusedMachine ? buffersByMachine.get(focusedMachine.machineid) || [] : []),
     [buffersByMachine, focusedMachine]
   );
+  const shipmentBuffers = useMemo(
+    () => sortBoxItems(latestBuffers.filter((item) => item.type === 'shipment')),
+    [latestBuffers]
+  );
 
   const getTargetType = (over) => {
     if (!over) return null;
@@ -706,6 +825,20 @@ export default function BufferTransactionPage() {
   const refreshBufferHistory = useCallback(async () => {
     const rows = await fetchBufferTransactions('', { history: true });
     setBufferHistory(rows.map(normalizeBuffer));
+  }, []);
+
+  const markSowOperationFinished = useCallback((operation) => {
+    if (!operation?.order_no || operation.operation_no === null || operation.operation_no === undefined) return;
+    setSowRows((prev) => prev.map((row) => (
+      row.order_no === operation.order_no && String(row.operation_no) === String(operation.operation_no)
+        ? { ...row, is_finished: true, status: 'FINISH', finish_date: new Date().toISOString().slice(0, 10) }
+        : row
+    )));
+    setSelectedOperation((prev) => (
+      prev?.order_no === operation.order_no && String(prev.operation_no) === String(operation.operation_no)
+        ? { ...prev, is_finished: true, status: 'FINISH', finish_date: new Date().toISOString().slice(0, 10) }
+        : prev
+    ));
   }, []);
 
   const sourceToOperation = (source) => (
@@ -728,8 +861,6 @@ export default function BufferTransactionPage() {
     setMachinePickerMode(mode);
     setSelectedArriveMachine('');
   };
-
-  const openArrivePicker = (source) => openMachinePicker(source, 'arrive');
 
   const createMovement = async (source, type, machineId = focusedMachine?.machineid) => {
     const operation = source?.source === 'buffer'
@@ -768,9 +899,52 @@ export default function BufferTransactionPage() {
       const normalizedSaved = normalizeBuffer(saved);
       setBufferHistory((prev) => [normalizedSaved, ...prev]);
       await refreshBufferHistory();
+      if (type === 'out') markSowOperationFinished(operation);
       return normalizedSaved;
     } catch (err) {
       setError(err.message || 'Gagal menyimpan buffer.');
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const createShipment = async (order) => {
+    if (!order?.order_no) return null;
+    const nextPriority = shipmentBuffers.length === 0
+      ? 0
+      : Math.max(...shipmentBuffers.map((item) => Number(item.priority || 0))) + 1;
+
+    setSaving(true);
+    setError('');
+    try {
+      const saved = await setBufferTransaction({
+        machine_id: SHIPMENT_MACHINE_ID,
+        type: 'shipment',
+        component_label: order.part_name || order.order_no,
+        order_no: order.order_no,
+        ssbr_id: order.ssbr_id,
+        operation_no: null,
+        operation_text: 'Ready To Shipment',
+        priority: nextPriority,
+        note: 'Ready to shipment',
+      });
+
+      const normalizedSaved = normalizeBuffer(saved);
+      setBufferHistory((prev) => [normalizedSaved, ...prev]);
+      await refreshBufferHistory();
+      return normalizedSaved;
+    } catch (err) {
+      const unfinished = err.details?.unfinished_operations || [];
+      const examples = unfinished
+        .slice(0, 3)
+        .map((item) => `OP ${item.operation_no} ${item.operation_text || ''}`.trim())
+        .join(', ');
+      setError(
+        err.status === 409 && unfinished.length > 0
+          ? `Belum bisa Ready To Shipment: ${unfinished.length} operation belum finish${examples ? ` (${examples})` : ''}.`
+          : err.message || 'Gagal menyimpan Ready To Shipment.'
+      );
       return null;
     } finally {
       setSaving(false);
@@ -829,7 +1003,18 @@ export default function BufferTransactionPage() {
     const source = active.data?.current;
 
     setActiveDrag(null);
-    if (!source || !focusedMachine || !over) return;
+    if (!source || !over) return;
+
+    const targetType = getTargetType(over);
+
+    if (source.source === 'order') {
+      if (targetType === 'shipment') await createShipment(source.order);
+      return;
+    }
+
+    if (targetType === 'shipment') return;
+
+    if (!focusedMachine) return;
 
     if (source.source === 'buffer') {
       const overBuffer = latestBuffers.find((item) => `buffer-${item.id}` === over.id);
@@ -838,7 +1023,6 @@ export default function BufferTransactionPage() {
         return;
       }
 
-      const targetType = getTargetType(over);
       if (!targetType) return;
       if (targetType === 'moving') {
         openMachinePicker(source, 'moving');
@@ -851,7 +1035,6 @@ export default function BufferTransactionPage() {
       return;
     }
 
-    const targetType = getTargetType(over);
     if (!targetType) return;
     if (targetType === 'moving') {
       openMachinePicker(source, 'moving');
@@ -990,11 +1173,11 @@ export default function BufferTransactionPage() {
                 </div>
               ) : selectedOrderData ? (
                 <div className="space-y-1">
-                  <div className="rounded-xl border border-[#0096c7] bg-[#caf0f8] p-4">
-                    <div className="text-lg font-bold text-slate-900">{selectedOrderData.order_no}</div>
-                    <div className="mt-1 text-sm text-slate-700">{selectedOrderData.ssbr_id || '-'} / {selectedOrderData.part_name || '-'}</div>
-                    <div className="text-sm text-slate-600">Model: {selectedOrderData.model || '-'} / Plan: {formatHours(selectedOrderData.total_planhours)} jam</div>
-                  </div>
+                  <DraggableOrder
+                    order={selectedOrderData}
+                    latest={orderLatestStatus.get(selectedOrderData.order_no)}
+                    onSelect={() => {}}
+                  />
                   {selectedOrderData.operations.map((operation) => (
                     <div
                       key={`${operation.order_no}-${operation.operation_no}`}
@@ -1019,34 +1202,18 @@ export default function BufferTransactionPage() {
                 <div className="sow-order-list flex flex-col gap-1">
                   {groupedOrders.map((order) => {
                     const latest = orderLatestStatus.get(order.order_no);
-                    const statusType = latest?.type || 'none';
                     const firstOpenOperation = order.operations.find((operation) => !operation.is_finished) || order.operations[0] || null;
 
                     return (
-                      <button
+                      <DraggableOrder
                         key={order.order_no}
-                        type="button"
-                        onClick={() => {
+                        order={order}
+                        latest={latest}
+                        onSelect={() => {
                           setSelectedOrder(order.order_no);
                           setSelectedOperation(firstOpenOperation?.is_finished ? null : firstOpenOperation);
                         }}
-                        className="w-full min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-[#0096c7] hover:shadow-md tablet-card"
-                      >
-                        <div className="flex items-start justify-between gap-3 tablet-gap">
-                          <div className="min-w-0 flex-1 overflow-hidden">
-                            <div className="truncate text-lg font-bold text-slate-900 tablet-subheading">{order.order_no}</div>
-                            <div className="mt-1 line-clamp-1 break-all text-sm text-slate-600 tablet-body">{order.ssbr_id || '-'} / {order.part_name || '-'}</div>
-                            <div className="line-clamp-1 break-all text-sm text-slate-500 tablet-body">Model: {order.model || '-'}</div>
-                            <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-xs font-bold uppercase ${ORDER_STATUS_CLASS[statusType] || ORDER_STATUS_CLASS.none}`}>
-                              {latest ? `${statusType} / ${latest.machine_id || '-'}` : 'Belum diproses'}
-                            </span>
-                          </div>
-                          <div className="shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-right">
-                            <div className="text-xs font-bold text-slate-500">Plan</div>
-                            <div className="font-mono text-sm font-bold text-slate-900">{formatHours(order.total_planhours)}h</div>
-                          </div>
-                        </div>
-                      </button>
+                      />
                     );
                   })}
                 </div>
@@ -1082,9 +1249,22 @@ export default function BufferTransactionPage() {
               <div>
                 <h3 className="text-lg font-bold text-slate-900">Daftar Mesin</h3>
                 <p className="text-sm text-slate-500">
-                  {focusedMachine ? `${focusedMachine.machineid} sedang dipilih.` : 'Klik mesin untuk fokus sebelum drop.'}
+                  {showShipmentZone ? 'Ready To Shipment zone aktif.' : focusedMachine ? `${focusedMachine.machineid} sedang dipilih.` : 'Klik mesin untuk fokus sebelum drop.'}
                 </p>
               </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowShipmentZone((value) => !value)}
+                  className={`inline-flex min-h-[36px] items-center justify-center gap-1.5 rounded-lg border px-3 text-sm font-semibold transition ${
+                    showShipmentZone
+                      ? 'border-violet-200 bg-violet-100 text-violet-700 hover:bg-violet-50'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Truck className="h-4 w-4" />
+                  {showShipmentZone ? 'Hide Shipment' : 'Show Shipment'}
+                </button>
               {focusedMachine && (
                 <button
                   type="button"
@@ -1095,7 +1275,18 @@ export default function BufferTransactionPage() {
                   Pilih Mesin Lain
                 </button>
               )}
+              </div>
             </div>
+
+            {showShipmentZone && (
+            <div className="mb-3 shrink-0">
+              <ShipmentDropZone
+                items={shipmentBuffers}
+                disabled={saving}
+                onNoteClick={openNote}
+              />
+            </div>
+            )}
 
             {!focusedMachine && (
               <label className="mb-3 flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
@@ -1156,6 +1347,9 @@ export default function BufferTransactionPage() {
         </main>
 
         <DragOverlay dropAnimation={null}>
+          {activeDrag?.source === 'order' && (
+            <OrderCard order={activeDrag.order} latest={orderLatestStatus.get(activeDrag.order.order_no)} dragging />
+          )}
           {activeDrag?.source === 'sow' && (
             <OperationCard operation={activeDrag.operation} selected dragging />
           )}

@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 
 const TTS_API_BASE = import.meta.env.VITE_TTS_API_URL || '';
-const POLL_INTERVAL_MS = 5000;
-const BLOCKED_RETRY_MS = 15000;
+const DEFAULT_POLL_INTERVAL_MS = 15000;
+const BLOCKED_RETRY_MS = 30000;
+const ERROR_RETRY_MS = 45000;
 
 function ttsUrl(path) {
   return `${TTS_API_BASE.replace(/\/$/, '')}${path}`;
@@ -59,27 +60,33 @@ async function markAudioPlayed(id) {
   });
 }
 
-export default function TtsAutoAnnouncementPlayer() {
+export default function TtsAutoAnnouncementPlayer({
+  enabled = true,
+  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+}) {
   const audioRef = useRef(null);
   const currentIdRef = useRef(null);
   const isPlayingRef = useRef(false);
+  const isCheckingRef = useRef(false);
   const blockedToastShownRef = useRef(false);
   const retryTimerRef = useRef(null);
   const playPendingAudioRef = useRef(null);
   const objectUrlRef = useRef(null);
 
-  const scheduleRetry = useCallback(() => {
+  const scheduleRetry = useCallback((delayMs = ERROR_RETRY_MS) => {
     window.clearTimeout(retryTimerRef.current);
     retryTimerRef.current = window.setTimeout(() => {
       playPendingAudioRef.current?.();
-    }, BLOCKED_RETRY_MS);
+    }, delayMs);
   }, []);
 
   const playPendingAudio = useCallback(async () => {
-    if (isPlayingRef.current) return;
+    if (!enabled || document.hidden || isPlayingRef.current || isCheckingRef.current) return;
 
     const audio = audioRef.current;
     if (!audio) return;
+
+    isCheckingRef.current = true;
 
     try {
       const pending = await fetchAudioCandidate();
@@ -107,11 +114,15 @@ export default function TtsAutoAnnouncementPlayer() {
       if (error?.name === 'NotAllowedError' && !blockedToastShownRef.current) {
         blockedToastShownRef.current = true;
         toast.warning('Autoplay audio diblok browser. Izinkan autoplay untuk site ini agar TTS bisa jalan otomatis.');
+        scheduleRetry(BLOCKED_RETRY_MS);
+        return;
       }
 
       scheduleRetry();
+    } finally {
+      isCheckingRef.current = false;
     }
-  }, [scheduleRetry]);
+  }, [enabled, scheduleRetry]);
 
   useEffect(() => {
     playPendingAudioRef.current = playPendingAudio;
@@ -140,12 +151,19 @@ export default function TtsAutoAnnouncementPlayer() {
   }, [scheduleRetry]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
+
     playPendingAudio();
-    const interval = window.setInterval(playPendingAudio, POLL_INTERVAL_MS);
+    const interval = window.setInterval(playPendingAudio, pollIntervalMs);
 
     const retryAfterBrowserUnlock = () => playPendingAudio();
+    const retryAfterVisible = () => {
+      if (!document.hidden) playPendingAudio();
+    };
+
     window.addEventListener('pointerdown', retryAfterBrowserUnlock, { capture: true });
     window.addEventListener('keydown', retryAfterBrowserUnlock, { capture: true });
+    document.addEventListener('visibilitychange', retryAfterVisible);
 
     return () => {
       window.clearInterval(interval);
@@ -155,8 +173,9 @@ export default function TtsAutoAnnouncementPlayer() {
       }
       window.removeEventListener('pointerdown', retryAfterBrowserUnlock, { capture: true });
       window.removeEventListener('keydown', retryAfterBrowserUnlock, { capture: true });
+      document.removeEventListener('visibilitychange', retryAfterVisible);
     };
-  }, [playPendingAudio]);
+  }, [enabled, playPendingAudio, pollIntervalMs]);
 
   return (
     <audio

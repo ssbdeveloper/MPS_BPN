@@ -19,6 +19,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const SUBMITTED_STORAGE_KEY = 'machine_hours_validation_submitted';
 const FILTER_STORAGE_KEY = 'machineHoursValidationShowFilters';
 const POST_SAP_STORAGE_KEY = 'machineHoursValidationPostSap';
+const AUTO_REFRESH_MS = 30000;
 
 const PALETTE = {
   deepTwilight: '#03045e',
@@ -160,7 +161,14 @@ const ValidateBtn = ({ onClick, size = 'sm', title = 'Validate' }) => (
 function todayMinus(days) {
   const date = new Date();
   date.setDate(date.getDate() - days);
-  return date.toISOString().slice(0, 10);
+  return formatLocalDateInput(date);
+}
+
+function formatLocalDateInput(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function apiUrl(path, params = {}) {
@@ -441,7 +449,7 @@ const MachineHoursValidationPage = ({
   });
   const [filters, setFilters] = useState({
     start: todayMinus(7),
-    end: new Date().toISOString().slice(0, 10),
+    end: formatLocalDateInput(),
     search: '',
     machineno: '',
     statusid: '',
@@ -469,7 +477,7 @@ const MachineHoursValidationPage = ({
       if (!response.ok || json.success === false) throw new Error(json.error || 'Gagal load Overall Equipment Effectiveness');
       setStats(json.stats || {});
       setGroups(Array.isArray(json.groups) ? json.groups : []);
-      setGroupRecords({});
+      if (!silent) setGroupRecords({});
     } catch (err) {
       setError(err.message);
       toast.error('Gagal load data machine hours', { description: err.message });
@@ -480,6 +488,11 @@ const MachineHoursValidationPage = ({
 
   useEffect(() => {
     loadValidationData();
+  }, [loadValidationData]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => loadValidationData(true), AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
   }, [loadValidationData]);
 
   const loadGroupRecords = useCallback(async (machineno, force = false) => {
@@ -573,7 +586,7 @@ const MachineHoursValidationPage = ({
   const clearFilters = () => {
     setFilters({
       start: todayMinus(7),
-      end: new Date().toISOString().slice(0, 10),
+      end: formatLocalDateInput(),
       search: '',
       machineno: '',
       statusid: '',

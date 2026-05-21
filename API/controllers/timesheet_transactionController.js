@@ -421,6 +421,15 @@ exports.checkoutUnprod = async (req, res) => {
     }
 
     const serialnumber = datakaryawan.sn;
+    const workcentercode = normalizeText(datakaryawan.workcentercode || datakaryawan.workcenter);
+    const params = [serialnumber];
+    let workcenterFilter = '';
+
+    if (workcentercode) {
+      params.push(workcentercode);
+      workcenterFilter = `
+         AND COALESCE(NULLIF(TRIM(workcentercode), ''), '') = $${params.length}`;
+    }
 
     const result = await db.query(
       `UPDATE timesheet_transaction
@@ -432,6 +441,7 @@ exports.checkoutUnprod = async (req, res) => {
            )
        WHERE serialnumber = $1
          AND date_checkout IS NULL
+         ${workcenterFilter}
          AND (
            NULLIF(TRIM(activitytype), '') IS NOT NULL
            OR (
@@ -441,7 +451,7 @@ exports.checkoutUnprod = async (req, res) => {
            )
          )
        RETURNING *`,
-      [serialnumber]
+      params
     );
 
     // Tidak ada unprod terbuka bukan error — kembalikan array kosong

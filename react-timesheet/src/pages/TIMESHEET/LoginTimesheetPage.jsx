@@ -26,6 +26,12 @@ const ACTION_LABEL = {
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+const getTimesheetMode = (user = {}) => (
+  String(user.mode || sessionStorage.getItem('timesheetMode') || 'single')
+    .trim()
+    .toLowerCase()
+);
+
 // ─── Sub-component: Unprod Mode Panel ────────────────────────────────────────
 const UnprodPanel = ({ panelRef, onSelect }) => {
   const btnBase = `flex flex-col items-center justify-center gap-1.5 py-3 px-1 min-h-[44px]
@@ -185,12 +191,17 @@ const LoginTimesheetPage = () => {
 
   const createUnprodActivity = async (user, unprodCode, unprodLabel) => {
     try {
-      const isMultiple = user.mode === 'multiple';
+      const isMultiple = getTimesheetMode(user) === 'multiple';
       const checkoutEndpoint = isMultiple ? 'checkout-unprod' : 'checkout';
       await fetch(`${API_BASE}/timesheet/${checkoutEndpoint}`, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ datakaryawan: { sn: user.snssb } }),
+        body:    JSON.stringify({
+          datakaryawan: {
+            sn: user.snssb,
+            workcentercode: user.workcenter || '',
+          },
+        }),
       });
 
       const res = await fetch(`${API_BASE}/timesheet/`, {

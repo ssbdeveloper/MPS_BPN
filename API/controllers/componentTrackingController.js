@@ -1,4 +1,5 @@
 const db = global.pool || require("../db");
+const SHIPMENT_MACHINE_ID = "__SHIPMENT__";
 
 const tableExistsCache = new Map();
 
@@ -382,25 +383,124 @@ exports.setBuffer = async (req, res) => {
     note,
   } = req.body || {};
 
-  const resolvedMachineId = String(machine_id || machineId || "").trim();
   const resolvedType = String(type || "").trim().toLowerCase();
+  const resolvedMachineId = String(machine_id || machineId || (resolvedType === "shipment" ? SHIPMENT_MACHINE_ID : "")).trim();
   const resolvedOrderNo = String(order_no || "").trim();
-  const resolvedOperationNo = Number(operation_no);
+  const resolvedOperationNo = operation_no === null || operation_no === undefined || operation_no === ""
+    ? null
+    : Number(operation_no);
 
   if (!resolvedMachineId) {
     return res.status(400).json({ error: "machine_id is required" });
   }
 
-  if (!["in", "out", "moving"].includes(resolvedType)) {
-    return res.status(400).json({ error: "type must be in, out, or moving" });
+  if (!["in", "out", "moving", "shipment"].includes(resolvedType)) {
+    return res.status(400).json({ error: "type must be in, out, moving, or shipment" });
   }
 
-  if (!resolvedOrderNo || !Number.isFinite(resolvedOperationNo)) {
+  if (!resolvedOrderNo || (resolvedType !== "shipment" && !Number.isFinite(resolvedOperationNo))) {
     return res.status(400).json({ error: "order_no and operation_no are required" });
   }
 
+  let client = null;
   try {
-    const result = await db.query(
+    client = typeof db.connect === "function" ? await db.connect() : null;
+    const query = client ? client.query.bind(client) : db.query.bind(db);
+    if (client) await query("BEGIN");
+
+    if (resolvedType === "out") {
+      const finishResult = await query(
+        `UPDATE public.sow
+         SET status = 'FINISH',
+             finish_date = CURRENT_DATE,
+             updated_at = NOW()
+         WHERE order_no = $1
+           AND operation_no = $2
+         RETURNING idsow`,
+        [resolvedOrderNo, resolvedOperationNo]
+      );
+
+      if (finishResult.rowCount === 0) {
+        const error = new Error("SOW activity not found for buffer out");
+        error.status = 404;
+        throw error;
+      }
+    }
+
+    if (resolvedType === "shipment") {
+      const readinessResult = await query(
+        `WITH latest_sow AS (
+           SELECT *
+           FROM (
+             SELECT
+               s.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY s.operation_no
+                 ORDER BY s.idsow DESC
+               ) AS rn
+             FROM public.sow s
+             WHERE s.order_no = $1
+               AND s.operation_no IS NOT NULL
+           ) ranked
+           WHERE rn = 1
+         ),
+         evaluated AS (
+           SELECT
+             idsow,
+             operation_no,
+             COALESCE(NULLIF(operation_text, ''), '-') AS operation_text,
+             CASE
+               WHEN LOWER(TRIM(COALESCE(status, ''))) IN ('finish', 'finished', 'complete', 'completed', 'done') THEN TRUE
+               WHEN actual_finish IS NOT NULL THEN TRUE
+               WHEN COALESCE(progress, 0) >= 100 THEN TRUE
+               WHEN LOWER(TRIM(COALESCE(systemstatus, ''))) LIKE '%finish%' THEN TRUE
+               ELSE FALSE
+             END AS is_finished
+           FROM latest_sow
+         )
+         SELECT
+           COUNT(*)::int AS total_operations,
+           COUNT(*) FILTER (WHERE is_finished)::int AS finished_operations,
+           COALESCE(
+             json_agg(
+               json_build_object(
+                 'idsow', idsow,
+                 'operation_no', operation_no,
+                 'operation_text', operation_text
+               )
+               ORDER BY operation_no
+             ) FILTER (WHERE NOT is_finished),
+             '[]'::json
+           ) AS unfinished_operations
+         FROM evaluated`,
+        [resolvedOrderNo]
+      );
+
+      const readiness = readinessResult.rows[0] || {};
+      const totalOperations = Number(readiness.total_operations || 0);
+      const unfinishedOperations = Array.isArray(readiness.unfinished_operations)
+        ? readiness.unfinished_operations
+        : [];
+
+      if (totalOperations === 0) {
+        const error = new Error("SOW order not found for shipment");
+        error.status = 404;
+        throw error;
+      }
+
+      if (unfinishedOperations.length > 0) {
+        const error = new Error(`${unfinishedOperations.length} operation belum finish`);
+        error.status = 409;
+        error.details = {
+          total_operations: totalOperations,
+          finished_operations: Number(readiness.finished_operations || 0),
+          unfinished_operations: unfinishedOperations,
+        };
+        throw error;
+      }
+    }
+
+    const result = await query(
       `INSERT INTO buffer_transaction (
          machine_id,
          type,
@@ -425,17 +525,21 @@ exports.setBuffer = async (req, res) => {
         component_label || "",
         resolvedOrderNo,
         ssbr_id || "",
-        resolvedOperationNo,
+        Number.isFinite(resolvedOperationNo) ? resolvedOperationNo : null,
         operation_text || "",
-        `BUFFER-${resolvedMachineId}-${resolvedOrderNo}-${resolvedOperationNo}-${Date.now()}`,
-        note || "Set from Buffer Transaction page",
+        `BUFFER-${resolvedMachineId}-${resolvedOrderNo}-${resolvedOperationNo || "ORDER"}-${Date.now()}`,
+        note || (resolvedType === "shipment" ? "Ready to shipment" : "Set from Buffer Transaction page"),
         Number.isFinite(Number(priority)) ? Number(priority) : 0,
       ]
     );
 
+    if (client) await query("COMMIT");
     res.json({ data: result.rows[0] });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    res.status(err.status || 500).json({ error: err.message, details: err.details });
+  } finally {
+    if (client) client.release();
   }
 };
 

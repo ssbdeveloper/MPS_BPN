@@ -19,6 +19,12 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const ICON_SIZE = 20;
 
+const getTimesheetMode = (user = {}) => (
+  String(user.mode || sessionStorage.getItem('timesheetMode') || 'single')
+    .trim()
+    .toLowerCase()
+);
+
 // Icon mapping for each unprod code
 const UNPROD_ICONS = {
   '1510': <Users size={ICON_SIZE} strokeWidth={1.8} />,
@@ -73,7 +79,7 @@ const UnproductiveMenuPage = () => {
       return;
     }
 
-    const isMultiple = (datakaryawan.mode || sessionStorage.getItem('timesheetMode') || 'single') === 'multiple';
+    const isMultiple = getTimesheetMode(datakaryawan) === 'multiple';
     const operation_text = `${code} ${label}`;
 
     toast.success(`${label} berhasil dicatat!`);
@@ -97,7 +103,12 @@ const UnproductiveMenuPage = () => {
       fetch(`${API_BASE}/timesheet/checkout-unprod`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ datakaryawan: { sn: datakaryawan.snssb } })
+        body: JSON.stringify({
+          datakaryawan: {
+            sn: datakaryawan.snssb,
+            workcentercode: datakaryawan.workcenter || '',
+          },
+        })
       }).finally(doCreate);
     } else {
       // Mode single: checkout semua (productive + unprod), lalu buat entry unprod

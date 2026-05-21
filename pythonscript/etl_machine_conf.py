@@ -33,7 +33,7 @@ SQLSERVER_CONFIG = {
 }
 
 POSTGRES_CONFIG = {
-    "host":     "10.169.1.12",
+    "host":     "100.86.231.55",
     "port":     5433,
     "dbname":   "ptssb",
     "user":     "tag",
