@@ -3,7 +3,7 @@ etl_mch_transaction.py
 Incremental PostgreSQL ETL that fills public.mch_transaction from public.mch_productiondata.
 
 The transformation follows public.mv_mch_productiondata_detail, but avoids the heaviest part:
-nearest timesheet lookup only runs for source rows where statusid = 1.
+nearest timesheet lookup only runs for source rows where statusid needs operator lookup.
 
 Usage:
     python etl_mch_transaction.py
@@ -26,7 +26,7 @@ BATCH_SIZE = 5000
 DEFAULT_FROM_DATE = "2026-01-01"
 TARGET_TABLE = "public.mch_transaction"
 SOURCE_TABLE = "public.mch_productiondata"
-ALLOWED_STATUS_IDS = (1, 6, 7, 8, 9)
+TIMESHEET_LOOKUP_STATUS_IDS = (1, 6, 7, 8, 9)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 ENV_PATH = os.path.join(PROJECT_ROOT, ".env")
@@ -174,8 +174,8 @@ def make_date_range(args: argparse.Namespace) -> tuple[datetime, datetime | None
 
 
 def build_source_query(full_rebuild: bool, from_dt: datetime, to_dt: datetime | None) -> tuple[str, list]:
-    base_filters = ["p.startdatetime >= %s", "p.statusid = ANY(%s)"]
-    params: list = [from_dt, list(ALLOWED_STATUS_IDS)]
+    base_filters = ["p.startdatetime >= %s"]
+    params: list = [from_dt]
 
     if to_dt:
         base_filters.append("p.startdatetime < %s")
@@ -330,7 +330,7 @@ def fetch_latest_ph3_by_confirmation(cursor, job_ids: list[str]) -> dict[str, di
 def fetch_timesheet_matches(cursor, source_rows: list[dict], ph3_map: dict[str, dict]) -> dict[int, dict]:
     candidates = []
     for row in source_rows:
-        if row["statusid"] not in ALLOWED_STATUS_IDS:
+        if row["statusid"] not in TIMESHEET_LOOKUP_STATUS_IDS:
             continue
         ph3 = ph3_map.get(row.get("jobid"))
         if not ph3:
@@ -506,7 +506,7 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             for row in source_rows
         ]
 
-        lookup_status_count = sum(1 for row in source_rows if row["statusid"] in ALLOWED_STATUS_IDS)
+        lookup_status_count = sum(1 for row in source_rows if row["statusid"] in TIMESHEET_LOOKUP_STATUS_IDS)
         log.info(
             "Prepared batch offset=%d count=%d timesheet_lookup_candidates=%d timesheet_matches=%d",
             offset,
@@ -578,8 +578,8 @@ def main() -> None:
             if args.full_rebuild
             else "incremental by proddataid + reprocess target rows with enddatetime IS NULL",
         )
-        log.info("Status filter: %s", ", ".join(str(status_id) for status_id in ALLOWED_STATUS_IDS))
-        log.info("Timesheet lookup scope: rows with statusid in %s", ALLOWED_STATUS_IDS)
+        log.info("Source status filter: all statusid values")
+        log.info("Timesheet lookup scope: rows with statusid in %s", TIMESHEET_LOOKUP_STATUS_IDS)
 
         pg_conn = psycopg2.connect(**pg_config)
         processed = run_etl(pg_conn, from_dt, to_dt, args.full_rebuild, args.dry_run)

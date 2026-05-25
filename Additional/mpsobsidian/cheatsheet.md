@@ -54,3 +54,4 @@ sudo docker exec timesheet-nginx nginx -s reload
 
 akses file folder sow upload
 sudo docker compose exec -u root api sh -lc "mkdir -p /app/uploads/sow-pdf && chown -R node:node /app/uploads && chmod -R u+rwX,g+rwX /app/uploads"
+scp "D:\Users\tee.san\Downloads\header.mp3" tag@100.86.231.55:"/home/tag/MPS2/TTS Service/"
