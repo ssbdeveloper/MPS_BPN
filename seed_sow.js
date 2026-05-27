@@ -11,8 +11,9 @@
  *   node seed_sow.js --on-conflict=skip
  *
  * Expected CSV columns, delimiter semicolon:
- *   operation_no;operation_text;part_name;model;part_number;wct_group;
- *   std_hours;loading;setting;measurement;unloading;total_std;source_plant
+ *   template_key;template_name;template_sort;line_order;operation_no;operation_text;
+ *   part_name;model;part_number;wct_group;std_hours;loading;setting;measurement;
+ *   unloading;total_std;remark;source_plant
  *
  * Behavior:
  *   - components are upserted by (model, part_number)
@@ -20,6 +21,7 @@
  *   - wct_group is also matched to workcenter.groupname + source_plant
  *     to fill sow_standard.workcenter with workcenter.workcenternew when available
  *   - NNVA columns are saved to sow_nnva_standard using sow_nnva_base
+ *   - template_key/template_name are saved to sow_templates and sow_template_lines
  */
 
 const fs = require("fs");
@@ -45,6 +47,13 @@ const REQUIRED_COLUMNS = [
   "unloading",
   "total_std",
   "source_plant",
+];
+
+const OPTIONAL_COLUMNS = [
+  "template_key",
+  "template_name",
+  "template_sort",
+  "line_order",
 ];
 
 const NNVA_COLUMNS = [
@@ -185,8 +194,14 @@ function readStandardCsv(filePath) {
 
 function normalizeCsvRow(row, rowNumber) {
   const operationNo = toInteger(row.operation_no);
+  const templateName = clean(row.template_name);
+  const templateKey = clean(row.template_key) || slugify(templateName);
   return {
     rowNumber,
+    template_key: templateKey,
+    template_name: templateName || (templateKey ? `Package ${templateKey}` : ""),
+    template_sort: toInteger(row.template_sort),
+    line_order: toInteger(row.line_order),
     operation_no: operationNo,
     operation_text: clean(row.operation_text),
     part_name: clean(row.part_name),
@@ -199,8 +214,16 @@ function normalizeCsvRow(row, rowNumber) {
     measurement: toNumber(row.measurement),
     unloading: toNumber(row.unloading),
     total_std: toNumber(row.total_std),
+    remark: nullableText(row.remark),
     source_plant: toInteger(row.source_plant),
   };
+}
+
+function slugify(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 function getTotalStdHours(row) {
@@ -222,6 +245,10 @@ function operationKey(componentId, operationNo) {
   return `${componentId}|${operationNo}`;
 }
 
+function templateKey(componentId, key) {
+  return `${componentId}|${key}`;
+}
+
 function hr(label) {
   console.log(`\n${"=".repeat(64)}`);
   if (label) console.log(label);
@@ -230,12 +257,14 @@ function hr(label) {
 
 function summarizeRows(rows) {
   const components = new Set(rows.map(componentKey));
+  const templates = new Set(rows.filter((row) => row.template_key).map((row) => `${componentKey(row)}|||${row.template_key}`));
   const nnvaCount = rows.reduce((sum, row) => {
     return sum + NNVA_COLUMNS.filter((item) => (row[item.csvColumn] || 0) > 0).length;
   }, 0);
 
   console.log(`CSV rows valid     : ${rows.length}`);
   console.log(`Unique components  : ${components.size}`);
+  console.log(`Unique templates   : ${templates.size}`);
   console.log(`NNVA assignments   : ${nnvaCount}`);
 }
 
@@ -410,6 +439,62 @@ async function fetchExistingOperations(client, componentIds) {
   return { operationMap, maxMap, usedMap };
 }
 
+async function fetchExistingTemplates(client, componentIds) {
+  if (!componentIds.length) return new Map();
+
+  const result = await client.query(
+    `SELECT template_id, component_id, template_key, template_name
+     FROM public.sow_templates
+     WHERE component_id = ANY($1::bigint[])`,
+    [componentIds]
+  );
+
+  return new Map(
+    result.rows.map((row) => [templateKey(row.component_id, row.template_key), row])
+  );
+}
+
+async function upsertTemplate(client, row, componentId, templateMap) {
+  if (!row.template_key) return null;
+
+  const key = templateKey(componentId, row.template_key);
+  const result = await client.query(
+    `INSERT INTO public.sow_templates
+       (component_id, template_key, template_name, sort_order, is_active, updated_at)
+     VALUES ($1, $2, $3, $4, true, now())
+     ON CONFLICT (component_id, template_key)
+     DO UPDATE SET
+       template_name = EXCLUDED.template_name,
+       sort_order = EXCLUDED.sort_order,
+       is_active = true,
+       updated_at = now()
+     RETURNING template_id, component_id, template_key, template_name`,
+    [
+      componentId,
+      row.template_key,
+      row.template_name || `Package ${row.template_key}`,
+      row.template_sort || 0,
+    ]
+  );
+
+  const saved = result.rows[0];
+  templateMap.set(key, saved);
+  return saved.template_id;
+}
+
+async function upsertTemplateLine(client, templateId, standardId, lineOrder) {
+  if (!templateId || !standardId) return false;
+
+  await client.query(
+    `INSERT INTO public.sow_template_lines (template_id, standard_id, line_order)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (template_id, standard_id)
+     DO UPDATE SET line_order = EXCLUDED.line_order`,
+    [templateId, standardId, lineOrder || 0]
+  );
+  return true;
+}
+
 function nextOperationNo(componentId, maxMap, usedMap) {
   const key = String(componentId);
   const used = usedMap.get(key) || new Set();
@@ -448,8 +533,8 @@ async function replaceNnva(client, sowStandardId, items) {
 async function insertSowStandard(client, row, componentId, workcenter, operationNo) {
   const result = await client.query(
     `INSERT INTO public.sow_standard
-       (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
     [
       componentId,
@@ -459,6 +544,7 @@ async function insertSowStandard(client, row, componentId, workcenter, operation
       workcenter?.workcenternew || null,
       getTotalStdHours(row),
       row.source_plant,
+      row.remark,
     ]
   );
   return result.rows[0].id;
@@ -471,7 +557,8 @@ async function updateSowStandard(client, standardId, row, workcenter) {
          machineid = $3,
          workcenter = $4,
          std_hours = $5,
-         source_plant = $6
+         source_plant = $6,
+         remark = $7
      WHERE id = $1
      RETURNING id`,
     [
@@ -481,6 +568,7 @@ async function updateSowStandard(client, standardId, row, workcenter) {
       workcenter?.workcenternew || null,
       getTotalStdHours(row),
       row.source_plant,
+      row.remark,
     ]
   );
   return result.rows[0]?.id || null;
@@ -496,6 +584,14 @@ function printConflictSamples(rows, componentMap, operationMap) {
   for (const row of samples) {
     console.log(`  row ${row.rowNumber}: ${row.model} / ${row.part_number} op ${row.operation_no} - ${row.operation_text}`);
   }
+}
+
+function buildExistingStandardIdMap(operationMap) {
+  const map = new Map();
+  for (const [key, rows] of operationMap.entries()) {
+    if (rows.length) map.set(key, rows[0].id);
+  }
+  return map;
 }
 
 async function main() {
@@ -520,6 +616,9 @@ async function main() {
     sowSkipped: 0,
     sowAppended: 0,
     nnvaSaved: 0,
+    templatesCreated: 0,
+    templatesUpdated: 0,
+    templateLinesSaved: 0,
     missingWorkcenter: 0,
     ambiguousWorkcenter: 0,
   };
@@ -544,6 +643,9 @@ async function main() {
 
     const componentIds = [...new Set([...componentResult.componentMap.values()].map(String))];
     const { operationMap, maxMap, usedMap } = await fetchExistingOperations(client, componentIds);
+    const standardIdMap = buildExistingStandardIdMap(operationMap);
+    const templateMap = await fetchExistingTemplates(client, componentIds);
+    const existingTemplateKeys = new Set(templateMap.keys());
 
     const conflictRows = rows.filter((row) => {
       const componentId = componentResult.componentMap.get(componentKey(row));
@@ -566,6 +668,7 @@ async function main() {
       const existing = operationMap.get(existingKey) || [];
       const workcenter = workcenterMap.get(`${row.wct_group}|${row.source_plant || ""}`) || null;
       const nnvaItems = buildNnvaItems(row, nnvaBaseMap);
+      const currentTemplateKey = row.template_key ? templateKey(componentId, row.template_key) : null;
 
       if (!workcenter) stats.missingWorkcenter += 1;
 
@@ -581,13 +684,48 @@ async function main() {
       if (Number(matchingCandidates.rows[0]?.count || 0) > 1) stats.ambiguousWorkcenter += 1;
 
       if (args.dryRun) {
-        if (existing.length) stats.sowSkipped += 1;
+        const seenInBatch = standardIdMap.has(existingKey);
+        if (existing.length || seenInBatch) stats.sowSkipped += 1;
         else stats.sowInserted += 1;
         stats.nnvaSaved += nnvaItems.length;
+        if (row.template_key) {
+          if (existingTemplateKeys.has(currentTemplateKey)) stats.templatesUpdated += 1;
+          else {
+            stats.templatesCreated += 1;
+            existingTemplateKeys.add(currentTemplateKey);
+          }
+          stats.templateLinesSaved += 1;
+        }
+        continue;
+      }
+
+      if (standardIdMap.has(existingKey) && !existing.length) {
+        const templateId = await upsertTemplate(client, row, componentId, templateMap);
+        if (templateId && !existingTemplateKeys.has(currentTemplateKey)) {
+          stats.templatesCreated += 1;
+          existingTemplateKeys.add(currentTemplateKey);
+        } else if (templateId) {
+          stats.templatesUpdated += 1;
+        }
+        if (await upsertTemplateLine(client, templateId, standardIdMap.get(existingKey), row.line_order || row.operation_no)) {
+          stats.templateLinesSaved += 1;
+        }
+        stats.sowSkipped += 1;
         continue;
       }
 
       if (existing.length && conflictMode === "skip") {
+        const standardId = existing[0].id;
+        const templateId = await upsertTemplate(client, row, componentId, templateMap);
+        if (templateId && !existingTemplateKeys.has(currentTemplateKey)) {
+          stats.templatesCreated += 1;
+          existingTemplateKeys.add(currentTemplateKey);
+        } else if (templateId) {
+          stats.templatesUpdated += 1;
+        }
+        if (await upsertTemplateLine(client, templateId, standardId, row.line_order || row.operation_no)) {
+          stats.templateLinesSaved += 1;
+        }
         stats.sowSkipped += 1;
         continue;
       }
@@ -596,6 +734,17 @@ async function main() {
         const targetId = existing[0].id;
         const updatedId = await updateSowStandard(client, targetId, row, workcenter);
         await replaceNnva(client, updatedId, nnvaItems);
+        standardIdMap.set(existingKey, updatedId);
+        const templateId = await upsertTemplate(client, row, componentId, templateMap);
+        if (templateId && !existingTemplateKeys.has(currentTemplateKey)) {
+          stats.templatesCreated += 1;
+          existingTemplateKeys.add(currentTemplateKey);
+        } else if (templateId) {
+          stats.templatesUpdated += 1;
+        }
+        if (await upsertTemplateLine(client, templateId, updatedId, row.line_order || row.operation_no)) {
+          stats.templateLinesSaved += 1;
+        }
         stats.sowUpdated += 1;
         stats.nnvaSaved += nnvaItems.length;
         continue;
@@ -606,6 +755,18 @@ async function main() {
         : row.operation_no;
       const insertedId = await insertSowStandard(client, row, componentId, workcenter, finalOperationNo);
       await replaceNnva(client, insertedId, nnvaItems);
+      standardIdMap.set(operationKey(componentId, finalOperationNo), insertedId);
+      if (!existing.length) standardIdMap.set(existingKey, insertedId);
+      const templateId = await upsertTemplate(client, row, componentId, templateMap);
+      if (templateId && !existingTemplateKeys.has(currentTemplateKey)) {
+        stats.templatesCreated += 1;
+        existingTemplateKeys.add(currentTemplateKey);
+      } else if (templateId) {
+        stats.templatesUpdated += 1;
+      }
+      if (await upsertTemplateLine(client, templateId, insertedId, row.line_order || row.operation_no)) {
+        stats.templateLinesSaved += 1;
+      }
       stats.sowInserted += 1;
       if (existing.length) stats.sowAppended += 1;
       stats.nnvaSaved += nnvaItems.length;
@@ -626,6 +787,9 @@ async function main() {
     console.log(`sow appended       : ${stats.sowAppended}`);
     console.log(`sow skipped        : ${stats.sowSkipped}`);
     console.log(`nnva saved         : ${stats.nnvaSaved}`);
+    console.log(`templates created  : ${stats.templatesCreated}`);
+    console.log(`templates updated  : ${stats.templatesUpdated}`);
+    console.log(`template lines     : ${stats.templateLinesSaved}`);
     console.log(`missing workcenter : ${stats.missingWorkcenter}`);
     console.log(`ambiguous groups   : ${stats.ambiguousWorkcenter} (first match used)`);
 

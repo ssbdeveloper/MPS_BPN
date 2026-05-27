@@ -42,6 +42,7 @@ router.get("/standard", controller.getSowStandard);
 // ============================================
 router.get("/standard/grouped",          controller.getSowStandardGrouped);
 router.get("/standard/component/:component_id", controller.getSowStandardByComponent);
+router.get("/standard/component/:component_id/templates", controller.getSowTemplatesByComponent);
 router.get("/standard/operation/:id",    controller.getSowStandardById);
 router.post("/standard/operation",       controller.createSowStandardOperation);
 router.put("/standard/operation/:id",    controller.updateSowStandardOperation);

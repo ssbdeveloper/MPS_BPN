@@ -844,20 +844,27 @@ export function ComponentMasterPicker({ selectedPart, onSelect }) {
   );
 }
 
-export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, onToggleAll, onResolveComponent }) {
-  const [ops, setOps]         = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState(null);
+export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, onToggleAll, onToggleTemplate, onResolveComponent }) {
+  const [ops, setOps]               = useState([]);
+  const [templates, setTemplates]   = useState([]);
+  const [expanded, setExpanded]     = useState(new Set());
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState(null);
 
   useEffect(() => {
-    if (!componentId) { setOps([]); return; }
+    if (!componentId) { setOps([]); setTemplates([]); return; }
     setLoading(true);
     setError(null);
-    fetch(`${API_BASE}/sow/standard/component/${componentId}`)
-      .then((r) => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); })
-      .then((data) =>
-        setOps(Array.isArray(data) ? data.sort((a, b) => a.operation_no - b.operation_no) : [])
-      )
+    Promise.all([
+      fetch(`${API_BASE}/sow/standard/component/${componentId}`)
+        .then((r) => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); }),
+      fetch(`${API_BASE}/sow/standard/component/${componentId}/templates`)
+        .then((r) => { if (!r.ok) throw new Error(`Server ${r.status}`); return r.json(); }),
+    ])
+      .then(([operationsPayload, templatesPayload]) => {
+        setOps(Array.isArray(operationsPayload) ? operationsPayload.sort((a, b) => a.operation_no - b.operation_no) : []);
+        setTemplates(Array.isArray(templatesPayload?.data) ? templatesPayload.data : []);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [componentId]);
@@ -906,8 +913,21 @@ export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, o
     );
   }
 
-  const allChecked  = ops.every((op) => checked.has(op.id));
+  const allChecked  = ops.length > 0 && ops.every((op) => checked.has(op.id));
   const someChecked = ops.some((op) => checked.has(op.id));
+  const operationIdsInTemplates = new Set(
+    templates.flatMap((template) => (template.operations || []).map((op) => op.id))
+  );
+  const individualOps = ops.filter((op) => !operationIdsInTemplates.has(op.id));
+  const standaloneOps = individualOps.length ? individualOps : ops;
+  const toggleExpanded = (templateId) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(templateId)) next.delete(templateId);
+      else next.add(templateId);
+      return next;
+    });
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -920,7 +940,7 @@ export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, o
                      hover:text-[#0077b6] transition-colors min-h-[36px]"
         >
           <Checkbox checked={allChecked} indeterminate={someChecked && !allChecked} />
-          {allChecked ? 'Deselect All' : 'Select All'}
+          {allChecked ? 'Deselect All' : 'Select All Operations'}
         </button>
         <span className="text-[10px] text-slate-400">
           <span className="font-semibold text-slate-600">{checked.size}</span>/{ops.length}
@@ -928,8 +948,63 @@ export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, o
       </div>
 
       {/* Operations list */}
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
-        {ops.map((op) => {
+      <div className="flex-1 overflow-y-auto">
+        {templates.length > 0 && (
+          <div className="border-b border-slate-100">
+            <div className="px-3 py-2 text-[10px] font-extrabold uppercase tracking-wide text-slate-400 bg-white">
+              Operation Packages
+            </div>
+            <div className="divide-y divide-slate-50">
+              {templates.map((template) => {
+                const templateOps = Array.isArray(template.operations) ? template.operations : [];
+                const templateChecked = templateOps.length > 0 && templateOps.every((op) => checked.has(op.id));
+                const templatePartial = templateOps.some((op) => checked.has(op.id));
+                const isOpen = expanded.has(template.template_id);
+                return (
+                  <div key={template.template_id}>
+                    <div className={`w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${templateChecked ? 'bg-[#caf0f8]/40' : 'hover:bg-slate-50'}`}>
+                      <button
+                        onClick={() => onToggleTemplate(templateOps, !templateChecked)}
+                        className="mt-0.5"
+                        title={templateChecked ? 'Deselect package' : 'Select package'}
+                      >
+                        <Checkbox checked={templateChecked} indeterminate={templatePartial && !templateChecked} />
+                      </button>
+                      <button onClick={() => toggleExpanded(template.template_id)} className="min-w-0 flex-1 text-left">
+                        <div className="flex items-center gap-1.5">
+                          {isOpen ? <ChevronDown size={12} className="text-slate-400" /> : <ChevronRight size={12} className="text-slate-400" />}
+                          <span className="truncate text-xs font-bold text-slate-800">{template.template_name}</span>
+                          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">
+                            {template.operation_count} ops
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[10px] text-slate-400">
+                          Key {template.template_key} · {fmtHours(template.total_std_hours)} hrs
+                        </p>
+                      </button>
+                    </div>
+                    {isOpen && (
+                      <div className="bg-slate-50/70 py-1">
+                        {templateOps.map((op) => (
+                          <div key={`${template.template_id}-${op.id}`} className="flex gap-2 px-8 py-1.5 text-[11px] text-slate-600">
+                            <span className="font-mono font-bold text-[#0077b6]">{String(op.operation_no).padStart(4, '0')}</span>
+                            <span className="min-w-0 flex-1">{op.operation_text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="px-3 py-2 text-[10px] font-extrabold uppercase tracking-wide text-slate-400 bg-white">
+          {templates.length > 0 ? 'Individual Operations' : 'Operations'}
+        </div>
+        <div className="divide-y divide-slate-50">
+        {standaloneOps.map((op) => {
           const isChecked = checked.has(op.id);
           return (
             <button
@@ -963,6 +1038,7 @@ export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, o
             </button>
           );
         })}
+        </div>
       </div>
     </div>
   );
@@ -1009,7 +1085,7 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
   const [dragOverKey, setDragOverKey] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newOp, setNewOp] = useState({
-    operation_text: '', machineid: '', std_hours: '',
+    operation_text: '', machineid: '', std_hours: '', remark: '',
   });
 
   // ── Drag and drop ──
@@ -1043,8 +1119,9 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
       operation_text: newOp.operation_text.trim(),
       machineid:      newOp.machineid,
       std_hours:      newOp.std_hours,
+      remark:         newOp.remark,
     });
-    setNewOp({ operation_text: '', machineid: '', std_hours: '' });
+    setNewOp({ operation_text: '', machineid: '', std_hours: '', remark: '' });
     setShowAddForm(false);
   };
 
@@ -1077,7 +1154,7 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
       {/* ── Operation table ── */}
       <div className="flex-1 overflow-y-auto">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs min-w-[500px]">
+          <table className="w-full text-xs min-w-[620px]">
             <thead>
               <tr style={{ background: '#caf0f8' }}>
                 <th className="w-8 px-2 py-2" aria-label="Drag" />
@@ -1092,6 +1169,9 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                 </th>
                 <th className="w-[80px] px-2 py-2 text-right font-semibold text-slate-600 whitespace-nowrap">
                   Std Hrs
+                </th>
+                <th className="w-[130px] px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">
+                  Remark
                 </th>
                 <th className="w-8 px-2 py-2" aria-label="Delete" />
               </tr>
@@ -1166,6 +1246,19 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                         placeholder="0.00"
                         className="w-full px-2 py-1.5 bg-white border border-slate-200 text-slate-800
                                    text-right rounded text-xs focus:outline-none focus:ring-1
+                                   focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+                      />
+                    </td>
+
+                    {/* Remark */}
+                    <td className="px-2 py-1.5">
+                      <input
+                        type="text"
+                        value={op.remark ?? ''}
+                        onChange={(e) => onEdit(op._key, 'remark', e.target.value)}
+                        placeholder="Remark"
+                        className="w-full px-2 py-1.5 bg-white border border-slate-200 text-slate-800
+                                   rounded text-xs focus:outline-none focus:ring-1
                                    focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
                       />
                     </td>
@@ -1249,12 +1342,22 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                 />
               </div>
 
+              <input
+                type="text"
+                value={newOp.remark}
+                onChange={(e) => setNewOp((p) => ({ ...p, remark: e.target.value }))}
+                placeholder="Remark"
+                className="w-full px-2.5 py-2 bg-white border border-slate-200 text-slate-800
+                           placeholder-slate-400 rounded-lg text-xs focus:outline-none
+                           focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+              />
+
               {/* Buttons */}
               <div className="flex gap-2 justify-end mt-0.5">
                 <button
                   onClick={() => {
                     setShowAddForm(false);
-                    setNewOp({ operation_text: '', machineid: '', std_hours: '' });
+                    setNewOp({ operation_text: '', machineid: '', std_hours: '', remark: '' });
                   }}
                   className="px-3 py-1.5 text-xs font-semibold text-slate-600
                              bg-white border border-slate-200 rounded-lg
@@ -1353,7 +1456,7 @@ export function TravelCardPreview({
             <td>${esc(op.operation_text)}</td>
             <td class="tc">${machineId}</td>
             <td class="hrs-col">${op.std_hours !== '' && op.std_hours != null ? parseFloat(op.std_hours) : '—'}</td>
-            <td></td><td></td><td></td>
+            <td></td><td></td><td>${esc(op.remark || '')}</td>
           </tr>`
         );
         // NNVA child rows
@@ -2232,6 +2335,32 @@ const SowCreatePage = () => {
     }
   }, []);
 
+  const handleToggleTemplate = useCallback((ops, selectAll) => {
+    const templateOps = Array.isArray(ops) ? ops : [];
+    if (templateOps.length === 0) return;
+
+    setCheckedOps((prev) => {
+      const next = new Set(prev);
+      templateOps.forEach((op) => {
+        if (selectAll) next.add(op.id);
+        else next.delete(op.id);
+      });
+      return next;
+    });
+
+    setEditOps((prev) => {
+      const bySource = new Map(prev.map((op) => [op._srcId, op]));
+      if (selectAll) {
+        templateOps.forEach((op) => {
+          if (!bySource.has(op.id)) bySource.set(op.id, makeEditEntry(op, 0));
+        });
+      } else {
+        templateOps.forEach((op) => bySource.delete(op.id));
+      }
+      return Array.from(bySource.values()).map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
+    });
+  }, []);
+
   // ── Edit a field in editOps ──
   const handleEdit = useCallback((key, field, value) => {
     setEditOps((prev) =>
@@ -2277,6 +2406,7 @@ const SowCreatePage = () => {
         operation_text: opData.operation_text,
         machineid:      opData.machineid,
         std_hours:      opData.std_hours,
+        remark:         opData.remark || '',
         operation_no:   0,
       };
       const appended = [...prev, entry];
@@ -2317,6 +2447,7 @@ const SowCreatePage = () => {
           operation_text: op.operation_text,
           machineid:      op.machineid,
           planhours:      op.std_hours !== '' ? parseFloat(op.std_hours) : null,
+          remark:         op.remark || null,
           source_op_id:   op._srcId,
         })),
       };
@@ -2508,6 +2639,7 @@ const SowCreatePage = () => {
               checked={checkedOps}
               onToggle={handleToggle}
               onToggleAll={handleToggleAll}
+              onToggleTemplate={handleToggleTemplate}
               onResolveComponent={handleResolveComponent}
             />
           </div>
@@ -2750,6 +2882,7 @@ export function makeEditEntry(op, operation_no) {
     operation_text: op.operation_text,
     machineid:      op.machineid || op.workcenter || '',
     std_hours:      op.std_hours ?? '',
+    remark:         op.remark ?? '',
     operation_no,
   };
 }

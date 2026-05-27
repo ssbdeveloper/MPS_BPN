@@ -38,7 +38,7 @@ const SELECT_CLS = `w-full px-3 py-2 bg-white border border-slate-200 text-slate
 
 const EMPTY_OP = {
   operation_no: '', operation_text: '', machineid: '',
-  workcenter: '', std_hours: '', source_plant: '',
+  workcenter: '', std_hours: '', source_plant: '', remark: '',
 };
 
 // ─── useWorkcenterData: fetch once, memo derived lists ────────────────────────
@@ -355,11 +355,23 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
                   )}
                 </div>
               </div>
+
+              {/* Row 4: Remark */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Remark</label>
+                <textarea
+                  value={form.remark || ''}
+                  onChange={set('remark')}
+                  rows={2}
+                  placeholder="Catatan khusus operation"
+                  className={`${INPUT_CLS} resize-none`}
+                />
+              </div>
             </div>
 
             {/* ── NNVA section (edit only) ── */}
             {mode === 'edit' && (
-              <NnvaPanel standardId={initial.id} operationText={`${initial.operation_no} — ${initial.operation_text}`} />
+              <NnvaPanel standardId={initial.id} />
             )}
 
             {/* ── Attachment section (edit only) ── */}
@@ -615,7 +627,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
 }
 
 // ─── NnvaPanel (inline, for OperationFormModal) ─────────────────────────────
-function NnvaPanel({ standardId, operationText }) {
+function NnvaPanel({ standardId }) {
   const [nnvaBase, setNnvaBase] = useState([]);
   const [selected, setSelected] = useState({});
   const [loading, setLoading] = useState(true);
@@ -877,6 +889,11 @@ function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNn
         </td>
         <td className="px-3 py-2 text-xs text-slate-800">
           <span>{op.operation_text}</span>
+          {op.remark && (
+            <p className="mt-1 text-[11px] text-slate-500 line-clamp-2">
+              {op.remark}
+            </p>
+          )}
           {hasNnva && (
             <button
               onClick={(e) => { e.stopPropagation(); onToggleNnva(op.id); }}
@@ -954,6 +971,7 @@ function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNn
 function ComponentGroup({ group }) {
   const [open, setOpen]             = useState(false);
   const [operations, setOperations] = useState([]);
+  const [templates, setTemplates]   = useState([]);
   const [loadingOps, setLoadingOps] = useState(false);
   const [modal, setModal]           = useState(null);
   const [nnvaModal, setNnvaModal]   = useState(null);
@@ -964,9 +982,14 @@ function ComponentGroup({ group }) {
   const loadOperations = useCallback(async () => {
     setLoadingOps(true);
     try {
-      const res  = await fetch(`${API_BASE}/sow/standard/component/${group.component_id}`);
+      const [res, templateRes] = await Promise.all([
+        fetch(`${API_BASE}/sow/standard/component/${group.component_id}`),
+        fetch(`${API_BASE}/sow/standard/component/${group.component_id}/templates`),
+      ]);
       const json = await res.json();
+      const templateJson = await templateRes.json().catch(() => ({}));
       const ops = Array.isArray(json) ? json : [];
+      setTemplates(Array.isArray(templateJson.data) ? templateJson.data : []);
       // Fetch NNVA for all operations
       if (ops.length) {
         const nnvaResults = await Promise.all(
@@ -984,6 +1007,7 @@ function ComponentGroup({ group }) {
       setOperations(ops);
     } catch {
       setOperations([]);
+      setTemplates([]);
     } finally {
       setLoadingOps(false);
     }
@@ -1078,8 +1102,32 @@ function ComponentGroup({ group }) {
           ) : operations.length === 0 ? (
             <p className="text-center text-xs text-slate-400 py-5">Belum ada operasi.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <>
+              {templates.length > 0 && (
+                <div className="border-b border-slate-100 bg-white px-4 py-3">
+                  <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                    Packages
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {templates.map((template) => (
+                      <div key={template.template_id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-xs font-bold text-slate-800">{template.template_name}</span>
+                          <span className="shrink-0 rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-500">
+                            {template.operation_count} ops
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
+                          <span className="font-mono">Key {template.template_key}</span>
+                          <span>{fmtHours(template.total_std_hours)} h</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
                 <thead>
                   <tr style={{ background: '#caf0f8' }}>
                     <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap">Op No.</th>
@@ -1106,8 +1154,9 @@ function ComponentGroup({ group }) {
                     />
                   ))}
                 </tbody>
-              </table>
-            </div>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}

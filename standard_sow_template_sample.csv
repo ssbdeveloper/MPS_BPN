@@ -1,0 +1,21 @@
+template_key;template_name;template_sort;line_order;operation_no;operation_text;part_name;model;part_number;wct_group;std_hours;loading;setting;measurement;unloading;total_std;remark;source_plant
+1;Full Bushing Package;10;10;10;Order bushing;Idler Gear;C32;185-1497;PPC;10;1;1;1;1;;Check drawing and material availability;5051
+1;Full Bushing Package;10;20;20;Inspection new bushing;Idler Gear;C32;185-1497;QCP;11;0.5;0.5;0.5;0.5;;Dimensional check before assembly;5051
+1;Full Bushing Package;10;30;30;Remove old bushing;Idler Gear;C32;185-1497;DIS;12;0.5;0.5;0.5;0.5;;;5051
+1;Full Bushing Package;10;40;40;Install new bushing;Idler Gear;C32;185-1497;ASY;13;0.5;0.5;0.5;0.5;;;5051
+2;Machining Package;20;10;50;Seting before machining ID bushing;Idler Gear;C32;185-1497;HLC;14;0.5;0.5;0.5;0.5;;;5051
+2;Machining Package;20;20;60;Final machining ID bushing;Idler Gear;C32;185-1497;HLC;15;;;;;;;5051
+2;Machining Package;20;30;70;Polish ID bushing;Idler Gear;C32;185-1497;HLC;16;1;1;1;1;;;5051
+2;Machining Package;20;40;80;Check dimension;Idler Gear;C32;185-1497;HLC;17;;;;;;;5051
+3;Inspection Package;30;10;90;Handressing deburr after machining;Idler Gear;C32;185-1497;HDR;18;;;;;;;5051
+3;Inspection Package;30;20;100;Post Inspection;Idler Gear;C32;185-1497;QCP;19;;;;;;Final QC before release;5051
+1;Full Bushing Package;10;10;10;Order bushing;Idler Gear;C32B;185-1497;PPC;20;;;;;;;5051
+1;Full Bushing Package;10;20;20;Inspection new bushing;Idler Gear;C32B;185-1497;QCP;21;;;;;;;5051
+1;Full Bushing Package;10;30;30;Remove old bushing;Idler Gear;C32B;185-1497;DIS;22;;;;;;;5051
+1;Full Bushing Package;10;40;40;Install new bushing;Idler Gear;C32B;185-1497;ASY;23;;;;;;;5051
+2;Machining Package;20;10;50;Seting before machining ID bushing;Idler Gear;C32B;185-1497;HLC;24;;;;;;;5051
+2;Machining Package;20;20;60;Final machining ID bushing;Idler Gear;C32B;185-1497;HLC;25;;;;;;;5051
+2;Machining Package;20;30;70;Polish ID bushing;Idler Gear;C32B;185-1497;HLC;26;;;;;;;5051
+2;Machining Package;20;40;80;Check dimension;Idler Gear;C32B;185-1497;HLC;27;;;;;;;5051
+3;Inspection Package;30;10;90;Handressing deburr after machining;Idler Gear;C32B;185-1497;HDR;28;;;;;;;5051
+3;Inspection Package;30;20;100;Post Inspection;Idler Gear;C32B;185-1497;QCP;29;;;;;;;5051

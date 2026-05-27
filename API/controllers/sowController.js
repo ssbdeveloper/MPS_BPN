@@ -1622,7 +1622,7 @@ exports.createFromBuilder = async (req, res) => {
           type || null,
           group || null,
           category || null,
-          remark || null,
+          op.remark || remark || null,
         ]
       );
 
@@ -2520,6 +2520,7 @@ exports.getSowStandard = async (req, res) => {
          ss.machineid,
          ss.workcenter,
          ss.std_hours,
+         ss.remark,
          ss.source_plant,
          c.part_name,
          c.part_number,
@@ -2584,9 +2585,13 @@ exports.getSowStandardGrouped = async (req, res) => {
          c.part_number,
          c.model,
          COUNT(ss.id)::int AS operation_count,
+         COUNT(DISTINCT t.template_id)::int AS template_count,
          COALESCE(MAX(ss.source_plant), 0) AS source_plant
        FROM sow_standard ss
        JOIN components c ON ss.component_id = c.component_id
+       LEFT JOIN sow_templates t
+         ON t.component_id = c.component_id
+        AND COALESCE(t.is_active, true) = true
        ${where}
        GROUP BY c.component_id, c.part_name, c.part_number, c.model
        ORDER BY c.part_name ASC, c.part_number ASC
@@ -2618,6 +2623,7 @@ exports.getSowStandardByComponent = async (req, res) => {
          ss.machineid,
          ss.workcenter,
          ss.std_hours,
+         ss.remark,
          ss.source_plant,
          COALESCE(
            json_agg(
@@ -2640,6 +2646,52 @@ exports.getSowStandardByComponent = async (req, res) => {
       [component_id]
     );
     res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET operation packages for a single component.
+// template_name is intentionally not unique; template_key is unique per component.
+exports.getSowTemplatesByComponent = async (req, res) => {
+  try {
+    const { component_id } = req.params;
+    const result = await db.query(
+      `SELECT
+         t.template_id,
+         t.component_id,
+         t.template_key,
+         t.template_name,
+         COALESCE(t.sort_order, 0) AS sort_order,
+         COALESCE(
+           json_agg(
+             json_build_object(
+               'id', ss.id,
+               'operation_no', ss.operation_no,
+               'operation_text', ss.operation_text,
+               'machineid', ss.machineid,
+               'workcenter', ss.workcenter,
+               'std_hours', ss.std_hours,
+               'remark', ss.remark,
+               'source_plant', ss.source_plant,
+               'line_order', COALESCE(tl.line_order, ss.operation_no)
+             )
+             ORDER BY COALESCE(tl.line_order, ss.operation_no), ss.operation_no, ss.id
+           ) FILTER (WHERE ss.id IS NOT NULL),
+           '[]'
+         ) AS operations,
+         COUNT(ss.id)::int AS operation_count,
+         COALESCE(SUM(COALESCE(ss.std_hours, 0)), 0)::numeric AS total_std_hours
+       FROM public.sow_templates t
+       LEFT JOIN public.sow_template_lines tl ON tl.template_id = t.template_id
+       LEFT JOIN public.sow_standard ss ON ss.id = tl.standard_id
+       WHERE t.component_id = $1
+         AND COALESCE(t.is_active, true) = true
+       GROUP BY t.template_id
+       ORDER BY COALESCE(t.sort_order, 0), t.template_name, t.template_key`,
+      [component_id]
+    );
+    res.json({ data: result.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2683,15 +2735,15 @@ exports.getSowStandardById = async (req, res) => {
 // POST create new operation under a component
 exports.createSowStandardOperation = async (req, res) => {
   try {
-    const { component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant } = req.body;
+    const { component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark } = req.body;
     if (!component_id || !operation_no || !operation_text) {
       return res.status(400).json({ error: 'component_id, operation_no, dan operation_text wajib diisi' });
     }
     const result = await db.query(
-      `INSERT INTO sow_standard (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO sow_standard (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING *`,
-      [component_id, operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null]
+      [component_id, operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null, remark || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -2703,13 +2755,13 @@ exports.createSowStandardOperation = async (req, res) => {
 exports.updateSowStandardOperation = async (req, res) => {
   try {
     const { id } = req.params;
-    const { operation_no, operation_text, machineid, workcenter, std_hours, source_plant } = req.body;
+    const { operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark } = req.body;
     const result = await db.query(
       `UPDATE sow_standard
-       SET operation_no=$1, operation_text=$2, machineid=$3, workcenter=$4, std_hours=$5, source_plant=$6
-       WHERE id=$7
+       SET operation_no=$1, operation_text=$2, machineid=$3, workcenter=$4, std_hours=$5, source_plant=$6, remark=$7
+       WHERE id=$8
        RETURNING *`,
-      [operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null, id]
+      [operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null, remark || null, id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
