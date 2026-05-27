@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <title>Travel Card - Sanggar Sarana Baja (Full A4)</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   /* Hapus margin cetak, gunakan seluruh kertas */
   @page {
@@ -27,7 +26,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    font-family: 'IBM Plex Mono', 'Courier New', monospace;
+    font-family: 'Consolas', 'Courier New', monospace;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
@@ -93,7 +92,7 @@
     display: block;
   }
   .brand-name {
-    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-family: system-ui, 'Segoe UI', sans-serif;
     font-size: 9.5pt;
     font-weight: 800;
     letter-spacing: 0.06em;
@@ -187,7 +186,8 @@
   .op-row { background: #ffffff; }
   .tc { text-align: center; }
   .ops-no { text-align: left; font-weight: 600; color: #0a0a0a; font-size:1.5mm}
-  .ops-no-tc { text-align: center; font-weight: 600; color: #0a0a0a; }
+  .ops-no-tc { text-align: center; font-weight: 600; color: #0a0a0a; font-size: 7pt; }
+  .remark-cell { font-size: 7pt; }
   .nnva-row { background: #faf8f5; }
   .nnva-row td { padding: 1.5mm; font-size: 8.5pt; color: #555; word-break: break-word; }
   .nnva-row .ops-no { padding-left: 6mm; font-weight: 500; color: #777; font-size: 8.5pt; }
@@ -237,7 +237,7 @@
     padding: 2mm 4mm;
     text-align: center;
     font-size: 6.5pt;
-    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-family: system-ui, 'Segoe UI', sans-serif;
     font-style: italic;
     color: #555;
     line-height: 1.6;
@@ -283,8 +283,8 @@
   <div class="card-middle">
     <div class="section-hdr-dark">Planned Work</div>
     <table class="work-table">
-      <colgroup><col style="width:14mm;"><col><col style="width:22mm;"><col style="width:13mm;"><col style="width:18mm;"><col style="width:18mm;"><col style="width:37mm;"></colgroup>
-      <thead><tr><th class="tc">Ops No</th><th style="text-align:left;">Description</th><th class="tc">Workcenter</th><th class="tc">Est Hrs</th><th class="tc">Operator Sign</th><th class="tc">Inspector Sign</th><th style="text-align:left;">Remarks</th></tr></thead>
+      <colgroup><col style="width:10mm;"><col><col style="width:14mm;"><col style="width:13mm;"><col style="width:14mm;"><col style="width:14mm;"><col style="width:57mm;"></colgroup>
+      <thead><tr><th class="tc">No</th><th class="tc">Description</th><th class="tc">Wct</th><th class="tc">Est Hrs</th><th class="tc">Opr Sign</th><th class="tc">Ipr Sign</th><th class="tc">Remarks</th></tr></thead>
       <tbody>
         <!-- {{#each operations}} -->
         <tr class="{{rowClass}}"><td class="ops-no">{{operation_no}}</td><td>{{operation_text}}</td><td class="tc">{{machineid}}</td><td class="tc">{{std_hours}}</td><td></td><td></td><td></td></tr>

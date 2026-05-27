@@ -1,4 +1,5 @@
 const db = global.pool || require("../db");
+const pgPool = db.pool || db; // normalize: raw Pool (global.pool) vs { query, pool } (db module)
 const path = require('path');
 const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -2692,6 +2693,112 @@ exports.getSowTemplatesByComponent = async (req, res) => {
       [component_id]
     );
     res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/templates — create template with operation lines
+exports.createTemplate = async (req, res) => {
+  const client = await pgPool.connect();
+  try {
+    const { component_id, template_name, template_key, sort_order, operation_ids } = req.body;
+    if (!component_id || !template_name || !template_key) {
+      return res.status(400).json({ error: 'component_id, template_name, template_key wajib diisi' });
+    }
+    if (!Array.isArray(operation_ids) || operation_ids.length === 0) {
+      return res.status(400).json({ error: 'Pilih minimal 1 operation' });
+    }
+
+    await client.query('BEGIN');
+
+    const tmpl = await client.query(
+      `INSERT INTO public.sow_templates (component_id, template_name, template_key, sort_order, created_by)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [component_id, template_name, template_key, sort_order || 0, req.body.created_by || null]
+    );
+    const template_id = tmpl.rows[0].template_id;
+
+    for (let i = 0; i < operation_ids.length; i++) {
+      await client.query(
+        `INSERT INTO public.sow_template_lines (template_id, standard_id, line_order)
+         VALUES ($1,$2,$3)`,
+        [template_id, operation_ids[i], (i + 1) * 10]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json(tmpl.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Template key sudah digunakan untuk component ini' });
+    }
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// PUT /sow/templates/:templateId — update template + replace lines
+exports.updateTemplate = async (req, res) => {
+  const client = await pgPool.connect();
+  try {
+    const { templateId } = req.params;
+    const { template_name, template_key, sort_order, operation_ids } = req.body;
+
+    await client.query('BEGIN');
+
+    await client.query(
+      `UPDATE public.sow_templates
+       SET template_name = $1, template_key = $2, sort_order = $3, updated_at = now()
+       WHERE template_id = $4`,
+      [template_name, template_key, sort_order || 0, templateId]
+    );
+
+    await client.query('DELETE FROM public.sow_template_lines WHERE template_id = $1', [templateId]);
+
+    if (Array.isArray(operation_ids) && operation_ids.length > 0) {
+      for (let i = 0; i < operation_ids.length; i++) {
+        await client.query(
+          `INSERT INTO public.sow_template_lines (template_id, standard_id, line_order)
+           VALUES ($1,$2,$3)`,
+          [templateId, operation_ids[i], (i + 1) * 10]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
+    const result = await client.query(
+      `SELECT t.*, COALESCE(json_agg(tl.standard_id ORDER BY tl.line_order) FILTER (WHERE tl.standard_id IS NOT NULL), '[]') AS operation_ids
+       FROM public.sow_templates t
+       LEFT JOIN public.sow_template_lines tl ON tl.template_id = t.template_id
+       WHERE t.template_id = $1
+       GROUP BY t.template_id`,
+      [templateId]
+    );
+    res.json(result.rows[0] || null);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Template key sudah digunakan untuk component ini' });
+    }
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// DELETE /sow/templates/:templateId — soft delete
+exports.deleteTemplate = async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    await db.query(
+      `UPDATE public.sow_templates SET is_active = false, updated_at = now() WHERE template_id = $1`,
+      [templateId]
+    );
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

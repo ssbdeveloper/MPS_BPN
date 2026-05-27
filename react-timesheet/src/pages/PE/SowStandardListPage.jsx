@@ -873,6 +873,151 @@ function NnvaModal({ standardId, operationText, onClose }) {
   );
 }
 
+// ─── TemplateEditorModal ──────────────────────────────────────────────────────
+function TemplateEditorModal({ mode, componentId, template, operations, nextKey, onClose, onSaved }) {
+  const [form, setForm] = useState(() => ({
+    template_name: template?.template_name || '',
+  }));
+  const [checked, setChecked] = useState(() => {
+    const initial = new Set();
+    if (mode === 'edit' && Array.isArray(template?.operations)) {
+      template.operations.forEach(op => { if (op.id != null) initial.add(String(op.id)); });
+    }
+    return initial;
+  });
+  const hasExistingOps = mode === 'edit' && Array.isArray(template?.operations) && template.operations.length > 0;
+  const [saving, setSaving] = useState(false);
+  const [formErr, setFormErr] = useState(null);
+
+  const toggleOp = (id) => {
+    const key = String(id);
+    setChecked(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const set = (k) => (e) => setForm(p => ({ ...p, [k]: e.target.value }));
+
+  const handleSave = async () => {
+    if (!form.template_name.trim()) { setFormErr('Template Name wajib diisi'); return; }
+    if (checked.size === 0) { setFormErr('Pilih minimal 1 operation'); return; }
+
+    setSaving(true);
+    setFormErr(null);
+    try {
+      const isEdit = mode === 'edit';
+      const url = isEdit
+        ? `${API_BASE}/sow/templates/${template.template_id}`
+        : `${API_BASE}/sow/templates`;
+      const method = isEdit ? 'PUT' : 'POST';
+      const tplKey = isEdit ? template.template_key : String(nextKey || 1);
+      const body = {
+        component_id: componentId,
+        template_name: form.template_name.trim(),
+        template_key: tplKey,
+        sort_order: parseInt(tplKey) * 10,
+        operation_ids: Array.from(checked),
+      };
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Server ${res.status}`);
+      }
+      toast.success(isEdit ? 'Package diperbarui' : 'Package dibuat');
+      onSaved();
+      onClose();
+    } catch (err) {
+      setFormErr(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm p-0 md:p-4">
+      <div className="bg-white w-full md:max-w-xl rounded-t-2xl md:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+        <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h2 className="text-base font-bold text-slate-800">
+            {mode === 'edit' ? 'Edit Package' : 'Create Package'}
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {formErr && (
+            <div className="mb-4 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+              <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />{formErr}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5">Template Name *</label>
+              <input value={form.template_name} onChange={set('template_name')} className={INPUT_CLS} placeholder="e.g. Package A" />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-600">Operations ({checked.size} dipilih)</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (checked.size === operations.length) setChecked(new Set());
+                    else setChecked(new Set(operations.map(o => String(o.id))));
+                  }}
+                  className="text-[10px] font-semibold text-[#0096c7] hover:text-[#0077b6]"
+                >
+                  {checked.size === operations.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div className="max-h-64 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
+                {operations.map(op => {
+                  const idKey = String(op.id);
+                  const isChecked = checked.has(idKey);
+                  const wasExisting = hasExistingOps && template.operations.some(to => String(to.id) === idKey);
+                  return (
+                  <label
+                    key={op.id}
+                    className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors ${isChecked ? 'bg-[#caf0f8]/40' : 'hover:bg-slate-50'}`}
+                  >
+                    <input type="checkbox" checked={isChecked} onChange={() => toggleOp(op.id)} className="w-3.5 h-3.5 rounded accent-[#0096c7] flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] font-bold text-[#0077b6] flex-shrink-0">{String(op.operation_no).padStart(4, '0')}</span>
+                        <span className="text-xs text-slate-700 truncate">{op.operation_text}</span>
+                        {wasExisting && (
+                          <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-bold text-emerald-700 border border-emerald-200">in package</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-0.5">{op.machineid || '—'} · {fmtHours(op.std_hours)} hrs</p>
+                    </div>
+                  </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-shrink-0 flex gap-2 justify-end px-5 py-4 border-t border-slate-100">
+          <button onClick={onClose} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95">
+            Batal
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── OperationRow ─────────────────────────────────────────────────────────────
 function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNnva }) {
   const nnva = op._nnva || [];
@@ -976,6 +1121,8 @@ function ComponentGroup({ group }) {
   const [modal, setModal]           = useState(null);
   const [nnvaModal, setNnvaModal]   = useState(null);
   const [deleting, setDeleting]     = useState(null);
+  const [deletingTemplate, setDeletingTemplate] = useState(null);
+  const [templateModal, setTemplateModal] = useState(null); // { mode, template }
   const [nnvaExpanded, setNnvaExpanded] = useState(new Set());
   const fetched = useRef(false);
 
@@ -1049,6 +1196,29 @@ function ComponentGroup({ group }) {
     toast.success('Operasi disimpan');
   };
 
+  const handleDeleteTemplate = async (templateId) => {
+    if (!window.confirm('Hapus package ini?')) return;
+    setDeletingTemplate(templateId);
+    try {
+      const res = await fetch(`${API_BASE}/sow/templates/${templateId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Gagal hapus');
+      setTemplates(prev => prev.filter(t => t.template_id !== templateId));
+      toast.success('Package dihapus');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDeletingTemplate(null);
+    }
+  };
+
+  const handleTemplateSaved = () => {
+    // Reload templates
+    fetch(`${API_BASE}/sow/standard/component/${group.component_id}/templates`)
+      .then(r => r.json())
+      .then(json => setTemplates(Array.isArray(json.data) ? json.data : []))
+      .catch(() => {});
+  };
+
   return (
     <div className="bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden mb-3">
       {/* Group header */}
@@ -1105,13 +1275,22 @@ function ComponentGroup({ group }) {
             <>
               {templates.length > 0 && (
                 <div className="border-b border-slate-100 bg-white px-4 py-3">
-                  <div className="mb-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                    Packages
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                      Packages
+                    </span>
+                    <button
+                      onClick={() => setTemplateModal({ mode: 'create' })}
+                      className="flex items-center gap-1 text-[10px] font-semibold text-[#0096c7] hover:text-[#0077b6] transition-colors"
+                    >
+                      <Plus size={11} />
+                      Package
+                    </button>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {templates.map((template) => (
                       <div key={template.template_id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center justify-between gap-1">
                           <span className="truncate text-xs font-bold text-slate-800">{template.template_name}</span>
                           <span className="shrink-0 rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold text-slate-500">
                             {template.operation_count} ops
@@ -1121,9 +1300,37 @@ function ComponentGroup({ group }) {
                           <span className="font-mono">Key {template.template_key}</span>
                           <span>{fmtHours(template.total_std_hours)} h</span>
                         </div>
+                        <div className="mt-1.5 flex items-center gap-1 border-t border-slate-200 pt-1.5">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setTemplateModal({ mode: 'edit', template }); }}
+                            className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-500 hover:text-[#0096c7] py-1 rounded transition-colors hover:bg-white"
+                          >
+                            <Pencil size={10} /> Edit
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(template.template_id); }}
+                            disabled={deletingTemplate === template.template_id}
+                            className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-400 hover:text-red-500 py-1 rounded transition-colors hover:bg-white disabled:opacity-40"
+                          >
+                            {deletingTemplate === template.template_id ? <Loader2 size={10} className="animate-spin" /> : <Trash2 size={10} />}
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+              {templates.length === 0 && operations.length > 0 && (
+                <div className="border-b border-slate-100 bg-white px-4 py-3 flex items-center justify-between">
+                  <span className="text-[11px] font-medium text-slate-400">Belum ada package. Kelompokkan operasi ke dalam package.</span>
+                  <button
+                    onClick={() => setTemplateModal({ mode: 'create' })}
+                    className="flex items-center gap-1 text-xs font-semibold text-white px-2.5 py-1.5 rounded-lg bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95"
+                  >
+                    <Plus size={12} />
+                    Create Package
+                  </button>
                 </div>
               )}
               <div className="overflow-x-auto">
@@ -1178,6 +1385,19 @@ function ComponentGroup({ group }) {
           standardId={nnvaModal.id}
           operationText={`${nnvaModal.operation_no} — ${nnvaModal.operation_text}`}
           onClose={() => setNnvaModal(null)}
+        />
+      )}
+
+      {/* Template Editor Modal */}
+      {templateModal && (
+        <TemplateEditorModal
+          mode={templateModal.mode}
+          componentId={group.component_id}
+          template={templateModal.template}
+          operations={operations}
+          nextKey={templates.length + 1}
+          onClose={() => setTemplateModal(null)}
+          onSaved={handleTemplateSaved}
         />
       )}
     </div>

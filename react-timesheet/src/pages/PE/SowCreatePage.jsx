@@ -52,6 +52,7 @@ export function formatTravelCardIssuedAt(date = new Date()) {
 
 const OP_MAIN_BOX_W = 700;
 const OP_MAIN_BOX_H = 560;
+const AUTO_ATTACH_MARGIN = 40;
 
 function resolveAssetUrl(src) {
   if (!src) return '';
@@ -153,7 +154,7 @@ function PdfPreview({ url, style }) {
 
   return <canvas ref={canvasRef} style={{ ...style, display: 'block' }} />;
 }
-const TRAVEL_CARD_ROWS_PER_PAGE = 25;
+const TRAVEL_CARD_MAX_HEIGHT_MM = 180;
 
 export const makeOperationCardKey = (op) => op?._key || `${op?.operation_no || 'op'}-${op?.machineid || ''}`;
 const operationCardStyle = operationCardHtml.match(/<style>([\s\S]*?)<\/style>/i)?.[1] || '';
@@ -268,12 +269,33 @@ function splitTravelCardTemplate(html) {
   };
 }
 
-function chunkRowsByPage(rows, rowsPerPage) {
-  const chunks = [];
+function chunkRowsByHeight(rows, maxHeightMM = TRAVEL_CARD_MAX_HEIGHT_MM) {
+  const PADDING_MM = 3;
+  const LINE_HEIGHT_MM = 3;
+  const DESC_CHARS_PER_LINE = 25;
+  const REMARK_CHARS_PER_LINE = 36;
 
-  for (let index = 0; index < rows.length; index += rowsPerPage) {
-    chunks.push(rows.slice(index, index + rowsPerPage));
+  const chunks = [];
+  let currentChunk = [];
+  let currentHeight = 0;
+
+  for (const row of rows) {
+    const descLines = Math.max(1, Math.ceil((row.opText?.length || 0) / DESC_CHARS_PER_LINE));
+    const remarkLines = Math.max(1, Math.ceil((row.remark?.length || 0) / REMARK_CHARS_PER_LINE));
+    const rowLines = Math.max(descLines, remarkLines);
+    const rowHeight = PADDING_MM + rowLines * LINE_HEIGHT_MM;
+
+    if (currentHeight + rowHeight > maxHeightMM && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentHeight = 0;
+    }
+
+    currentChunk.push(row);
+    currentHeight += rowHeight;
   }
+
+  if (currentChunk.length > 0) chunks.push(currentChunk);
 
   return chunks.length ? chunks : [[]];
 }
@@ -1446,32 +1468,36 @@ export function TravelCardPreview({
       const canvas    = qrRef.current?.querySelector('canvas');
       const qrDataUrl = canvas ? canvas.toDataURL('image/png') : '';
 
-      // Generate rows including NNVA children
+      // Generate rows including NNVA children — store as structured objects for height-aware pagination
       const opsRows = [];
       editOps.forEach((op) => {
         const machineId = esc(op.machineid || '—');
-        opsRows.push(
-          `<tr class="op-row">
+        opsRows.push({
+          html: `<tr class="op-row">
             <td class="ops-no-tc">${op.operation_no}</td>
             <td>${esc(op.operation_text)}</td>
             <td class="tc">${machineId}</td>
             <td class="hrs-col">${op.std_hours !== '' && op.std_hours != null ? parseFloat(op.std_hours) : '—'}</td>
-            <td></td><td></td><td>${esc(op.remark || '')}</td>
-          </tr>`
-        );
+            <td></td><td></td><td class="remark-cell">${esc(op.remark || '')}</td>
+          </tr>`,
+          opText: op.operation_text || '',
+          remark: op.remark || '',
+        });
         // NNVA child rows
         const stdId = op._srcId || op.id;
         const nnvaList = nnvaMap[stdId] || [];
         nnvaList.forEach((n) => {
-          opsRows.push(
-            `<tr class="nnva-row">
+          opsRows.push({
+            html: `<tr class="nnva-row">
               <td class="ops-no"> - </td>
               <td class="ops-no">${esc(n.nnva_name || '')}</td>
               <td class="tc">${machineId}</td>
               <td class="hrs-col">${n.standard_hours != null ? parseFloat(n.standard_hours) : '—'}</td>
-              <td></td><td></td><td></td>
-            </tr>`
-          );
+              <td></td><td></td><td class="remark-cell"></td>
+            </tr>`,
+            opText: n.nnva_name || '',
+            remark: '',
+          });
         });
       });
 
@@ -1493,7 +1519,7 @@ export function TravelCardPreview({
         .replace('{{totalHours}}',      totalHoursDisplay);
 
       const { card1, card2, card3, wrapperClass } = splitTravelCardTemplate(html);
-      const rowChunks = chunkRowsByPage(opsRows, TRAVEL_CARD_ROWS_PER_PAGE);
+      const rowChunks = chunkRowsByHeight(opsRows, TRAVEL_CARD_MAX_HEIGHT_MM);
       const operationBlockPattern = /<!--\s*\{\{#each operations\}\}\s*-->[\s\S]*?<!--\s*\{\{\/each\}\}\s*-->/;
 
       const pages = rowChunks.map((rows, index) => {
@@ -1501,7 +1527,7 @@ export function TravelCardPreview({
         const pageCard1 = card1
           .replace('<td class="meta-label">Page</td><td class="meta-value">1 of 1</td>', `<td class="meta-label">Page</td><td class="meta-value">${pageLabel}</td>`)
           .replace('<td class="id-val"><span class="colon"></span> 1 of 1</td>', `<td class="id-val"><span class="colon"></span> ${pageLabel}</td>`);
-        const workCard = card2.replace(operationBlockPattern, rows.join(''));
+        const workCard = card2.replace(operationBlockPattern, rows.map(r => r.html).join(''));
 
         return `
           <section class="${wrapperClass}">
@@ -1598,6 +1624,7 @@ export function OperationCardPreview({
   const [savingCard, setSavingCard] = useState(false);
   const [attachModal, setAttachModal] = useState(null); // { list, selected: Set }
   const [attachPreviewIdx, setAttachPreviewIdx] = useState(0);
+  const autoAttachedRef = useRef(new Set());
 
   const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const selectedOps = useMemo(
@@ -1617,26 +1644,100 @@ export function OperationCardPreview({
     }
   }, [activeOperationKey, editOps, onActiveOperationChange]);
 
-  // Auto-load saved operation card images when switching to an operation
+  // Batch auto-attach first SOP attachment for all selected operations (run once on mount)
   useEffect(() => {
-    if (!activeKey || !activeOp) return;
-    const stdId = activeOp._cardSourceId || activeOp._srcId || activeOp.id;
-    if (!stdId) return;
-    const alreadyHas = imagesByKey[activeKey] && imagesByKey[activeKey].length > 0;
-    if (alreadyHas) return;
-    fetch(`${API_BASE}/sow/operationcard/${stdId}?revision_no=${encodeURIComponent(revisionNo)}`)
-      .then(r => r.json())
-      .then(json => {
-        const saved = json.data;
-        if (saved && Array.isArray(saved.images) && saved.images.length > 0) {
+    if (!editOps.length || !selectedKeys.length) return;
+
+    let cancelled = false;
+
+    const batchLoad = async () => {
+      const loaded = [];
+      for (const op of editOps) {
+        if (cancelled) break;
+        const key = makeOperationCardKey(op);
+        if (!selectedKeys.includes(key)) continue;
+        if (autoAttachedRef.current.has(key)) continue;
+
+        const stdId = op._srcId || op.id;
+        if (!stdId) continue;
+
+        const existing = imagesByKey[key];
+        if (existing && existing.length > 0) continue;
+
+        try {
+          const res = await fetch(`${API_BASE}/sow/standard/operation/${stdId}/attachments`);
+          if (!res.ok) continue;
+          const attachments = await res.json();
+          if (cancelled) return;
+
+          const list = (Array.isArray(attachments) ? attachments : [])
+            .filter(att => /\.(png|jpe?g|gif|webp|pdf)$/i.test(att.original_name || ''));
+          if (!list.length) continue;
+
+          const first = list[0];
+          const fileUrl = resolveAssetUrl(first.file_path);
+          const isPdf = /\.pdf$/i.test(first.original_name || '');
+
+          let src = fileUrl;
+          if (isPdf) {
+            try {
+              src = await renderPdfToDataUrl(fileUrl);
+            } catch {
+              continue;
+            }
+          }
+
+          autoAttachedRef.current.add(key);
+          loaded.push(op);
           onImagesByKeyChange(prev => ({
             ...prev,
-            [activeKey]: saved.images,
+            [key]: [...(prev[key] || []), {
+              id: `auto-att-${first.id}`,
+              src,
+              type: isPdf ? 'pdf-image' : 'image',
+              name: first.original_name,
+              x: AUTO_ATTACH_MARGIN,
+              y: AUTO_ATTACH_MARGIN,
+              width: OP_MAIN_BOX_W - AUTO_ATTACH_MARGIN * 2,
+              height: OP_MAIN_BOX_H - AUTO_ATTACH_MARGIN * 2,
+            }],
           }));
+        } catch {
+          // skip
         }
-      })
-      .catch(() => {});
-  }, [activeKey, revisionNo]);
+      }
+
+      if (!cancelled) {
+        const keysWithAttachments = new Set(loaded.map(op => makeOperationCardKey(op)));
+        for (const key of selectedKeys) {
+          if (imagesByKey[key] && imagesByKey[key].length > 0) {
+            keysWithAttachments.add(key);
+          }
+        }
+
+        const filtered = selectedKeys.filter(k => keysWithAttachments.has(k));
+        if (filtered.length !== selectedKeys.length) {
+          onSelectedKeysChange(filtered);
+          if (!filtered.includes(activeKey)) {
+            onActiveOperationChange(filtered[0] || null);
+          }
+        }
+
+        if (loaded.length > 0) {
+          toast.success(
+            loaded.length === 1
+              ? `Attachment SOP ditambahkan untuk Ops ${loaded[0].operation_no}`
+              : `${loaded.length} attachment SOP otomatis ditambahkan`
+          );
+        } else if (filtered.length === 0) {
+          toast.error('Tidak ada operation dengan attachment SOP');
+        }
+      }
+    };
+
+    batchLoad();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -2059,6 +2160,7 @@ export function OperationCardPreview({
           </table>
 
           <div
+            key={activeKey}
             style={{
               width: OP_MAIN_BOX_W,
               height: OP_MAIN_BOX_H,
@@ -2068,7 +2170,7 @@ export function OperationCardPreview({
               overflow: 'hidden',
               background: '#fff',
             }}
-            onClick={(e) => {
+            onMouseDown={(e) => {
               if (e.target === e.currentTarget) setSelectedImageId(null);
             }}
           >
@@ -2094,8 +2196,7 @@ export function OperationCardPreview({
                     border: selected ? '2px dashed #0096c7' : '2px dashed transparent',
                     boxSizing: 'border-box',
                   }}
-                  onClick={(e) => {
-                    e.stopPropagation();
+                  onMouseDown={() => {
                     setSelectedImageId(img.id);
                   }}
                 >

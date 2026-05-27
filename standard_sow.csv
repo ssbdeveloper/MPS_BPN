@@ -1,22 +1,5 @@
-﻿operation_no;operation_text;part_name;model;part_number;wct_group;std_hours;loading;setting;measurement;unloading;total_std;source_plant
-10;Order bushing;Idler Gear;C32;185-1497;PPC;10;1;1;1;1;;5051
-20;Inspection new bushing;Idler Gear;C32;185-1497;QCP;11;0.5;0.5;0.5;0.5;;5051
-30;Remove old bushing;Idler Gear;C32;185-1497;DIS;12;0.5;0.5;0.5;0.5;;5051
-40;Install new bushing;Idler Gear;C32;185-1497;ASY;13;0.5;0.5;0.5;0.5;;5051
-50;Seting before machining ID bushing;Idler Gear;C32;185-1497;HLC;14;0.5;0.5;0.5;0.5;;5051
-60;Final machining ID bushing;Idler Gear;C32;185-1497;HLC;15;;;;;;5051
-70;Polish ID bushing;Idler Gear;C32;185-1497;HLC;16;1;1;1;1;;5051
-80;Check dimension;Idler Gear;C32;185-1497;HLC;17;;;;;;5051
-90;Handressing deburr after machining;Idler Gear;C32;185-1497;HDR;18;;;;;;5051
-100;Post Inspection;Idler Gear;C32;185-1497;QCP;19;;;;;;5051
-10;Order bushing;Idler Gear;C32B;185-1497;PPC;20;;;;;;5051
-20;Inspection new bushing;Idler Gear;C32B;185-1497;QCP;21;;;;;;5051
-30;Remove old bushing;Idler Gear;C32B;185-1497;DIS;22;;;;;;5051
-40;Install new bushing;Idler Gear;C32B;185-1497;ASY;23;;;;;;5051
-50;Seting before machining ID bushing;Idler Gear;C32B;185-1497;HLC;24;;;;;;5051
-60;Final machining ID bushing;Idler Gear;C32B;185-1497;HLC;25;;;;;;5051
-70;Polish ID bushing;Idler Gear;C32B;185-1497;HLC;26;;;;;;5051
-80;Check dimension;Idler Gear;C32B;185-1497;HLC;27;;;;;;5051
-90;Handressing deburr after machining;Idler Gear;C32B;185-1497;HDR;28;;;;;;5051
-100;Post Inspection;Idler Gear;C32B;185-1497;QCP;29;;;;;;5051
-110;asdfhafsd;Idler Gear;C32B;185-1497;asdf;29;;;;;;5051
+﻿template_name;operation_no;operation_text;part_name;model;part_number;wct_group;std_hours;loading;setting;measurement;unloading;total_std;remark;source_plant
+Contoh paket 1;10;Order bushing;Head As Booms;6015/6015B;4250681;PPC;10;1;1;1;1;;contoh 1;5051
+Contoh paket 1;20;Inspection new bushing;Head As Booms;6015/6015B;4250681;QCP;11;0.5;0.5;0.5;0.5;;contoh 2;5051
+Contoh paket 1;30;Remove old bushing;Head As Booms;6015/6015B;4250681;DIS;12;0.5;0.5;0.5;0.5;;contoh 3;5051
+Contoh paket 1;40;Install new bushing;Head As Booms;6015/6015B;4250681;DIS;13;0.5;0.5;0.5;0.5;;;5051

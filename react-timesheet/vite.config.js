@@ -106,6 +106,10 @@ export default defineConfig(({ mode }) => {
         ws: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       },
+      '/uploads': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
       '^/tts/': {
         target: ttsProxyTarget,
         changeOrigin: true,
