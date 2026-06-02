@@ -154,7 +154,34 @@ function PdfPreview({ url, style }) {
 
   return <canvas ref={canvasRef} style={{ ...style, display: 'block' }} />;
 }
-const TRAVEL_CARD_MAX_HEIGHT_MM = 180;
+const TRAVEL_CARD_FALLBACK_MAX_HEIGHT_MM = 165;
+const TRAVEL_CARD_PAGE_SAFE_GAP_MM = 2;
+const CSS_PX_PER_MM = 96 / 25.4;
+const TRAVEL_CARD_RENDER_PATCH = `
+  body.travel-card-rendered {
+    display: block;
+    width: 210mm;
+    height: auto;
+    min-height: 0;
+    margin: 0 auto;
+    padding: 0;
+    background: #ffffff;
+  }
+  body.travel-card-rendered > .a4-page,
+  body.travel-card-rendered > .container {
+    width: 210mm;
+    height: 297mm;
+    margin: 0 auto;
+  }
+  body.travel-card-rendered > .a4-page:not(:last-child),
+  body.travel-card-rendered > .container:not(:last-child) {
+    break-after: page;
+    page-break-after: always;
+  }
+  body.travel-card-rendered .card-middle {
+    overflow: hidden;
+  }
+`;
 
 export const makeOperationCardKey = (op) => op?._key || `${op?.operation_no || 'op'}-${op?.machineid || ''}`;
 const operationCardStyle = operationCardHtml.match(/<style>([\s\S]*?)<\/style>/i)?.[1] || '';
@@ -162,13 +189,10 @@ const operationCardBody = operationCardHtml.match(/<body[^>]*>([\s\S]*?)<\/body>
 
 function getOperationQrValue({ selectedPart, cardInfo, op }) {
   const productionOrder = cardInfo.productionOrder || selectedPart?.production_order || '';
-  return [
-    'OPERATION_CARD',
-    `PO:${normalizeProductionOrder(productionOrder) || '-'}`,
-    `PART:${selectedPart?.part_number || '-'}`,
-    `OP:${op.operation_no || '-'}`,
-    `WC:${op.machineid || '-'}`,
-  ].join('|');
+  return [    
+    `${normalizeProductionOrder(productionOrder)}-`,
+    `${op.operation_no }`,
+  ].join('');
 }
 
 function renderOperationCardImages(images = []) {
@@ -269,7 +293,7 @@ function splitTravelCardTemplate(html) {
   };
 }
 
-function chunkRowsByHeight(rows, maxHeightMM = TRAVEL_CARD_MAX_HEIGHT_MM) {
+function chunkRowsByEstimatedHeight(rows, maxHeightMM = TRAVEL_CARD_FALLBACK_MAX_HEIGHT_MM) {
   const PADDING_MM = 3;
   const LINE_HEIGHT_MM = 3;
   const DESC_CHARS_PER_LINE = 25;
@@ -298,6 +322,137 @@ function chunkRowsByHeight(rows, maxHeightMM = TRAVEL_CARD_MAX_HEIGHT_MM) {
   if (currentChunk.length > 0) chunks.push(currentChunk);
 
   return chunks.length ? chunks : [[]];
+}
+
+function mmToPx(mm) {
+  return mm * CSS_PX_PER_MM;
+}
+
+function addMeasureIndexToRow(rowHtml, index) {
+  return rowHtml.replace(/<tr\b/i, `<tr data-measure-row="${index}"`);
+}
+
+function chunkRowsByMeasuredHeights(rows, rowHeights, maxRowsHeightPx) {
+  const chunks = [];
+  let currentChunk = [];
+  let currentHeight = 0;
+
+  rows.forEach((row, index) => {
+    const rowHeight = Math.max(0, rowHeights[index] || 0);
+
+    if (currentChunk.length > 0 && currentHeight + rowHeight > maxRowsHeightPx) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentHeight = 0;
+    }
+
+    currentChunk.push(row);
+    currentHeight += rowHeight;
+  });
+
+  if (currentChunk.length > 0) chunks.push(currentChunk);
+
+  return chunks.length ? chunks : [[]];
+}
+
+function waitForIframeLoad(iframe) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+
+    iframe.onload = finish;
+    window.setTimeout(finish, 300);
+  });
+}
+
+function waitForLayoutFrame() {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(resolve);
+    });
+  });
+}
+
+async function chunkRowsByMeasuredHeight({
+  html,
+  rows,
+  card1,
+  card2,
+  card3,
+  wrapperClass,
+  operationBlockPattern,
+}) {
+  if (!rows.length || typeof document === 'undefined' || !document.body) {
+    return chunkRowsByEstimatedHeight(rows);
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.tabIndex = -1;
+  iframe.style.position = 'fixed';
+  iframe.style.left = '-10000px';
+  iframe.style.top = '0';
+  iframe.style.width = '210mm';
+  iframe.style.height = '297mm';
+  iframe.style.visibility = 'hidden';
+  iframe.style.pointerEvents = 'none';
+
+  const measuredRowsHtml = rows
+    .map((row, index) => addMeasureIndexToRow(row.html, index))
+    .join('');
+  const workCard = card2.replace(operationBlockPattern, measuredRowsHtml);
+  const measurementPage = `
+    <section class="${wrapperClass}">
+      ${card1}
+      ${workCard}
+      ${card3}
+    </section>
+  `;
+  const measurementHtml = html
+    .replace('</style>', `${TRAVEL_CARD_RENDER_PATCH}</style>`)
+    .replace(/<body[^>]*>[\s\S]*?<\/body>/, `<body class="travel-card-rendered">${measurementPage}</body>`);
+
+  try {
+    const loadPromise = waitForIframeLoad(iframe);
+    iframe.srcdoc = measurementHtml;
+    document.body.appendChild(iframe);
+    await loadPromise;
+
+    const iframeDocument = iframe.contentDocument;
+    if (!iframeDocument) throw new Error('Travel card measurement document is not available.');
+
+    if (iframeDocument.fonts?.ready) {
+      await iframeDocument.fonts.ready.catch(() => undefined);
+    }
+    await waitForLayoutFrame();
+
+    const cardMiddle = iframeDocument.querySelector('.card-middle');
+    const tbody = iframeDocument.querySelector('.work-table tbody');
+    const measuredRowEls = Array.from(iframeDocument.querySelectorAll('tr[data-measure-row]'));
+
+    if (!cardMiddle || !tbody || measuredRowEls.length !== rows.length) {
+      throw new Error('Travel card measurement nodes are incomplete.');
+    }
+
+    const cardRect = cardMiddle.getBoundingClientRect();
+    const tbodyRect = tbody.getBoundingClientRect();
+    const maxRowsHeightPx = Math.max(0, cardRect.bottom - tbodyRect.top - mmToPx(TRAVEL_CARD_PAGE_SAFE_GAP_MM));
+    const rowHeights = measuredRowEls.map((rowEl) => rowEl.getBoundingClientRect().height);
+
+    if (!Number.isFinite(maxRowsHeightPx) || maxRowsHeightPx <= 0 || rowHeights.some((height) => height <= 0)) {
+      throw new Error('Travel card measurement produced invalid heights.');
+    }
+
+    return chunkRowsByMeasuredHeights(rows, rowHeights, maxRowsHeightPx);
+  } catch {
+    return chunkRowsByEstimatedHeight(rows);
+  } finally {
+    iframe.remove();
+  }
 }
 
 export function useWorkcenterData() {
@@ -866,7 +1021,7 @@ export function ComponentMasterPicker({ selectedPart, onSelect }) {
   );
 }
 
-export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, onToggleAll, onToggleTemplate, onResolveComponent }) {
+export function ChecklistPanel({ componentId, selectedPart, checked, checkedTemplates, onToggle, onToggleAll, onToggleTemplate, onResolveComponent }) {
   const [ops, setOps]               = useState([]);
   const [templates, setTemplates]   = useState([]);
   const [expanded, setExpanded]     = useState(new Set());
@@ -979,16 +1134,17 @@ export function ChecklistPanel({ componentId, selectedPart, checked, onToggle, o
             <div className="divide-y divide-slate-50">
               {templates.map((template) => {
                 const templateOps = Array.isArray(template.operations) ? template.operations : [];
-                const templateChecked = templateOps.length > 0 && templateOps.every((op) => checked.has(op.id));
-                const templatePartial = templateOps.some((op) => checked.has(op.id));
+                const templateExplicitChecked = checkedTemplates?.has(template.template_id);
+                const templatePartial = !templateExplicitChecked && templateOps.some((op) => checked.has(op.id));
+                const templateChecked = templateExplicitChecked || (templateOps.length > 0 && templateOps.every((op) => checked.has(op.id)));
                 const isOpen = expanded.has(template.template_id);
                 return (
                   <div key={template.template_id}>
                     <div className={`w-full flex items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${templateChecked ? 'bg-[#caf0f8]/40' : 'hover:bg-slate-50'}`}>
                       <button
-                        onClick={() => onToggleTemplate(templateOps, !templateChecked)}
+                        onClick={() => onToggleTemplate(templateOps, !templateExplicitChecked, template.template_id)}
                         className="mt-0.5"
-                        title={templateChecked ? 'Deselect package' : 'Select package'}
+                        title={templateExplicitChecked ? 'Deselect package' : 'Select package'}
                       >
                         <Checkbox checked={templateChecked} indeterminate={templatePartial && !templateChecked} />
                       </button>
@@ -1464,7 +1620,10 @@ export function TravelCardPreview({
   const totalHoursDisplay = totalHrs % 1 === 0 ? String(totalHrs) : totalHrs.toFixed(2);
 
   useEffect(() => {
+    let cancelled = false;
+
     const timer = setTimeout(() => {
+      const buildTravelCard = async () => {
       const canvas    = qrRef.current?.querySelector('canvas');
       const qrDataUrl = canvas ? canvas.toDataURL('image/png') : '';
 
@@ -1519,8 +1678,18 @@ export function TravelCardPreview({
         .replace('{{totalHours}}',      totalHoursDisplay);
 
       const { card1, card2, card3, wrapperClass } = splitTravelCardTemplate(html);
-      const rowChunks = chunkRowsByHeight(opsRows, TRAVEL_CARD_MAX_HEIGHT_MM);
       const operationBlockPattern = /<!--\s*\{\{#each operations\}\}\s*-->[\s\S]*?<!--\s*\{\{\/each\}\}\s*-->/;
+      const rowChunks = await chunkRowsByMeasuredHeight({
+        html,
+        rows: opsRows,
+        card1,
+        card2,
+        card3,
+        wrapperClass,
+        operationBlockPattern,
+      });
+
+      if (cancelled) return;
 
       const pages = rowChunks.map((rows, index) => {
         const pageLabel = `${index + 1} of ${rowChunks.length}`;
@@ -1538,39 +1707,19 @@ export function TravelCardPreview({
         `;
       }).join('');
 
-      const renderPatch = `
-        body.travel-card-rendered {
-          display: block;
-          width: 210mm;
-          height: auto;
-          min-height: 0;
-          margin: 0 auto;
-          padding: 0;
-          background: #ffffff;
-        }
-        body.travel-card-rendered > .a4-page,
-        body.travel-card-rendered > .container {
-          width: 210mm;
-          height: 297mm;
-          margin: 0 auto;
-        }
-        body.travel-card-rendered > .a4-page:not(:last-child),
-        body.travel-card-rendered > .container:not(:last-child) {
-          break-after: page;
-          page-break-after: always;
-        }
-        body.travel-card-rendered .card-middle {
-          overflow: hidden;
-        }
-      `;
-
       html = html
-        .replace('</style>', `${renderPatch}</style>`)
+        .replace('</style>', `${TRAVEL_CARD_RENDER_PATCH}</style>`)
         .replace(/<body[^>]*>[\s\S]*?<\/body>/, `<body class="travel-card-rendered">${pages}</body>`);
 
       setSrcDoc(html);
+      };
+
+      void buildTravelCard();
     }, 0);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [qrValue, selectedPart, editOps, cardInfo, dateStr, totalHoursDisplay, revisionLabel, issuedByName, issuedAt]);
 
   return (
@@ -2313,6 +2462,8 @@ export function OperationCardPreview({
 const SowCreatePage = () => {
   const [selectedPart, setSelectedPart] = useState(null);
   const [checkedOps, setCheckedOps]     = useState(new Set());
+  const [checkedTemplates, setCheckedTemplates] = useState(new Set());
+  const checkedTemplateOpsRef = useRef(new Map()); // template_id → Set of op.id
   const [editOps, setEditOps]           = useState([]);
   const [saving, setSaving]             = useState(false);
   const [activeStep, setActiveStep]     = useState('edit');
@@ -2372,6 +2523,8 @@ const SowCreatePage = () => {
   const handleSelectPart = useCallback((part) => {
     setSelectedPart(part);
     setCheckedOps(new Set());
+    setCheckedTemplates(new Set());
+    checkedTemplateOpsRef.current.clear();
     setEditOps([]);
     setOperationCardKeys([]);
     setActiveOperationKey(null);
@@ -2395,6 +2548,8 @@ const SowCreatePage = () => {
       resolved_component_id: component.component_id,
     }));
     setCheckedOps(new Set());
+    setCheckedTemplates(new Set());
+    checkedTemplateOpsRef.current.clear();
     setEditOps([]);
     setOperationCardKeys([]);
     setActiveOperationKey(null);
@@ -2433,19 +2588,44 @@ const SowCreatePage = () => {
     } else {
       setCheckedOps(new Set());
       setEditOps([]);
+      setCheckedTemplates(new Set());
+      checkedTemplateOpsRef.current.clear();
     }
   }, []);
 
-  const handleToggleTemplate = useCallback((ops, selectAll) => {
+  const handleToggleTemplate = useCallback((ops, selectAll, templateId) => {
     const templateOps = Array.isArray(ops) ? ops : [];
     if (templateOps.length === 0) return;
 
+    setCheckedTemplates((prev) => {
+      const next = new Set(prev);
+      if (selectAll) next.add(templateId);
+      else next.delete(templateId);
+      return next;
+    });
+
+    if (selectAll) {
+      checkedTemplateOpsRef.current.set(templateId, new Set(templateOps.map((op) => op.id)));
+    } else {
+      checkedTemplateOpsRef.current.delete(templateId);
+    }
+
     setCheckedOps((prev) => {
       const next = new Set(prev);
-      templateOps.forEach((op) => {
-        if (selectAll) next.add(op.id);
-        else next.delete(op.id);
-      });
+      if (selectAll) {
+        templateOps.forEach((op) => next.add(op.id));
+      } else {
+        // Remove only ops that are NOT in any remaining checked template
+        const remainingTemplateOpIds = new Set();
+        checkedTemplateOpsRef.current.forEach((opSet) => {
+          opSet.forEach((id) => remainingTemplateOpIds.add(id));
+        });
+        templateOps.forEach((op) => {
+          if (!remainingTemplateOpIds.has(op.id)) {
+            next.delete(op.id);
+          }
+        });
+      }
       return next;
     });
 
@@ -2456,7 +2636,16 @@ const SowCreatePage = () => {
           if (!bySource.has(op.id)) bySource.set(op.id, makeEditEntry(op, 0));
         });
       } else {
-        templateOps.forEach((op) => bySource.delete(op.id));
+        // Remove only ops that are NOT in remaining checked templates
+        const remainingTemplateOpIds = new Set();
+        checkedTemplateOpsRef.current.forEach((opSet) => {
+          opSet.forEach((id) => remainingTemplateOpIds.add(id));
+        });
+        templateOps.forEach((op) => {
+          if (!remainingTemplateOpIds.has(op.id)) {
+            bySource.delete(op.id);
+          }
+        });
       }
       return Array.from(bySource.values()).map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
     });
@@ -2609,6 +2798,8 @@ const SowCreatePage = () => {
       // Reset
       setSelectedPart(null);
       setCheckedOps(new Set());
+      setCheckedTemplates(new Set());
+      checkedTemplateOpsRef.current.clear();
       setEditOps([]);
       setOperationCardKeys([]);
       setActiveOperationKey(null);
@@ -2738,6 +2929,7 @@ const SowCreatePage = () => {
               componentId={selectedPart?.component_id}
               selectedPart={selectedPart}
               checked={checkedOps}
+              checkedTemplates={checkedTemplates}
               onToggle={handleToggle}
               onToggleAll={handleToggleAll}
               onToggleTemplate={handleToggleTemplate}
