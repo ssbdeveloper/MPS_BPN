@@ -147,6 +147,7 @@ app.use('/machine-hours-validation', require('./routes/machineHoursValidation'))
 app.use('/consumable', require('./routes/consumable'));
 app.use('/tools', require('./routes/tools'));
 app.use('/auth', require('./routes/auth'));
+app.use('/ms-project', require('./routes/msProject'));
 
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (request, socket, head) => {
