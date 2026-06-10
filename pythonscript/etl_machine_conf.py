@@ -25,7 +25,7 @@ import pyodbc
 # Credentials - hardcoded per task_etl.md
 # ---------------------------------------------------------------------------
 SQLSERVER_CONFIG = {
-    "server":   "10.169.2.76,61142",
+    "server":   "10.169.2.76,61878",
     "database": "SSB_OEE",
     "username": "tag",
     "password": "@dminta9",

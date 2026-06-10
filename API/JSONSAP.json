@@ -34,7 +34,7 @@
             "RUECK": "0004727824",
             "ZINDICATOR": "UPDT",
             "LTXA1": "pararel",
-            "AUFNR": "001000073558",
+            "AUFNR": "001000073558", // PO ORIGIN atau PO REWORK
             "VORNR": "0020",
             "FLGAT": "1",
             "PLNFL": "000001",
@@ -49,7 +49,10 @@
             "VGE01": "HR",
             "VGW01": "0.000 ",
             "AUART": "ZPP4",
-            "ZTXT04_AUFNR": "REL"
+            "ZTXT04_AUFNR": "REL",
+            "PRO_REG": "001000073558" //PO INDUK
+
+
         }
 
         

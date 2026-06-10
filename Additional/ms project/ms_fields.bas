@@ -31,31 +31,31 @@ Public Sub MsSetProjectMode(ByVal modeValue As String)
     ActiveProject.ProjectSummaryTask.Text28 = modeValue
 End Sub
 
-Public Function MsTaskId(ByVal t As Task) As String
+Public Function MsTaskId(ByVal t As Object) As String
     On Error Resume Next
     MsTaskId = Trim$(t.Text10)
     On Error GoTo 0
 End Function
 
-Public Sub MsSetTaskId(ByVal t As Task, ByVal taskId As String)
+Public Sub MsSetTaskId(ByVal t As Object, ByVal taskId As String)
     t.Text10 = taskId
 End Sub
 
-Public Sub MsSetTaskProjectId(ByVal t As Task, ByVal projectId As String)
+Public Sub MsSetTaskProjectId(ByVal t As Object, ByVal projectId As String)
     t.Text11 = projectId
 End Sub
 
-Public Sub MsSetTaskParentId(ByVal t As Task, ByVal parentTaskId As String)
+Public Sub MsSetTaskParentId(ByVal t As Object, ByVal parentTaskId As String)
     t.Text12 = parentTaskId
 End Sub
 
-Public Function MsResourceId(ByVal r As Resource) As String
+Public Function MsResourceId(ByVal r As Object) As String
     On Error Resume Next
     MsResourceId = Trim$(r.Text9)
     On Error GoTo 0
 End Function
 
-Public Sub MsSetResourceId(ByVal r As Resource, ByVal resourceId As String)
+Public Sub MsSetResourceId(ByVal r As Object, ByVal resourceId As String)
     r.Text9 = resourceId
 End Sub
 
@@ -132,6 +132,7 @@ Public Sub MsClearAllDatabaseIds()
     Dim t As Task
     Dim r As Resource
     Dim a As Object
+    Dim taskAssignments As Object
 
     MsSetProjectId ""
     MsSetProjectRevisionNo ""
@@ -148,9 +149,23 @@ Public Sub MsClearAllDatabaseIds()
         If Not r Is Nothing Then r.Text9 = ""
     Next r
 
-    For Each a In ActiveProject.Assignments
-        If Not a Is Nothing Then MsSetAssignmentId a, ""
-    Next a
+    For Each t In ActiveProject.Tasks
+        If Not t Is Nothing Then
+            On Error Resume Next
+            Set taskAssignments = CallByName(t, "Assignments", VbGet)
+            If Err.Number <> 0 Then
+                Err.Clear
+                Set taskAssignments = Nothing
+            End If
+            On Error GoTo 0
+
+            If Not taskAssignments Is Nothing Then
+                For Each a In taskAssignments
+                    If Not a Is Nothing Then MsSetAssignmentId a, ""
+                Next a
+            End If
+        End If
+    Next t
 End Sub
 
 Public Function MsIsMasterPortfolioView() As Boolean
@@ -166,4 +181,3 @@ Public Function MsIsMasterPortfolioView() As Boolean
 
     MsIsMasterPortfolioView = (ids.Count > 1 Or MsGetProjectMode() = MS_MODE_MASTER_PORTFOLIO)
 End Function
-

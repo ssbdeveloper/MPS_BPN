@@ -1,9 +1,8 @@
 Attribute VB_Name = "ms_config"
 Option Explicit
 
-' Change this if the Express API is deployed behind nginx or another host.
-' Local dev default: run API with npm start in D:\website\MPS2\API.
-Public Const MS_API_BASE_URL As String = "http://localhost:3001/ms-project"
+' Express API through nginx.
+Public Const MS_API_BASE_URL As String = "https://100.80.101.53/api/ms-project"
 
 ' Microsoft Project custom field mapping.
 Public Const MS_PROJECT_ID_FIELD As String = "ProjectSummaryTask.Text30"

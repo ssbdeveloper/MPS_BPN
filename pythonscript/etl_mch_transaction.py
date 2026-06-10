@@ -30,6 +30,7 @@ TIMESHEET_LOOKUP_STATUS_IDS = (1, 6, 7, 8, 9)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 ENV_PATH = os.path.join(PROJECT_ROOT, ".env")
+CANDIDATE_TABLE = "pg_temp.mch_transaction_etl_candidates"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -202,19 +203,6 @@ def build_source_query(full_rebuild: bool, from_dt: datetime, to_dt: datetime | 
         return query, params
 
     query = f"""
-        WITH candidate_proddataids AS (
-            SELECT p.proddataid
-            FROM {SOURCE_TABLE} p
-            WHERE {base_filter_sql}
-              AND p.proddataid > (SELECT COALESCE(MAX(t.proddataid), 0) FROM {TARGET_TABLE} t)
-            UNION
-            SELECT p.proddataid
-            FROM {SOURCE_TABLE} p
-            JOIN {TARGET_TABLE} t
-              ON t.proddataid = p.proddataid
-            WHERE {base_filter_sql}
-              AND t.enddatetime IS NULL
-        )
         SELECT
             p.proddataid,
             p.startdatetime,
@@ -225,12 +213,53 @@ def build_source_query(full_rebuild: bool, from_dt: datetime, to_dt: datetime | 
             p.previoustatusid,
             p.jobid
         FROM {SOURCE_TABLE} p
-        JOIN candidate_proddataids c
+        JOIN {CANDIDATE_TABLE} c
           ON c.proddataid = p.proddataid
         ORDER BY p.proddataid
         LIMIT %s OFFSET %s
     """
-    return query, params + params
+    return query, []
+
+
+def prepare_incremental_candidates(cursor, from_dt: datetime, to_dt: datetime | None) -> int:
+    base_filters = ["p.startdatetime >= %s"]
+    params: list = [from_dt]
+
+    if to_dt:
+        base_filters.append("p.startdatetime < %s")
+        params.append(to_dt)
+
+    base_filter_sql = " AND ".join(base_filters)
+
+    cursor.execute("DROP TABLE IF EXISTS mch_transaction_etl_candidates")
+    cursor.execute(
+        """
+        CREATE TEMP TABLE mch_transaction_etl_candidates (
+            proddataid integer PRIMARY KEY
+        ) ON COMMIT PRESERVE ROWS
+        """
+    )
+    cursor.execute(
+        f"""
+        INSERT INTO {CANDIDATE_TABLE} (proddataid)
+        SELECT p.proddataid
+        FROM {SOURCE_TABLE} p
+        LEFT JOIN {TARGET_TABLE} t
+          ON t.proddataid = p.proddataid
+        WHERE {base_filter_sql}
+          AND t.proddataid IS NULL
+        UNION
+        SELECT p.proddataid
+        FROM {SOURCE_TABLE} p
+        JOIN {TARGET_TABLE} t
+          ON t.proddataid = p.proddataid
+        WHERE {base_filter_sql}
+          AND t.enddatetime IS NULL
+        """,
+        params + params,
+    )
+    cursor.execute(f"SELECT COUNT(*) FROM {CANDIDATE_TABLE}")
+    return cursor.fetchone()[0]
 
 
 def fetch_source_rows(cursor, full_rebuild: bool, from_dt: datetime, to_dt: datetime | None, offset: int) -> list[dict]:
@@ -284,9 +313,25 @@ def fetch_status_maps(cursor, status_ids: list[int]) -> dict[int, dict]:
     }
 
 
+def normalize_confirmation_lookup(value) -> str | None:
+    text = str(value).strip()
+    if not text or not text.isdigit() or not text.startswith("0"):
+        return None
+    normalized = text.lstrip("0")
+    return normalized or "0"
+
+
 def fetch_latest_ph3_by_confirmation(cursor, job_ids: list[str]) -> dict[str, dict]:
     if not job_ids:
         return {}
+    lookup_ids = sorted(
+        {
+            lookup_id
+            for job_id in job_ids
+            for lookup_id in (str(job_id).strip(), normalize_confirmation_lookup(job_id))
+            if lookup_id
+        }
+    )
     cursor.execute(
         """
         SELECT DISTINCT ON (confirmation_number)
@@ -306,11 +351,11 @@ def fetch_latest_ph3_by_confirmation(cursor, job_ids: list[str]) -> dict[str, di
         WHERE confirmation_number = ANY(%s)
         ORDER BY confirmation_number, id DESC
         """,
-        (job_ids,),
+        (lookup_ids,),
     )
-    result = {}
+    rows_by_confirmation = {}
     for row in cursor.fetchall():
-        result[row[0]] = {
+        rows_by_confirmation[str(row[0])] = {
             "confirmation_number": row[0],
             "order_no": row[1],
             "operation_no": row[2],
@@ -324,6 +369,16 @@ def fetch_latest_ph3_by_confirmation(cursor, job_ids: list[str]) -> dict[str, di
             "material_no": row[10],
             "material_description": row[11],
         }
+
+    result = {}
+    for job_id in job_ids:
+        exact_key = str(job_id).strip()
+        normalized_key = normalize_confirmation_lookup(job_id)
+        ph3 = rows_by_confirmation.get(exact_key)
+        if ph3 is None and normalized_key:
+            ph3 = rows_by_confirmation.get(normalized_key)
+        if ph3:
+            result[job_id] = ph3
     return result
 
 
@@ -477,6 +532,12 @@ def upsert_batch(cursor, values: list[tuple]) -> None:
 def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bool, dry_run: bool) -> int:
     total_upserted = 0
     offset = 0
+
+    if not full_rebuild:
+        with pg_conn.cursor() as cursor:
+            candidate_count = prepare_incremental_candidates(cursor, from_dt, to_dt)
+        pg_conn.commit()
+        log.info("Prepared incremental candidate rows: %d", candidate_count)
 
     while True:
         with pg_conn.cursor() as cursor:

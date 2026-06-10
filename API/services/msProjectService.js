@@ -180,6 +180,7 @@ async function queryProjectPackage(client, projectId) {
       `select *
        from ms_project_task
        where project_id = $1
+         and is_active = true
        order by outline_number nulls last, created_at, task_name`,
       [projectId]
     ),
@@ -187,6 +188,7 @@ async function queryProjectPackage(client, projectId) {
       `select *
        from ms_project_assignment
        where project_id = $1
+         and is_active = true
        order by created_at, assignment_id`,
       [projectId]
     ),
@@ -194,6 +196,7 @@ async function queryProjectPackage(client, projectId) {
       `select *
        from ms_project_dependency
        where project_id = $1
+         and is_active = true
        order by created_at, dependency_id`,
       [projectId]
     ),
@@ -700,6 +703,32 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
       }
       updated += 1;
     } else {
+      const existingByPair = await client.query(
+        `select dependency_id
+         from ms_project_dependency
+         where project_id = $1
+           and predecessor_task_id = $2
+           and successor_task_id = $3
+           and coalesce(dependency_type, 'FS') = coalesce($4, 'FS')
+           and coalesce(lag_minutes, 0) = coalesce($5, 0)
+           and is_active = true
+         order by created_at, dependency_id
+         limit 1`,
+        [projectId, predecessorTaskId, successorTaskId, dep.dependency_type, dep.lag_minutes]
+      );
+
+      if (existingByPair.rows[0]) {
+        result = await client.query(
+          `update ms_project_dependency
+           set local_dependency_key = coalesce($3, local_dependency_key),
+               is_active = $4,
+               updated_at = now()
+           where project_id = $1 and dependency_id = $2
+           returning dependency_id, local_dependency_key, false as inserted`,
+          [projectId, existingByPair.rows[0].dependency_id, dep.local_dependency_key, dep.is_active]
+        );
+        updated += 1;
+      } else {
       result = await client.query(
         `insert into ms_project_dependency (
            project_id, predecessor_task_id, successor_task_id, dependency_type,
@@ -728,6 +757,7 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
       );
       if (result.rows[0].inserted) created += 1;
       else updated += 1;
+      }
     }
 
     mappings.push({

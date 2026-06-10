@@ -55,42 +55,128 @@ Public Sub Ms_ImportProjectById()
     MsImportProjectPackage Trim$(projectId)
 End Sub
 
+Private Function MsSyncObjText(ByVal obj As Object, ByVal propertyName As String, Optional ByVal fallback As String = "") As String
+    On Error Resume Next
+    Dim value As Variant
+    value = CallByName(obj, propertyName, VbGet)
+    If Err.Number <> 0 Or IsNull(value) Or IsEmpty(value) Then
+        Err.Clear
+        MsSyncObjText = fallback
+    Else
+        MsSyncObjText = CStr(value)
+    End If
+    On Error GoTo 0
+End Function
+
+Private Function MsSyncObjObject(ByVal obj As Object, ByVal propertyName As String) As Object
+    On Error Resume Next
+    Set MsSyncObjObject = CallByName(obj, propertyName, VbGet)
+    If Err.Number <> 0 Then
+        Err.Clear
+        Set MsSyncObjObject = Nothing
+    End If
+    On Error GoTo 0
+End Function
+
+Private Function MsSyncAssignmentLocalUid(ByVal a As Object, ByVal taskObj As Object, ByVal resourceObj As Object) As String
+    MsSyncAssignmentLocalUid = MsAssignmentLocalUid(a)
+    If Len(MsSyncAssignmentLocalUid) = 0 Then
+        MsSyncAssignmentLocalUid = MsSyncObjText(taskObj, "UniqueID") & "-" & MsSyncObjText(resourceObj, "UniqueID")
+    End If
+    If Len(MsSyncAssignmentLocalUid) = 1 Then MsSyncAssignmentLocalUid = ""
+End Function
+
+Private Function MsBuildTaskLocalUidIndex() As Object
+    Dim index As Object
+    Dim t As Task
+    Dim localUid As String
+
+    Set index = CreateObject("Scripting.Dictionary")
+    For Each t In ActiveProject.Tasks
+        If Not t Is Nothing Then
+            localUid = MsSyncObjText(t, "UniqueID")
+            If Len(localUid) > 0 Then
+                If Not index.Exists(localUid) Then index.Add localUid, t
+            End If
+        End If
+    Next t
+
+    Set MsBuildTaskLocalUidIndex = index
+End Function
+
+Private Function MsBuildAssignmentLocalUidIndex() As Object
+    Dim index As Object
+    Dim t As Task
+    Dim a As Object
+    Dim taskAssignments As Object
+    Dim taskObj As Object
+    Dim resourceObj As Object
+    Dim localUid As String
+
+    Set index = CreateObject("Scripting.Dictionary")
+    For Each t In ActiveProject.Tasks
+        If Not t Is Nothing Then
+            Set taskAssignments = MsSyncObjObject(t, "Assignments")
+            If Not taskAssignments Is Nothing Then
+                For Each a In taskAssignments
+                    If Not a Is Nothing Then
+                        Set taskObj = MsSyncObjObject(a, "Task")
+                        If taskObj Is Nothing Then Set taskObj = t
+                        Set resourceObj = MsSyncObjObject(a, "Resource")
+                        If Not resourceObj Is Nothing Then
+                            localUid = MsSyncAssignmentLocalUid(a, taskObj, resourceObj)
+                            If Len(localUid) > 0 Then
+                                If Not index.Exists(localUid) Then index.Add localUid, a
+                            End If
+                        End If
+                    End If
+                Next a
+            End If
+        End If
+    Next t
+
+    Set MsBuildAssignmentLocalUidIndex = index
+End Function
+
 Private Sub MsApplySyncResponse(ByVal root As Object)
     Dim data As Object
     Dim item As Variant
     Dim t As Task
     Dim a As Object
     Dim projectId As String
+    Dim taskByLocalUid As Object
+    Dim assignmentByLocalUid As Object
+    Dim localUid As String
 
     Set data = root("data")
     projectId = CStr(data("project_id"))
     MsSetProjectId projectId
     MsSetProjectRevisionNo data("revision_no")
     MsSetProjectMode MS_MODE_SINGLE_PROJECT
+    Set taskByLocalUid = MsBuildTaskLocalUidIndex()
 
     If data.Exists("task_mappings") Then
         For Each item In data("task_mappings")
             If Not item Is Nothing Then
-                Set t = MsFindTaskByLocalUid(CStr(item("local_task_uid")))
-                If Not t Is Nothing Then
+                localUid = CStr(item("local_task_uid"))
+                If taskByLocalUid.Exists(localUid) Then
+                    Set t = taskByLocalUid(localUid)
                     MsSetTaskId t, CStr(item("task_id"))
                     MsSetTaskProjectId t, projectId
                 End If
             End If
         Next item
     End If
+    Set assignmentByLocalUid = MsBuildAssignmentLocalUidIndex()
 
     If data.Exists("assignment_mappings") Then
         For Each item In data("assignment_mappings")
             If Not item Is Nothing Then
-                For Each a In ActiveProject.Assignments
-                    If Not a Is Nothing Then
-                        If MsAssignmentLocalUid(a) = CStr(item("local_assignment_uid")) Then
-                            MsSetAssignmentId a, CStr(item("assignment_id"))
-                            Exit For
-                        End If
-                    End If
-                Next a
+                localUid = CStr(item("local_assignment_uid"))
+                If assignmentByLocalUid.Exists(localUid) Then
+                    Set a = assignmentByLocalUid(localUid)
+                    MsSetAssignmentId a, CStr(item("assignment_id"))
+                End If
             End If
         Next item
     End If
@@ -98,6 +184,9 @@ End Sub
 
 Public Sub Ms_PublishNewProject()
     On Error GoTo ErrHandler
+    Dim phase As String
+    Dim oldCalculation As Long
+    phase = "validasi awal"
 
     If Len(MsGetProjectId()) > 0 Then
         MsgBox "Project ini sudah punya project_id. Gunakan Ms_SyncExistingProject atau Ms_CloneAsNewProject.", vbExclamation
@@ -108,9 +197,18 @@ Public Sub Ms_PublishNewProject()
 
     Dim payload As String
     Dim root As Object
+    oldCalculation = Application.Calculation
+    Application.ScreenUpdating = False
+    Application.Calculation = pjManual
+
+    phase = "build payload"
     payload = MsBuildProjectPayload(True)
+    phase = "send API publish"
     Set root = MsParseSuccess(MsHttpPost("/projects", payload))
+    phase = "apply response"
     MsApplySyncResponse root
+    Application.Calculation = oldCalculation
+    Application.ScreenUpdating = True
 
     MsgBox "Publish sukses." & vbCrLf & _
            "Project ID: " & MsGetProjectId() & vbCrLf & _
@@ -118,11 +216,18 @@ Public Sub Ms_PublishNewProject()
     Exit Sub
 
 ErrHandler:
-    MsgBox "Publish gagal: " & Err.Description, vbCritical
+    On Error Resume Next
+    If oldCalculation <> 0 Then Application.Calculation = oldCalculation
+    Application.ScreenUpdating = True
+    On Error GoTo 0
+    MsgBox "Publish gagal di fase [" & phase & "]: " & Err.Description, vbCritical
 End Sub
 
 Public Sub Ms_SyncExistingProject()
     On Error GoTo ErrHandler
+    Dim phase As String
+    Dim oldCalculation As Long
+    phase = "validasi awal"
 
     If MsIsMasterPortfolioView() Then
         MsgBox "Master Portfolio View read-only pada MVP. Sync ditolak.", vbExclamation
@@ -142,9 +247,18 @@ Public Sub Ms_SyncExistingProject()
 
     Dim payload As String
     Dim root As Object
+    oldCalculation = Application.Calculation
+    Application.ScreenUpdating = False
+    Application.Calculation = pjManual
+
+    phase = "build payload"
     payload = MsBuildProjectPayload(False)
+    phase = "send API sync"
     Set root = MsParseSuccess(MsHttpPut("/projects/" & projectId & "/sync", payload))
+    phase = "apply response"
     MsApplySyncResponse root
+    Application.Calculation = oldCalculation
+    Application.ScreenUpdating = True
 
     MsgBox "Sync sukses." & vbCrLf & _
            "Project ID: " & MsGetProjectId() & vbCrLf & _
@@ -152,7 +266,27 @@ Public Sub Ms_SyncExistingProject()
     Exit Sub
 
 ErrHandler:
-    MsgBox "Sync gagal: " & Err.Description, vbCritical
+    On Error Resume Next
+    If oldCalculation <> 0 Then Application.Calculation = oldCalculation
+    Application.ScreenUpdating = True
+    On Error GoTo 0
+    MsgBox "Sync gagal di fase [" & phase & "]: " & Err.Description, vbCritical
+End Sub
+
+Public Sub Ms_DebugBuildPayload()
+    On Error GoTo ErrHandler
+
+    Dim payload As String
+    payload = MsBuildProjectPayload(False)
+
+    Debug.Print Left$(payload, 2000)
+    MsgBox "Build payload OK." & vbCrLf & _
+           "Length: " & Len(payload) & " chars" & vbCrLf & _
+           "Preview 2000 chars tersedia di Immediate Window.", vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Build payload gagal: " & Err.Description, vbCritical
 End Sub
 
 Public Sub Ms_CloneAsNewProject()
@@ -188,4 +322,3 @@ Public Sub Ms_CheckResourceConflicts()
 ErrHandler:
     MsgBox "Check conflicts gagal: " & Err.Description, vbCritical
 End Sub
-

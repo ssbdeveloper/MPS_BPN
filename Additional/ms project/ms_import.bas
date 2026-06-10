@@ -2,6 +2,11 @@ Attribute VB_Name = "ms_import"
 Option Explicit
 
 Private Function MsApiDateToVba(ByVal value As Variant) As Variant
+    If IsEmpty(value) Or IsNull(value) Then
+        MsApiDateToVba = Empty
+        Exit Function
+    End If
+
     Dim text As String
     text = CStr(value & "")
     If Len(Trim$(text)) = 0 Then
@@ -40,6 +45,15 @@ Private Function MsItemBool(ByVal item As Object, ByVal key As String, Optional 
     If item.Exists(key) Then MsItemBool = CBool(item(key))
     On Error GoTo 0
 End Function
+
+Private Sub MsSetProjectTitleSafe(ByVal title As String)
+    On Error Resume Next
+    ActiveProject.Title = title
+    If Err.Number <> 0 Then Err.Clear
+    ActiveProject.ProjectSummaryTask.Name = title
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo 0
+End Sub
 
 Private Sub MsSetTaskOutlineLevel(ByVal t As Task, ByVal desiredLevel As Long)
     On Error Resume Next
@@ -82,9 +96,16 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
     Dim a As Object
     Dim taskById As Object
     Dim resourceById As Object
+    Dim planStart As Variant
+    Dim planFinish As Variant
+    Dim dependencyKey As String
+    Dim dependencyByKey As Object
+    Dim dependencySkipped As Long
+    Dim dependencyFailed As Long
 
     Set taskById = CreateObject("Scripting.Dictionary")
     Set resourceById = CreateObject("Scripting.Dictionary")
+    Set dependencyByKey = CreateObject("Scripting.Dictionary")
 
     responseText = MsHttpGet("/projects/" & projectId & "/package")
     Set root = MsParseSuccess(responseText)
@@ -95,7 +116,7 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
     Set assignments = data("assignments")
     Set dependencies = data("dependencies")
 
-    ActiveProject.Title = MsItemText(project, "project_name", "MS Project Package")
+    MsSetProjectTitleSafe MsItemText(project, "project_name", "MS Project Package")
     MsSetProjectId MsItemText(project, "project_id")
     MsSetProjectRevisionNo MsItemNumber(project, "revision_no", 1)
     MsSetProjectMode MS_MODE_SINGLE_PROJECT
@@ -117,8 +138,10 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
 
         If MsItemNumber(item, "duration_minutes", 0) > 0 Then t.Duration = CStr(MsItemNumber(item, "duration_minutes", 0)) & "m"
         If MsItemNumber(item, "planned_work_minutes", 0) > 0 Then t.Work = CStr(MsItemNumber(item, "planned_work_minutes", 0)) & "m"
-        If IsDate(MsApiDateToVba(item("plan_start"))) Then t.Start = MsApiDateToVba(item("plan_start"))
-        If IsDate(MsApiDateToVba(item("plan_finish"))) Then t.Finish = MsApiDateToVba(item("plan_finish"))
+        planStart = MsApiDateToVba(item("plan_start"))
+        planFinish = MsApiDateToVba(item("plan_finish"))
+        If IsDate(planStart) Then t.Start = planStart
+        If IsDate(planFinish) Then t.Finish = planFinish
 
         Call MsSetTaskOutlineLevel(t, CLng(MsItemNumber(item, "outline_level", 1)))
         taskById(MsItemText(item, "task_id")) = t.ID
@@ -149,22 +172,38 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         succId = MsItemText(item, "successor_task_id")
         If taskById.Exists(predId) And taskById.Exists(succId) Then
             Dim succTask As Task
+            dependencyKey = predId & "|" & succId & "|" & MsItemText(item, "dependency_type", "FS") & "|" & CStr(MsItemNumber(item, "lag_minutes", 0))
+            If dependencyByKey.Exists(dependencyKey) Then
+                dependencySkipped = dependencySkipped + 1
+                GoTo NextDependency
+            End If
+            dependencyByKey.Add dependencyKey, True
+
             Set succTask = ActiveProject.Tasks(taskById(succId))
+            On Error Resume Next
             If Len(succTask.Predecessors) = 0 Then
                 succTask.Predecessors = CStr(taskById(predId))
             Else
                 succTask.Predecessors = succTask.Predecessors & "," & CStr(taskById(predId))
             End If
+            If Err.Number <> 0 Then
+                dependencyFailed = dependencyFailed + 1
+                Err.Clear
+            End If
+            On Error GoTo ErrHandler
         End If
+NextDependency:
     Next item
 
     Application.Calculation = pjAutomatic
     Application.ScreenUpdating = True
 
-    MsgBox "Import selesai: " & ActiveProject.Title & vbCrLf & _
+    MsgBox "Import selesai: " & MsItemText(project, "project_name", "MS Project Package") & vbCrLf & _
            "Tasks: " & tasks.Count & vbCrLf & _
            "Resources: " & projectResources.Count & vbCrLf & _
-           "Assignments: " & assignments.Count, vbInformation
+           "Assignments: " & assignments.Count & vbCrLf & _
+           "Dependencies skipped duplicate: " & dependencySkipped & vbCrLf & _
+           "Dependencies failed: " & dependencyFailed, vbInformation
     Exit Sub
 
 ErrHandler:
@@ -172,4 +211,3 @@ ErrHandler:
     Application.ScreenUpdating = True
     MsgBox "Import package gagal: " & Err.Description, vbCritical
 End Sub
-
