@@ -66,14 +66,54 @@ exports.bulkLoadProjects = route(async (req) => {
   return (res) => success(res, data, 200, { count: data.length });
 });
 
+exports.listCalendars = route(async (req) => {
+  const result = await service.listCalendars(req.query);
+  return (res) => success(res, result.rows, 200, { limit: result.limit, offset: result.offset });
+});
+
+exports.getCalendar = route(async (req) => {
+  const data = await service.getCalendar(req.params.calendar_id);
+  return (res) => success(res, data);
+});
+
+exports.refreshCalendarsFromShifts = route(async (req) => {
+  const summary = await service.refreshCalendarsFromShifts(req.body || {});
+  return (res) => success(res, {}, 200, summary, summary.warnings || []);
+});
+
 exports.publishProject = route(async (req) => {
   const data = await service.publishProject(req.body);
   return (res) => success(res, data, 201, data.summary || {});
 });
 
+exports.checkoutProject = route(async (req) => {
+  const data = await service.checkoutProject(req.params.project_id, req.body || {});
+  return (res) => success(res, data);
+});
+
+exports.heartbeatProject = route(async (req) => {
+  const data = await service.heartbeatProject(req.params.project_id, req.body || {});
+  return (res) => success(res, data);
+});
+
 exports.syncProject = route(async (req) => {
   const data = await service.syncProject(req.params.project_id, req.body);
   return (res) => success(res, data, 200, data.summary || {});
+});
+
+exports.publishCurrentRevision = route(async (req) => {
+  const data = await service.publishCurrentRevision(req.params.project_id, req.body || {});
+  return (res) => success(res, data);
+});
+
+exports.checkinProject = route(async (req) => {
+  const data = await service.checkinProject(req.params.project_id, req.body || {});
+  return (res) => success(res, data);
+});
+
+exports.forceCheckinProject = route(async (req) => {
+  const data = await service.forceCheckinProject(req.params.project_id, req.body || {});
+  return (res) => success(res, data);
 });
 
 exports.searchResources = route(async (req) => {

@@ -182,6 +182,116 @@ Private Sub MsApplySyncResponse(ByVal root As Object)
     End If
 End Sub
 
+Private Sub MsApplyLockResponse(ByVal root As Object)
+    Dim data As Object
+    Set data = root("data")
+    If data.Exists("lock_token") Then MsSetProjectLockToken CStr(data("lock_token"))
+    If data.Exists("revision_no") Then MsSetProjectRevisionNo data("revision_no")
+    MsSetProjectMode MS_MODE_SINGLE_PROJECT
+End Sub
+
+Private Function MsProjectLockPayload(Optional ByVal includeRevision As Boolean = False) As String
+    Dim json As String
+    json = "{""project"":{"
+    json = json & """project_id"":" & MsJsonString(MsGetProjectId()) & ","
+    If includeRevision Then json = json & """last_known_revision_no"":" & CStr(MsGetProjectRevisionNo()) & ","
+    json = json & """lock_token"":" & MsJsonString(MsGetProjectLockToken()) & ","
+    json = json & """updated_by"":""ms-project-vba"""
+    json = json & "},"
+    json = json & """actor"":""ms-project-vba"","
+    json = json & """lock_token"":" & MsJsonString(MsGetProjectLockToken())
+    json = json & "}"
+    MsProjectLockPayload = json
+End Function
+
+Public Sub Ms_CheckOutCurrentProject()
+    On Error GoTo ErrHandler
+    Dim projectId As String
+    Dim payload As String
+    Dim root As Object
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Then
+        MsgBox "Project ID kosong. Import atau publish project dulu.", vbExclamation
+        Exit Sub
+    End If
+    If Len(MsGetProjectLockToken()) > 0 Then
+        MsgBox "Project ini sudah punya lock token aktif di file.", vbInformation
+        Exit Sub
+    End If
+
+    payload = "{""actor"":""ms-project-vba"",""lock_minutes"":30}"
+    Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/checkout", payload))
+    MsApplyLockResponse root
+    MsgBox "Checkout sukses." & vbCrLf & _
+           "Revision: " & MsGetProjectRevisionNo(), vbInformation
+    Exit Sub
+ErrHandler:
+    MsgBox "Checkout gagal: " & Err.Description, vbCritical
+End Sub
+
+Public Sub Ms_HeartbeatCurrentProject()
+    On Error GoTo ErrHandler
+    Dim projectId As String
+    Dim root As Object
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Or Len(MsGetProjectLockToken()) = 0 Then
+        MsgBox "Project belum checkout.", vbExclamation
+        Exit Sub
+    End If
+
+    Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/heartbeat", MsProjectLockPayload(False)))
+    MsgBox "Heartbeat OK. Lock diperpanjang.", vbInformation
+    Exit Sub
+ErrHandler:
+    MsgBox "Heartbeat gagal: " & Err.Description, vbCritical
+End Sub
+
+Public Sub Ms_PublishCurrentRevision()
+    On Error GoTo ErrHandler
+    Dim projectId As String
+    Dim root As Object
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Then
+        MsgBox "Project ID kosong. Publish new project atau import package dulu.", vbExclamation
+        Exit Sub
+    End If
+    If Len(MsGetProjectLockToken()) = 0 Then
+        MsgBox "Project belum checkout. Jalankan Ms_CheckOutCurrentProject dulu.", vbExclamation
+        Exit Sub
+    End If
+    If MsgBox("Publish current DB revision? Jalankan Sync dulu jika ada perubahan schedule di file.", vbQuestion + vbYesNo) <> vbYes Then Exit Sub
+
+    Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/publish", MsProjectLockPayload(True)))
+    If root("data").Exists("revision_no") Then MsSetProjectRevisionNo root("data")("revision_no")
+    MsgBox "Publish revision sukses." & vbCrLf & _
+           "Revision: " & MsGetProjectRevisionNo(), vbInformation
+    Exit Sub
+ErrHandler:
+    MsgBox "Publish revision gagal: " & Err.Description, vbCritical
+End Sub
+
+Public Sub Ms_CheckInCurrentProject()
+    On Error GoTo ErrHandler
+    Dim projectId As String
+    Dim root As Object
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Or Len(MsGetProjectLockToken()) = 0 Then
+        MsgBox "Project belum checkout.", vbExclamation
+        Exit Sub
+    End If
+
+    Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/checkin", MsProjectLockPayload(False)))
+    MsSetProjectLockToken ""
+    MsgBox "Check-in sukses. Lock dilepas.", vbInformation
+    Exit Sub
+ErrHandler:
+    MsgBox "Check-in gagal: " & Err.Description, vbCritical
+End Sub
+
 Public Sub Ms_PublishNewProject()
     On Error GoTo ErrHandler
     Dim phase As String
@@ -207,6 +317,7 @@ Public Sub Ms_PublishNewProject()
     Set root = MsParseSuccess(MsHttpPost("/projects", payload))
     phase = "apply response"
     MsApplySyncResponse root
+    MsSetProjectLockToken ""
     Application.Calculation = oldCalculation
     Application.ScreenUpdating = True
 
@@ -242,6 +353,10 @@ Public Sub Ms_SyncExistingProject()
     End If
     If MsGetProjectRevisionNo() <= 0 Then
         MsgBox "Revision number kosong. Import ulang package atau cek ProjectSummaryTask.Text29.", vbExclamation
+        Exit Sub
+    End If
+    If Len(MsGetProjectLockToken()) = 0 Then
+        MsgBox "Project belum checkout. Jalankan Ms_CheckOutCurrentProject dulu.", vbExclamation
         Exit Sub
     End If
 

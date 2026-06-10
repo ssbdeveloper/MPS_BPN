@@ -55,6 +55,53 @@ Private Sub MsSetProjectTitleSafe(ByVal title As String)
     On Error GoTo 0
 End Sub
 
+Private Sub MsTrySetObjectTextProperty(ByVal obj As Object, ByVal propertyName As String, ByVal value As String)
+    If Len(Trim$(value)) = 0 Then Exit Sub
+    On Error Resume Next
+    CallByName obj, propertyName, VbLet, value
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Sub MsTrySetObjectBoolProperty(ByVal obj As Object, ByVal propertyName As String, ByVal value As Boolean)
+    On Error Resume Next
+    CallByName obj, propertyName, VbLet, value
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Function MsLinkTypeValue(ByVal dependencyType As String) As Long
+    Select Case UCase$(Trim$(dependencyType))
+        Case "FF"
+            MsLinkTypeValue = 0
+        Case "FS"
+            MsLinkTypeValue = 1
+        Case "SF"
+            MsLinkTypeValue = 2
+        Case "SS"
+            MsLinkTypeValue = 3
+        Case Else
+            MsLinkTypeValue = 1
+    End Select
+End Function
+
+Private Function MsTryAddTaskDependency(ByVal succTask As Task, ByVal predTask As Task, ByVal dependencyType As String, ByVal lagMinutes As Long) As Boolean
+    Dim dependencies As Object
+    On Error Resume Next
+    Set dependencies = CallByName(succTask, "TaskDependencies", VbGet)
+    If Err.Number <> 0 Then
+        Err.Clear
+        Set dependencies = Nothing
+    End If
+
+    If Not dependencies Is Nothing Then
+        CallByName dependencies, "Add", VbMethod, predTask, MsLinkTypeValue(dependencyType), lagMinutes
+        MsTryAddTaskDependency = (Err.Number = 0)
+        If Err.Number <> 0 Then Err.Clear
+    End If
+    On Error GoTo 0
+End Function
+
 Private Sub MsSetTaskOutlineLevel(ByVal t As Task, ByVal desiredLevel As Long)
     On Error Resume Next
     SelectTaskField Row:=t.ID, Column:="Name", RowRelative:=False
@@ -120,6 +167,9 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
     MsSetProjectId MsItemText(project, "project_id")
     MsSetProjectRevisionNo MsItemNumber(project, "revision_no", 1)
     MsSetProjectMode MS_MODE_SINGLE_PROJECT
+    MsSetProjectLockToken ""
+    MsSetProjectCalendarId MsItemText(project, "calendar_id")
+    MsTrySetObjectTextProperty ActiveProject, "Calendar", MsItemText(project, "calendar_name")
 
     For Each item In projectResources
         Set r = MsEnsureResourceFromApi(item)
@@ -131,6 +181,9 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         MsSetTaskId t, MsItemText(item, "task_id")
         MsSetTaskProjectId t, projectId
         MsSetTaskParentId t, MsItemText(item, "parent_task_id")
+        MsSetTaskCalendarId t, MsItemText(item, "calendar_id")
+        MsTrySetObjectTextProperty t, "Calendar", MsItemText(item, "calendar_name")
+        MsTrySetObjectBoolProperty t, "IgnoreResourceCalendar", MsItemBool(item, "ignore_resource_calendar", False)
         t.Text1 = MsItemText(item, "order_no")
         t.Text2 = MsItemText(item, "operation_no")
         t.Text3 = MsItemText(item, "ssbr_id")
@@ -172,6 +225,9 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         succId = MsItemText(item, "successor_task_id")
         If taskById.Exists(predId) And taskById.Exists(succId) Then
             Dim succTask As Task
+            Dim predTask As Task
+            Dim depType As String
+            Dim depLag As Long
             dependencyKey = predId & "|" & succId & "|" & MsItemText(item, "dependency_type", "FS") & "|" & CStr(MsItemNumber(item, "lag_minutes", 0))
             If dependencyByKey.Exists(dependencyKey) Then
                 dependencySkipped = dependencySkipped + 1
@@ -180,17 +236,13 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
             dependencyByKey.Add dependencyKey, True
 
             Set succTask = ActiveProject.Tasks(taskById(succId))
-            On Error Resume Next
-            If Len(succTask.Predecessors) = 0 Then
-                succTask.Predecessors = CStr(taskById(predId))
-            Else
-                succTask.Predecessors = succTask.Predecessors & "," & CStr(taskById(predId))
-            End If
-            If Err.Number <> 0 Then
+            Set predTask = ActiveProject.Tasks(taskById(predId))
+            depType = MsItemText(item, "dependency_type", "FS")
+            depLag = CLng(MsItemNumber(item, "lag_minutes", 0))
+
+            If Not MsTryAddTaskDependency(succTask, predTask, depType, depLag) Then
                 dependencyFailed = dependencyFailed + 1
-                Err.Clear
             End If
-            On Error GoTo ErrHandler
         End If
 NextDependency:
     Next item

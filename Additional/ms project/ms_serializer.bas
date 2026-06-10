@@ -93,6 +93,22 @@ Private Function MsSafeProjectName() As String
     On Error GoTo 0
 End Function
 
+Private Function MsCalendarPropertyName(ByVal obj As Object, ByVal propertyName As String) As String
+    Dim calObj As Object
+    Set calObj = MsObjObject(obj, propertyName)
+    If Not calObj Is Nothing Then
+        MsCalendarPropertyName = Trim$(MsObjText(calObj, "Name"))
+    Else
+        MsCalendarPropertyName = Trim$(MsObjText(obj, propertyName))
+    End If
+End Function
+
+Private Function MsProjectCalendarName() As String
+    On Error Resume Next
+    MsProjectCalendarName = MsCalendarPropertyName(ActiveProject, "Calendar")
+    On Error GoTo 0
+End Function
+
 Private Function MsSafeTaskUniqueId(ByVal t As Task) As String
     MsSafeTaskUniqueId = MsObjText(t, "UniqueID")
 End Function
@@ -107,6 +123,34 @@ Private Function MsSafeAssignmentLocalUid(ByVal a As Object, ByVal taskObj As Ob
         MsSafeAssignmentLocalUid = MsObjText(taskObj, "UniqueID") & "-" & MsObjText(resourceObj, "UniqueID")
     End If
     If Len(MsSafeAssignmentLocalUid) = 1 Then MsSafeAssignmentLocalUid = ""
+End Function
+
+Private Function MsDependencyTypeCode(ByVal typeValue As Variant) As String
+    Select Case CLng(Val(typeValue))
+        Case 0
+            MsDependencyTypeCode = "FF"
+        Case 1
+            MsDependencyTypeCode = "FS"
+        Case 2
+            MsDependencyTypeCode = "SF"
+        Case 3
+            MsDependencyTypeCode = "SS"
+        Case Else
+            MsDependencyTypeCode = "FS"
+    End Select
+End Function
+
+Private Function MsDependencyLagMinutes(ByVal dependency As Object) As Long
+    Dim value As Variant
+    On Error Resume Next
+    value = CallByName(dependency, "Lag", VbGet)
+    If Err.Number <> 0 Or IsNull(value) Or IsEmpty(value) Or Not IsNumeric(value) Then
+        Err.Clear
+        MsDependencyLagMinutes = 0
+    Else
+        MsDependencyLagMinutes = CLng(CDbl(value))
+    End If
+    On Error GoTo 0
 End Function
 
 Private Function MsTaskJson(ByVal t As Task, ByVal isNewProject As Boolean) As String
@@ -133,6 +177,9 @@ Private Function MsTaskJson(ByVal t As Task, ByVal isNewProject As Boolean) As S
     json = json & """plan_finish"":" & MsJsonNullableDate(MsObjDate(t, "Finish")) & ","
     json = json & """duration_minutes"":" & MsJsonNumber(MsObjNumber(t, "Duration", 0), "null") & ","
     json = json & """planned_work_minutes"":" & MsJsonNumber(MsObjNumber(t, "Work", 0), "null") & ","
+    json = json & """calendar_id"":" & MsJsonNullableString(MsTaskCalendarId(t)) & ","
+    json = json & """calendar_name"":" & MsJsonNullableString(MsCalendarPropertyName(t, "Calendar")) & ","
+    json = json & """ignore_resource_calendar"":" & MsJsonBool(MsObjBool(t, "IgnoreResourceCalendar", False)) & ","
     json = json & """is_summary"":" & MsJsonBool(MsObjBool(t, "Summary", False)) & ","
     json = json & """is_active"":true"
     json = json & "}"
@@ -225,10 +272,18 @@ End Function
 
 Private Function MsDependenciesJsonArray(ByVal isNewProject As Boolean) As String
     Dim t As Task
-    Dim pred As Task
+    Dim dependency As Object
+    Dim dependencies As Object
+    Dim pred As Object
+    Dim succ As Object
     Dim json As String
     Dim first As Boolean
     Dim key As String
+    Dim dependencyType As String
+    Dim lagMinutes As Long
+    Dim seen As Object
+
+    Set seen = CreateObject("Scripting.Dictionary")
 
     first = True
     json = "["
@@ -236,23 +291,35 @@ Private Function MsDependenciesJsonArray(ByVal isNewProject As Boolean) As Strin
     On Error Resume Next
     For Each t In ActiveProject.Tasks
         If Not t Is Nothing Then
-            For Each pred In t.PredecessorTasks
-                If Not pred Is Nothing Then
-                    key = MsObjText(pred, "UniqueID") & "|" & MsObjText(t, "UniqueID") & "|FS|0"
+            Set dependencies = MsObjObject(t, "TaskDependencies")
+            If Not dependencies Is Nothing Then
+                For Each dependency In dependencies
+                    Set pred = MsObjObject(dependency, "From")
+                    Set succ = MsObjObject(dependency, "To")
+                    If pred Is Nothing Or succ Is Nothing Then GoTo NextDependency
+                    If MsObjText(succ, "UniqueID") <> MsObjText(t, "UniqueID") Then GoTo NextDependency
+
+                    dependencyType = MsDependencyTypeCode(MsObjNumber(dependency, "Type", 1))
+                    lagMinutes = MsDependencyLagMinutes(dependency)
+                    key = MsObjText(pred, "UniqueID") & "|" & MsObjText(succ, "UniqueID") & "|" & dependencyType & "|" & CStr(lagMinutes)
+                    If seen.Exists(key) Then GoTo NextDependency
+                    seen.Add key, True
+
                     If Not first Then json = json & ","
                     json = json & "{"
                     json = json & """local_dependency_key"":" & MsJsonString(key) & ","
                     json = json & """predecessor_task_id"":" & MsJsonNullableString(MsTaskId(pred)) & ","
                     json = json & """predecessor_local_task_uid"":" & MsJsonString(MsObjText(pred, "UniqueID")) & ","
-                    json = json & """successor_task_id"":" & MsJsonNullableString(MsTaskId(t)) & ","
-                    json = json & """successor_local_task_uid"":" & MsJsonString(MsObjText(t, "UniqueID")) & ","
-                    json = json & """dependency_type"":""FS"","
-                    json = json & """lag_minutes"":0,"
+                    json = json & """successor_task_id"":" & MsJsonNullableString(MsTaskId(succ)) & ","
+                    json = json & """successor_local_task_uid"":" & MsJsonString(MsObjText(succ, "UniqueID")) & ","
+                    json = json & """dependency_type"":" & MsJsonString(dependencyType) & ","
+                    json = json & """lag_minutes"":" & CStr(lagMinutes) & ","
                     json = json & """is_active"":true"
                     json = json & "}"
                     first = False
-                End If
-            Next pred
+NextDependency:
+                Next dependency
+            End If
         End If
     Next t
     On Error GoTo 0
@@ -279,10 +346,13 @@ Public Function MsBuildProjectPayload(ByVal isNewProject As Boolean) As String
     If Not isNewProject Then
         json = json & """project_id"":" & MsJsonString(projectId) & ","
         json = json & """last_known_revision_no"":" & CStr(revisionNo) & ","
+        json = json & """lock_token"":" & MsJsonString(MsGetProjectLockToken()) & ","
     End If
     json = json & """project_name"":" & MsJsonString(MsSafeProjectName()) & ","
     json = json & """description"":null,"
     json = json & """status"":""ACTIVE""," 
+    json = json & """calendar_id"":" & MsJsonNullableString(MsGetProjectCalendarId()) & ","
+    json = json & """calendar_name"":" & MsJsonNullableString(MsProjectCalendarName()) & ","
     json = json & """updated_by"":""ms-project-vba"""
     json = json & "},"
     payloadPhase = "project resources"

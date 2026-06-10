@@ -31,6 +31,26 @@ Public Sub MsSetProjectMode(ByVal modeValue As String)
     ActiveProject.ProjectSummaryTask.Text28 = modeValue
 End Sub
 
+Public Function MsGetProjectLockToken() As String
+    On Error Resume Next
+    MsGetProjectLockToken = Trim$(ActiveProject.ProjectSummaryTask.Text27)
+    On Error GoTo 0
+End Function
+
+Public Sub MsSetProjectLockToken(ByVal lockToken As String)
+    ActiveProject.ProjectSummaryTask.Text27 = lockToken
+End Sub
+
+Public Function MsGetProjectCalendarId() As String
+    On Error Resume Next
+    MsGetProjectCalendarId = Trim$(ActiveProject.ProjectSummaryTask.Text26)
+    On Error GoTo 0
+End Function
+
+Public Sub MsSetProjectCalendarId(ByVal calendarId As String)
+    ActiveProject.ProjectSummaryTask.Text26 = calendarId
+End Sub
+
 Public Function MsTaskId(ByVal t As Object) As String
     On Error Resume Next
     MsTaskId = Trim$(t.Text10)
@@ -49,6 +69,16 @@ Public Sub MsSetTaskParentId(ByVal t As Object, ByVal parentTaskId As String)
     t.Text12 = parentTaskId
 End Sub
 
+Public Function MsTaskCalendarId(ByVal t As Object) As String
+    On Error Resume Next
+    MsTaskCalendarId = Trim$(t.Text13)
+    On Error GoTo 0
+End Function
+
+Public Sub MsSetTaskCalendarId(ByVal t As Object, ByVal calendarId As String)
+    t.Text13 = calendarId
+End Sub
+
 Public Function MsResourceId(ByVal r As Object) As String
     On Error Resume Next
     MsResourceId = Trim$(r.Text9)
@@ -57,6 +87,16 @@ End Function
 
 Public Sub MsSetResourceId(ByVal r As Object, ByVal resourceId As String)
     r.Text9 = resourceId
+End Sub
+
+Public Function MsResourceCalendarId(ByVal r As Object) As String
+    On Error Resume Next
+    MsResourceCalendarId = Trim$(r.Text8)
+    On Error GoTo 0
+End Function
+
+Public Sub MsSetResourceCalendarId(ByVal r As Object, ByVal calendarId As String)
+    r.Text8 = calendarId
 End Sub
 
 Public Function MsAssignmentId(ByVal a As Object) As String
@@ -136,17 +176,23 @@ Public Sub MsClearAllDatabaseIds()
 
     MsSetProjectId ""
     MsSetProjectRevisionNo ""
+    MsSetProjectLockToken ""
+    MsSetProjectCalendarId ""
 
     For Each t In ActiveProject.Tasks
         If Not t Is Nothing Then
             t.Text10 = ""
             t.Text11 = ""
             t.Text12 = ""
+            t.Text13 = ""
         End If
     Next t
 
     For Each r In ActiveProject.Resources
-        If Not r Is Nothing Then r.Text9 = ""
+        If Not r Is Nothing Then
+            r.Text8 = ""
+            r.Text9 = ""
+        End If
     Next r
 
     For Each t In ActiveProject.Tasks

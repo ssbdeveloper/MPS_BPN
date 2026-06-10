@@ -21,6 +21,14 @@ Private Function MsDictNumber(ByVal item As Object, ByVal key As String, Optiona
     On Error GoTo 0
 End Function
 
+Private Sub MsTrySetResourceCalendarName(ByVal r As Resource, ByVal calendarName As String)
+    If Len(Trim$(calendarName)) = 0 Then Exit Sub
+    On Error Resume Next
+    CallByName r, "BaseCalendar", VbLet, calendarName
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo 0
+End Sub
+
 Public Function MsEnsureResourceFromApi(ByVal item As Object) As Resource
     Dim resourceId As String
     Dim resourceCode As String
@@ -49,6 +57,8 @@ Public Function MsEnsureResourceFromApi(ByVal item As Object) As Resource
     r.MaxUnits = MsDictNumber(item, "max_units", 1)
     On Error GoTo 0
     MsSetResourceId r, resourceId
+    MsSetResourceCalendarId r, MsDictText(item, "calendar_id")
+    MsTrySetResourceCalendarName r, MsDictText(item, "calendar_name", MsDictText(item, "resource_calendar_name"))
 
     Set MsEnsureResourceFromApi = r
 End Function
@@ -109,4 +119,3 @@ Public Function MsResourceJsonArrayFromSheet() As String
     json = json & "]"
     MsResourceJsonArrayFromSheet = json
 End Function
-

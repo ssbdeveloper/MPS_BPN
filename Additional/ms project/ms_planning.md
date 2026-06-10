@@ -31,6 +31,325 @@ Prinsip desain:
 4. `lock_token` adalah pessimistic concurrency token saat user mengedit.
 5. Reporting/dashboard membaca read model, bukan draft/current write path.
 
+## 0A. Review Validasi Resmi Microsoft Project / PWA / Project Server
+
+Status review: divalidasi ulang terhadap dokumentasi resmi Microsoft Project Object Model VBA, Project Server/PWA architecture, Project Server CSOM, Project Server queue, Project Online/Project Server export data definitions, dan Microsoft Support calendar/scheduling guidance.
+
+Sumber resmi utama:
+
+| Area | Dokumentasi resmi |
+| --- | --- |
+| Project Object Model | `https://learn.microsoft.com/en-us/office/vba/api/project.project` |
+| Task Object Model | `https://learn.microsoft.com/en-us/office/vba/api/project.task` |
+| Assignment Object Model | `https://learn.microsoft.com/en-us/office/vba/api/project.assignment` |
+| Resource Object Model | `https://learn.microsoft.com/en-us/office/vba/api/project.resource` |
+| Calendar Object Model | `https://learn.microsoft.com/en-us/office/vba/api/project.calendar` |
+| Task Calendar | `https://learn.microsoft.com/en-us/office/vba/api/project.task.calendar` |
+| Ignore Resource Calendar | `https://learn.microsoft.com/en-us/office/vba/api/project.task.ignoreresourcecalendar` |
+| Resource Calendar / Max Units / Availability | `https://learn.microsoft.com/en-us/office/vba/api/project.resource.calendar`, `resource.maxunits`, `resource.availabilities` |
+| Calendar WeekDays / Exceptions | `https://learn.microsoft.com/en-us/office/vba/api/project.calendar.weekdays`, `calendar.exceptions`, `weekday`, `exception` |
+| Project Server architecture | `https://learn.microsoft.com/en-us/office/client-developer/project/project-server-2013-architecture` |
+| Project Server 2019 architecture | `https://learn.microsoft.com/en-us/project/project-server-2019-architecture` |
+| CSOM create/publish sample | `https://learn.microsoft.com/en-us/office/client-developer/project/getting-started-with-the-project-server-csom-and-net` |
+| Queue settings/jobs | `https://learn.microsoft.com/en-us/project/manage-queue-settings-for-project-web-app`, `https://learn.microsoft.com/en-us/project/manage-queue-jobs-project-server-2013` |
+| Export data definitions | `https://learn.microsoft.com/en-us/projectonline/project-online-and-project-server-export-data-definitions` |
+| Calendar scheduling behavior | `https://support.microsoft.com/en-us/project/how-project-schedules-tasks-behind-the-scenes`, `work-with-calendars-in-project`, `task-calendar-task-field` |
+| Project sites/documents | `https://learn.microsoft.com/en-us/project/manage-connected-sharepoint-sites-in-project-server-2013`, Project Online/Server export `WorkspaceItems` |
+
+### Validasi Umum
+
+Hasil review:
+
+1. Desain `project -> task -> assignment -> resource` sudah selaras dengan object model Microsoft Project. `Task` dan `Resource` memiliki collection `Assignments`, sedangkan `Assignment` menyimpan referensi ke task/resource.
+2. Keputusan menyimpan `task_id`, `assignment_id`, dan `resource_id` sendiri di custom field tetap benar. Microsoft Project punya `Guid` dan `UniqueID`, tetapi `Guid` bersifat read-only dan `UniqueID` hanya aman sebagai correlation dalam satu file/sesi. UUID database tetap harus menjadi canonical ID setelah publish.
+3. `ms_project_resource` sebagai project team cocok dengan konsep enterprise resource pool + selected project team. Microsoft Project juga punya flow enterprise team builder/resource import dari Project Server.
+4. Check-out/check-in/locking wajib untuk project existing. Microsoft Project Professional membuka enterprise project sebagai read-only lalu checkout menjadi read/write; jika sudah checkout oleh user lain, Project menolak edit.
+5. Publish bukan sekadar save. Dalam Project Server, save menulis draft/working copy, sedangkan publish mengirim pekerjaan ke Queue Service agar perubahan terlihat di published/read model dan, jika ada, project workspace.
+6. Direct write ke tabel Project Server draft/published/archive tidak didukung. Microsoft merekomendasikan CSOM/PSI untuk write path; reporting tables/views dan OData adalah read/reporting path. Karena itu keputusan MPS "write only lewat Express API" sudah benar.
+7. Calendar design perlu naik prioritas. Scheduling Microsoft Project sangat bergantung pada project calendar, task calendar, resource calendar, working time, exception, max units, dan assignment units. Tanpa metadata calendar, backend hanya menyimpan hasil tanggal, belum bisa mendekati capacity/scheduling behavior.
+
+### Core Entity Compatibility Matrix
+
+#### Project
+
+| Aspek | Microsoft Project / PWA | Desain MPS saat ini | Status | Koreksi / rekomendasi |
+| --- | --- | --- | --- | --- |
+| Identitas | `Project.Guid`, `Project.UniqueID`, server project GUID, name. | `ms_project.project_id`, `project_name`. | Critical - sesuai. | Simpan juga `server_project_guid`/`mpp_project_guid` optional jika diambil dari Object Model. |
+| Summary custom fields | `Project.ProjectSummaryTask` dapat menyimpan local custom field project. Enterprise custom field perlu `GetField/SetField`. | Custom field Text30/Text29/Text28/Text27 dipakai untuk project id/revision/mode/lock. | Critical - sesuai. | Dokumentasikan bahwa field ini local custom field, bukan enterprise custom field. |
+| Schedule settings | Project punya `Calendar`, `ProjectStart`, `ProjectFinish`, `StatusDate`, `ScheduleFromStart`, `HoursPerDay`, `HoursPerWeek`, `DaysPerMonth`, `DefaultStartTime`, `DefaultFinishTime`. | Baru menyimpan name/description/status/revision. | Gap Critical untuk calendar. | Tambah kolom schedule settings atau `ms_project_schedule_option`. |
+| Save vs publish | Save ke draft; publish ke published/read model via queue. | `sync` menaikkan revision; `publish` snapshot. | Critical - sebagian sesuai. | Pisahkan istilah `sync/save draft` dan `publish`; jangan setiap sync dianggap published. |
+| Check-out/check-in | Enterprise project harus checkout agar editable; checkin bisa save/no-save dan dapat publish. | `ms_project_lock` + heartbeat + checkin. | Critical - sesuai. | Tambah stale lock policy dan audit actor wajib. |
+| Calculated fields | Finish, duration, percent complete, critical/slack, rollup summary dihitung engine. | Tanggal hasil Project disimpan. | Sesuai. | Jangan hitung ulang full scheduling engine di backend MVP. |
+
+Wajib MVP:
+
+1. `project_id`, `project_name`, `status`, `revision_no`.
+2. `published_revision_no`, `last_published_at`.
+3. `checked_out_by`, `checked_out_at`, `lock_token`.
+4. Project calendar reference atau minimal calendar name untuk kompatibilitas scheduling.
+
+Opsional fase lanjut:
+
+1. `mpp_project_guid`, `server_project_guid`, `database_project_unique_id`.
+2. Default scheduling options (`hours_per_day`, `hours_per_week`, `days_per_month`, default start/finish time).
+3. Enterprise custom field definitions.
+
+#### Task
+
+| Aspek | Microsoft Project / PWA | Desain MPS saat ini | Status | Koreksi / rekomendasi |
+| --- | --- | --- | --- | --- |
+| Identitas | `Task.Guid` read-only, `Task.UniqueID`, `Task.ID` row-like, WBS/Outline. | `task_id`, `local_task_uid`, outline fields. | Critical - sesuai. | Jangan pakai `Task.ID` sebagai key; tambahkan optional `mpp_task_guid`. |
+| Hierarchy | `OutlineLevel`, `OutlineNumber`, `OutlineParent`, summary task. | `parent_task_id`, outline fields, `is_summary`. | Critical - sesuai. | Parent resolution by local UID sudah benar. |
+| Scheduling fields | `Start`, `Finish`, `Duration`, `Work`, constraint, deadline, task mode, calendar. | Start/finish/duration/work ada; constraint/deadline/task mode belum. | Important gap. | Tambah `constraint_type`, `constraint_date`, `deadline`, `task_mode`, `calendar_id`. |
+| Calendar | `Task.Calendar` adalah nama calendar; jika none maka project calendar. `Task.IgnoreResourceCalendar` menentukan apakah resource calendar dipakai. | Stage 8 sudah menambah `calendar_id`, `ignore_resource_calendar`. | Important - roadmap sesuai. | Implementasi calendar harus export/import property ini dari VBA. |
+| Dependencies | Predecessor/successor link dengan type/lag. | `ms_project_dependency`. | Critical - sesuai. | Tambah support relation type selain FS di VBA, bukan hardcode FS saja. |
+| Actuals | Actual start/finish/work/progress ada di Project, tetapi ownership MPS adalah timesheet/PostgreSQL. | `actual_*` tidak diubah sync planning. | Critical - sesuai. | Tetap reject planning payload yang mencoba overwrite actual. |
+
+Wajib MVP:
+
+1. `task_id`, `project_id`, `local_task_uid`, `task_name`.
+2. `parent_task_id` atau `parent_local_task_uid`.
+3. `plan_start`, `plan_finish`, `duration_minutes`, `planned_work_minutes`.
+4. `is_summary`, `is_active`.
+5. Business keys MPS (`order_no`, `operation_no`, `ssbr_id`, `workcenter`).
+
+Important fase berikutnya:
+
+1. `mpp_task_guid`.
+2. `constraint_type`, `constraint_date`, `deadline`, `task_mode`.
+3. `calendar_id`, `calendar_name`, `ignore_resource_calendar`.
+4. Full dependency type/lag parsing dari Object Model.
+
+Calculated / jangan jadi write authority:
+
+1. Critical/slack/early/late dates.
+2. Summary rollup start/finish/work/cost.
+3. Percent complete jika actual owner adalah timesheet.
+
+#### Assignment
+
+| Aspek | Microsoft Project / PWA | Desain MPS saat ini | Status | Koreksi / rekomendasi |
+| --- | --- | --- | --- | --- |
+| Identitas | `Assignment.Guid`, `Assignment.UniqueID`, `TaskUniqueID`, `ResourceUniqueID`. | `assignment_id`, `local_assignment_uid`, task/resource FK. | Critical - sesuai. | Tambah optional `mpp_assignment_guid`. |
+| Core relation | Assignment menghubungkan task dan resource, dengan units/work/start/finish. | `task_id`, `resource_id`, `assignment_units`, work/start/finish. | Critical - sesuai. | `assignment_units` decimal 1.0 = 100% tetap benar. |
+| Scheduling impact | Assignment units dan resource calendar memengaruhi work/duration/finish. | Conflict check memakai units dan window. | Important - sebagian. | Calendar-aware conflict perlu Stage 8/9. |
+| Actuals | Assignment punya actual work/start/finish. | `actual_*` tersedia tetapi planning sync tidak overwrite. | Critical - sesuai. | Actual assignment update harus dari actual sync endpoint, bukan planning sync. |
+| Contour/timephased | Assignment punya work contour dan timescale data. | Belum ada. | Optional/Important untuk capacity detail. | Tambah timephased assignment read model jika dashboard resource loading perlu presisi. |
+
+Wajib MVP:
+
+1. `assignment_id`, `project_id`, `task_id`, `resource_id`.
+2. `local_assignment_uid`.
+3. `assignment_units`, `planned_work_minutes`.
+4. `assignment_start`, `assignment_finish`.
+
+Important fase berikutnya:
+
+1. `mpp_assignment_guid`.
+2. `work_contour`, `cost_rate_table`, `booking_type`.
+3. Timephased assignment buckets untuk capacity planning.
+
+#### Resource
+
+| Aspek | Microsoft Project / PWA | Desain MPS saat ini | Status | Koreksi / rekomendasi |
+| --- | --- | --- | --- | --- |
+| Identitas | `Resource.Guid`, `UniqueID`, enterprise properties, Windows account, code, group. | `resource_id`, `resource_code`, source mapping. | Critical - sesuai. | Tambah optional `mpp_resource_guid`/`enterprise_resource_uid`. |
+| Type/category | Project resource type: work/material/cost. Business category bukan bawaan Project. | `resource_type` + `resource_category`. | Critical - sesuai. | Category MPS harus tetap internal, tidak disamakan dengan Project `Type`. |
+| Calendar | `Resource.Calendar` read-only calendar object for resource; material resource tidak meaningful. | Stage 8 `ms_resource.calendar_id`. | Important gap. | Jangan assign calendar ke MATERIAL. |
+| Capacity | `MaxUnits` percent availability; `Availabilities` date-ranged capacity. | `max_units` tunggal. | Important gap. | Tambah `ms_resource_availability` untuk date-ranged max units. |
+| Enterprise pool | Enterprise resource pool dikelola pusat; project memilih team. | `ms_resource` + `ms_project_resource`. | Critical - sesuai. | Add/remove project team harus audit. |
+| Over-allocation | Project menghitung overallocated dari assignment/resource calendar/units. | Conflict warning manual. | Important. | Conflict check harus calendar-aware dan range-aware. |
+
+Wajib MVP:
+
+1. `resource_id`, `resource_code`, `resource_name`.
+2. `resource_type`, `resource_category`.
+3. `source_type`, `source_ref_id`.
+4. `max_units`, `is_assignable`, `is_generic`, `is_active`.
+5. `ms_project_resource` sebagai project team.
+
+Important fase berikutnya:
+
+1. `calendar_id`.
+2. `ms_resource_availability(resource_id, available_from, available_to, max_units)`.
+3. `enterprise_resource_uid`, Windows account/email jika ada.
+
+#### Calendar
+
+| Aspek | Microsoft Project / PWA | Desain MPS saat ini | Status | Koreksi / rekomendasi |
+| --- | --- | --- | --- | --- |
+| Calendar object | `Calendar` untuk project/resource; punya `BaseCalendar`, `Exceptions`, `WeekDays`, `WorkWeeks`, `Guid`, `Enterprise`. | Stage 8 schema calendar. | Important - roadmap sesuai. | Tambah `calendar_guid`, `enterprise`, `work_week` detail. |
+| Weekdays | `Calendar.WeekDays` collection; `WeekDay.Working`, `Shift1..Shift5`. | `calendar_weekday` + `working_time` segment. | Sesuai. | Segment max 5 mengikuti Object Model Project. |
+| Exceptions | `Calendar.Exceptions`; `Exception` punya start/finish, type, recurrence-like fields, Shift1..Shift5. | `calendar_exception` + `exception_time` + JSON recurrence. | Sesuai. | JSON recurrence harus mampu memetakan `Type`, `Occurrences`, `Month`, `MonthDay`, `DaysOfWeek`. |
+| Project calendar | `Project.Calendar`; base calendar bisa dipilih dari Project Information. | `ms_project.calendar_id` Stage 8. | Important. | Implementasikan sebelum server-side capacity dianggap valid. |
+| Task calendar | `Task.Calendar`; default None. | `ms_project_task.calendar_id` Stage 8. | Important. | Simpan juga `calendar_name` agar roundtrip VBA mudah. |
+| Resource calendar | Resource calendar biasanya berbasis project/base calendar; vacation/maintenance masuk exception. | `ms_resource.calendar_id` Stage 8. | Important. | Tambah resource exception dari leave/maintenance jika tersedia. |
+
+Wajib untuk calendar feature:
+
+1. Enterprise/base calendar master.
+2. Weekday working/non-working + working time segment.
+3. Exception/holiday/non-working period.
+4. Project/task/resource calendar reference.
+5. `ignore_resource_calendar`.
+6. Hours/day, hours/week, days/month.
+
+Optional:
+
+1. Full `WorkWeeks` effective date pattern.
+2. Full exception recurrence parity.
+3. Calendar versioning dan effective dating.
+
+### Calendar & Scheduling Validation
+
+Aturan Microsoft yang harus diikuti:
+
+1. Jika task tidak punya task calendar, Project memakai project calendar.
+2. Jika task punya task calendar, task calendar menggantikan project calendar untuk task itu.
+3. Jika resource assigned, resource calendar juga diperhitungkan.
+4. Jika task calendar dan resource calendar sama-sama ada, scheduling memakai intersection working time keduanya.
+5. Jika `IgnoreResourceCalendar = true`, task calendar dapat mengabaikan non-working time resource.
+6. Resource `MaxUnits`, resource availability periods, assignment units, dan calendar bersama-sama menentukan capacity.
+7. Holiday/vacation/maintenance direpresentasikan sebagai calendar exceptions; recurring holiday/vacation perlu recurrence metadata.
+8. Working time satu hari bisa multi-shift/segment. Object Model menyediakan sampai `Shift1..Shift5` untuk weekday/exception.
+
+Koreksi terhadap asumsi sebelumnya:
+
+1. `ms_project_calendar_weekday` + `ms_project_calendar_working_time` sudah benar, tetapi perlu batasi/validasi `segment_no` agar kompatibel dengan `Shift1..Shift5`.
+2. `recurrence_rule jsonb` tetap valid, tetapi harus mencakup field Object Model exception: `Type`, `Occurrences`, `Month`, `MonthDay`, `MonthItem`, `MonthPosition`, `DaysOfWeek`, `Period`.
+3. `hours_per_day`, `hours_per_week`, dan `days_per_month` tidak sekadar metadata display; nilai ini memengaruhi konversi duration/work di Project dan harus ikut package.
+4. Calendar harus punya `calendar_guid` atau `source_ref_id` yang stabil agar roundtrip tidak bergantung pada nama calendar saja.
+5. Resource availability tidak cukup hanya `max_units`; Microsoft punya date-ranged availability grid. Tambah tabel availability pada fase capacity.
+
+### Project Lifecycle & Server Feature Validation
+
+| Fitur Microsoft | Perilaku resmi | Rekomendasi MPS | Prioritas |
+| --- | --- | --- | --- |
+| Open project | Project Professional dapat membuka enterprise project dari Project Server; read-only jika belum checkout. | Import package dari API sebagai Single Project Editor; Master Portfolio read-only. | Critical |
+| Save project | Save menyimpan working/draft state, bukan publish. | `PUT /sync` diperlakukan sebagai save draft/current. | Critical |
+| Publish project | Publish mengirim job ke Project Server Queue dan mempromosikan draft ke published. | `POST /publish` buat published snapshot dan audit. | Critical |
+| Check-out | Mengubah read-only enterprise project menjadi read/write untuk user pemegang lock. | `ms_project_lock`, `lock_token`, heartbeat. | Critical |
+| Check-in | Release lock; dapat menyimpan atau tidak menyimpan perubahan; pada Project method bisa menutup file. | `/checkin` release lock; optional publish tetap endpoint terpisah. | Critical |
+| Project locking | User lain ditolak sampai project check-in atau admin force check-in. | Conflict `PROJECT_LOCKED`; admin `/force-checkin`. | Critical |
+| Version control | Project Server punya draft/published/archive; SharePoint document library bisa punya revision comments untuk documents. | `ms_project_revision` dan `ms_project_publish`. | Important |
+| Enterprise resource pool | Resource pusat dikelola enterprise; project memilih team. | `ms_resource` + `ms_project_resource`. | Critical |
+| Assignment management | Assignment adalah entity sendiri dan dapat punya owner/status/timephased. | `ms_project_assignment` saat ini cukup MVP. | Critical |
+| Queue processing | Publish/check-in/reporting jobs asynchronous dan dapat dilihat/retry/cancel di queue. | MPS bisa synchronous MVP; queue table/job worker fase berikutnya. | Important |
+| Force check-in enterprise objects | Admin dapat force check-in project/object yang terkunci. | `/force-checkin` + audit. | Critical |
+| Enterprise calendars/custom fields checked out | Export definitions menunjukkan enterprise calendar/custom field dapat checked out. | Calendar/custom field admin editing perlu lock terpisah. | Important |
+
+Rekomendasi queue MPS:
+
+1. MVP boleh synchronous untuk sync/publish jika payload kecil.
+2. Tambah `ms_project_queue_job` sebelum payload besar, publish multi-project, snapshot berat, atau calendar recalculation warning.
+3. Job type awal: `SYNC_PROJECT`, `PUBLISH_PROJECT`, `REFRESH_RESOURCES`, `REFRESH_CALENDARS`, `BUILD_REPORTING_SNAPSHOT`.
+4. Job status: `QUEUED`, `PROCESSING`, `SUCCEEDED`, `FAILED`, `CANCELLED`.
+
+### File & Storage Management Validation
+
+Pola Microsoft:
+
+1. `.mpp` lokal tetap bisa disimpan sebagai file, tetapi enterprise/PWA project disimpan dan diakses lewat server/business layer.
+2. Project Server 2013 memakai satu Project database per PWA instance untuk draft/published/archive/reporting; Project Server 2019 memakai SharePoint content database untuk PWA information dan tidak lagi separate Project Server database.
+3. Project Server/Online memakai SharePoint project sites untuk dokumen, issues, risks, deliverables, dan linked workspace items.
+4. Document/revision comments pada check-in berlaku untuk dokumen SharePoint/library scenarios, bukan pengganti publish revision planning.
+
+Rekomendasi MPS:
+
+| Area | Rekomendasi | Prioritas |
+| --- | --- | --- |
+| Canonical planning data | Tetap PostgreSQL via API, bukan file share `.mpp`. | Critical |
+| File metadata | Simpan optional file import metadata: original filename, hash, imported_by, imported_at, parser version. | Important |
+| MPP binary storage | Tidak wajib simpan `.mpp` binary pada MVP; cukup data structured hasil VBA. | Optional |
+| Supporting documents | Buat `ms_project_document` untuk link attachment/drawing/SOW/support docs. | Important |
+| Linked task documents | Buat `ms_project_object_link` untuk link task/resource/project ke dokumen, issue, risk. | Optional |
+| Folder/document storage | Reuse storage aplikasi existing atau network path; DB menyimpan metadata/link, bukan blob besar. | Important |
+| Project site equivalent | Jika ingin meniru PWA, project workspace MPS dapat berupa folder/document list per project. | Optional |
+
+Schema roadmap dokumen:
+
+```sql
+create table if not exists ms_project_document (
+  document_id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references ms_project(project_id) on delete cascade,
+  document_type text not null,
+  title text not null,
+  file_name text,
+  file_path text,
+  file_url text,
+  content_hash text,
+  uploaded_by text,
+  uploaded_at timestamptz not null default now(),
+  is_active boolean not null default true
+);
+
+create table if not exists ms_project_object_link (
+  link_id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references ms_project(project_id) on delete cascade,
+  entity_type text not null,
+  entity_id uuid,
+  document_id uuid references ms_project_document(document_id) on delete cascade,
+  link_type text not null default 'REFERENCE',
+  created_by text,
+  created_at timestamptz not null default now()
+);
+```
+
+### Compatibility Classification
+
+| Feature | Classification | Alasan |
+| --- | --- | --- |
+| Project master + revision token | Critical | Semua sync/publish bergantung pada identity dan concurrency. |
+| Task hierarchy + schedule result | Critical | Core planning object dan output scheduling engine. |
+| Assignment entity | Critical | Resource planning tidak valid tanpa assignment sebagai entity tersendiri. |
+| Enterprise resource pool mirror | Critical | Mencegah free-text resource dan duplikasi. |
+| Project resource team | Critical | Meniru selected team dari enterprise pool. |
+| Check-out/check-in/lock | Critical | Perilaku utama Project Server/PWA untuk edit project. |
+| Publish snapshot | Critical | Memisahkan draft/current dari data yang terlihat/reportable. |
+| Calendar reference minimal | Critical | Project/task/resource calendar memengaruhi scheduling. Minimal ID/name harus ada. |
+| Calendar working time/exception full schema | Important | Dibutuhkan untuk capacity/conflict akurat, tetapi schedule calculation tetap dari Project Desktop. |
+| Resource date-ranged availability | Important | Microsoft mendukung availability grid; perlu untuk capacity planning. |
+| Queue processing | Important | Meniru Project Server untuk operasi berat; MVP bisa synchronous. |
+| Baseline | Important | Penting untuk kontrol project, tetapi bisa setelah sync/publish stabil. |
+| Custom field definitions/values | Important | Dibutuhkan untuk kompatibilitas enterprise field dan reporting. |
+| Timephased assignment data | Important | Dibutuhkan untuk resource/capacity dashboard presisi. |
+| Project document storage/link | Important | PWA memakai project sites untuk dokumen/issue/risk; MPS minimal perlu link dokumen. |
+| Server-side scheduling engine penuh | Not Required | Microsoft scheduling engine kompleks; MPS harus menyimpan hasil kalkulasi dari Project Desktop pada MVP. |
+| Direct Project Server DB table parity | Not Required | Tidak perlu meniru internal table Project Server; cukup behavior/API-compatible. |
+| `.mpp` binary as canonical store | Not Required | Bertentangan dengan tujuan PostgreSQL sebagai canonical structured data. |
+
+### Gap Analysis Desain Saat Ini vs Microsoft Project
+
+| Gap | Dampak | Prioritas | Rekomendasi |
+| --- | --- | --- | --- |
+| Belum menyimpan `Task.Calendar` dan `IgnoreResourceCalendar`. | Schedule roundtrip calendar belum akurat. | Critical untuk Stage 8. | Tambah field dan VBA export/import. |
+| Belum menyimpan `Project.HoursPerDay`, `HoursPerWeek`, `DaysPerMonth`, default start/finish time. | Duration/work conversion bisa beda dari file asli. | Important. | Tambah schedule options di project/calendar package. |
+| Dependency VBA masih cenderung FS/0. | Link SS/FF/SF dan lag hilang. | Critical. | Parse `TaskDependencies`/predecessor detail dari Object Model. |
+| Belum ada constraint/deadline/task mode. | Schedule hasil import ulang bisa berubah dari file asli. | Important. | Tambah metadata task lanjutan. |
+| Resource availability grid belum ada. | Capacity planning tidak setara MaxUnits date range. | Important. | Tambah `ms_resource_availability`. |
+| Calendar recurrence belum dipetakan ke property Exception Object. | Recurring holiday/vacation bisa tidak roundtrip. | Important. | Definisikan JSON schema recurrence sesuai Object Model. |
+| Queue job belum ada. | Publish besar dapat timeout dan tidak punya retry/cancel. | Important. | Tambah queue setelah endpoint stabil. |
+| Document/project workspace belum ada. | Belum meniru PWA project site/document link. | Important. | Tambah project document/link metadata. |
+| Enterprise custom fields belum ada. | Reporting dan project metadata belum enterprise-compatible. | Important. | Tambah custom field definitions/values. |
+| Server-side read model published belum dipisah fisik. | Dashboard bisa salah baca draft jika query tidak disiplin. | Important. | Buat view/materialized view published setelah publish stabil. |
+
+### MVP yang Harus Dibangun Terlebih Dahulu
+
+Urutan MVP agar mendekati perilaku Microsoft Project/Project Server:
+
+1. Project/package API dengan `project_id`, revision, published metadata, lock metadata.
+2. Resource refresh dari master MPS menjadi enterprise resource pool mirror.
+3. Project resource team API.
+4. Publish new project dari VBA dengan tasks, resources, assignments, dependencies.
+5. Checkout/heartbeat/sync/checkin project existing.
+6. Publish current revision dengan snapshot dan audit.
+7. Import package single project editor dan master portfolio read-only.
+8. Dependency type/lag lengkap dari VBA.
+9. Minimal calendar reference: project/resource/task calendar ID/name + `ignore_resource_calendar`.
+10. Calendar schema enterprise/base + weekday working time + exception.
+11. Conflict check peak units, lalu calendar-aware conflict.
+12. Published read model untuk dashboard/report.
+
 ## 1. Ringkasan MVP Revisi
 
 MVP harus mendukung:
@@ -610,11 +929,278 @@ Tabel berikut tidak wajib untuk API backend MVP pertama, tetapi harus masuk road
 | `ms_project_file_import` | Metadata import `.mpp`/XML: filename, hash, parser version, imported_by. |
 | `ms_project_calendar` | Calendar project/resource. |
 | `ms_project_calendar_exception` | Hari libur, non-working time, shift exception. |
+| `ms_project_resource_availability` | Date-ranged `MaxUnits`/availability seperti Resource Availability grid Microsoft Project. |
 | `ms_project_baseline` | Header baseline project. |
 | `ms_project_baseline_task` | Baseline start/finish/duration/work per task. |
 | `ms_project_baseline_assignment` | Baseline work/units per assignment. |
 | `ms_project_custom_field` | Definisi custom field yang diimpor dari MS Project. |
 | `ms_project_custom_field_value` | Nilai custom field per project/task/resource/assignment. |
+| `ms_project_queue_job` | Queue/retry/cancel untuk publish, sync berat, refresh resource/calendar, dan reporting snapshot. |
+| `ms_project_document` | Metadata dokumen/attachment/link pendukung project. |
+| `ms_project_object_link` | Link project/task/resource/assignment ke dokumen, issue, risk, atau deliverable. |
+
+### Desain Calendar & Scheduling Roadmap
+
+Status: belum masuk backend/VBA MVP. Section ini mengunci desain agar implementasi calendar nanti tidak sekadar menyimpan nama kalender, tetapi cukup lengkap untuk mendekati perilaku Microsoft Project / PWA.
+
+Referensi konsep Microsoft:
+
+1. Microsoft Project memiliki empat tipe kalender utama: `base calendar`, `project calendar`, `resource calendar`, dan `task calendar`.
+2. Base calendar bertindak sebagai template untuk project/resource/task calendar. Default Project Desktop mencakup `Standard`, `24 Hours`, dan `Night Shift`.
+3. Project, resource, dan task calendar "stack together" saat scheduling; kalender membatasi kapan work boleh dijadwalkan.
+4. Pada Project Server/PWA, enterprise calendar dikelola terpusat oleh administrator. Project Professional atau Project Web App memakai scheduling/calculation service untuk menghitung perubahan schedule.
+5. Project Server menyarankan client memakai API/business layer (`CSOM`/`PSI`) dan reporting objects, bukan direct write ke draft/published/archive table.
+
+Implikasi untuk MPS:
+
+1. PostgreSQL harus menyimpan calendar sebagai master scheduling metadata, tetapi Microsoft Project Desktop tetap menjadi engine kalkulasi utama pada MVP calendar.
+2. Backend tidak boleh mencoba reimplement full scheduling engine Microsoft Project pada tahap awal. Backend menyimpan hasil schedule (`plan_start`, `plan_finish`, `duration_minutes`, `planned_work_minutes`) beserta calendar definition yang dipakai.
+3. Jika MPS nantinya ingin capacity planning server-side, calendar dipakai untuk menghitung working window, resource availability, dan conflict warning yang lebih akurat.
+4. Calendar master harus enterprise-level, bukan dibuat bebas dari tiap file `.mpp`, supaya standard shift dan holiday perusahaan konsisten.
+
+#### Konsep kalender yang harus didukung
+
+| Konsep | Definisi | Mapping MPS |
+| --- | --- | --- |
+| Base Calendar | Template working/non-working time. Contoh: Standard, 24 Hours, Night Shift. | `ms_project_calendar.calendar_scope = 'BASE'`. |
+| Enterprise Calendar | Base calendar yang dikelola pusat di PWA/Project Server. | Semua calendar global MPS dengan `is_enterprise = true`. |
+| Project Calendar | Kalender default project. Menentukan working time default untuk task tanpa override. | `ms_project.calendar_id`. |
+| Resource Calendar | Kalender resource/person/machine/team; bisa punya exception seperti cuti, maintenance, shift khusus. | `ms_resource.calendar_id` atau mapping override di tabel assignment calendar. |
+| Task Calendar | Kalender khusus task, misalnya pekerjaan weekend/night shift. | `ms_project_task.calendar_id`. |
+| Exception Calendar | Tanggal/rentang khusus yang override weekly pattern: holiday, shutdown, cuti, maintenance. | `ms_project_calendar_exception`. |
+| Recurring Exception | Exception berulang: weekly, monthly, yearly, atau pola tertentu. | `ms_project_calendar_exception.recurrence_rule`. |
+
+#### Tabel calendar yang disarankan
+
+##### `ms_project_calendar`
+
+```sql
+create table if not exists ms_project_calendar (
+  calendar_id uuid primary key default gen_random_uuid(),
+  calendar_code text unique not null,
+  calendar_name text not null,
+  calendar_scope text not null default 'BASE',
+  base_calendar_id uuid null references ms_project_calendar(calendar_id),
+  is_enterprise boolean not null default true,
+  is_default boolean not null default false,
+  is_active boolean not null default true,
+  hours_per_day numeric(10,2) not null default 8,
+  hours_per_week numeric(10,2) not null default 40,
+  days_per_month numeric(10,2) not null default 20,
+  timezone text not null default 'Asia/Jakarta',
+  description text,
+  source_type text not null default 'MPS',
+  source_ref_id text,
+  created_by text,
+  updated_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_ms_project_calendar_scope
+    check (calendar_scope in ('BASE', 'PROJECT', 'RESOURCE', 'TASK')),
+  constraint chk_ms_project_calendar_hours_positive
+    check (hours_per_day > 0 and hours_per_week > 0 and days_per_month > 0)
+);
+```
+
+Catatan:
+
+1. `calendar_scope = 'BASE'` dipakai untuk enterprise/base calendar seperti `STANDARD`, `24H`, `NIGHT_SHIFT`.
+2. `base_calendar_id` membuat turunan calendar seperti resource calendar dari base calendar.
+3. `hours_per_day`, `hours_per_week`, dan `days_per_month` disimpan karena Microsoft Project memakai setting ini untuk konversi durasi.
+4. `timezone` wajib karena MPS beroperasi lintas zona waktu Indonesia dan date/time dari Project Desktop perlu dinormalisasi.
+
+##### `ms_project_calendar_weekday`
+
+```sql
+create table if not exists ms_project_calendar_weekday (
+  calendar_weekday_id uuid primary key default gen_random_uuid(),
+  calendar_id uuid not null references ms_project_calendar(calendar_id) on delete cascade,
+  day_of_week integer not null,
+  day_type text not null default 'WORKING',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (calendar_id, day_of_week),
+  constraint chk_ms_project_calendar_weekday_dow
+    check (day_of_week between 1 and 7),
+  constraint chk_ms_project_calendar_weekday_type
+    check (day_type in ('WORKING', 'NON_WORKING', 'DEFAULT'))
+);
+```
+
+Konvensi `day_of_week`: `1 = Monday` sampai `7 = Sunday`.
+
+##### `ms_project_calendar_working_time`
+
+```sql
+create table if not exists ms_project_calendar_working_time (
+  working_time_id uuid primary key default gen_random_uuid(),
+  calendar_id uuid not null references ms_project_calendar(calendar_id) on delete cascade,
+  day_of_week integer not null,
+  segment_no integer not null default 1,
+  start_time time not null,
+  end_time time not null,
+  crosses_midnight boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (calendar_id, day_of_week, segment_no),
+  constraint chk_ms_project_calendar_working_time_dow
+    check (day_of_week between 1 and 7),
+  constraint chk_ms_project_calendar_working_time_segment
+    check (segment_no > 0)
+);
+```
+
+Catatan:
+
+1. Satu hari bisa punya beberapa segment, misalnya `08:00-12:00` dan `13:00-17:00`.
+2. Night shift yang melewati tengah malam harus pakai `crosses_midnight = true`, bukan menyimpan jam negatif.
+
+##### `ms_project_calendar_exception`
+
+```sql
+create table if not exists ms_project_calendar_exception (
+  exception_id uuid primary key default gen_random_uuid(),
+  calendar_id uuid not null references ms_project_calendar(calendar_id) on delete cascade,
+  exception_name text not null,
+  exception_type text not null default 'NON_WORKING',
+  start_date date not null,
+  end_date date not null,
+  recurrence_rule jsonb,
+  priority integer not null default 100,
+  created_by text,
+  updated_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint chk_ms_project_calendar_exception_type
+    check (exception_type in ('WORKING', 'NON_WORKING', 'REDUCED_WORKING')),
+  constraint chk_ms_project_calendar_exception_window
+    check (end_date >= start_date)
+);
+```
+
+`recurrence_rule` memakai JSON agar cukup fleksibel untuk pola berulang:
+
+```json
+{
+  "frequency": "YEARLY",
+  "interval": 1,
+  "month": 12,
+  "day": 25,
+  "until": "2030-12-31"
+}
+```
+
+##### `ms_project_calendar_exception_time`
+
+```sql
+create table if not exists ms_project_calendar_exception_time (
+  exception_time_id uuid primary key default gen_random_uuid(),
+  exception_id uuid not null references ms_project_calendar_exception(exception_id) on delete cascade,
+  segment_no integer not null default 1,
+  start_time time not null,
+  end_time time not null,
+  crosses_midnight boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (exception_id, segment_no),
+  constraint chk_ms_project_calendar_exception_time_segment
+    check (segment_no > 0)
+);
+```
+
+Jika `exception_type = 'NON_WORKING'`, tabel time ini boleh kosong. Jika `WORKING` atau `REDUCED_WORKING`, tabel ini mendefinisikan working segment override pada tanggal exception.
+
+#### Relasi calendar ke entity planning
+
+Tambahkan kolom saat calendar feature diimplementasikan:
+
+```sql
+alter table ms_project
+  add column if not exists calendar_id uuid null references ms_project_calendar(calendar_id);
+
+alter table ms_resource
+  add column if not exists calendar_id uuid null references ms_project_calendar(calendar_id);
+
+alter table ms_project_task
+  add column if not exists calendar_id uuid null references ms_project_calendar(calendar_id),
+  add column if not exists ignore_resource_calendar boolean not null default false;
+```
+
+Aturan inheritance:
+
+1. `ms_project.calendar_id` adalah default project calendar.
+2. `ms_project_task.calendar_id` override project calendar untuk task tertentu.
+3. `ms_resource.calendar_id` menentukan availability resource.
+4. Jika task punya task calendar dan resource assignment, scheduling harus mempertimbangkan perpotongan task calendar dan resource calendar, kecuali `ignore_resource_calendar = true`.
+5. Jika tidak ada calendar khusus, gunakan enterprise default calendar (`is_default = true`).
+
+#### Scheduling rules yang harus dipertahankan
+
+1. Durasi task dihitung berdasarkan working time calendar, bukan elapsed wall-clock time, kecuali task dibuat sebagai elapsed duration di Microsoft Project.
+2. Non-working day tidak boleh menghasilkan planned work normal.
+3. Holiday/company shutdown harus berasal dari exception calendar.
+4. Resource availability untuk conflict/capacity harus memakai `resource calendar + max_units + assignment_units`.
+5. Dependency `FS/SS/FF/SF` tetap dihitung oleh Microsoft Project Desktop pada MVP; backend menyimpan hasil tanggal dan dependency metadata.
+6. Backend conflict check fase lanjut boleh menghitung overlap berdasarkan working windows, bukan hanya timestamp overlap.
+7. Perubahan calendar harus membuat warning bahwa schedule perlu recalculation di Microsoft Project sebelum publish.
+
+#### Integrasi dengan shift MPS existing
+
+MPS sudah memiliki `shift_definition` untuk SOW scheduling. Integrasi calendar tidak boleh menduplikasi konsep shift tanpa mapping.
+
+Mapping awal:
+
+| Sumber MPS | Calendar target |
+| --- | --- |
+| `shift_definition.shift_code` | `ms_project_calendar.calendar_code` untuk calendar shift. |
+| `start_time`, `end_time`, `crosses_midnight` | `ms_project_calendar_working_time`. |
+| `default_capacity_hours` | `hours_per_day` atau capacity hint. |
+| Date override shift | `ms_project_calendar_exception` + `exception_time`. |
+
+Keputusan:
+
+1. `shift_definition` tetap sumber operasional SOW scheduling.
+2. `ms_project_calendar` menjadi mirror/scheduling profile untuk MS Project integration.
+3. Sync shift ke calendar harus idempotent dan menulis `source_type = 'SHIFT_DEFINITION'`.
+
+#### API calendar roadmap
+
+Endpoint yang perlu dibuat saat calendar feature dimulai:
+
+| Endpoint | Fungsi |
+| --- | --- |
+| `GET /ms-project/calendars` | List/search enterprise calendars. |
+| `GET /ms-project/calendars/:calendar_id` | Detail calendar lengkap dengan weekday, working time, exception. |
+| `POST /ms-project/calendars` | Create calendar enterprise/manual. |
+| `PUT /ms-project/calendars/:calendar_id` | Update header calendar. |
+| `PUT /ms-project/calendars/:calendar_id/weekdays` | Replace weekly working pattern. |
+| `POST /ms-project/calendars/:calendar_id/exceptions` | Add exception/holiday/maintenance. |
+| `PUT /ms-project/calendars/:calendar_id/exceptions/:exception_id` | Update exception. |
+| `DELETE /ms-project/calendars/:calendar_id/exceptions/:exception_id` | Deactivate/delete exception. |
+| `POST /ms-project/calendars/refresh-from-shifts` | Build/update calendars from `shift_definition`. |
+
+#### VBA calendar roadmap
+
+VBA harus memakai Microsoft Project Object Model sebagai sumber utama calendar data dari file aktif.
+
+Deliverable:
+
+1. Export active project calendar name, hours/day, hours/week, days/month.
+2. Export base calendar name for project, resource, dan task jika accessible.
+3. Export weekday working times dari `WeekDays`.
+4. Export exception dates dari calendar exceptions jika accessible.
+5. Import enterprise calendar list dari API.
+6. Set project calendar dari selected enterprise calendar.
+7. Set resource base calendar saat loading project team.
+8. Simpan `calendar_id` pada custom field yang aman jika Object Model tidak menyediakan stable enterprise UID.
+
+Acceptance:
+
+1. Project baru dapat memilih enterprise calendar sebelum publish.
+2. Resource calendar tidak dibuat bebas di file `.mpp`; harus berasal dari API/enterprise calendar.
+3. Holiday/maintenance dari API muncul sebagai non-working time setelah import ke MS Project.
+4. Jika calendar berubah di server setelah project diimport, VBA memberi warning untuk reload/recalculate sebelum sync.
+5. Publish/sync mengirim `calendar_id` untuk project/resource/task jika tersedia.
 
 ### Relational integrity wajib
 
@@ -1479,6 +2065,7 @@ Deliverable:
 9. Serialize project, project resources, tasks, assignments, dependencies.
 10. Simpan `project_id`, `revision_no`, `task_id`, `resource_id`, dan `assignment_id` ke field MS Project.
 11. Kirim `lock_token`, `last_known_revision_no`, `local_task_uid`, `local_assignment_uid`, `parent_local_task_uid`, `predecessor_local_task_uid`, dan `successor_local_task_uid`.
+12. Serialize dependency type `FS/SS/FF/SF` dan lag aktual dari Object Model, bukan hardcode `FS|0`.
 
 Acceptance:
 
@@ -1491,6 +2078,13 @@ Acceptance:
 7. Sync/publish ditolak jika belum checkout.
 8. Sync/publish ditolak jika `revision_no` stale.
 9. Checkin melepas lock dan tidak menghapus revision history.
+10. Dependency hasil roundtrip mempertahankan type dan lag.
+
+Status implementasi 2026-06-11:
+
+1. `ms_serializer.bas` sudah memakai `Task.TaskDependencies` dan `TaskDependency.Type/Lag` untuk export dependency `FS/SS/FF/SF` plus lag minutes.
+2. `ms_import.bas` sudah memakai `TaskDependencies.Add` saat import dependency agar type dan lag dari server dipertahankan.
+3. Fallback full parse string `Predecessors` tidak dipakai sebagai jalur utama karena Object Model resmi menyediakan `TaskDependency` untuk type dan lag.
 
 ### Stage 7 - Conflict check
 
@@ -1508,6 +2102,100 @@ Acceptance:
 2. Conflict person/machine/workcenter/team mudah dibedakan.
 3. MVP hanya warning, belum blocking sync.
 
+### Stage 8 - Calendar settings and scheduling metadata
+
+Deliverable:
+
+1. Migration `ms_project_calendar`.
+2. Migration `ms_project_calendar_weekday`.
+3. Migration `ms_project_calendar_working_time`.
+4. Migration `ms_project_calendar_exception`.
+5. Migration `ms_project_calendar_exception_time`.
+6. Tambah `calendar_id` di `ms_project`, `ms_resource`, dan `ms_project_task`.
+7. Tambah `ignore_resource_calendar` di `ms_project_task`.
+8. Tambah `calendar_guid`/`source_ref_id` untuk roundtrip yang tidak bergantung pada nama calendar.
+9. Tambah `ms_project_resource_availability` untuk date-ranged `MaxUnits`.
+10. Seed default calendars: `STANDARD`, `24H`, dan `NIGHT_SHIFT`.
+11. Endpoint CRUD calendar dan endpoint `refresh-from-shifts`.
+12. VBA export/import project calendar, resource calendar, task calendar, working time, exception, dan `IgnoreResourceCalendar`.
+13. Warning recalculation jika calendar berubah setelah file `.mpp` diimport.
+
+Acceptance:
+
+1. Project dapat memilih enterprise calendar sebelum publish.
+2. Resource dapat memakai base/resource calendar dari API.
+3. Task dapat memakai task calendar optional.
+4. Working time mendukung multi-segment dalam satu hari dengan batas kompatibel `Shift1..Shift5`.
+5. Night shift/cross-midnight didukung eksplisit.
+6. Holiday dan recurring exception tersimpan di DB.
+7. Calendar dari `shift_definition` dapat direfresh berulang tanpa duplikasi.
+8. Sync calendar tidak mengganti hasil schedule tanpa recalculation di MS Project.
+9. Conflict/capacity fase lanjut dapat memakai calendar working window.
+10. Resource availability date range dapat menurunkan/menaikkan capacity tanpa membuat resource baru.
+
+#### Stage 8.1 - Implementasi fondasi calendar scheduling (2026-06-10)
+
+Status: diimplementasikan sebagai fondasi compatible untuk stack PostgreSQL, NodeJS, dan VBA. Tahap ini sengaja belum membuat scheduling engine server-side baru; Microsoft Project Desktop tetap menjadi kalkulator utama untuk start/finish/duration/work pada MVP.
+
+File implementasi:
+
+1. Migration: `API/migrations/20260610_ms_project_calendar_scheduling.sql`.
+2. Backend NodeJS: `API/services/msProjectService.js`, `API/controllers/msProjectController.js`, `API/routes/msProject.js`.
+3. VBA: `Additional/ms project/ms_config.bas`, `ms_fields.bas`, `ms_serializer.bas`, `ms_import.bas`, `ms_resources.bas`, `ms_calendars.bas`.
+
+Yang sudah ada pada tahap ini:
+
+1. Tabel enterprise/base calendar: `ms_project_calendar`.
+2. Tabel weekday pattern: `ms_project_calendar_weekday`.
+3. Tabel working time segment dengan batas `segment_no 1..5`: `ms_project_calendar_working_time`.
+4. Tabel exception dan exception working time: `ms_project_calendar_exception`, `ms_project_calendar_exception_time`.
+5. Relasi calendar ke `ms_project`, `ms_resource`, dan `ms_project_task`.
+6. `ms_project_task.ignore_resource_calendar`.
+7. `ms_project_resource_availability` untuk date-ranged resource capacity.
+8. Seed default calendar `STANDARD`, `24H`, dan `NIGHT_SHIFT`.
+9. Endpoint `GET /ms-project/calendars`, `GET /ms-project/calendars/:calendar_id`, dan `POST /ms-project/calendars/refresh-from-shifts`.
+10. Payload publish/sync menyimpan `project.calendar_id`, `project.calendar_name`, `task.calendar_id`, `task.calendar_name`, dan `task.ignore_resource_calendar`.
+11. VBA menyimpan UUID calendar di custom fields dan membaca nama calendar dari Microsoft Project Object Model jika tersedia.
+12. VBA menyediakan macro `Ms_ListCalendars`, `Ms_RefreshCalendarsFromShifts`, dan `Ms_SetProjectCalendarFromServer`.
+13. VBA dapat membuat/memakai base calendar lokal dari detail API dan mengisi weekday working time non-cross-midnight ke `WeekDays/Shift1..Shift5` secara best-effort.
+
+Alasan teknis perubahan:
+
+1. PostgreSQL dipakai sebagai canonical metadata store karena calendar perlu FK, constraint, seed idempotent, dan future capacity query.
+2. NodeJS Express tetap menjadi write path tunggal agar VBA tidak pernah menulis langsung ke database.
+3. VBA mengirim hasil schedule dari Microsoft Project dan metadata calendar; backend tidak menghitung ulang full scheduling agar tidak menyimpang dari engine Microsoft Project.
+4. `calendar_name` disimpan sebagai fallback round-trip karena Object Model mudah membaca nama calendar, sedangkan stable enterprise calendar ID tidak selalu tersedia dari file lokal.
+5. `segment_no` dibatasi 1 sampai 5 agar kompatibel dengan model `Shift1..Shift5` pada WeekDay/Exception Microsoft Project.
+
+Belum termasuk pada tahap ini:
+
+1. Full CRUD UI/admin untuk calendar weekday dan exception.
+2. Full mapping recurring exception ke semua property Exception Object Model.
+3. Apply otomatis cross-midnight working time ke MS Project masih diberi warning karena Project Desktop perlu pemodelan split-shift yang lebih hati-hati.
+4. Warning otomatis jika calendar server berubah setelah file `.mpp` diimport.
+5. Calendar-aware conflict/capacity engine.
+6. Queue job untuk refresh calendar dan rebuild reporting snapshot.
+
+### Stage 9 - Queue, published read model, and project documents
+
+Deliverable:
+
+1. `ms_project_queue_job` untuk operasi berat/asynchronous.
+2. Worker atau job runner untuk publish snapshot/reporting snapshot.
+3. Status job: `QUEUED`, `PROCESSING`, `SUCCEEDED`, `FAILED`, `CANCELLED`.
+4. Endpoint queue status per project.
+5. Published read model/view untuk dashboard agar tidak membaca draft.
+6. `ms_project_document` untuk metadata dokumen project.
+7. `ms_project_object_link` untuk link task/resource/project ke dokumen atau artefak pendukung.
+
+Acceptance:
+
+1. Publish besar tidak timeout di request utama.
+2. User dapat melihat status job publish/sync/reporting.
+3. Dashboard/portfolio membaca published read model.
+4. Dokumen pendukung project tersimpan sebagai metadata/link, bukan blob besar wajib di DB.
+5. Link dokumen ke task/resource/project dapat diaudit.
+
 ## 19. Data `.mpp` yang Perlu Disimpan
 
 Saat import atau sync dari Microsoft Project, simpan data inti berikut agar PostgreSQL bisa menjadi canonical source dan tidak tergantung pada file `.mpp` lokal.
@@ -1521,7 +2209,7 @@ Saat import atau sync dari Microsoft Project, simpan data inti berikut agar Post
 | Project resource team | Resource yang dipilih untuk project, meskipun belum assigned. |
 | Assignments | `assignment_id`, `local_assignment_uid`, task, resource, units, planned work, start, finish. |
 | Dependencies | predecessor, successor, dependency type `FS/SS/FF/SF`, lag, `local_dependency_key`. |
-| Calendars | Working days, working times, exception days, holiday/shift rules. MVP boleh ditunda, tetapi schema roadmap harus ada. |
+| Calendars | `calendar_id`, base/project/resource/task calendar, weekday working pattern, working time segments, exception days, recurring exceptions, holiday/shift rules, hours/day, hours/week, days/month, timezone. MVP runtime boleh ditunda, tetapi schema dan API roadmap sudah dikunci. |
 | Baselines | Baseline start/finish/duration/work per task dan assignment. MVP boleh ditunda setelah publish/sync stabil. |
 | Custom fields | Definisi field dan nilai field penting dari project/task/resource/assignment. |
 | File import metadata | Original filename, file hash, parser/importer version, imported_by, imported_at. |
@@ -1713,4 +2401,5 @@ Ownership data:
 30. Project Center harus menampilkan lock metadata dan published revision metadata.
 31. `.mpp` bukan canonical source setelah project dipublish; PostgreSQL adalah source of truth.
 32. Dashboard/portfolio membaca published/read model, bukan draft/current yang sedang diedit.
-33. Calendar, baseline, dan custom field detail masuk roadmap setelah checkout/sync/publish stabil.
+33. Calendar runtime full scheduling belum termasuk MVP checkout/sync/publish, tetapi fondasi schema, API list/detail/refresh, dan payload VBA calendar sudah dimulai pada Stage 8.1.
+34. Baseline dan custom field detail masuk roadmap setelah checkout/sync/publish stabil.

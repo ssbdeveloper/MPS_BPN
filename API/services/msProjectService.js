@@ -1,6 +1,9 @@
 const dbModule = require("../db");
+const crypto = require("crypto");
 
 const MAX_LIMIT = 100;
+const DEFAULT_LOCK_MINUTES = 30;
+const MAX_LOCK_MINUTES = 240;
 const RESOURCE_CATEGORIES = new Set(["PERSON", "MACHINE", "WORKCENTER", "TEAM"]);
 const RESOURCE_REFRESH_SOURCES = new Set(["WORKCENTER", "MACHINE", "EMPLOYEE"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -37,6 +40,11 @@ function assertUuid(value, fieldName = "id") {
 
 function isUuid(value) {
   return UUID_RE.test(normalizeText(value));
+}
+
+function optionalUuid(value, fieldName) {
+  if (value === undefined || value === null || value === "") return null;
+  return assertUuid(value, fieldName);
 }
 
 function normalizeUuidArray(values, fieldName) {
@@ -128,6 +136,12 @@ function mapProject(row) {
     status: row.status,
     source_type: row.source_type,
     revision_no: row.revision_no,
+    published_revision_no: row.published_revision_no,
+    last_published_at: row.last_published_at,
+    checked_out_by: row.checked_out_by,
+    checked_out_at: row.checked_out_at,
+    calendar_id: row.calendar_id,
+    calendar_name: row.calendar_name,
     created_by: row.created_by,
     updated_by: row.updated_by,
     created_at: row.created_at,
@@ -143,6 +157,89 @@ function buildPackage(rows) {
     assignments: rows.assignments || [],
     dependencies: rows.dependencies || [],
   };
+}
+
+function lockMinutes(value) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_LOCK_MINUTES;
+  return Math.min(MAX_LOCK_MINUTES, Math.max(1, parsed));
+}
+
+function actorFromBody(body, fallback = "ms-project-vba") {
+  return nullableText(body?.actor || body?.user || body?.updated_by || body?.created_by) || fallback;
+}
+
+async function writeAuditLog(client, { projectId = null, action, actor = null, lockToken = null, revisionNo = null, details = {} }) {
+  await client.query(
+    `insert into ms_project_audit_log (project_id, action, actor, lock_token, revision_no, details)
+     values ($1, $2, $3, $4, $5, $6::jsonb)`,
+    [projectId, action, actor, lockToken, revisionNo, JSON.stringify(details || {})]
+  );
+}
+
+async function snapshotProject(client, projectId) {
+  return queryProjectPackage(client, projectId);
+}
+
+async function writeRevisionSnapshot(client, { projectId, revisionNo, revisionType, actor, snapshot }) {
+  await client.query(
+    `insert into ms_project_revision (project_id, revision_no, revision_type, snapshot, created_by)
+     values ($1, $2, $3, $4::jsonb, $5)
+     on conflict (project_id, revision_no, revision_type)
+     do update set snapshot = excluded.snapshot, created_by = excluded.created_by, created_at = now()`,
+    [projectId, revisionNo, revisionType, JSON.stringify(snapshot), actor]
+  );
+}
+
+async function writePublishSnapshot(client, { projectId, revisionNo, actor, snapshot }) {
+  await client.query(
+    `insert into ms_project_publish (project_id, revision_no, snapshot, published_by)
+     values ($1, $2, $3::jsonb, $4)
+     on conflict (project_id, revision_no)
+     do update set snapshot = excluded.snapshot, published_by = excluded.published_by, published_at = now()`,
+    [projectId, revisionNo, JSON.stringify(snapshot), actor]
+  );
+  await client.query(
+    `update ms_project
+     set published_revision_no = $2,
+         last_published_at = now(),
+         updated_by = coalesce($3, updated_by)
+     where project_id = $1`,
+    [projectId, revisionNo, actor]
+  );
+}
+
+async function getActiveLock(client, projectId) {
+  const result = await client.query(
+    `select *
+     from ms_project_lock
+     where project_id = $1
+       and expires_at > now()
+     for update`,
+    [projectId]
+  );
+  return result.rows[0] || null;
+}
+
+async function requireValidLock(client, projectId, lockToken, actionName) {
+  const token = nullableText(lockToken);
+  if (!token) {
+    throw new ApiError(423, "PROJECT_LOCK_REQUIRED", `${actionName} requires a valid checkout lock_token`);
+  }
+  const result = await client.query(
+    `select *
+     from ms_project_lock
+     where project_id = $1
+       and lock_token = $2
+       and expires_at > now()
+     for update`,
+    [projectId, token]
+  );
+  const lock = result.rows[0];
+  if (!lock) {
+    throw new ApiError(423, "PROJECT_LOCK_INVALID", "Project lock is missing, expired, or owned by another session");
+  }
+  return lock;
 }
 
 async function queryProjectPackage(client, projectId) {
@@ -165,6 +262,10 @@ async function queryProjectPackage(client, projectId) {
          r.workcenter_code,
          r.parent_resource_id,
          r.max_units,
+         r.calendar_id,
+         r.calendar_name,
+         rc.calendar_code as resource_calendar_code,
+         rc.calendar_name as resource_calendar_name,
          r.is_assignable,
          r.is_generic,
          r.is_active as resource_is_active,
@@ -172,6 +273,7 @@ async function queryProjectPackage(client, projectId) {
          pr.updated_at
        from ms_project_resource pr
        join ms_resource r on r.resource_id = pr.resource_id
+       left join ms_project_calendar rc on rc.calendar_id = r.calendar_id
        where pr.project_id = $1
        order by r.resource_category, r.resource_code`,
       [projectId]
@@ -230,7 +332,10 @@ function normalizeProjectPayload(payload, isSync = false) {
       project_name: projectName,
       description: nullableText(project.description),
       status: nullableText(project.status) || (isSync ? null : "ACTIVE"),
+      calendar_id: optionalUuid(project.calendar_id, "project.calendar_id"),
+      calendar_name: nullableText(project.calendar_name || project.calendar),
       last_known_revision_no: toNullableInt(project.last_known_revision_no),
+      lock_token: nullableText(project.lock_token || body.lock_token),
       created_by: nullableText(project.created_by),
       updated_by: nullableText(project.updated_by),
     },
@@ -269,9 +374,30 @@ function normalizeTaskPayload(task, index, isPublish) {
     plan_finish: nullableText(task.plan_finish),
     duration_minutes: toNullableInt(task.duration_minutes),
     planned_work_minutes: toNullableInt(task.planned_work_minutes),
+    calendar_id: optionalUuid(task.calendar_id, `tasks[${index}].calendar_id`),
+    calendar_name: nullableText(task.calendar_name || task.calendar),
+    ignore_resource_calendar: toBool(task.ignore_resource_calendar, false) === true,
     is_summary: Boolean(task.is_summary),
     is_active: task.is_active === undefined ? true : Boolean(task.is_active),
   };
+}
+
+async function validateCalendarIds(client, values) {
+  const ids = Array.from(new Set(values.filter(Boolean)));
+  if (!ids.length) return;
+
+  const result = await client.query(
+    `select calendar_id
+     from ms_project_calendar
+     where calendar_id = any($1::uuid[])
+       and is_active = true`,
+    [ids]
+  );
+  const found = new Set(result.rows.map((row) => row.calendar_id));
+  const missing = ids.filter((id) => !found.has(id));
+  if (missing.length) {
+    throw new ApiError(400, "INVALID_CALENDAR", "One or more calendar_id values are invalid or inactive", missing);
+  }
 }
 
 function normalizeAssignmentPayload(assignment, index, isPublish) {
@@ -450,7 +576,10 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
              planned_work_minutes = $14,
              is_summary = $15,
              is_active = $16,
-             local_task_uid = coalesce($17, local_task_uid)
+             local_task_uid = coalesce($17, local_task_uid),
+             calendar_id = $18,
+             calendar_name = $19,
+             ignore_resource_calendar = $20
          where project_id = $1 and task_id = $2
          returning task_id, local_task_uid`,
         [
@@ -471,6 +600,9 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
           task.is_summary,
           task.is_active,
           task.local_task_uid,
+          task.calendar_id,
+          task.calendar_name,
+          task.ignore_resource_calendar,
         ]
       );
       if (!result.rows[0]) {
@@ -483,9 +615,10 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
            project_id, parent_task_id, task_name, outline_level, outline_number,
            order_no, operation_no, ssbr_id, sow_id, workcenter,
            plan_start, plan_finish, duration_minutes, planned_work_minutes,
-           is_summary, is_active, local_task_uid
+           is_summary, is_active, local_task_uid, calendar_id, calendar_name,
+           ignore_resource_calendar
          )
-         values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
          on conflict (project_id, local_task_uid)
          where local_task_uid is not null
          do update set
@@ -503,6 +636,9 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
            planned_work_minutes = excluded.planned_work_minutes,
            is_summary = excluded.is_summary,
            is_active = excluded.is_active,
+           calendar_id = excluded.calendar_id,
+           calendar_name = excluded.calendar_name,
+           ignore_resource_calendar = excluded.ignore_resource_calendar,
            parent_task_id = null,
            updated_at = now()
          returning task_id, local_task_uid, (xmax = 0) as inserted`,
@@ -523,6 +659,9 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
           task.is_summary,
           task.is_active,
           task.local_task_uid,
+          task.calendar_id,
+          task.calendar_name,
+          task.ignore_resource_calendar,
         ]
       );
       if (result.rows[0].inserted) created += 1;
@@ -874,7 +1013,23 @@ async function listProjects(query) {
   values.push(limit, offset);
 
   const sql = `
-    select project_id, project_name, description, status, source_type, revision_no, created_at, updated_at
+    select
+      project_id,
+      project_name,
+      description,
+      status,
+      source_type,
+      revision_no,
+      published_revision_no,
+      last_published_at,
+      checked_out_by,
+      checked_out_at,
+      calendar_id,
+      calendar_name,
+      created_by,
+      updated_by,
+      created_at,
+      updated_at
     from ms_project
     ${where.length ? `where ${where.join(" and ")}` : ""}
     order by updated_at desc
@@ -898,6 +1053,253 @@ async function bulkLoadProjectPackages(projectIds) {
     packages.push(await queryProjectPackage(pool(), id));
   }
   return packages;
+}
+
+async function listCalendars(query = {}) {
+  const values = [];
+  const where = [];
+  const active = toBool(query.active, true);
+  const scope = nullableText(query.scope)?.toUpperCase();
+  const q = nullableText(query.q);
+
+  if (active !== null) {
+    values.push(active);
+    where.push(`c.is_active = $${values.length}`);
+  }
+  if (scope) {
+    values.push(scope);
+    where.push(`c.calendar_scope = $${values.length}`);
+  }
+  if (q) {
+    values.push(`%${q}%`);
+    where.push(`(c.calendar_code ilike $${values.length} or c.calendar_name ilike $${values.length})`);
+  }
+
+  const limit = clampLimit(query.limit);
+  const offset = clampOffset(query.offset);
+  values.push(limit, offset);
+
+  const result = await pool().query(
+    `select
+       c.*,
+       coalesce(wd.weekday_count, 0)::integer as weekday_count,
+       coalesce(wt.working_time_count, 0)::integer as working_time_count,
+       coalesce(ex.exception_count, 0)::integer as exception_count
+     from ms_project_calendar c
+     left join (
+       select calendar_id, count(*) as weekday_count
+       from ms_project_calendar_weekday
+       group by calendar_id
+     ) wd on wd.calendar_id = c.calendar_id
+     left join (
+       select calendar_id, count(*) as working_time_count
+       from ms_project_calendar_working_time
+       group by calendar_id
+     ) wt on wt.calendar_id = c.calendar_id
+     left join (
+       select calendar_id, count(*) as exception_count
+       from ms_project_calendar_exception
+       where is_active = true
+       group by calendar_id
+     ) ex on ex.calendar_id = c.calendar_id
+     ${where.length ? `where ${where.join(" and ")}` : ""}
+     order by c.is_default desc, c.calendar_scope, c.calendar_code
+     limit $${values.length - 1} offset $${values.length}`,
+    values
+  );
+
+  return { rows: result.rows, limit, offset };
+}
+
+async function getCalendar(calendarIdParam) {
+  const calendarId = assertUuid(calendarIdParam, "calendar_id");
+  const client = pool();
+  const [calendar, weekdays, workingTimes, exceptions, exceptionTimes] = await Promise.all([
+    client.query("select * from ms_project_calendar where calendar_id = $1", [calendarId]),
+    client.query(
+      `select *
+       from ms_project_calendar_weekday
+       where calendar_id = $1
+       order by day_of_week`,
+      [calendarId]
+    ),
+    client.query(
+      `select *
+       from ms_project_calendar_working_time
+       where calendar_id = $1
+       order by day_of_week, segment_no`,
+      [calendarId]
+    ),
+    client.query(
+      `select *
+       from ms_project_calendar_exception
+       where calendar_id = $1
+       order by start_date, priority, exception_name`,
+      [calendarId]
+    ),
+    client.query(
+      `select et.*
+       from ms_project_calendar_exception_time et
+       join ms_project_calendar_exception ex on ex.exception_id = et.exception_id
+       where ex.calendar_id = $1
+       order by et.exception_id, et.segment_no`,
+      [calendarId]
+    ),
+  ]);
+
+  if (!calendar.rows[0]) {
+    throw new ApiError(404, "CALENDAR_NOT_FOUND", "Calendar not found");
+  }
+
+  const timesByException = new Map();
+  for (const row of exceptionTimes.rows) {
+    if (!timesByException.has(row.exception_id)) timesByException.set(row.exception_id, []);
+    timesByException.get(row.exception_id).push(row);
+  }
+
+  return {
+    ...calendar.rows[0],
+    weekdays: weekdays.rows,
+    working_times: workingTimes.rows,
+    exceptions: exceptions.rows.map((row) => ({
+      ...row,
+      working_times: timesByException.get(row.exception_id) || [],
+    })),
+  };
+}
+
+async function refreshCalendarsFromShifts(body = {}) {
+  const actor = actorFromBody(body, "ms-project-api");
+  const client = await pool().connect();
+  const summary = { created: 0, updated: 0, skipped: 0, warnings: [] };
+
+  try {
+    await client.query("begin");
+
+    const rows = await client.query(
+      `select shift_code,
+              shift_name,
+              start_time,
+              end_time,
+              crosses_midnight,
+              default_capacity_hours
+       from shift_definition
+       where is_default = true
+         and shift_code is not null
+         and trim(shift_code) <> ''
+       order by shift_code`
+    );
+
+    for (const row of rows.rows) {
+      const calendarCode = normalizeText(row.shift_code).toUpperCase();
+      const calendarName = nullableText(row.shift_name) || calendarCode;
+      const hoursPerDay = Number(row.default_capacity_hours) > 0 ? Number(row.default_capacity_hours) : 8;
+      const hoursPerWeek = hoursPerDay * 5;
+
+      const upserted = await client.query(
+        `insert into ms_project_calendar (
+           calendar_code,
+           calendar_name,
+           calendar_scope,
+           is_enterprise,
+           is_default,
+           hours_per_day,
+           hours_per_week,
+           days_per_month,
+           default_start_time,
+           default_finish_time,
+           timezone,
+           description,
+           source_type,
+           source_ref_id,
+           created_by,
+           updated_by
+         )
+         values ($1, $2, 'BASE', true, false, $3, $4, 20, $5, $6, 'Asia/Jakarta',
+                 $7, 'SHIFT_DEFINITION', $8, $9, $9)
+         on conflict (calendar_code)
+         do update set
+           calendar_name = excluded.calendar_name,
+           calendar_scope = excluded.calendar_scope,
+           is_enterprise = excluded.is_enterprise,
+           hours_per_day = excluded.hours_per_day,
+           hours_per_week = excluded.hours_per_week,
+           days_per_month = excluded.days_per_month,
+           default_start_time = excluded.default_start_time,
+           default_finish_time = excluded.default_finish_time,
+           timezone = excluded.timezone,
+           description = excluded.description,
+           source_type = excluded.source_type,
+           source_ref_id = excluded.source_ref_id,
+           updated_by = excluded.updated_by
+         returning calendar_id, (xmax = 0) as inserted`,
+        [
+          calendarCode,
+          calendarName,
+          hoursPerDay,
+          hoursPerWeek,
+          row.start_time,
+          row.end_time,
+          `Mirrored from shift_definition.${calendarCode}`,
+          calendarCode,
+          actor,
+        ]
+      );
+
+      const calendarId = upserted.rows[0].calendar_id;
+      if (upserted.rows[0].inserted) summary.created += 1;
+      else summary.updated += 1;
+
+      await client.query(
+        `insert into ms_project_calendar_weekday (calendar_id, day_of_week, day_type)
+         select $1, day_of_week,
+                case when day_of_week between 1 and 5 then 'WORKING' else 'NON_WORKING' end
+         from generate_series(1, 7) as day_of_week
+         on conflict (calendar_id, day_of_week)
+         do update set day_type = excluded.day_type`,
+        [calendarId]
+      );
+
+      await client.query("delete from ms_project_calendar_working_time where calendar_id = $1", [calendarId]);
+      await client.query(
+        `insert into ms_project_calendar_working_time (
+           calendar_id,
+           day_of_week,
+           segment_no,
+           start_time,
+           end_time,
+           crosses_midnight
+         )
+         select $1, day_of_week, 1, $2::time, $3::time, $4::boolean
+         from generate_series(1, 5) as day_of_week`,
+        [calendarId, row.start_time, row.end_time, row.crosses_midnight === true]
+      );
+    }
+
+    const skipped = await client.query(
+      `select count(*)::integer as count
+       from shift_definition
+       where is_default = false
+         and shift_code is not null
+         and trim(shift_code) <> ''`
+    );
+    summary.skipped = skipped.rows[0]?.count || 0;
+    if (summary.skipped > 0) {
+      summary.warnings.push({
+        code: "SHIFT_DATE_OVERRIDES_NOT_IMPORTED",
+        message: "Non-default shift_definition rows were not imported in this stage; they belong to calendar exceptions.",
+        skipped: summary.skipped,
+      });
+    }
+
+    await client.query("commit");
+    return summary;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function searchResources(query) {
@@ -1182,21 +1584,274 @@ async function deactivateProjectResource(projectId, resourceId) {
   }
 }
 
+async function checkoutProject(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const actor = actorFromBody(body);
+  const minutes = lockMinutes(body.lock_minutes);
+  const lockToken = crypto.randomUUID();
+  const client = await pool().connect();
+
+  try {
+    await client.query("begin");
+    const projectResult = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
+    const project = projectResult.rows[0];
+    if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+
+    const activeLock = await getActiveLock(client, projectId);
+    if (activeLock) {
+      throw new ApiError(409, "PROJECT_LOCKED", "Project is already checked out", {
+        checked_out_by: activeLock.locked_by,
+        checked_out_at: activeLock.locked_at,
+        expires_at: activeLock.expires_at,
+      });
+    }
+
+    await client.query(
+      `insert into ms_project_lock (project_id, lock_token, locked_by, expires_at)
+       values ($1, $2, $3, now() + ($4::text || ' minutes')::interval)
+       on conflict (project_id)
+       do update set
+         lock_token = excluded.lock_token,
+         locked_by = excluded.locked_by,
+         locked_at = now(),
+         heartbeat_at = now(),
+         expires_at = excluded.expires_at,
+         updated_at = now()
+       returning *`,
+      [projectId, lockToken, actor, minutes]
+    );
+    await client.query(
+      `update ms_project
+       set checked_out_by = $2,
+           checked_out_at = now(),
+           updated_by = $2
+       where project_id = $1`,
+      [projectId, actor]
+    );
+    await writeAuditLog(client, {
+      projectId,
+      action: "CHECKOUT",
+      actor,
+      lockToken,
+      revisionNo: project.revision_no,
+      details: { lock_minutes: minutes },
+    });
+    await client.query("commit");
+
+    return {
+      project_id: projectId,
+      lock_token: lockToken,
+      locked_by: actor,
+      revision_no: project.revision_no,
+      expires_in_minutes: minutes,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function heartbeatProject(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const minutes = lockMinutes(body.lock_minutes);
+  const client = await pool().connect();
+
+  try {
+    await client.query("begin");
+    const lock = await requireValidLock(client, projectId, body.lock_token, "heartbeat");
+    const result = await client.query(
+      `update ms_project_lock
+       set heartbeat_at = now(),
+           expires_at = now() + ($3::text || ' minutes')::interval,
+           updated_at = now()
+       where project_id = $1
+         and lock_token = $2
+       returning *`,
+      [projectId, body.lock_token, minutes]
+    );
+    await client.query("commit");
+    return {
+      project_id: projectId,
+      lock_token: body.lock_token,
+      locked_by: lock.locked_by,
+      heartbeat_at: result.rows[0].heartbeat_at,
+      expires_at: result.rows[0].expires_at,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function checkinProject(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const actor = actorFromBody(body);
+  const client = await pool().connect();
+
+  try {
+    await client.query("begin");
+    const projectResult = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
+    const project = projectResult.rows[0];
+    if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    await requireValidLock(client, projectId, body.lock_token, "checkin");
+    await client.query("delete from ms_project_lock where project_id = $1 and lock_token = $2", [projectId, body.lock_token]);
+    await client.query(
+      `update ms_project
+       set checked_out_by = null,
+           checked_out_at = null,
+           updated_by = coalesce($2, updated_by)
+       where project_id = $1`,
+      [projectId, actor]
+    );
+    await writeAuditLog(client, {
+      projectId,
+      action: "CHECKIN",
+      actor,
+      lockToken: body.lock_token,
+      revisionNo: project.revision_no,
+      details: {},
+    });
+    await client.query("commit");
+    return { project_id: projectId, checked_in: true, revision_no: project.revision_no };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function forceCheckinProject(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const actor = actorFromBody(body, "admin");
+  const reason = nullableText(body.reason) || "force check-in";
+  const client = await pool().connect();
+
+  try {
+    await client.query("begin");
+    const projectResult = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
+    const project = projectResult.rows[0];
+    if (!project) throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    const lockResult = await client.query("delete from ms_project_lock where project_id = $1 returning *", [projectId]);
+    await client.query(
+      `update ms_project
+       set checked_out_by = null,
+           checked_out_at = null,
+           updated_by = coalesce($2, updated_by)
+       where project_id = $1`,
+      [projectId, actor]
+    );
+    await writeAuditLog(client, {
+      projectId,
+      action: "FORCE_CHECKIN",
+      actor,
+      revisionNo: project.revision_no,
+      details: { reason, released_lock: lockResult.rows[0] || null },
+    });
+    await client.query("commit");
+    return { project_id: projectId, checked_in: true, forced: true, released_lock: Boolean(lockResult.rows[0]) };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function publishCurrentRevision(projectIdParam, payload = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const body = ensureObject(payload || {}, "payload");
+  const project = ensureObject(body.project || {}, "project");
+  const actor = actorFromBody({ ...body, ...project });
+  const lockToken = nullableText(project.lock_token || body.lock_token);
+  const lastKnownRevisionNo = toNullableInt(project.last_known_revision_no || body.last_known_revision_no);
+  if (!Number.isInteger(lastKnownRevisionNo)) {
+    throw new ApiError(400, "REVISION_REQUIRED", "project.last_known_revision_no is required for publish");
+  }
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const locked = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
+    const currentProject = locked.rows[0];
+    if (!currentProject) throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    await requireValidLock(client, projectId, lockToken, "publish");
+    if (Number(currentProject.revision_no) !== Number(lastKnownRevisionNo)) {
+      throw new ApiError(409, "PROJECT_REVISION_CONFLICT", "Project has been updated by another user.", {
+        current_revision_no: currentProject.revision_no,
+      });
+    }
+
+    const revisionResult = await client.query(
+      `update ms_project
+       set revision_no = revision_no + 1,
+           updated_by = coalesce($2, updated_by),
+           updated_at = now()
+       where project_id = $1
+       returning project_id, revision_no, updated_at`,
+      [projectId, actor]
+    );
+    const revisionNo = revisionResult.rows[0].revision_no;
+    const snapshot = await snapshotProject(client, projectId);
+    await writeRevisionSnapshot(client, { projectId, revisionNo, revisionType: "PUBLISH", actor, snapshot });
+    await writePublishSnapshot(client, { projectId, revisionNo, actor, snapshot });
+    await writeAuditLog(client, {
+      projectId,
+      action: "PUBLISH",
+      actor,
+      lockToken,
+      revisionNo,
+      details: { previous_revision_no: currentProject.revision_no },
+    });
+    await client.query("commit");
+
+    return {
+      project_id: projectId,
+      revision_no: revisionNo,
+      updated_at: revisionResult.rows[0].updated_at,
+      published_revision_no: revisionNo,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function publishProject(payload) {
   const normalized = normalizeProjectPayload(payload, false);
   const client = await pool().connect();
 
   try {
     await client.query("begin");
+    await validateCalendarIds(client, [
+      normalized.project.calendar_id,
+      ...normalized.tasks.map((task) => task.calendar_id),
+    ]);
 
     const projectResult = await client.query(
-      `insert into ms_project (project_name, description, status, created_by, updated_by)
-       values ($1, $2, $3, $4, $5)
+      `insert into ms_project (
+         project_name,
+         description,
+         status,
+         calendar_id,
+         calendar_name,
+         created_by,
+         updated_by
+       )
+       values ($1, $2, $3, $4, $5, $6, $7)
        returning *`,
       [
         normalized.project.project_name,
         normalized.project.description,
         normalized.project.status,
+        normalized.project.calendar_id,
+        normalized.project.calendar_name,
         normalized.project.created_by,
         normalized.project.updated_by,
       ]
@@ -1208,6 +1863,33 @@ async function publishProject(payload) {
     const taskResult = await upsertTasks(client, projectId, normalized.tasks, true);
     const assignmentResult = await upsertAssignments(client, projectId, normalized.assignments, taskResult.localTaskMap, true);
     const dependencyResult = await upsertDependencies(client, projectId, normalized.dependencies, taskResult.localTaskMap, true);
+    const actor = normalized.project.created_by || normalized.project.updated_by || "ms-project-vba";
+    const snapshot = await snapshotProject(client, projectId);
+    await writeRevisionSnapshot(client, {
+      projectId,
+      revisionNo: project.revision_no,
+      revisionType: "CREATE",
+      actor,
+      snapshot,
+    });
+    await writePublishSnapshot(client, {
+      projectId,
+      revisionNo: project.revision_no,
+      actor,
+      snapshot,
+    });
+    await writeAuditLog(client, {
+      projectId,
+      action: "CREATE_PROJECT",
+      actor,
+      revisionNo: project.revision_no,
+      details: {
+        project_resources: projectResourceResult.resourceIds.length,
+        tasks: taskResult.mappings.length,
+        assignments: assignmentResult.mappings.length,
+        dependencies: dependencyResult.mappings.length,
+      },
+    });
 
     await client.query("commit");
 
@@ -1252,11 +1934,16 @@ async function syncProject(projectIdParam, payload) {
 
   try {
     await client.query("begin");
+    await validateCalendarIds(client, [
+      normalized.project.calendar_id,
+      ...normalized.tasks.map((task) => task.calendar_id),
+    ]);
     const locked = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
     const project = locked.rows[0];
     if (!project) {
       throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
     }
+    await requireValidLock(client, projectId, normalized.project.lock_token, "sync");
     if (Number(project.revision_no) !== Number(normalized.project.last_known_revision_no)) {
       throw new ApiError(409, "PROJECT_REVISION_CONFLICT", "Project has been updated by another user.", {
         current_revision_no: project.revision_no,
@@ -1268,7 +1955,9 @@ async function syncProject(projectIdParam, payload) {
        set project_name = coalesce($2, project_name),
            description = coalesce($3, description),
            status = coalesce($4, status),
-           updated_by = coalesce($5, updated_by)
+           updated_by = coalesce($5, updated_by),
+           calendar_id = coalesce($6, calendar_id),
+           calendar_name = coalesce($7, calendar_name)
        where project_id = $1`,
       [
         projectId,
@@ -1276,6 +1965,8 @@ async function syncProject(projectIdParam, payload) {
         normalized.project.description,
         normalized.project.status,
         normalized.project.updated_by,
+        normalized.project.calendar_id,
+        normalized.project.calendar_name,
       ]
     );
 
@@ -1293,6 +1984,31 @@ async function syncProject(projectIdParam, payload) {
        returning project_id, revision_no, updated_at`,
       [projectId]
     );
+    const revisionNo = revisionResult.rows[0].revision_no;
+    const actor = normalized.project.updated_by || "ms-project-vba";
+    const snapshot = await snapshotProject(client, projectId);
+    await writeRevisionSnapshot(client, { projectId, revisionNo, revisionType: "SYNC", actor, snapshot });
+    await writeAuditLog(client, {
+      projectId,
+      action: "SYNC",
+      actor,
+      lockToken: normalized.project.lock_token,
+      revisionNo,
+      details: {
+        previous_revision_no: project.revision_no,
+        summary: {
+          project_resources_created: projectResourceResult.created,
+          project_resources_updated: projectResourceResult.updated,
+          tasks_created: taskResult.created,
+          tasks_updated: taskResult.updated,
+          assignments_created: assignmentResult.created,
+          assignments_updated: assignmentResult.updated,
+          dependencies_created: dependencyResult.created,
+          dependencies_updated: dependencyResult.updated,
+          ...deactivateSummary,
+        },
+      },
+    });
 
     await client.query("commit");
 
@@ -1501,13 +2217,21 @@ module.exports = {
   ApiError,
   addProjectResources,
   bulkLoadProjectPackages,
+  checkinProject,
+  checkoutProject,
   deactivateProjectResource,
+  forceCheckinProject,
   getConflicts,
+  getCalendar,
   getProjectPackage,
   getProjectResources,
+  heartbeatProject,
   health,
+  listCalendars,
   listProjects,
+  publishCurrentRevision,
   publishProject,
+  refreshCalendarsFromShifts,
   refreshResources,
   searchResources,
   syncProject,

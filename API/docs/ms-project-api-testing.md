@@ -124,9 +124,22 @@ curl -X POST "$BASE_URL/projects" \
 
 Save `project_id`, `revision_no`, `task_mappings`, `assignment_mappings`, and `dependency_mappings`.
 
-## 5. Sync Existing Project
+## 5. Checkout Existing Project
 
-Replace IDs and revision number from the publish response.
+Existing project must be checked out before sync or publish. Save the returned `lock_token`.
+
+```bash
+curl -X POST "$BASE_URL/projects/PROJECT_UUID/checkout" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actor": "api-test",
+    "lock_minutes": 30
+  }'
+```
+
+## 6. Sync Existing Project
+
+Replace IDs, revision number, and `LOCK_TOKEN` from the publish/checkout response.
 
 ```bash
 curl -X PUT "$BASE_URL/projects/PROJECT_UUID/sync" \
@@ -135,7 +148,8 @@ curl -X PUT "$BASE_URL/projects/PROJECT_UUID/sync" \
     "project": {
       "project_id": "PROJECT_UUID",
       "project_name": "MS Project API Test",
-      "last_known_revision_no": 1
+      "last_known_revision_no": 1,
+      "lock_token": "LOCK_TOKEN"
     },
     "project_resources": [
       { "resource_id": "00000000-0000-0000-0000-000000000001" },
@@ -159,7 +173,33 @@ curl -X PUT "$BASE_URL/projects/PROJECT_UUID/sync" \
 
 Run the same sync with an old `last_known_revision_no` to verify `409 PROJECT_REVISION_CONFLICT`.
 
-## 6. Explicit Deactivate
+## 7. Publish Current Revision
+
+```bash
+curl -X POST "$BASE_URL/projects/PROJECT_UUID/publish" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project": {
+      "project_id": "PROJECT_UUID",
+      "last_known_revision_no": 2,
+      "lock_token": "LOCK_TOKEN"
+    },
+    "actor": "api-test"
+  }'
+```
+
+## 8. Checkin Existing Project
+
+```bash
+curl -X POST "$BASE_URL/projects/PROJECT_UUID/checkin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "lock_token": "LOCK_TOKEN",
+    "actor": "api-test"
+  }'
+```
+
+## 9. Explicit Deactivate
 
 ```bash
 curl -X PUT "$BASE_URL/projects/PROJECT_UUID/sync" \
@@ -167,7 +207,8 @@ curl -X PUT "$BASE_URL/projects/PROJECT_UUID/sync" \
   -d '{
     "project": {
       "project_id": "PROJECT_UUID",
-      "last_known_revision_no": 2
+      "last_known_revision_no": 2,
+      "lock_token": "LOCK_TOKEN"
     },
     "project_resources": [],
     "tasks": [],
@@ -182,7 +223,7 @@ curl -X PUT "$BASE_URL/projects/PROJECT_UUID/sync" \
   }'
 ```
 
-## 7. Project Resource Team
+## 10. Project Resource Team
 
 ```bash
 curl "$BASE_URL/projects/PROJECT_UUID/resources"
@@ -196,7 +237,7 @@ curl -X DELETE "$BASE_URL/projects/PROJECT_UUID/resources/RESOURCE_UUID"
 
 Deactivate should return `409` if the resource is still used by active assignments.
 
-## 8. Package and Bulk Load
+## 11. Package and Bulk Load
 
 ```bash
 curl "$BASE_URL/projects/PROJECT_UUID/package"
@@ -206,7 +247,7 @@ curl -X POST "$BASE_URL/projects/bulk-load" \
   -d '{"project_ids":["PROJECT_UUID_1","PROJECT_UUID_2"]}'
 ```
 
-## 9. Conflict Checks
+## 12. Conflict Checks
 
 ```bash
 curl "$BASE_URL/resources/conflicts?category=PERSON"
@@ -217,7 +258,7 @@ curl "$BASE_URL/resources/conflicts?project_id=PROJECT_UUID&start=2026-06-03T00:
 
 Verify individual resources use pairwise overlap and generic resources report peak concurrent units.
 
-## 10. Invalid Requests
+## 13. Invalid Requests
 
 Invalid UUID:
 
