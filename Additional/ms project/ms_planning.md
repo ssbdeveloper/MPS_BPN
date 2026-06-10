@@ -2,7 +2,34 @@
 
 Dokumen ini adalah planning implementasi integrasi Microsoft Project dengan PostgreSQL untuk project MPS2. Revisi ini menggabungkan requirement awal dari `ms_requirement.md` dan koreksi desain resource dari `ms_requirement2.md`.
 
-Tujuan utama: Microsoft Project dipakai sebagai planning editor, sedangkan PostgreSQL menjadi pusat data project, task, resource, assignment, dependency, dan validasi lintas project.
+Tujuan utama: Microsoft Project dipakai sebagai planning editor, sedangkan PostgreSQL menjadi pusat data project, task, resource, assignment, dependency, publish state, revision history, audit log, dan validasi lintas project.
+
+## 0. Referensi Konsep PWA yang Akan Direplikasi
+
+Microsoft Project Web App (PWA) / Project Server tidak bekerja sebagai file server `.mpp` biasa. PWA memakai central project database, API/business object layer, queue untuk operasi berat, calculation service, dan pemisahan state project.
+
+Konsep PWA yang relevan untuk sistem pengganti MPS:
+
+| Konsep PWA | Arti Teknis | Replikasi di MPS |
+| --- | --- | --- |
+| Draft data | Perubahan project yang belum dipublish. | Data current/editable di tabel `ms_project*` dengan lock aktif. |
+| Published data | Project yang terlihat untuk user lain, report, dan portfolio. | `published_revision_no` di `ms_project` + snapshot publish di `ms_project_publish`. |
+| Archive/version | Backup versi project lama. | `ms_project_revision` dan snapshot JSON per revision/publish. |
+| Reporting data | Read model untuk laporan, tidak dipakai sebagai write target. | View/materialized view PostgreSQL untuk dashboard. |
+| Check-out | Lock eksklusif agar satu user mengedit satu project. | `ms_project_lock` dengan `lock_token`, heartbeat, expiry, dan force check-in. |
+| Check-in | Release lock setelah save/sync/publish selesai. | Endpoint `/checkin`, audit log, dan optional publish. |
+| Publish | Promosi draft/current menjadi versi yang terlihat. | Endpoint `/publish` yang membuat publish snapshot dan increment revision. |
+| Project Center | Daftar project, status, owner, last update, checked-out-by. | `GET /ms-project/projects` plus lock/publish metadata. |
+| Resource Center | Enterprise resource pool. | `ms_resource` + `ms_project_resource`. |
+| Security category/RBS | Scope akses project/resource berdasarkan role dan struktur organisasi. | Role + project membership + workcenter/resource scope. |
+
+Prinsip desain:
+
+1. Client tidak boleh menulis langsung ke PostgreSQL. Semua write harus lewat Express API.
+2. `.mpp` bukan canonical source setelah project dipublish. PostgreSQL menjadi canonical source, `.mpp` menjadi editor/sync client.
+3. `revision_no` adalah optimistic concurrency token utama.
+4. `lock_token` adalah pessimistic concurrency token saat user mengedit.
+5. Reporting/dashboard membaca read model, bukan draft/current write path.
 
 ## 1. Ringkasan MVP Revisi
 
@@ -19,6 +46,9 @@ MVP harus mendukung:
 9. Conflict check menghitung peak concurrent capacity, bukan total semua assignment dalam rentang filter.
 10. Planned schedule berasal dari Microsoft Project; actual data tetap berasal dari PostgreSQL/timesheet/transaksi lapangan.
 11. Single Project Editor menjadi mode edit/sync MVP; Master Portfolio View menjadi read-only pada MVP.
+12. Check-out/check-in wajib tersedia sebelum project existing boleh diedit.
+13. Publish wajib membuat revision/snapshot dan audit log.
+14. `revision_no` menjadi token concurrency utama; `updated_at` hanya metadata.
 
 Perubahan penting dari planning sebelumnya:
 
@@ -177,6 +207,10 @@ create table if not exists ms_project (
   status text not null default 'ACTIVE',
   source_type text default 'MS_PROJECT',
   revision_no integer not null default 1,
+  published_revision_no integer,
+  last_published_at timestamptz,
+  checked_out_by text,
+  checked_out_at timestamptz,
   created_by text,
   updated_by text,
   created_at timestamptz default now(),
@@ -190,6 +224,8 @@ Index:
 create index if not exists idx_ms_project_status_updated
 on ms_project(status, updated_at desc);
 ```
+
+`checked_out_by` dan `checked_out_at` di `ms_project` hanya denormalized display metadata untuk Project Center. Source of truth lock tetap `ms_project_lock`.
 
 ### `ms_project_task`
 
@@ -436,6 +472,7 @@ create table if not exists ms_project_dependency (
   successor_task_id uuid not null,
   dependency_type text,
   lag_minutes integer,
+  local_dependency_key text,
   is_active boolean default true,
   created_at timestamptz default now(),
   updated_at timestamptz default now(),
@@ -449,7 +486,135 @@ create table if not exists ms_project_dependency (
 );
 ```
 
+Index dependency:
+
+```sql
+create unique index if not exists uq_ms_project_dependency_local_key
+on ms_project_dependency(project_id, local_dependency_key)
+where local_dependency_key is not null;
+```
+
+Format `local_dependency_key` rekomendasi:
+
+```text
+{predecessor_local_task_uid}|{successor_local_task_uid}|{dependency_type}|{lag_minutes}
+```
+
 Untuk MVP, predecessor dan successor harus berada dalam project yang sama. Cross-project dependency baru boleh masuk fase lanjutan setelah Single Project Editor stabil.
+
+### `ms_project_lock`
+
+`ms_project_lock` adalah replikasi konsep check-out PWA. Satu project hanya boleh punya satu lock aktif.
+
+```sql
+create table if not exists ms_project_lock (
+  project_id uuid primary key references ms_project(project_id) on delete cascade,
+  locked_by text not null,
+  lock_token uuid not null default gen_random_uuid(),
+  locked_at timestamptz not null default now(),
+  heartbeat_at timestamptz not null default now(),
+  expires_at timestamptz,
+  lock_reason text,
+  client_info jsonb
+);
+```
+
+Aturan lock:
+
+1. `checkout` insert row baru jika belum ada lock aktif.
+2. Jika lock aktif milik user lain, API return `409 Conflict`.
+3. Semua `sync`, `publish`, dan `checkin` project existing wajib membawa `lock_token`.
+4. Heartbeat memperbarui `heartbeat_at` dan optional `expires_at`.
+5. Admin boleh force check-in lock stale, tetapi wajib masuk audit log.
+
+### `ms_project_revision`
+
+`ms_project_revision` menyimpan histori revision project. MVP boleh menyimpan summary dan snapshot ringkas dalam JSONB. Jika kebutuhan diff semakin besar, snapshot bisa dinormalisasi ke tabel `*_version`.
+
+```sql
+create table if not exists ms_project_revision (
+  revision_id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references ms_project(project_id) on delete cascade,
+  revision_no integer not null,
+  revision_type text not null,
+  created_by text,
+  created_at timestamptz not null default now(),
+  summary jsonb,
+  snapshot jsonb,
+  unique (project_id, revision_no),
+  constraint chk_ms_project_revision_type
+    check (revision_type in ('IMPORT', 'PUBLISH_NEW', 'SYNC', 'PUBLISH', 'CHECKOUT', 'CHECKIN', 'FORCE_CHECKIN', 'CLONE'))
+);
+```
+
+### `ms_project_publish`
+
+`ms_project_publish` adalah published state. Ini meniru published database PWA tanpa langsung memecah semua tabel draft/published pada MVP.
+
+```sql
+create table if not exists ms_project_publish (
+  publish_id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references ms_project(project_id) on delete cascade,
+  revision_no integer not null,
+  published_by text,
+  published_at timestamptz not null default now(),
+  publish_status text not null default 'PUBLISHED',
+  snapshot jsonb not null,
+  unique (project_id, revision_no)
+);
+```
+
+Untuk MVP, `snapshot` berisi package project published:
+
+```json
+{
+  "project": {},
+  "project_resources": [],
+  "tasks": [],
+  "assignments": [],
+  "dependencies": []
+}
+```
+
+Fase lanjutan dapat memecah published state ke tabel fisik seperti `ms_project_task_published`, tetapi jangan lakukan sebelum workflow check-out/sync/publish stabil.
+
+### `ms_project_audit_log`
+
+Audit log wajib untuk menelusuri perubahan, force check-in, publish, clone, dan sync dari VBA/API.
+
+```sql
+create table if not exists ms_project_audit_log (
+  audit_id uuid primary key default gen_random_uuid(),
+  project_id uuid references ms_project(project_id) on delete set null,
+  revision_no integer,
+  actor text,
+  action text not null,
+  entity_type text,
+  entity_id uuid,
+  before_data jsonb,
+  after_data jsonb,
+  client_info jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_ms_project_audit_project_time
+on ms_project_audit_log(project_id, created_at desc);
+```
+
+### Tabel fase lanjutan
+
+Tabel berikut tidak wajib untuk API backend MVP pertama, tetapi harus masuk roadmap agar sistem tidak mentok saat ingin mendekati kemampuan PWA:
+
+| Tabel | Fungsi |
+| --- | --- |
+| `ms_project_file_import` | Metadata import `.mpp`/XML: filename, hash, parser version, imported_by. |
+| `ms_project_calendar` | Calendar project/resource. |
+| `ms_project_calendar_exception` | Hari libur, non-working time, shift exception. |
+| `ms_project_baseline` | Header baseline project. |
+| `ms_project_baseline_task` | Baseline start/finish/duration/work per task. |
+| `ms_project_baseline_assignment` | Baseline work/units per assignment. |
+| `ms_project_custom_field` | Definisi custom field yang diimpor dari MS Project. |
+| `ms_project_custom_field_value` | Nilai custom field per project/task/resource/assignment. |
 
 ### Relational integrity wajib
 
@@ -507,7 +672,12 @@ Endpoint MVP:
 | `GET` | `/ms-project/projects` | List project ringkas. Query: `status`, `q`, `limit`. |
 | `GET` | `/ms-project/projects/:project_id/package` | Ambil project, project resources, tasks, assignments, dependencies. |
 | `POST` | `/ms-project/projects` | Publish project baru. |
+| `POST` | `/ms-project/projects/:project_id/checkout` | Check-out project existing dan buat lock eksklusif. |
+| `POST` | `/ms-project/projects/:project_id/heartbeat` | Perpanjang lock session saat user masih mengedit. |
 | `PUT` | `/ms-project/projects/:project_id/sync` | Sync existing project dalam transaksi. |
+| `POST` | `/ms-project/projects/:project_id/publish` | Publish current revision menjadi published snapshot. |
+| `POST` | `/ms-project/projects/:project_id/checkin` | Release lock setelah sync/publish selesai. |
+| `POST` | `/ms-project/projects/:project_id/force-checkin` | Admin release lock stale atau lock bermasalah. |
 | `POST` | `/ms-project/projects/bulk-load` | Ambil beberapa package project sekaligus. |
 | `GET` | `/ms-project/resources` | Search resource pool. |
 | `GET` | `/ms-project/projects/:project_id/resources` | Load project resource team. |
@@ -547,6 +717,79 @@ Catatan publish project baru:
 2. Project baru mengirim `project_resources` dalam payload `POST /ms-project/projects`.
 3. API menyimpan project, resource team, task, assignment, dan dependency dalam satu transaksi.
 4. Endpoint add/remove project team hanya untuk project existing.
+
+Catatan check-out/check-in:
+
+1. `checkout` mengembalikan `lock_token`, `revision_no`, dan project package.
+2. `sync`, `publish`, `heartbeat`, dan `checkin` wajib mengirim `lock_token`.
+3. `force-checkin` hanya untuk role admin dan wajib menulis `ms_project_audit_log`.
+4. Project Center harus menampilkan `checked_out_by`, `checked_out_at`, dan apakah lock stale.
+
+Contoh response checkout:
+
+```json
+{
+  "success": true,
+  "data": {
+    "project_id": "uuid",
+    "revision_no": 4,
+    "lock_token": "uuid",
+    "locked_by": "planner.name",
+    "package": {
+      "project": {},
+      "project_resources": [],
+      "tasks": [],
+      "assignments": [],
+      "dependencies": []
+    }
+  }
+}
+```
+
+### Workflow check-out, sync, publish, check-in
+
+Workflow project existing:
+
+```text
+User pilih project
+  -> POST /checkout
+  -> API validasi permission dan lock
+  -> API return package + revision_no + lock_token
+  -> VBA isi MS Project dan simpan project_id/revision_no
+  -> User edit schedule
+  -> PUT /sync dengan lock_token + last_known_revision_no
+  -> API validasi lock dan revision
+  -> API upsert project_resources/tasks/assignments/dependencies dalam transaksi
+  -> API increment revision_no dan tulis audit
+  -> VBA simpan mapping UUID dan revision_no terbaru
+  -> Optional POST /publish
+  -> POST /checkin
+```
+
+Workflow publish project baru:
+
+```text
+File belum punya project_id
+  -> User pilih temporary project team
+  -> User klik Publish New Project
+  -> POST /projects dengan full package
+  -> API insert project/resources/tasks/assignments/dependencies dalam transaksi
+  -> API buat revision PUBLISH_NEW
+  -> API buat published snapshot awal
+  -> API return project_id, revision_no, mapping UUID
+  -> VBA simpan UUID ke custom fields
+```
+
+Workflow force check-in:
+
+```text
+Admin melihat project terkunci/stale
+  -> POST /force-checkin
+  -> API validasi role admin
+  -> API release lock
+  -> API tulis audit FORCE_CHECKIN dengan reason
+  -> User berikutnya wajib checkout ulang
+```
 
 ## 8. Sync Payload
 
@@ -597,7 +840,8 @@ Payload sync existing:
     "project_name": "Master Schedule",
     "description": "",
     "status": "ACTIVE",
-    "last_known_updated_at": "2026-06-03T00:00:00Z"
+    "last_known_revision_no": 3,
+    "lock_token": "uuid"
   },
   "project_resources": [],
   "tasks": [],
@@ -719,6 +963,7 @@ Response sync:
 ```json
 {
   "project_id": "...",
+  "revision_no": 4,
   "updated_at": "...",
   "summary": {
     "tasks_created": 0,
@@ -752,7 +997,9 @@ Jangan menimpa `Text1`, `Text2`, dan `Text3` karena sudah digunakan flow existin
 | Object | Data | Field rekomendasi | Catatan |
 | --- | --- | --- | --- |
 | Project | `project_id` | `ProjectSummaryTask.Text30` | ID project DB. |
-| Project | `project_updated_at` | `ProjectSummaryTask.Text29` | Untuk optimistic concurrency. |
+| Project | `revision_no` | `ProjectSummaryTask.Text29` | Optimistic concurrency token utama. |
+| Project | `project_mode` | `ProjectSummaryTask.Text28` | `SINGLE_PROJECT_EDITOR` atau `MASTER_PORTFOLIO_VIEW`. |
+| Project session | `lock_token` | Project custom property atau field configurable | Token check-out session. Jangan simpan permanen saat clone. |
 | Project | `project_name` | `ActiveProject.Title` | Disinkronkan dengan DB. |
 | Task | `task_id` | `Task.Text10` | Technical key permanen. |
 | Task | `project_id` | `Task.Text11` | Wajib untuk multi-project dalam satu file. |
@@ -777,11 +1024,12 @@ Aturan:
 
 1. Satu file `.mpp` mewakili satu project.
 2. `ProjectSummaryTask.Text30` menyimpan `project_id`.
-3. `ProjectSummaryTask.Text29` menyimpan `project_updated_at`.
-4. User boleh `Publish New Project`.
-5. User boleh `Sync Existing Project`.
-6. User boleh mengelola project resource team.
-7. API sync hanya menerima task/assignment/dependency untuk satu `project_id`.
+3. `ProjectSummaryTask.Text29` menyimpan `revision_no`.
+4. User boleh `Publish New Project` jika belum memiliki `project_id`.
+5. User wajib `Check Out` sebelum `Sync Existing Project` atau `Publish`.
+6. User boleh `Sync Existing Project` jika `lock_token` dan `revision_no` valid.
+7. User boleh mengelola project resource team.
+8. API sync hanya menerima task/assignment/dependency untuk satu `project_id`.
 
 ### Master Portfolio View
 
@@ -810,7 +1058,7 @@ Tambahkan dua action berbeda:
 Flow `Clone as New Project`:
 
 1. Hapus `project_id` dari `ProjectSummaryTask.Text30`.
-2. Hapus `project_updated_at` dari `ProjectSummaryTask.Text29`.
+2. Hapus `revision_no` dari `ProjectSummaryTask.Text29`.
 3. Hapus seluruh `task_id` dari `Task.Text10`.
 4. Hapus seluruh `assignment_id` dari `Assignment.Text10`.
 5. Pertahankan business key seperti `order_no`, `operation_no`, `ssbr_id`, task name, schedule, resource team, dan assignment planning.
@@ -1045,11 +1293,46 @@ Risiko: project yang sama dibuka dua user, lalu sync saling menimpa.
 
 MVP handling:
 
-1. `ms_project.updated_at` dan `revision_no` disimpan di DB.
-2. VBA menyimpan `project_updated_at` di `ProjectSummaryTask.Text29`.
-3. Saat sync, VBA mengirim `last_known_updated_at`.
-4. API menolak dengan `409 Conflict` jika DB lebih baru dari nilai yang dikirim.
-5. User diminta reload/import ulang atau melakukan force sync pada fase berikutnya.
+1. `revision_no` disimpan di `ms_project` dan menjadi optimistic concurrency token utama.
+2. VBA menyimpan `revision_no` di `ProjectSummaryTask.Text29`.
+3. `updated_at` tetap dikembalikan sebagai metadata display, tetapi tidak boleh menjadi satu-satunya token concurrency.
+4. Project existing harus di-checkout sebelum sync/publish.
+5. `checkout` mengembalikan `lock_token`.
+6. Saat sync/publish, VBA mengirim `last_known_revision_no` dan `lock_token`.
+7. API menolak dengan `409 Conflict` jika `last_known_revision_no` tidak sama dengan `ms_project.revision_no`.
+8. API menolak dengan `423 Locked` atau `409 Conflict` jika lock tidak valid, expired, atau dimiliki user lain.
+9. Setiap sync/publish yang sukses increment `revision_no` dalam transaksi yang sama.
+10. User diminta reload/import ulang jika revision conflict.
+
+Contoh payload minimal sync existing:
+
+```json
+{
+  "project": {
+    "project_id": "uuid",
+    "last_known_revision_no": 3,
+    "lock_token": "uuid"
+  },
+  "project_resources": [],
+  "tasks": [],
+  "assignments": [],
+  "dependencies": []
+}
+```
+
+Contoh response conflict:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "REVISION_CONFLICT",
+    "message": "Project revision has changed. Reload the project before syncing.",
+    "current_revision_no": 4,
+    "client_revision_no": 3
+  }
+}
+```
 
 ## 18. Implementation Stages
 
@@ -1080,9 +1363,13 @@ Deliverable:
 3. Migration SQL untuk `ms_resource`.
 4. Migration SQL untuk `ms_project_resource`.
 5. Migration SQL untuk `ms_project_assignment`.
-6. Optional migration SQL untuk `ms_project_dependency`.
-7. Trigger `updated_at`.
-8. Index dan constraint dasar.
+6. Migration SQL untuk `ms_project_dependency`.
+7. Migration SQL untuk `ms_project_lock`.
+8. Migration SQL untuk `ms_project_revision`.
+9. Migration SQL untuk `ms_project_publish`.
+10. Migration SQL untuk `ms_project_audit_log`.
+11. Trigger `updated_at`.
+12. Index dan constraint dasar.
 
 Acceptance:
 
@@ -1092,6 +1379,8 @@ Acceptance:
 4. Unique anti-duplikasi resource tersedia.
 5. Composite FK same-project tersedia untuk parent task, assignment, dan dependency.
 6. Constraint units `> 0` tersedia untuk `max_units` dan `assignment_units`.
+7. Unique index `local_dependency_key` tersedia untuk dependency baru.
+8. Lock, revision, publish, dan audit table tersedia sejak MVP.
 
 ### Stage 2 - Resource refresh API
 
@@ -1134,8 +1423,13 @@ Deliverable:
 1. `GET /ms-project/projects`.
 2. `GET /ms-project/projects/:project_id/package`.
 3. `POST /ms-project/projects`.
-4. `PUT /ms-project/projects/:project_id/sync`.
-5. `POST /ms-project/projects/bulk-load`.
+4. `POST /ms-project/projects/:project_id/checkout`.
+5. `POST /ms-project/projects/:project_id/heartbeat`.
+6. `PUT /ms-project/projects/:project_id/sync`.
+7. `POST /ms-project/projects/:project_id/publish`.
+8. `POST /ms-project/projects/:project_id/checkin`.
+9. `POST /ms-project/projects/:project_id/force-checkin`.
+10. `POST /ms-project/projects/bulk-load`.
 
 Acceptance:
 
@@ -1146,6 +1440,9 @@ Acceptance:
 5. Publish project baru menerima temporary project team dalam bulk payload.
 6. Local UID mapping resolve parent task, assignment, dan dependency.
 7. Sync planning tidak overwrite kolom `actual_*`.
+8. Project existing wajib lock valid sebelum sync/publish.
+9. `revision_no` naik setelah sync/publish sukses.
+10. Publish membuat snapshot dan audit log.
 
 ### Stage 5 - VBA resource flow
 
@@ -1172,12 +1469,16 @@ Acceptance:
 Deliverable:
 
 1. Publish new project.
-2. Sync current project.
-3. Clone as New Project.
-4. Import selected projects sebagai Master Portfolio View read-only.
-5. Serialize project, project resources, tasks, assignments, dependencies.
-6. Simpan `project_id`, `task_id`, `resource_id`, dan `assignment_id` ke field MS Project.
-7. Kirim `local_task_uid`, `local_assignment_uid`, `parent_local_task_uid`, `predecessor_local_task_uid`, dan `successor_local_task_uid`.
+2. Check Out project existing.
+3. Heartbeat lock saat sesi edit berjalan.
+4. Sync current project.
+5. Publish current revision.
+6. Check In project.
+7. Clone as New Project.
+8. Import selected projects sebagai Master Portfolio View read-only.
+9. Serialize project, project resources, tasks, assignments, dependencies.
+10. Simpan `project_id`, `revision_no`, `task_id`, `resource_id`, dan `assignment_id` ke field MS Project.
+11. Kirim `lock_token`, `last_known_revision_no`, `local_task_uid`, `local_assignment_uid`, `parent_local_task_uid`, `predecessor_local_task_uid`, dan `successor_local_task_uid`.
 
 Acceptance:
 
@@ -1187,6 +1488,9 @@ Acceptance:
 4. Person dan machine assignment terkirim ke PostgreSQL dengan `resource_id` yang valid.
 5. `Sync Current Project` ditolak pada Master Portfolio View.
 6. `Clone as New Project` menghapus UUID lama sebelum publish.
+7. Sync/publish ditolak jika belum checkout.
+8. Sync/publish ditolak jika `revision_no` stale.
+9. Checkin melepas lock dan tidak menghapus revision history.
 
 ### Stage 7 - Conflict check
 
@@ -1204,7 +1508,45 @@ Acceptance:
 2. Conflict person/machine/workcenter/team mudah dibedakan.
 3. MVP hanya warning, belum blocking sync.
 
-## 19. Risiko dan Mitigasi
+## 19. Data `.mpp` yang Perlu Disimpan
+
+Saat import atau sync dari Microsoft Project, simpan data inti berikut agar PostgreSQL bisa menjadi canonical source dan tidak tergantung pada file `.mpp` lokal.
+
+| Area | Data yang disimpan |
+| --- | --- |
+| Project | `project_id`, name/title, description, start, finish, status date, manager/owner, calendar, notes, source file metadata. |
+| Tasks | `task_id`, `local_task_uid`, name, outline level, outline number/WBS, parent, summary flag, milestone flag, start, finish, duration, work, percent complete planned view, constraint type/date, deadline, priority, notes. |
+| Business keys | `order_no`, `operation_no`, `ssbr_id`, `sow_id`, workcenter, operation text. |
+| Resources | `resource_id`, code, name, type, category, max units, calendar, group/workcenter, source mapping. |
+| Project resource team | Resource yang dipilih untuk project, meskipun belum assigned. |
+| Assignments | `assignment_id`, `local_assignment_uid`, task, resource, units, planned work, start, finish. |
+| Dependencies | predecessor, successor, dependency type `FS/SS/FF/SF`, lag, `local_dependency_key`. |
+| Calendars | Working days, working times, exception days, holiday/shift rules. MVP boleh ditunda, tetapi schema roadmap harus ada. |
+| Baselines | Baseline start/finish/duration/work per task dan assignment. MVP boleh ditunda setelah publish/sync stabil. |
+| Custom fields | Definisi field dan nilai field penting dari project/task/resource/assignment. |
+| File import metadata | Original filename, file hash, parser/importer version, imported_by, imported_at. |
+
+Ownership data:
+
+1. Planned schedule berasal dari Microsoft Project.
+2. Actual progress/work berasal dari PostgreSQL/timesheet/transaksi lapangan.
+3. Resource master berasal dari PostgreSQL, bukan dari free-text Resource Sheet.
+4. Setelah project punya `project_id`, `.mpp` hanya editor client; PostgreSQL adalah source of truth.
+
+## 20. Risiko Khusus Jika `.mpp` Menjadi Sumber Data Tunggal
+
+| Risiko | Dampak | Mitigasi |
+| --- | --- | --- |
+| Format `.mpp` proprietary | Parser server-side bisa tidak membaca semua fitur dengan sempurna | Gunakan VBA/Project Object Model untuk sync utama; server-side import dipakai sebagai fallback. |
+| Scheduling engine kompleks | Hasil kalkulasi durasi/start/finish bisa beda dari Microsoft Project Desktop | Simpan hasil kalkulasi dari Desktop; jangan reimplement scheduling engine penuh pada MVP. |
+| File dicopy beserta UUID | Project lama bisa tertimpa | Wajib `Clone as New Project` untuk menghapus UUID lama sebelum publish baru. |
+| `Task.UniqueID` hanya stabil dalam satu file | Clone/import ulang dapat menciptakan korelasi palsu | Gunakan UUID DB (`task_id`) setelah publish; `local_task_uid` hanya correlation sementara. |
+| Nomor baris task berubah | Upsert salah atau duplikasi | Jangan pernah memakai row number sebagai key. |
+| Resource free-text berubah nama | Assignment putus atau resource duplikat | Assignment wajib memakai `resource_id` dari `Resource.Text9`. |
+| Password-protected/corrupt `.mpp` | Import gagal | Validasi file, catat import error, sediakan path export XML/VBA sync. |
+| Actual diedit di `.mpp` | Data lapangan rusak | Planning sync tidak boleh overwrite `actual_*`. |
+
+## 21. Risiko dan Mitigasi
 
 | Risiko | Dampak | Mitigasi |
 | --- | --- | --- |
@@ -1222,10 +1564,14 @@ Acceptance:
 | Planning sync menimpa actual | Data lapangan rusak | Pisahkan planned dan actual fields; planning sync tidak update `actual_*`. |
 | File `.mpp` dicopy dengan UUID lama | Project lama tertimpa | Sediakan `Clone as New Project` yang menghapus UUID sebelum publish. |
 | Field custom MS Project bertabrakan | ID hilang/tertukar | Audit field dulu; mapping di modul konfigurasi. |
-| Dua user sync project sama | Update tertimpa | `updated_at`, `revision_no`, dan response `409 Conflict`. |
+| Dua user sync project sama | Update tertimpa | Wajib checkout; validasi `lock_token`, `revision_no`, dan response `409 Conflict`. |
+| Lock tidak dilepas karena MS Project crash | Project tidak bisa diedit user lain | Heartbeat, stale lock detection, dan admin force check-in dengan audit. |
+| Publish gagal di tengah transaksi | Published snapshot tidak konsisten | Publish harus transactional; jangan update `published_revision_no` sebelum snapshot sukses. |
+| Dashboard membaca draft | User melihat data belum dipublish | Reporting harus membaca published/read model, bukan current draft jika konteksnya portfolio. |
+| Client menulis langsung ke DB | Permission, audit, dan lock bypass | Semua write wajib lewat Express API `/ms-project`. |
 | API legacy masih dipakai | Regression SOW lama | Buat route `/ms-project` baru berdampingan, jangan hapus flow lama. |
 
-## 20. Test Plan
+## 22. Test Plan
 
 ### Scenario 1 - Resource refresh
 
@@ -1267,15 +1613,46 @@ Acceptance:
 
 ### Scenario 5 - Sync existing project
 
-1. Ubah schedule task.
-2. Tambah task baru.
-3. Tambah child task baru.
-4. Tambah assignment person atau machine.
-5. Tambah dependency baru.
-6. Sync.
-7. Sync ulang tanpa perubahan.
-8. Pastikan tidak ada duplikasi.
-9. Pastikan `actual_*` di DB tidak berubah oleh planning sync.
+1. Checkout project existing.
+2. Pastikan API mengembalikan `lock_token` dan `revision_no`.
+3. Ubah schedule task.
+4. Tambah task baru.
+5. Tambah child task baru.
+6. Tambah assignment person atau machine.
+7. Tambah dependency baru.
+8. Sync dengan `lock_token` dan `last_known_revision_no`.
+9. Sync ulang tanpa perubahan.
+10. Pastikan tidak ada duplikasi.
+11. Pastikan `actual_*` di DB tidak berubah oleh planning sync.
+12. Pastikan `revision_no` naik setelah sync sukses.
+
+### Scenario 5A - Checkout conflict
+
+1. User A checkout project.
+2. User B mencoba checkout project yang sama.
+3. Pastikan API menolak dengan conflict/locked response.
+4. User A checkin.
+5. User B checkout ulang.
+6. Pastikan checkout User B sukses setelah lock dilepas.
+
+### Scenario 5B - Revision conflict
+
+1. User A checkout project revision 3.
+2. Admin/API test menaikkan project ke revision 4 melalui sync/publish valid.
+3. User A mencoba sync dengan `last_known_revision_no = 3`.
+4. Pastikan API menolak dengan `REVISION_CONFLICT`.
+5. Pastikan user diminta reload/import ulang.
+
+### Scenario 5C - Publish and audit
+
+1. Checkout project.
+2. Sync perubahan schedule.
+3. Publish project.
+4. Pastikan `ms_project_publish` berisi snapshot revision terbaru.
+5. Pastikan `ms_project.published_revision_no` dan `last_published_at` ter-update.
+6. Pastikan `ms_project_revision` berisi revision type `PUBLISH`.
+7. Pastikan `ms_project_audit_log` mencatat action publish.
+8. Checkin project.
 
 ### Scenario 6 - Import project
 
@@ -1302,7 +1679,7 @@ Acceptance:
 4. Publish.
 5. Pastikan DB membuat project baru dan project lama tidak berubah.
 
-## 21. Keputusan MVP yang Dikunci
+## 23. Keputusan MVP yang Dikunci
 
 1. Resource bukan hanya mesin. MVP wajib support person, machine, workcenter, dan team.
 2. `resource_type` adalah klasifikasi teknis Microsoft Project: `WORK`, `MATERIAL`, `COST`.
@@ -1328,3 +1705,12 @@ Acceptance:
 22. Planning sync tidak boleh overwrite actual data.
 23. Soft delete/reactivation dipakai untuk resource team, task, assignment, dan dependency.
 24. `Clone as New Project` wajib menghapus UUID lama sebelum publish baru.
+25. Project existing wajib checkout sebelum sync atau publish.
+26. `lock_token` wajib divalidasi untuk sync, publish, heartbeat, dan checkin.
+27. `revision_no` adalah optimistic concurrency token utama; `updated_at` hanya metadata.
+28. Publish wajib membuat snapshot di `ms_project_publish`.
+29. Sync/publish/force-checkin wajib menulis `ms_project_audit_log`.
+30. Project Center harus menampilkan lock metadata dan published revision metadata.
+31. `.mpp` bukan canonical source setelah project dipublish; PostgreSQL adalah source of truth.
+32. Dashboard/portfolio membaca published/read model, bukan draft/current yang sedang diedit.
+33. Calendar, baseline, dan custom field detail masuk roadmap setelah checkout/sync/publish stabil.
