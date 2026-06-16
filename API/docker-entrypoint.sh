@@ -3,6 +3,7 @@ set -e
 
 mkdir -p \
   /app/uploads/sow-pdf \
+  /app/uploads/ms-project-mpp \
   /app/uploads/operation-card \
   /app/uploads/progress \
   /app/uploads/consumable

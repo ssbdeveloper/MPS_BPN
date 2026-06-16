@@ -9,8 +9,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG VITE_API_URL=/api
 ARG VITE_TTS_API_URL=
+ARG VITE_APP_VARIANT=salvaging
 ENV VITE_API_URL=$VITE_API_URL
 ENV VITE_TTS_API_URL=$VITE_TTS_API_URL
+ENV VITE_APP_VARIANT=$VITE_APP_VARIANT
 RUN npm run build
 
 FROM nginx:alpine

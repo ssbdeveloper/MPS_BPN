@@ -1,6 +1,30 @@
 const express = require("express");
+const fs = require("fs");
+const multer = require("multer");
+const path = require("path");
 const router = express.Router();
 const controller = require("../controllers/msProjectController");
+
+const uploadDir = path.join(__dirname, "../uploads/ms-project-mpp");
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    fs.mkdirSync(uploadDir, { recursive: true });
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const projectId = String(req.params.project_id || "").replace(/[^0-9a-f-]/gi, "");
+    cb(null, `${projectId || "project"}-${Date.now()}.uploading.mpp`);
+  },
+});
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    cb(null, path.extname(file.originalname).toLowerCase() === ".mpp");
+  },
+  limits: { fileSize: 100 * 1024 * 1024 },
+});
 
 router.get("/health", controller.health);
 
@@ -8,6 +32,7 @@ router.get("/projects", controller.listProjects);
 router.post("/projects/bulk-load", controller.bulkLoadProjects);
 router.get("/projects/:project_id/package", controller.getProjectPackage);
 router.post("/projects", controller.publishProject);
+router.post("/projects/:project_id/file", upload.single("file"), controller.uploadProjectFile);
 router.post("/projects/:project_id/checkout", controller.checkoutProject);
 router.post("/projects/:project_id/heartbeat", controller.heartbeatProject);
 router.put("/projects/:project_id/sync", controller.syncProject);

@@ -54,6 +54,76 @@ Public Function MsHttpDelete(ByVal path As String) As String
     MsHttpDelete = MsHttpRequest("DELETE", MsApiUrl(path))
 End Function
 
+Private Sub MsStreamWriteAscii(ByVal stream As Object, ByVal text As String)
+    Dim bytes() As Byte
+    bytes = StrConv(text, vbFromUnicode)
+    stream.Write bytes
+End Sub
+
+Public Function MsHttpUploadFile(ByVal path As String, ByVal fieldName As String, ByVal filePath As String) As String
+    On Error GoTo ErrHandler
+
+    Dim fso As Object
+    Dim boundary As String
+    Dim body As Object
+    Dim fileStream As Object
+    Dim http As Object
+    Dim fileName As String
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FileExists(filePath) Then
+        Err.Raise vbObjectError + 9101, "MsHttpUploadFile", "File tidak ditemukan: " & filePath
+    End If
+
+    fileName = fso.GetFileName(filePath)
+    boundary = "----MPSMSProject" & Format$(Now, "yyyymmddhhnnss") & CStr(Int(Rnd() * 1000000))
+
+    Set body = CreateObject("ADODB.Stream")
+    body.Type = 1
+    body.Open
+
+    MsStreamWriteAscii body, "--" & boundary & vbCrLf
+    MsStreamWriteAscii body, "Content-Disposition: form-data; name=""" & fieldName & """; filename=""" & fileName & """" & vbCrLf
+    MsStreamWriteAscii body, "Content-Type: application/vnd.ms-project" & vbCrLf & vbCrLf
+
+    Set fileStream = CreateObject("ADODB.Stream")
+    fileStream.Type = 1
+    fileStream.Open
+    fileStream.LoadFromFile filePath
+    fileStream.Position = 0
+    body.Write fileStream.Read
+    fileStream.Close
+
+    MsStreamWriteAscii body, vbCrLf & "--" & boundary & "--" & vbCrLf
+    body.Position = 0
+
+    Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    http.Open "POST", MsApiUrl(path), False
+    http.Option(4) = 13056
+    http.SetTimeouts 5000, 5000, MS_HTTP_TIMEOUT_MS, MS_HTTP_TIMEOUT_MS
+    http.SetRequestHeader "Accept", "application/json"
+    http.SetRequestHeader "Content-Type", "multipart/form-data; boundary=" & boundary
+    http.SetRequestHeader "Cache-Control", "no-cache"
+    http.Send body.Read
+    http.WaitForResponse
+    body.Close
+
+    If http.Status < 200 Or http.Status >= 300 Then
+        Err.Raise vbObjectError + http.Status, "MsHttpUploadFile", _
+            "HTTP " & http.Status & " " & http.StatusText & vbCrLf & Left$(http.ResponseText, 1000)
+    End If
+
+    MsHttpUploadFile = http.ResponseText
+    Exit Function
+
+ErrHandler:
+    On Error Resume Next
+    If Not fileStream Is Nothing Then fileStream.Close
+    If Not body Is Nothing Then body.Close
+    On Error GoTo 0
+    Err.Raise Err.Number, Err.Source, Err.Description
+End Function
+
 Public Function MsParseSuccess(ByVal responseText As String) As Object
     Dim root As Object
     Set root = JsonConverter.ParseJson(responseText)
@@ -152,4 +222,3 @@ Public Function MsUrlEncode(ByVal value As String) As String
 
     MsUrlEncode = result
 End Function
-

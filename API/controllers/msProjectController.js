@@ -86,6 +86,11 @@ exports.publishProject = route(async (req) => {
   return (res) => success(res, data, 201, data.summary || {});
 });
 
+exports.uploadProjectFile = route(async (req) => {
+  const data = await service.uploadProjectFile(req.params.project_id, req.file);
+  return (res) => success(res, data);
+});
+
 exports.checkoutProject = route(async (req) => {
   const data = await service.checkoutProject(req.params.project_id, req.body || {});
   return (res) => success(res, data);

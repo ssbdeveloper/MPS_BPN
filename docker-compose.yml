@@ -63,7 +63,12 @@ services:
       - timesheet-network
 
   frontend:
-    build: ./react-timesheet
+    build:
+      context: ./react-timesheet
+      args:
+        VITE_API_URL: /api
+        VITE_TTS_API_URL: ""
+        VITE_APP_VARIANT: ${VITE_APP_VARIANT:-salvaging}
     container_name: timesheet-frontend
     expose:
       - "80"

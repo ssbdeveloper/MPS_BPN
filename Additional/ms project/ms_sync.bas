@@ -190,6 +190,43 @@ Private Sub MsApplyLockResponse(ByVal root As Object)
     MsSetProjectMode MS_MODE_SINGLE_PROJECT
 End Sub
 
+Private Function MsProjectTempMppPath() As String
+    Dim projectId As String
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Then
+        Err.Raise vbObjectError + 9201, "MsProjectTempMppPath", "Project ID kosong"
+    End If
+    MsProjectTempMppPath = Environ$("TEMP") & "\mps-ms-project-" & projectId & ".mpp"
+End Function
+
+Private Sub MsSaveAndUploadCurrentProjectFile()
+    Dim projectId As String
+    Dim filePath As String
+    Dim root As Object
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Then
+        Err.Raise vbObjectError + 9202, "MsSaveAndUploadCurrentProjectFile", "Project ID kosong"
+    End If
+
+    filePath = MsProjectTempMppPath()
+    FileSaveAs Name:=filePath, FormatID:="MSProject.mpp"
+    Set root = MsParseSuccess(MsHttpUploadFile("/projects/" & projectId & "/file", "file", filePath))
+End Sub
+
+Public Sub Ms_UploadCurrentProjectFile()
+    On Error GoTo ErrHandler
+    If Len(MsGetProjectId()) = 0 Then
+        MsgBox "Project ID kosong. Publish atau import project dulu.", vbExclamation
+        Exit Sub
+    End If
+    MsSaveAndUploadCurrentProjectFile
+    MsgBox "Upload file .mpp sukses.", vbInformation
+    Exit Sub
+ErrHandler:
+    MsgBox "Upload file .mpp gagal: " & Err.Description, vbCritical
+End Sub
+
 Private Function MsProjectLockPayload(Optional ByVal includeRevision As Boolean = False) As String
     Dim json As String
     json = "{""project"":{"
@@ -318,6 +355,8 @@ Public Sub Ms_PublishNewProject()
     phase = "apply response"
     MsApplySyncResponse root
     MsSetProjectLockToken ""
+    phase = "save and upload mpp file"
+    MsSaveAndUploadCurrentProjectFile
     Application.Calculation = oldCalculation
     Application.ScreenUpdating = True
 
@@ -372,6 +411,8 @@ Public Sub Ms_SyncExistingProject()
     Set root = MsParseSuccess(MsHttpPut("/projects/" & projectId & "/sync", payload))
     phase = "apply response"
     MsApplySyncResponse root
+    phase = "save and upload mpp file"
+    MsSaveAndUploadCurrentProjectFile
     Application.Calculation = oldCalculation
     Application.ScreenUpdating = True
 

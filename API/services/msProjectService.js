@@ -1,5 +1,7 @@
 const dbModule = require("../db");
 const crypto = require("crypto");
+const fs = require("fs/promises");
+const path = require("path");
 
 const MAX_LIMIT = 100;
 const DEFAULT_LOCK_MINUTES = 30;
@@ -138,6 +140,10 @@ function mapProject(row) {
     revision_no: row.revision_no,
     published_revision_no: row.published_revision_no,
     last_published_at: row.last_published_at,
+    file_path: row.file_path,
+    file_name: row.file_name,
+    file_size: row.file_size === null || row.file_size === undefined ? null : Number(row.file_size),
+    file_uploaded_at: row.file_uploaded_at,
     checked_out_by: row.checked_out_by,
     checked_out_at: row.checked_out_at,
     calendar_id: row.calendar_id,
@@ -1920,6 +1926,67 @@ async function publishProject(payload) {
   }
 }
 
+async function uploadProjectFile(projectIdParam, file) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+
+  if (!file) {
+    throw new ApiError(400, "PROJECT_FILE_REQUIRED", "A .mpp file upload is required");
+  }
+
+  const originalName = nullableText(file.originalname) || `${projectId}.mpp`;
+  if (path.extname(originalName).toLowerCase() !== ".mpp") {
+    await fs.unlink(file.path).catch(() => {});
+    throw new ApiError(400, "INVALID_PROJECT_FILE", "Only .mpp files are allowed");
+  }
+
+  const finalFilename = `${projectId}.mpp`;
+  const finalPath = path.join(path.dirname(file.path), finalFilename);
+  const publicPath = `/uploads/ms-project-mpp/${finalFilename}`;
+  const client = await pool().connect();
+
+  try {
+    await client.query("begin");
+    const result = await client.query(
+      `update ms_project
+       set file_path = $2,
+           file_name = $3,
+           file_size = $4,
+           file_uploaded_at = now(),
+           updated_at = now()
+       where project_id = $1
+       returning project_id, project_name, revision_no, file_path, file_name, file_size, file_uploaded_at`,
+      [projectId, publicPath, originalName, file.size]
+    );
+
+    if (!result.rows[0]) {
+      await client.query("rollback");
+      await fs.unlink(file.path).catch(() => {});
+      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+
+    await writeAuditLog(client, {
+      projectId,
+      action: "UPLOAD_PROJECT_FILE",
+      revisionNo: result.rows[0].revision_no,
+      details: {
+        file_path: publicPath,
+        file_name: originalName,
+        file_size: file.size,
+      },
+    });
+
+    await fs.rename(file.path, finalPath);
+    await client.query("commit");
+    return result.rows[0];
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    await fs.unlink(file.path).catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function syncProject(projectIdParam, payload) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const normalized = normalizeProjectPayload(payload, true);
@@ -2235,4 +2302,5 @@ module.exports = {
   refreshResources,
   searchResources,
   syncProject,
+  uploadProjectFile,
 };
