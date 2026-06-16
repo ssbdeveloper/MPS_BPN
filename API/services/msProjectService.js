@@ -209,7 +209,7 @@ async function writePublishSnapshot(client, { projectId, revisionNo, actor, snap
     `update ms_project
      set published_revision_no = $2,
          last_published_at = now(),
-         updated_by = coalesce($3, updated_by)
+         updated_by = coalesce($3::text, updated_by)
      where project_id = $1`,
     [projectId, revisionNo, actor]
   );
@@ -584,14 +584,14 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
              is_active = $16,
              local_task_uid = case
                when local_task_uid is null
-                and $17 is not null
+                and $17::text is not null
                 and not exists (
                   select 1 from ms_project_task x
                   where x.project_id = $1
-                    and x.local_task_uid = $17
+                    and x.local_task_uid = $17::text
                     and x.task_id <> $2
                 )
-               then $17
+               then $17::text
                else local_task_uid
              end,
              calendar_id = $18,
@@ -745,14 +745,14 @@ async function upsertAssignments(client, projectId, assignments, taskMap, isPubl
              is_active = $9,
              local_assignment_uid = case
                when local_assignment_uid is null
-                and $10 is not null
+                and $10::text is not null
                 and not exists (
                   select 1 from ms_project_assignment x
                   where x.project_id = $1
-                    and x.local_assignment_uid = $10
+                    and x.local_assignment_uid = $10::text
                     and x.assignment_id <> $2
                 )
-               then $10
+               then $10::text
                else local_assignment_uid
              end
          where project_id = $1 and assignment_id = $2
@@ -850,14 +850,14 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
              lag_minutes = $6,
              local_dependency_key = case
                when local_dependency_key is null
-                and $7 is not null
+                and $7::text is not null
                 and not exists (
                   select 1 from ms_project_dependency x
                   where x.project_id = $1
-                    and x.local_dependency_key = $7
+                    and x.local_dependency_key = $7::text
                     and x.dependency_id <> $2
                 )
-               then $7
+               then $7::text
                else local_dependency_key
              end,
              is_active = $8
@@ -887,8 +887,8 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
          where project_id = $1
            and predecessor_task_id = $2
            and successor_task_id = $3
-           and coalesce(dependency_type, 'FS') = coalesce($4, 'FS')
-           and coalesce(lag_minutes, 0) = coalesce($5, 0)
+           and coalesce(dependency_type, 'FS') = coalesce($4::text, 'FS')
+           and coalesce(lag_minutes, 0) = coalesce($5::integer, 0)
            and is_active = true
          order by created_at, dependency_id
          limit 1`,
@@ -900,14 +900,14 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
           `update ms_project_dependency
            set local_dependency_key = case
                  when local_dependency_key is null
-                  and $3 is not null
+                  and $3::text is not null
                   and not exists (
                     select 1 from ms_project_dependency x
                     where x.project_id = $1
-                      and x.local_dependency_key = $3
+                      and x.local_dependency_key = $3::text
                       and x.dependency_id <> $2
                   )
-                 then $3
+                 then $3::text
                  else local_dependency_key
                end,
                is_active = $4,
@@ -1753,7 +1753,7 @@ async function checkinProject(projectIdParam, body = {}) {
       `update ms_project
        set checked_out_by = null,
            checked_out_at = null,
-           updated_by = coalesce($2, updated_by)
+           updated_by = coalesce($2::text, updated_by)
        where project_id = $1`,
       [projectId, actor]
     );
@@ -1791,7 +1791,7 @@ async function forceCheckinProject(projectIdParam, body = {}) {
       `update ms_project
        set checked_out_by = null,
            checked_out_at = null,
-           updated_by = coalesce($2, updated_by)
+           updated_by = coalesce($2::text, updated_by)
        where project_id = $1`,
       [projectId, actor]
     );
@@ -1839,7 +1839,7 @@ async function publishCurrentRevision(projectIdParam, payload = {}) {
     const revisionResult = await client.query(
       `update ms_project
        set revision_no = revision_no + 1,
-           updated_by = coalesce($2, updated_by),
+           updated_by = coalesce($2::text, updated_by),
            updated_at = now()
        where project_id = $1
        returning project_id, revision_no, updated_at`,
@@ -2074,12 +2074,12 @@ async function syncProject(projectIdParam, payload) {
 
     await client.query(
       `update ms_project
-       set project_name = coalesce($2, project_name),
-           description = coalesce($3, description),
-           status = coalesce($4, status),
-           updated_by = coalesce($5, updated_by),
-           calendar_id = coalesce($6, calendar_id),
-           calendar_name = coalesce($7, calendar_name)
+       set project_name = coalesce($2::text, project_name),
+           description = coalesce($3::text, description),
+           status = coalesce($4::text, status),
+           updated_by = coalesce($5::text, updated_by),
+           calendar_id = coalesce($6::uuid, calendar_id),
+           calendar_name = coalesce($7::text, calendar_name)
        where project_id = $1`,
       [
         projectId,

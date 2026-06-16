@@ -11,12 +11,13 @@ function success(res, data = {}, status = 200, summary = {}, warnings = []) {
 
 function error(res, err) {
   const isDbConflict = ["23503", "23505"].includes(err.code);
+  const isPostgresError = Boolean(err.code && err.severity);
   const status = err.status || (isDbConflict ? 409 : 500);
   const code = err.code || "INTERNAL_SERVER_ERROR";
   const response = {
     success: false,
     code,
-    message: status === 500 ? "Internal Server Error" : err.message,
+    message: status === 500 && !isPostgresError ? "Internal Server Error" : err.message,
     details: Array.isArray(err.details) ? err.details : err.details ? [err.details] : [],
   };
 
@@ -29,12 +30,31 @@ function error(res, err) {
     }];
   }
 
+  if (isPostgresError && !isDbConflict) {
+    response.details = [{
+      table: err.table || null,
+      column: err.column || null,
+      constraint: err.constraint || null,
+      detail: err.detail || null,
+      hint: err.hint || null,
+      position: err.position || null,
+      where: err.where || null,
+      routine: err.routine || null,
+    }];
+  }
+
   if (code === "PROJECT_REVISION_CONFLICT" && err.details && err.details.current_revision_no !== undefined) {
     response.current_revision_no = err.details.current_revision_no;
   }
 
   if (status >= 500) {
-    console.error("[ms-project]", code, err.message);
+    console.error("[ms-project]", code, err.message, {
+      detail: err.detail,
+      hint: err.hint,
+      position: err.position,
+      where: err.where,
+      routine: err.routine,
+    });
   }
 
   res.status(status).json(response);
