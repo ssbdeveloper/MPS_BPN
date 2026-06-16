@@ -22,7 +22,7 @@ Sync Existing Project
   -> API validasi lock_token + revision_no
   -> API update metadata dan naikkan revision_no
   -> VBA update revision/mapping UUID
-  -> VBA FileSaveAs ke temp .mpp
+  -> VBA FileSave file .mpp aktif; jika belum ada path .mpp, FileSaveAs ke temp
   -> VBA upload ulang .mpp, overwrite file server
 ```
 
@@ -93,7 +93,7 @@ Public Const MS_API_BASE_URL As String = "https://100.80.101.53/api/ms-project"
 | `/projects` | POST | `Ms_PublishNewProject` | Buat project baru dan simpan metadata. |
 | `/projects/:project_id/package` | GET | `MsImportProjectPackage` | Ambil full package project. |
 | `/projects/:project_id/checkout` | POST | `Ms_CheckOutCurrentProject` | Ambil lock edit. |
-| `/projects/:project_id/heartbeat` | POST | `Ms_HeartbeatCurrentProject` | Perpanjang lock. |
+| `/projects/:project_id/heartbeat` | POST | `Ms_HeartbeatCurrentProject` | Cek/refresh lock aktif. |
 | `/projects/:project_id/sync` | PUT | `Ms_SyncExistingProject` | Update metadata project existing. |
 | `/projects/:project_id/file` | POST multipart | `Ms_UploadCurrentProjectFile`, publish/sync | Upload/overwrite file `.mpp`. |
 | `/projects/:project_id/publish` | POST | `Ms_PublishCurrentRevision` | Tandai revision DB sebagai published. |
@@ -108,7 +108,7 @@ Public Const MS_API_BASE_URL As String = "https://100.80.101.53/api/ms-project"
 ## Catatan Cara Kerja
 
 - Sync existing wajib punya `project_id`, `revision_no`, dan `lock_token`.
-- API akan menolak sync jika revision file sudah stale (`409 conflict`) atau lock expired (`423`).
+- Lock token tidak expired untuk MVP; API akan menolak sync jika revision file sudah stale (`409 conflict`) atau lock sudah dilepas/dimiliki sesi lain (`423`).
 - Perubahan outline/indent task ikut dikirim lewat `parent_local_task_uid`, `outline_level`, dan `outline_number`.
 - Task baru wajib punya `local_task_uid` dari `Task.UniqueID`; task lama lebih stabil kalau sudah punya `task_id`.
 - File `.mpp` disimpan backend di folder khusus `uploads/ms-project-mpp`, bukan folder SOW.

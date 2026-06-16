@@ -4,8 +4,7 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const MAX_LIMIT = 100;
-const DEFAULT_LOCK_MINUTES = 30;
-const MAX_LOCK_MINUTES = 240;
+const NON_EXPIRING_LOCK_INTERVAL = "100 years";
 const RESOURCE_CATEGORIES = new Set(["PERSON", "MACHINE", "WORKCENTER", "TEAM"]);
 const RESOURCE_REFRESH_SOURCES = new Set(["WORKCENTER", "MACHINE", "EMPLOYEE"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -165,12 +164,6 @@ function buildPackage(rows) {
   };
 }
 
-function lockMinutes(value) {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) return DEFAULT_LOCK_MINUTES;
-  return Math.min(MAX_LOCK_MINUTES, Math.max(1, parsed));
-}
-
 function actorFromBody(body, fallback = "ms-project-vba") {
   return nullableText(body?.actor || body?.user || body?.updated_by || body?.created_by) || fallback;
 }
@@ -220,7 +213,6 @@ async function getActiveLock(client, projectId) {
     `select *
      from ms_project_lock
      where project_id = $1
-       and expires_at > now()
      for update`,
     [projectId]
   );
@@ -237,13 +229,12 @@ async function requireValidLock(client, projectId, lockToken, actionName) {
      from ms_project_lock
      where project_id = $1
        and lock_token = $2
-       and expires_at > now()
      for update`,
     [projectId, token]
   );
   const lock = result.rows[0];
   if (!lock) {
-    throw new ApiError(423, "PROJECT_LOCK_INVALID", "Project lock is missing, expired, or owned by another session");
+    throw new ApiError(423, "PROJECT_LOCK_INVALID", "Project lock is missing or owned by another session");
   }
   return lock;
 }
@@ -1637,7 +1628,6 @@ async function deactivateProjectResource(projectId, resourceId) {
 async function checkoutProject(projectIdParam, body = {}) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const actor = actorFromBody(body);
-  const minutes = lockMinutes(body.lock_minutes);
   const lockToken = crypto.randomUUID();
   const client = await pool().connect();
 
@@ -1656,9 +1646,9 @@ async function checkoutProject(projectIdParam, body = {}) {
       });
     }
 
-    await client.query(
+    const lockResult = await client.query(
       `insert into ms_project_lock (project_id, lock_token, locked_by, expires_at)
-       values ($1, $2, $3, now() + ($4::text || ' minutes')::interval)
+       values ($1, $2, $3, now() + $4::interval)
        on conflict (project_id)
        do update set
          lock_token = excluded.lock_token,
@@ -1668,7 +1658,7 @@ async function checkoutProject(projectIdParam, body = {}) {
          expires_at = excluded.expires_at,
          updated_at = now()
        returning *`,
-      [projectId, lockToken, actor, minutes]
+      [projectId, lockToken, actor, NON_EXPIRING_LOCK_INTERVAL]
     );
     await client.query(
       `update ms_project
@@ -1684,7 +1674,7 @@ async function checkoutProject(projectIdParam, body = {}) {
       actor,
       lockToken,
       revisionNo: project.revision_no,
-      details: { lock_minutes: minutes },
+      details: { non_expiring: true },
     });
     await client.query("commit");
 
@@ -1693,7 +1683,8 @@ async function checkoutProject(projectIdParam, body = {}) {
       lock_token: lockToken,
       locked_by: actor,
       revision_no: project.revision_no,
-      expires_in_minutes: minutes,
+      expires_at: lockResult.rows[0].expires_at,
+      expires_in_minutes: null,
     };
   } catch (error) {
     await client.query("rollback");
@@ -1705,7 +1696,6 @@ async function checkoutProject(projectIdParam, body = {}) {
 
 async function heartbeatProject(projectIdParam, body = {}) {
   const projectId = assertUuid(projectIdParam, "project_id");
-  const minutes = lockMinutes(body.lock_minutes);
   const client = await pool().connect();
 
   try {
@@ -1714,12 +1704,12 @@ async function heartbeatProject(projectIdParam, body = {}) {
     const result = await client.query(
       `update ms_project_lock
        set heartbeat_at = now(),
-           expires_at = now() + ($3::text || ' minutes')::interval,
+           expires_at = now() + $3::interval,
            updated_at = now()
        where project_id = $1
          and lock_token = $2
        returning *`,
-      [projectId, body.lock_token, minutes]
+      [projectId, body.lock_token, NON_EXPIRING_LOCK_INTERVAL]
     );
     await client.query("commit");
     return {

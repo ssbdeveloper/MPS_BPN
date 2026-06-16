@@ -199,6 +199,67 @@ Private Function MsProjectTempMppPath() As String
     MsProjectTempMppPath = Environ$("TEMP") & "\mps-ms-project-" & projectId & ".mpp"
 End Function
 
+Private Function MsCurrentMppFilePath() As String
+    On Error Resume Next
+    Dim filePath As String
+    filePath = ActiveProject.FullName
+    If Err.Number <> 0 Then
+        Err.Clear
+        filePath = ""
+    End If
+    On Error GoTo 0
+
+    filePath = Trim$(filePath)
+    If Len(filePath) > 0 Then
+        If LCase$(Right$(filePath, 4)) = ".mpp" Then
+            MsCurrentMppFilePath = filePath
+        End If
+    End If
+End Function
+
+Private Sub MsSaveAsMppSafe(ByVal filePath As String)
+    On Error Resume Next
+
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(filePath) Then fso.DeleteFile filePath, True
+
+    Err.Clear
+    FileSaveAs Name:=filePath, FormatID:="MSProject.mpp"
+    If Err.Number <> 0 Then
+        Err.Clear
+        FileSaveAs Name:=filePath
+    End If
+
+    If Err.Number <> 0 Then
+        Dim saveErrNo As Long
+        Dim saveErrSource As String
+        Dim saveErrDescription As String
+        saveErrNo = Err.Number
+        saveErrSource = Err.Source
+        saveErrDescription = Err.Description
+        On Error GoTo 0
+        Err.Raise saveErrNo, saveErrSource, saveErrDescription & vbCrLf & "Path: " & filePath
+    End If
+
+    On Error GoTo 0
+End Sub
+
+Private Function MsSaveCurrentProjectForUpload() As String
+    Dim filePath As String
+
+    filePath = MsCurrentMppFilePath()
+    If Len(filePath) > 0 Then
+        FileSave
+        MsSaveCurrentProjectForUpload = filePath
+        Exit Function
+    End If
+
+    filePath = MsProjectTempMppPath()
+    MsSaveAsMppSafe filePath
+    MsSaveCurrentProjectForUpload = filePath
+End Function
+
 Private Sub MsSaveAndUploadCurrentProjectFile()
     Dim projectId As String
     Dim filePath As String
@@ -209,8 +270,7 @@ Private Sub MsSaveAndUploadCurrentProjectFile()
         Err.Raise vbObjectError + 9202, "MsSaveAndUploadCurrentProjectFile", "Project ID kosong"
     End If
 
-    filePath = MsProjectTempMppPath()
-    FileSaveAs Name:=filePath, FormatID:="MSProject.mpp"
+    filePath = MsSaveCurrentProjectForUpload()
     Set root = MsParseSuccess(MsHttpUploadFile("/projects/" & projectId & "/file", "file", filePath))
 End Sub
 
@@ -241,6 +301,13 @@ Private Function MsProjectLockPayload(Optional ByVal includeRevision As Boolean 
     MsProjectLockPayload = json
 End Function
 
+Private Function MsIsProjectLockInvalidError(ByVal errorText As String) As Boolean
+    MsIsProjectLockInvalidError = _
+        InStr(1, errorText, "HTTP 423", vbTextCompare) > 0 Or _
+        InStr(1, errorText, "PROJECT_LOCK_INVALID", vbTextCompare) > 0 Or _
+        InStr(1, errorText, "PROJECT_LOCK_REQUIRED", vbTextCompare) > 0
+End Function
+
 Public Sub Ms_CheckOutCurrentProject()
     On Error GoTo ErrHandler
     Dim projectId As String
@@ -253,11 +320,27 @@ Public Sub Ms_CheckOutCurrentProject()
         Exit Sub
     End If
     If Len(MsGetProjectLockToken()) > 0 Then
-        MsgBox "Project ini sudah punya lock token aktif di file.", vbInformation
-        Exit Sub
+        On Error Resume Next
+        Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/heartbeat", MsProjectLockPayload(False)))
+        If Err.Number = 0 Then
+            On Error GoTo ErrHandler
+            MsgBox "Project ini sudah checkout dan lock masih aktif.", vbInformation
+            Exit Sub
+        End If
+
+        Dim lockErrDescription As String
+        lockErrDescription = Err.Description
+        Err.Clear
+        On Error GoTo ErrHandler
+
+        If MsIsProjectLockInvalidError(lockErrDescription) Then
+            MsSetProjectLockToken ""
+        Else
+            Err.Raise vbObjectError + 9203, "Ms_CheckOutCurrentProject", lockErrDescription
+        End If
     End If
 
-    payload = "{""actor"":""ms-project-vba"",""lock_minutes"":30}"
+    payload = "{""actor"":""ms-project-vba""}"
     Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/checkout", payload))
     MsApplyLockResponse root
     MsgBox "Checkout sukses." & vbCrLf & _
