@@ -9,7 +9,7 @@
     "VORNR_B":"0020",       // Branch Operation (table production_operations)
     "VORNR_R":"0030",       // Return Operation (table production_operations)
     "ZCONF_TYPE": "",       // Confirmation Type (Jika nilai workcenter diakhiri dengan kata "OT", maka set ZCONF_TYPE = "OV"
-                            // Jika operation_no bernilai lebih dari 5000, maka set ZCONF_TYPE = "RW"
+                            // Jika order_no diawali 32, maka set ZCONF_TYPE = "RW"
                             // Jika tidak memenuhi semua kondisi, maka set ZCONF_TYPE = "RG")
                             // Jika dari Machine Hours (M1 untuk VA, M2 untuk NNVA)
     "ARBPL": "M5051WLS",    // workcenter (table timesheet_transaction)
