@@ -1,134 +1,129 @@
-# VBA Macro Summary — MS Project Integration (MPS SOW)
+# VBA Summary - MS Project Integration
 
-> Auto-generated technical summary. Do not edit manually.
+Dokumen ringkas untuk memahami modul VBA di folder ini. Fokus MVP saat ini: **MS Project menjadi editor**, backend menyimpan **metadata project/task/resource** dan file fisik **`.mpp`** di server.
 
----
+## Alur Utama MVP
 
-## 1. Overview
+```text
+Publish New Project
+  -> VBA serialize metadata dari file aktif
+  -> POST /api/ms-project/projects
+  -> API simpan project, task, resource, assignment, dependency
+  -> API balas project_id + revision_no + mapping UUID
+  -> VBA tulis UUID/revision ke custom fields
+  -> VBA FileSaveAs ke temp .mpp
+  -> VBA upload .mpp ke POST /api/ms-project/projects/:project_id/file
+  -> API simpan file ke /uploads/ms-project-mpp/{project_id}.mpp
 
-| Module | Description |
+Sync Existing Project
+  -> user checkout project dulu
+  -> VBA serialize metadata dari file aktif
+  -> PUT /api/ms-project/projects/:project_id/sync
+  -> API validasi lock_token + revision_no
+  -> API update metadata dan naikkan revision_no
+  -> VBA update revision/mapping UUID
+  -> VBA FileSaveAs ke temp .mpp
+  -> VBA upload ulang .mpp, overwrite file server
+```
+
+## Modul Aktif
+
+| Module | Kegunaan |
 |---|---|
-| **createReAPI.bas** | Main module: fetches new SOW operations from the FastAPI backend, creates `.mpp` subproject files per order (from a template), links a shared resource pool, inserts subprojects into the master project, and marks synced orders as `"scheduled"` via a follow-up API call. |
-| **createresource.bas** | Legacy CSV-based version of the above. Reads `.csv` files from a local folder (`D:\csv project\`), creates `.mpp` subprojects using the same template/resource pool pattern, then consolidates them into the master project. |
-| **createwithrresource.bas** | Alias entry point (`CREATEUYE`) that positions the cursor in the task grid and then delegates to `ConvertAPI_To_MPP_And_Inserts2` in createReAPI. Acts as a UI-triggered launcher. |
-| **senddata.bas** | Iterates all tasks in the active project and POSTs each task's plan dates and resource assignment individually to the `update-plan` endpoint (one HTTP call per task). |
-| **senddatabulk.bas** | Same as senddata but batches all task plan data into a single JSON array and POSTs it to the `update-plan-bulk` endpoint in one call. Includes a `JsonEscape` helper. |
-| **getdata.bas** | Pulls actual progress data from the API (`get-actual`), matches response records back to tasks by composite key (`Text1 + Text2`), and updates `PhysicalPercentComplete` and `ActualWork`. Uses the `JsonConverter` library to parse the response. |
-| **getmissing2.bas** | Given a selected task, identifies all existing `codenumber` values (order_no + operation_no) for that order, POSTs them to `get-missing`, and inserts any operations missing from MS Project immediately after the last task of the same order. Sorts by `Text2` after insertion. |
-| **httphelper.bas** | Shared HTTP utility module. Provides `HttpPost` (fire-and-forget via MSXML2), `HttpPostBulk` (WinHttp, no return value), and `HttpPostBulks` (WinHttp, returns response string). All variants bypass SSL validation for internal self-signed certificates. |
-| **JsonConverter.bas** | Third-party library — VBA-JSON v2.3.1 by Tim Hall (MIT). Provides `ParseJson` for full JSON parsing. Used only in `getdata.bas`. |
+| `ms_config.bas` | Konfigurasi API base URL, timeout, dan mapping custom fields MS Project. |
+| `ms_http.bas` | Helper HTTP JSON (`GET/POST/PUT/DELETE`), parser success response, JSON escape, URL encode, dan upload multipart file `.mpp`. |
+| `ms_fields.bas` | Getter/setter UUID di custom fields: project, task, resource, assignment, calendar, lock token, revision. Juga helper clear UUID untuk clone. |
+| `ms_serializer.bas` | Mengubah file MS Project aktif menjadi payload JSON: project header, resources, tasks, assignments, dependencies. |
+| `ms_sync.bas` | Entry point utama user: check connection, list/import project, publish, checkout, heartbeat, sync, check-in, upload `.mpp`, clone as new, resource conflict check. |
+| `ms_import.bas` | Import package project dari API ke file MS Project aktif: project, resource sheet, task, assignment, dependency. |
+| `ms_resources.bas` | Load project team dari API ke Resource Sheet dan serialize resource yang sudah punya `resource_id`. |
+| `ms_calendars.bas` | Ambil calendar dari server, refresh calendar dari shift, dan apply calendar ke MS Project. |
+| `JsonConverter.bas` | Library VBA-JSON untuk parse/convert JSON. Wajib ada. |
+| `httphelper.bas` | Helper lama untuk macro legacy. Tidak dipakai oleh flow `ms_*` baru. |
 
----
+## Macro Yang Paling Sering Dipakai
 
-## 2. MS Project Fields Used
-
-| Field | VBA Name | Purpose |
+| Macro | Kapan Dipakai | Hasil |
 |---|---|---|
-| Task Name | `t.Name` / `Task.Name` | Operation description (`operation_text` from API) |
-| Text1 | `t.Text1` | `order_no` — SAP order number; primary grouping key |
-| Text2 | `t.Text2` | `operation_no` — SAP operation number; used in composite key and for sorting |
-| Text3 | `t.Text3` | `ssbr_id` — internal MPS identifier for the order |
-| Start | `t.Start` | Planned start date (`plan_start` from API) |
-| Finish | `t.Finish` | Planned finish date (`plan_finish` from API) |
-| Duration | `t.Duration` | Derived from `planhours` (stored as `Nh` hours) |
-| Work | `t.Work` | `planhours × 60` (converted hours → minutes, MS Project unit) |
-| Resource Names | `t.ResourceNames` | `workcenter` — SAP work center assigned as resource |
-| Physical % Complete | `t.PhysicalPercentComplete` | `actual_progress × 100` from API sync |
-| Actual Work | `t.ActualWork` | `actual_hours × 60` from API sync (hours → minutes) |
-| Task Type | `t.Type` | Set to `pjFixedWork` for all created tasks |
-| Project Title | `subProj.Title` | Composite of `order_no ssbr_id part_name` |
+| `Ms_CheckConnection` | Tes koneksi API. | Popup status API dan database. |
+| `Ms_PublishNewProject` | File baru belum punya `project_id`. | Simpan metadata ke DB, tulis UUID ke file, upload `.mpp` ke server. |
+| `Ms_CheckOutCurrentProject` | Sebelum edit/sync project existing. | Dapat `lock_token` dan revision aktif. |
+| `Ms_SyncExistingProject` | Setelah edit project existing. | Update metadata DB, naikkan revision, upload ulang `.mpp`. |
+| `Ms_CheckInCurrentProject` | Setelah selesai edit. | Lepas lock project. |
+| `Ms_UploadCurrentProjectFile` | Retry upload `.mpp` jika publish/sync metadata sudah sukses tapi upload file gagal. | Upload file aktif ke server. |
+| `Ms_ImportProjectById` | Buka ulang project dari DB berdasarkan `project_id`. | Rebuild project ke MS Project aktif. |
+| `Ms_CloneAsNewProject` | File copy ingin jadi project baru. | Hapus UUID lama agar aman dipublish sebagai project baru. |
+| `Ms_LoadProjectTeam` | Muat resource project ke Resource Sheet. | Resource siap dipakai assignment. |
+| `Ms_SetProjectCalendarFromServer` | Set calendar project dari server. | Calendar diterapkan ke file aktif. |
 
----
+## Field Mapping MS Project
 
-## 3. Integration Flow
+| Data | Field |
+|---|---|
+| `project_id` | `ProjectSummaryTask.Text30` |
+| `revision_no` | `ProjectSummaryTask.Text29` |
+| `mode` | `ProjectSummaryTask.Text28` |
+| `lock_token` | `ProjectSummaryTask.Text27` |
+| `project calendar_id` | `ProjectSummaryTask.Text26` |
+| `task_id` | `Task.Text10` |
+| `task project_id` | `Task.Text11` |
+| `parent_task_id` | `Task.Text12` |
+| `task calendar_id` | `Task.Text13` |
+| `order_no` | `Task.Text1` |
+| `operation_no` | `Task.Text2` |
+| `ssbr_id` | `Task.Text3` |
+| `resource_id` | `Resource.Text9` |
+| `resource calendar_id` | `Resource.Text8` |
+| `assignment_id` | `Assignment.Text10` |
 
-### API Endpoints
+`order_no` dan `operation_no` boleh kosong untuk MVP metadata-only. Dampaknya hanya fitur matching/report by SOW tidak bisa bekerja untuk task tersebut.
 
-| Endpoint | Method | Module | Direction | Purpose |
-|---|---|---|---|---|
-| `https://10.169.1.12/fastapi/sow/get-new` | POST | createReAPI | ← receive | Fetch operations with status `"new"` |
-| `https://10.169.1.12/fastapi/sow/update-sync` | POST | createReAPI | → send | Mark successfully scheduled orders as `"scheduled"` |
-| `https://10.169.1.12/fastapi/sow/update-plan` | POST | senddata | → send | Push plan dates per task (one call per task) |
-| `https://10.169.1.12/fastapi/sow/update-plan-bulk` | POST | senddatabulk | → send | Push all plan dates in one batched call |
-| `https://10.169.1.12/fastapi/sow/get-actual` | POST | getdata | ← receive | Pull actual progress/hours by composite keys |
-| `https://10.169.1.12/fastapi/sow/get-missing` | POST | getmissing2 | ← receive | Diff existing vs API operations for one order |
-| `https://100.80.101.53/fastapi/sow/update-plan` | POST | senddata | → send | Alternate server target (older/parallel env) |
+## Endpoint Yang Dipakai
 
-> **SSL:** All calls use `http.Option(4) = 13056` to suppress SSL certificate errors (self-signed internal certs).
+Base URL ada di `ms_config.bas`:
 
-### createReAPI — Main Flow
-
-```
-User runs ConvertAPI_To_MPP_And_Inserts2
-  │
-  ├─ POST get-new {"order_no": null}
-  │     → Response: array of operations grouped by order_no
-  │
-  ├─ For each order_no:
-  │   ├─ Open template (master.mpt) as new project
-  │   ├─ Link resource pool (5051_RESOURCES.mpp)
-  │   ├─ Insert tasks (one per operation_no)
-  │   ├─ Save as D:\mpp\<order_no> <ssbr_id> <part_name>.mpp
-  │   ├─ Re-open master project
-  │   └─ ConsolidateProjects (insert subproject into master)
-  │
-  └─ POST update-sync {"order_nos": [...], "sync_status": "scheduled"}
+```vb
+Public Const MS_API_BASE_URL As String = "https://100.80.101.53/api/ms-project"
 ```
 
-### getdata — Actual Sync Flow
+| Endpoint | Method | Dipakai Oleh | Fungsi |
+|---|---|---|---|
+| `/health` | GET | `Ms_CheckConnection` | Tes koneksi. |
+| `/projects` | GET | `Ms_ListProjects`, import latest | List project. |
+| `/projects` | POST | `Ms_PublishNewProject` | Buat project baru dan simpan metadata. |
+| `/projects/:project_id/package` | GET | `MsImportProjectPackage` | Ambil full package project. |
+| `/projects/:project_id/checkout` | POST | `Ms_CheckOutCurrentProject` | Ambil lock edit. |
+| `/projects/:project_id/heartbeat` | POST | `Ms_HeartbeatCurrentProject` | Perpanjang lock. |
+| `/projects/:project_id/sync` | PUT | `Ms_SyncExistingProject` | Update metadata project existing. |
+| `/projects/:project_id/file` | POST multipart | `Ms_UploadCurrentProjectFile`, publish/sync | Upload/overwrite file `.mpp`. |
+| `/projects/:project_id/publish` | POST | `Ms_PublishCurrentRevision` | Tandai revision DB sebagai published. |
+| `/projects/:project_id/checkin` | POST | `Ms_CheckInCurrentProject` | Lepas lock. |
+| `/resources` | GET | resource picker/import helper | Cari resource. |
+| `/projects/:project_id/resources` | GET/POST/DELETE | resource helper | Kelola project team. |
+| `/resources/conflicts` | GET | `Ms_CheckResourceConflicts` | Cek konflik resource. |
+| `/calendars` | GET | calendar helper | List calendar. |
+| `/calendars/:calendar_id` | GET | `Ms_SetProjectCalendarFromServer` | Ambil detail calendar. |
+| `/calendars/refresh-from-shifts` | POST | `Ms_RefreshCalendarsFromShifts` | Refresh calendar dari shift rules. |
 
-```
-User runs SyncActualFromAPI
-  │
-  ├─ Collect all (Text1 + Text2) keys from active project tasks
-  ├─ POST get-actual {"keys": ["order+opno", ...]}
-  │     → Response: [{codenumber, actual_progress, actual_hours}, ...]
-  │
-  └─ Match codenumber → task, update:
-        t.PhysicalPercentComplete = actual_progress × 100
-        t.ActualWork = actual_hours × 60
-```
+## Catatan Cara Kerja
 
-### getmissing2 — Gap Detection Flow
+- Sync existing wajib punya `project_id`, `revision_no`, dan `lock_token`.
+- API akan menolak sync jika revision file sudah stale (`409 conflict`) atau lock expired (`423`).
+- Perubahan outline/indent task ikut dikirim lewat `parent_local_task_uid`, `outline_level`, dan `outline_number`.
+- Task baru wajib punya `local_task_uid` dari `Task.UniqueID`; task lama lebih stabil kalau sudah punya `task_id`.
+- File `.mpp` disimpan backend di folder khusus `uploads/ms-project-mpp`, bukan folder SOW.
+- Jika upload file gagal setelah metadata sukses, jalankan `Ms_UploadCurrentProjectFile` untuk retry.
 
-```
-User selects a task → runs SyncMissingOperations
-  │
-  ├─ Read Text1 (order_no) from selected task
-  ├─ Collect all existing codenumbers (Text1+Text2) for that order
-  ├─ POST get-missing {"order_no": "...", "codenumber": [...]}
-  │     → Response: operations NOT yet in MS Project
-  │
-  ├─ Find last task ID for the order (within ±50 task range)
-  └─ Insert missing tasks, set Text1/Text2/Work/ResourceNames
-     → Sort all tasks by Text2
-```
+## Legacy Modules
 
----
+Macro lama ada di folder `legacy/`. Fungsinya historis:
 
-## 4. Key Functions / Subs
+| Legacy Module | Fungsi Lama |
+|---|---|
+| `createReAPI.bas` | Ambil SOW baru dari FastAPI lama, buat subproject `.mpp` per order, insert ke master project. |
+| `createwithrresource.bas` / `createresource.bas` | Versi CSV/resource pool dari pembuat subproject lama. |
+| `senddata.bas` / `senddatabulk.bas` | Push plan date task ke endpoint SOW lama. |
+| `getdata.bas` | Pull actual progress/hours dari endpoint lama ke task. |
+| `getmissing2.bas` | Cari operation SOW yang belum ada di MS Project lama. |
 
-| Name | Module | Description |
-|---|---|---|
-| `ConvertAPI_To_MPP_And_Inserts2` | createReAPI | Main entry: fetch → create MPPs → insert into master → update sync status |
-| `CREATEUYE` | createwithrresource | UI launcher: resets cursor position, then calls `ConvertAPI_To_MPP_And_Inserts2` |
-| `ConvertCSV_To_MPP_And_Inserts` | createresource | CSV-based equivalent of the API flow; reads from `D:\csv project\` |
-| `SendPlanToAPI` | senddata | Posts each task's plan dates to API one by one |
-| `SendPlanToAPI_Bulk` | senddatabulk | Batches all task plan data into one JSON array POST |
-| `SyncActualFromAPI` | getdata | Pulls actual progress from API and writes back to MS Project tasks |
-| `SyncMissingOperations` | getmissing2 | Detects and inserts operations missing from MS Project for a given order |
-| `HttpPost` | httphelper | Fire-and-forget POST via MSXML2 (no return value) |
-| `HttpPostBulk` | httphelper | POST via WinHttp, prints response to debug, no return value |
-| `HttpPostBulks` | httphelper | POST via WinHttp, returns response string; used for read operations |
-| `HttpPost` (private) | createReAPI | Self-contained POST returning response string; used only within createReAPI |
-| `UpdateSyncScheduled` | createReAPI | Sends batch `update-sync` call for all successfully created orders |
-| `ParseNewOperations` | createReAPI | Custom JSON parser: extracts operation objects from `data` array |
-| `GroupByOrderNo` | createReAPI | Groups parsed operations into a Dictionary keyed by `order_no` |
-| `ExtractValueFromJSON` | createReAPI, getmissing2 | Lightweight field extractor for flat JSON objects (no library dependency) |
-| `ParseAPIResponse` | getmissing2 | Parses `get-missing` response, pads `operation_no` to 4 digits |
-| `CollectCodenumbers` | getmissing2 | Scans all project tasks and returns unique `Text1+Text2` keys for an order |
-| `FindInsertPosition` | getmissing2 | Finds the last task ID for an order within a ±50 task window |
-| `InsertMissingOperations` | getmissing2 | Uses `InsertTask`/`SetTaskField` to add missing operations; sorts by Text2 |
-| `JsonEscape` | senddatabulk | Escapes backslash, quotes, and newlines for safe JSON string embedding |
-| `ToDouble` | createresource | Locale-safe string-to-double conversion (handles decimal comma) |
-| `JsonConverter.ParseJson` | JsonConverter | Full JSON parse (VBA-JSON v2.3.1); returns Collection/Dictionary tree |
+Untuk MVP baru, gunakan modul `ms_*` dan `JsonConverter.bas`.

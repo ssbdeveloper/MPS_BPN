@@ -10,7 +10,8 @@ function success(res, data = {}, status = 200, summary = {}, warnings = []) {
 }
 
 function error(res, err) {
-  const status = err.status || 500;
+  const isDbConflict = ["23503", "23505"].includes(err.code);
+  const status = err.status || (isDbConflict ? 409 : 500);
   const code = err.code || "INTERNAL_SERVER_ERROR";
   const response = {
     success: false,
@@ -18,6 +19,15 @@ function error(res, err) {
     message: status === 500 ? "Internal Server Error" : err.message,
     details: Array.isArray(err.details) ? err.details : err.details ? [err.details] : [],
   };
+
+  if (isDbConflict) {
+    response.message = err.detail || err.message || "Database constraint conflict";
+    response.details = [{
+      constraint: err.constraint || null,
+      table: err.table || null,
+      detail: err.detail || null,
+    }];
+  }
 
   if (code === "PROJECT_REVISION_CONFLICT" && err.details && err.details.current_revision_no !== undefined) {
     response.current_revision_no = err.details.current_revision_no;

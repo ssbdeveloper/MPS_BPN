@@ -582,7 +582,18 @@ async function upsertTasks(client, projectId, tasks, isPublish) {
              planned_work_minutes = $14,
              is_summary = $15,
              is_active = $16,
-             local_task_uid = coalesce($17, local_task_uid),
+             local_task_uid = case
+               when local_task_uid is null
+                and $17 is not null
+                and not exists (
+                  select 1 from ms_project_task x
+                  where x.project_id = $1
+                    and x.local_task_uid = $17
+                    and x.task_id <> $2
+                )
+               then $17
+               else local_task_uid
+             end,
              calendar_id = $18,
              calendar_name = $19,
              ignore_resource_calendar = $20
@@ -732,7 +743,18 @@ async function upsertAssignments(client, projectId, assignments, taskMap, isPubl
              assignment_start = $7,
              assignment_finish = $8,
              is_active = $9,
-             local_assignment_uid = coalesce($10, local_assignment_uid)
+             local_assignment_uid = case
+               when local_assignment_uid is null
+                and $10 is not null
+                and not exists (
+                  select 1 from ms_project_assignment x
+                  where x.project_id = $1
+                    and x.local_assignment_uid = $10
+                    and x.assignment_id <> $2
+                )
+               then $10
+               else local_assignment_uid
+             end
          where project_id = $1 and assignment_id = $2
          returning assignment_id, local_assignment_uid`,
         [
@@ -826,7 +848,18 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
              successor_task_id = $4,
              dependency_type = $5,
              lag_minutes = $6,
-             local_dependency_key = coalesce($7, local_dependency_key),
+             local_dependency_key = case
+               when local_dependency_key is null
+                and $7 is not null
+                and not exists (
+                  select 1 from ms_project_dependency x
+                  where x.project_id = $1
+                    and x.local_dependency_key = $7
+                    and x.dependency_id <> $2
+                )
+               then $7
+               else local_dependency_key
+             end,
              is_active = $8
          where project_id = $1 and dependency_id = $2
          returning dependency_id, local_dependency_key`,
@@ -865,7 +898,18 @@ async function upsertDependencies(client, projectId, dependencies, taskMap, isPu
       if (existingByPair.rows[0]) {
         result = await client.query(
           `update ms_project_dependency
-           set local_dependency_key = coalesce($3, local_dependency_key),
+           set local_dependency_key = case
+                 when local_dependency_key is null
+                  and $3 is not null
+                  and not exists (
+                    select 1 from ms_project_dependency x
+                    where x.project_id = $1
+                      and x.local_dependency_key = $3
+                      and x.dependency_id <> $2
+                  )
+                 then $3
+                 else local_dependency_key
+               end,
                is_active = $4,
                updated_at = now()
            where project_id = $1 and dependency_id = $2
@@ -1946,6 +1990,22 @@ async function uploadProjectFile(projectIdParam, file) {
 
   try {
     await client.query("begin");
+    const projectResult = await client.query(
+      `select project_name
+       from ms_project
+       where project_id = $1
+       for update`,
+      [projectId]
+    );
+
+    if (!projectResult.rows[0]) {
+      await client.query("rollback");
+      await fs.unlink(file.path).catch(() => {});
+      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+
+    const storedFileName = `${projectResult.rows[0].project_name || projectId}.mpp`;
+
     const result = await client.query(
       `update ms_project
        set file_path = $2,
@@ -1955,14 +2015,8 @@ async function uploadProjectFile(projectIdParam, file) {
            updated_at = now()
        where project_id = $1
        returning project_id, project_name, revision_no, file_path, file_name, file_size, file_uploaded_at`,
-      [projectId, publicPath, originalName, file.size]
+      [projectId, publicPath, storedFileName, file.size]
     );
-
-    if (!result.rows[0]) {
-      await client.query("rollback");
-      await fs.unlink(file.path).catch(() => {});
-      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
-    }
 
     await writeAuditLog(client, {
       projectId,
@@ -1970,7 +2024,8 @@ async function uploadProjectFile(projectIdParam, file) {
       revisionNo: result.rows[0].revision_no,
       details: {
         file_path: publicPath,
-        file_name: originalName,
+        original_name: originalName,
+        file_name: storedFileName,
         file_size: file.size,
       },
     });

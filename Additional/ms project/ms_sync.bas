@@ -366,11 +366,23 @@ Public Sub Ms_PublishNewProject()
     Exit Sub
 
 ErrHandler:
+    Dim publishErrNo As Long
+    Dim publishErrSource As String
+    Dim publishErrDescription As String
+
+    publishErrNo = Err.Number
+    publishErrSource = Err.Source
+    publishErrDescription = Err.Description
+
     On Error Resume Next
     If oldCalculation <> 0 Then Application.Calculation = oldCalculation
     Application.ScreenUpdating = True
     On Error GoTo 0
-    MsgBox "Publish gagal di fase [" & phase & "]: " & Err.Description, vbCritical
+
+    If Len(publishErrDescription) = 0 Then publishErrDescription = "Tidak ada detail error dari VBA. Error No: " & CStr(publishErrNo)
+    MsgBox "Publish gagal di fase [" & phase & "]:" & vbCrLf & _
+           publishErrDescription & vbCrLf & vbCrLf & _
+           "Source: " & publishErrSource, vbCritical
 End Sub
 
 Public Sub Ms_SyncExistingProject()
@@ -422,11 +434,23 @@ Public Sub Ms_SyncExistingProject()
     Exit Sub
 
 ErrHandler:
+    Dim syncErrNo As Long
+    Dim syncErrSource As String
+    Dim syncErrDescription As String
+
+    syncErrNo = Err.Number
+    syncErrSource = Err.Source
+    syncErrDescription = Err.Description
+
     On Error Resume Next
     If oldCalculation <> 0 Then Application.Calculation = oldCalculation
     Application.ScreenUpdating = True
     On Error GoTo 0
-    MsgBox "Sync gagal di fase [" & phase & "]: " & Err.Description, vbCritical
+
+    If Len(syncErrDescription) = 0 Then syncErrDescription = "Tidak ada detail error dari VBA. Error No: " & CStr(syncErrNo)
+    MsgBox "Sync gagal di fase [" & phase & "]:" & vbCrLf & _
+           syncErrDescription & vbCrLf & vbCrLf & _
+           "Source: " & syncErrSource, vbCritical
 End Sub
 
 Public Sub Ms_DebugBuildPayload()

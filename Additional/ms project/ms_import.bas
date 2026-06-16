@@ -55,6 +55,36 @@ Private Sub MsSetProjectTitleSafe(ByVal title As String)
     On Error GoTo 0
 End Sub
 
+Private Function MsSafeFileName(ByVal value As String, Optional ByVal fallback As String = "MS Project Package") As String
+    Dim invalidChars As Variant
+    Dim ch As Variant
+
+    MsSafeFileName = Trim$(value)
+    If Len(MsSafeFileName) = 0 Then MsSafeFileName = fallback
+
+    invalidChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|")
+    For Each ch In invalidChars
+        MsSafeFileName = Replace(MsSafeFileName, CStr(ch), "_")
+    Next ch
+
+    Do While InStr(MsSafeFileName, "  ") > 0
+        MsSafeFileName = Replace(MsSafeFileName, "  ", " ")
+    Loop
+
+    MsSafeFileName = Trim$(MsSafeFileName)
+    Do While Right$(MsSafeFileName, 1) = "."
+        MsSafeFileName = Left$(MsSafeFileName, Len(MsSafeFileName) - 1)
+    Loop
+
+    If Len(MsSafeFileName) = 0 Then MsSafeFileName = fallback
+End Function
+
+Private Function MsImportLocalFilePath(ByVal project As Object) As String
+    Dim baseName As String
+    baseName = MsItemText(project, "project_name", "MS Project Package")
+    MsImportLocalFilePath = Environ$("TEMP") & "\" & MsSafeFileName(baseName) & ".mpp"
+End Function
+
 Private Sub MsTrySetObjectTextProperty(ByVal obj As Object, ByVal propertyName As String, ByVal value As String)
     If Len(Trim$(value)) = 0 Then Exit Sub
     On Error Resume Next
@@ -247,10 +277,15 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
 NextDependency:
     Next item
 
+    Dim importedFilePath As String
+    importedFilePath = MsImportLocalFilePath(project)
+    FileSaveAs Name:=importedFilePath, FormatID:="MSProject.mpp"
+
     Application.Calculation = pjAutomatic
     Application.ScreenUpdating = True
 
     MsgBox "Import selesai: " & MsItemText(project, "project_name", "MS Project Package") & vbCrLf & _
+           "File: " & importedFilePath & vbCrLf & _
            "Tasks: " & tasks.Count & vbCrLf & _
            "Resources: " & projectResources.Count & vbCrLf & _
            "Assignments: " & assignments.Count & vbCrLf & _
