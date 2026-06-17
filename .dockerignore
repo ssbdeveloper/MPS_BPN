@@ -27,5 +27,5 @@ backups
 export
 database
 db
-API/uploads
-nginx/ssl
+apps/api/uploads
+infra/nginx/ssl

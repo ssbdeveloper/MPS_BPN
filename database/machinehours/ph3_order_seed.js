@@ -1,7 +1,7 @@
 const path = require("path");
-const dotenv = require(path.join(__dirname, "../../API/node_modules/dotenv"));
-const ExcelJS = require(path.join(__dirname, "../../API/node_modules/exceljs"));
-const { Pool } = require(path.join(__dirname, "../../API/node_modules/pg"));
+const dotenv = require(path.join(__dirname, "../../apps/api/node_modules/dotenv"));
+const ExcelJS = require(path.join(__dirname, "../../apps/api/node_modules/exceljs"));
+const { Pool } = require(path.join(__dirname, "../../apps/api/node_modules/pg"));
 
 const ROOT_DIR = path.resolve(__dirname, "../..");
 const DEFAULT_FILE = path.join(__dirname, "template_ph3.xlsx");

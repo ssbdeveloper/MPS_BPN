@@ -15,8 +15,8 @@ env/
 
 # Node / React / Vite
 node_modules/
-react-timesheet/dist/
-react-timesheet/dev-dist/
+apps/web/dist/
+apps/web/dev-dist/
 /build
 /dist
 
@@ -30,7 +30,7 @@ yarn-error.log*
 
 # Uploads - user-uploaded files (served via volume mount)
 uploads/
-API/uploads/
+apps/api/uploads/
 
 # Build artifacts & cache
 .cache/

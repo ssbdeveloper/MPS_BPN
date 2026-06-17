@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { Client } = require("../../API/node_modules/pg");
+const { Client } = require("../../apps/api/node_modules/pg");
 
 const ROOT = __dirname;
 const PROJECT_ROOT = path.resolve(__dirname, "../..");

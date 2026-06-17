@@ -1,4 +1,4 @@
-# CLAUDE.md — MPS Timesheet (react-timesheet)
+# CLAUDE.md — MPS Timesheet (apps/web)
  
 > AI context file. Baca ini sebelum membuat atau mengubah kode apapun di project ini.
  
@@ -766,8 +766,8 @@ const isLandscape = useOrientation();
 | Drag & Drop | @dnd-kit (core, sortable, modifiers) | |
 | Icons | lucide-react v1 | |
 | Animations | framer-motion v12 | |
-| Backend API | Express.js 4 (Node 20, CommonJS) | In `API/server.js` |
-| Backend Python | FastAPI (Python 3.11, uvicorn) | In `API/FastAPI/main.py` — MS Project sync |
+| Backend API | Express.js 4 (Node 20, CommonJS) | In `apps/api/server.js` |
+| Backend Python | FastAPI (Python 3.11, uvicorn) | In `apps/fastapi-msproject/main.py` — MS Project sync |
 | Database | PostgreSQL 15 | + Microsoft SQL Server (SSB_OEE for machine hours) |
 | Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, routes `/api/`, `/fastapi/`, `/uploads/` |
 | Containerization | Docker Compose | 6 services: db, api, frontend, nginx, sow_exporter, fastapi |
@@ -780,15 +780,15 @@ const isLandscape = useOrientation();
 ## Key Commands
 
 ```bash
-# === Frontend (react-timesheet/) ===
-cd react-timesheet
+# === Frontend (apps/web/) ===
+cd apps/web
 npm run dev              # → http://localhost:5173
 npm run build            # Production build → dist/
 npm run preview          # Preview production build
 npm run lint             # ESLint
 
-# === Backend API (API/) ===
-cd API
+# === Backend API (apps/api/) ===
+cd apps/api
 node server.js           # Express API on port 3001
 # or with nodemon:
 npx nodemon server.js
@@ -797,138 +797,61 @@ npx nodemon server.js
 "C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb
 
 # === Docker (production) ===
-./deploy.sh build        # Build all containers
-./deploy.sh start        # Start all services
-./deploy.sh stop         # Stop all services
-./deploy.sh restart      # Restart all services
-./deploy.sh status       # Check service status
-./deploy.sh logs api     # View API logs
+scripts/deploy.sh build        # Build all containers
+scripts/deploy.sh start        # Start all services
+scripts/deploy.sh stop         # Stop all services
+scripts/deploy.sh restart      # Restart all services
+scripts/deploy.sh status       # Check service status
+scripts/deploy.sh logs api     # View API logs
 ```
 
 ---
 
 ## Monorepo Structure
 
-```
+```text
 MPS2/
-├── CLAUDE.md                          ← This file — AI context + design system
-├── .env                               ← Shared env (DB, CORS, SAP, etc.)
-├── docker-compose.yml                 ← 6-service orchestration
-├── deploy.sh                          ← Docker deployment script
-├── package.json                       ← Root: pg + xlsx (seed scripts)
-├── nginx/                             ← Nginx reverse proxy config + SSL
-│
-├── react-timesheet/                   ← FRONTEND: React + Vite SPA
-│   ├── package.json                   ← Dependencies (React 19, Vite 7, etc.)
-│   ├── vite.config.js                 ← Vite + PWA + proxy config
-│   ├── tailwind.config.js             ← Tailwind theme (primary/success/danger/warning)
-│   ├── postcss.config.js              ← Tailwind + autoprefixer
-│   ├── eslint.config.js               ← ESLint flat config
-│   ├── Dockerfile                     ← 2-stage: node:20-alpine build + nginx serve
-│   ├── index.html
-│   ├── public/                        ← Static assets + CSV dummy data
-│   └── src/
-│       ├── App.jsx                    ← RouterProvider + Toaster
-│       ├── main.jsx                   ← createRoot entry
-│       ├── index.css                  ← Tailwind directives + :root CSS vars
-│       ├── router/index.jsx           ← All routes (createBrowserRouter)
-│       ├── assets/                    ← Images (ssb.png, teamklu.png, etc.)
-│       ├── components/
-│       │   ├── index.js              ← Barrel export
-│       │   ├── auth/                 ← ProtectedRoute, PasswordPrompt
-│       │   ├── ui/                   ← Button, Card, Modal, ConfirmationModal, Switch
-│       │   ├── layout/               ← PageContainer, AppHeader, StatusBar, Container*, MenuGrid
-│       │   ├── forms/                ← Input, TextArea, SearchRow, FormRow, Select
-│       │   ├── tables/               ← Gallery, TimesheetTable, MachineGallery, TextBox
-│       │   └── dashboard/            ← KpiCard, DashboardFilters, 9 chart components
-│       ├── pages/
-│       │   ├── WelcomePage.jsx                  ← Landing
-│       │   ├── OperationsHubPage.jsx            ← Main hub / navigation
-│       │   ├── DashboardPage.jsx                ← KPI dashboard
-│       │   ├── SettingPage.jsx
-│       │   ├── DownloadPage.jsx
-│       │   ├── OrderListPage.jsx                ← SOW orders list
-│       │   ├── editorimage.jsx
-│       │   ├── TIMESHEET/                        ← Timesheet module
-│       │   │   ├── LoginTimesheetPage.jsx
-│       │   │   ├── TimesheetPage.jsx
-│       │   │   ├── TimesheetMainMenuPage.jsx
-│       │   │   ├── TimesheetListPage.jsx
-│       │   │   ├── TimesheetValidationPage.jsx  ← Original (V1)
-│       │   │   ├── TimesheetEditPage.jsx
-│       │   │   ├── LogTimesheetPage.jsx
-│       │   │   ├── SelectJobPage.jsx
-│       │   │   ├── SelectMachinePage.jsx
-│       │   │   ├── NfcUserListPage.jsx
-│       │   │   ├── CreateEditNfcPage.jsx
-│       │   │   └── UnproductiveMenuPage.jsx
-│       │   ├── MACHINE_H/                        ← Machine hours module
-│       │   │   ├── ProcessControlPage.jsx
-│       │   │   ├── EditParameterPage.jsx
-│       │   │   ├── MachineHoursSqlServerPage.jsx
-│       │   │   └── MachineHoursValidationPage.jsx
-│       │   ├── PPC/                              ← Production Planning Control
-│       │   │   ├── ComponentTrackingPage.jsx
-│       │   │   ├── BufferTransactionPage.jsx
-│       │   │   ├── ReceivingShipmentPage.jsx
-│       │   │   ├── ManageUserPage.jsx
-│       │   │   └── ManageUsersPage.jsx
-│       │   ├── PE/                               ← Production Engineering
-│       │   │   ├── SowManagementPage.jsx         ← Parent layout
-│       │   │   ├── SowStandardListPage.jsx
-│       │   │   ├── SowCreatePage.jsx
-│       │   │   ├── SowEditPage.jsx
-│       │   │   └── SowHistoryPage.jsx
-│       │   └── WAREHOUSE/
-│       │       ├── ConsumableRequestPage.jsx
-│       │       └── ConsumableControlPage.jsx
-│       ├── services/
-│       │   └── machineTrackingService.js  ← API fetch functions for machine tracking
-│       ├── hooks/
-│       │   └── useMachineTracking.js      ← Polling + smart merge + elapsed time
-│       ├── utils/
-│       │   └── navigation.js              ← goBackOrFallback helper
-│       └── templates/                     ← HTML templates (operation-card, etc.)
-│
-├── API/                                ← BACKEND: Express.js API
-│   ├── server.js                       ← Main Express server + DB pool
-│   ├── pcsserver.js                    ← Process Control server variant
-│   ├── db.js                           ← DB pool helper
-│   ├── package.json                    ← express, cors, pg, mssql, multer, exceljs, etc.
-│   ├── Dockerfile                      ← node:20-alpine
-│   ├── controllers/                    ← Business logic (14 controllers)
-│   │   ├── timesheet_transactionController.js   ← Timesheet CRUD + SAP posting
-│   │   ├── sowController.js                     ← SOW CRUD + history + reports
-│   │   ├── processControlController.js          ← Parameter management
-│   │   ├── dashboardController.js               ← KPI + chart data
-│   │   ├── componentTrackingController.js       ← Machine + buffer tracking
-│   │   ├── machineHoursSqlServerController.js   ← SQL Server machine hours
-│   │   ├── machineHoursValidationController.js
-│   │   ├── receivingShipmentController.js
-│   │   ├── consumableController.js
-│   │   ├── authController.js                    ← Login + user management
-│   │   ├── usernfcController.js
-│   │   ├── workcenterController.js
-│   │   ├── production_operationsController.js
-│   │   ├── tokencontroller.js
-│   │   └── authMiddleware.js
-│   ├── routes/                         ← Express routers (14 files)
-│   ├── websocket/                      ← WebSocket for real-time machine hours
-│   ├── FastAPI/                        ← Python FastAPI for MS Project sync
-│   │   ├── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   └── uploads/                        ← File uploads (sow-pdf/, consumable/)
-│
-├── database/                           ← Database schemas + migrations
-│   ├── schema.sql                      ← Full production schema dump (1505 lines)
-│   ├── init_database.sql               ← Initial table creation
-│   ├── migrate_*.sql                   ← Various migration scripts
-│   ├── machinehours/                   ← Machine hours seed data
-│   └── paket_kumplit/
-│
-└── pythonscript/                       ← SOW export Python scripts
++- apps/
+�  +- web/                         # React + Vite frontend
+�  +- api/                         # Express API, controllers, routes, uploads
+�  +- fastapi-msproject/            # FastAPI MS Project sync service
+�  +- tts-worker/                   # Piper TTS worker/service
++- jobs/
+�  +- sap_staging/                  # Stage/post/seed SAP payload rows
+�  +- etl/                          # Local DB / SQL Server ETL jobs
+�  +- export/                       # CSV/TXT export helpers
+�  +- sow/                          # SOW seed/export Docker helper files
++- database/
+�  +- migrations/                   # SQL migrations grouped by source app
+�  +- seeds/                        # Seed data and seed helpers
+�  +- schema/                       # Full schema/reference SQL dumps
++- docs/
+�  +- operations/                   # Operator/dev runbooks
+�  +- sap/                          # SAP staging and payload docs
+�  +- frontend/                     # Frontend UI notes
+�  +- deployment/                   # Docker/deploy docs
+�  +- archive/                      # Historical docs only
++- samples/
+�  +- sap_payloads/                 # JSON payload examples and manual test payload
+�  +- excel/                        # Excel/CSV sample artifacts
+�  +- media/                        # Audio/media samples
++- infra/
+�  +- docker/                       # Shared docker infra notes/assets
+�  +- nginx/                        # Nginx config and SSL material
++- scripts/                         # Root-level operational helper scripts
 ```
+
+## Folder Ownership Rules
+
+- Frontend changes go in `apps/web`; run npm commands from that folder.
+- Express API changes go in `apps/api`; route/controller imports must stay relative inside that app.
+- FastAPI MS Project changes go in `apps/fastapi-msproject`.
+- TTS worker changes go in `apps/tts-worker`; generated upload output belongs under `apps/api/uploads` or the Docker `/uploads` mount.
+- SAP staging/posting code goes in `jobs/sap_staging`; shared staging helpers stay in `sap_staging_common.py` only when used by more than one SAP script.
+- ETL sync jobs go in `jobs/etl`; export-only helpers go in `jobs/export`; SOW seed/export container files go in `jobs/sow`.
+- SQL migrations and schema references go under `database`; do not put new migration files in app folders.
+- Operational docs go in `docs`; current SAP docs go in `docs/sap`; old/historical docs go in `docs/archive`.
+- Example payloads and manual test JSON go in `samples/sap_payloads`; do not keep test payloads inside runtime app folders.
 
 ---
 
@@ -1001,7 +924,7 @@ MPS2/
 - **PostgreSQL pool:** `.env` loaded from root `D:\website\MPS2\.env`, pool max 20 connections, `timezone=Asia/Jakarta`
 - **Timestamp handling:** OID 1114/1184 forced to string (no JS Date conversion)
 - **WebSocket:** At `/machine-hours-sqlserver/ws` for real-time machine data streaming
-- **File uploads:** multer middleware, stored in `API/uploads/` (sow-pdf/, consumable/)
+- **File uploads:** multer middleware, stored in `apps/api/uploads/` (sow-pdf/, consumable/)
 - **SAP Integration:** POST to SAP CPI inbound URL (from env `SAP_INBOUND_URL`)
 - **CORS:** `*` origin (all origins allowed)
 
@@ -1060,11 +983,11 @@ MPS2/
 
 5. **Daftarkan route baru di `src/router/index.jsx`** — Selalu import page baru dan tambahkan entri route.
 
-6. **Work in `react-timesheet/` for frontend** — Semua perintah npm (dev, build, lint) dijalankan dari direktori `react-timesheet/`.
+6. **Work in `apps/web/` for frontend** — Semua perintah npm (dev, build, lint) dijalankan dari direktori `apps/web/`.
 
-7. **Backend di `API/`** — Express.js CommonJS. Nodemon untuk development.
+7. **Backend di `apps/api/`** — Express.js CommonJS. Nodemon untuk development.
 
-8. **`.env` di root `MPS2/`** — Dibaca oleh backend (`API/server.js`) dan frontend (`vite.config.js` envDir points to `..`).
+8. **`.env` di root `MPS2/`** — Dibaca oleh backend (`apps/api/server.js`) dan frontend (`vite.config.js` envDir points to repo root (`../..` from apps/web)).
 
 9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
 
