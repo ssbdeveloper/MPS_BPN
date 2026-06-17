@@ -199,18 +199,44 @@ Private Function MsProjectTempMppPath() As String
     MsProjectTempMppPath = Environ$("TEMP") & "\mps-ms-project-" & projectId & ".mpp"
 End Function
 
+Private Sub MsDebugLog(ByVal message As String)
+    Debug.Print Format$(Now, "yyyy-mm-dd hh:nn:ss") & " | " & message
+End Sub
+
+Private Function MsUploadCopyPath() As String
+    MsUploadCopyPath = Environ$("TEMP") & "\mps-upload-" & _
+        MsGetProjectId() & "-" & Format$(Now, "yyyymmddhhnnss") & ".mpp"
+End Function
+
 Private Function MsCurrentMppFilePath() As String
     On Error Resume Next
     Dim filePath As String
+    Dim projectPath As String
+    Dim projectName As String
+
     filePath = ActiveProject.FullName
     If Err.Number <> 0 Then
         Err.Clear
         filePath = ""
     End If
+
+    If Len(Trim$(filePath)) = 0 Then
+        projectPath = ActiveProject.Path
+        projectName = ActiveProject.Name
+        If Err.Number <> 0 Then
+            Err.Clear
+            projectPath = ""
+            projectName = ""
+        End If
+        If Len(Trim$(projectPath)) > 0 And Len(Trim$(projectName)) > 0 Then
+            filePath = projectPath & "\" & projectName
+        End If
+    End If
+
     On Error GoTo 0
 
     filePath = Trim$(filePath)
-    If Len(filePath) > 0 Then
+    If Len(filePath) >= 4 Then
         If LCase$(Right$(filePath, 4)) = ".mpp" Then
             MsCurrentMppFilePath = filePath
         End If
@@ -247,18 +273,140 @@ End Sub
 
 Private Function MsSaveCurrentProjectForUpload() As String
     Dim filePath As String
+    Dim uploadPath As String
+    Dim fso As Object
 
     filePath = MsCurrentMppFilePath()
     If Len(filePath) > 0 Then
-        FileSave
-        MsSaveCurrentProjectForUpload = filePath
+        Set fso = CreateObject("Scripting.FileSystemObject")
+        If Not fso.FileExists(filePath) Then
+            MsDebugLog "File .mpp aktif tidak ditemukan: " & filePath
+            Err.Raise vbObjectError + 9204, "MsSaveCurrentProjectForUpload", _
+                "File .mpp aktif tidak ditemukan." & vbCrLf & _
+                "Path: " & filePath
+        End If
+
+        MsDebugLog "File .mpp siap upload: " & filePath
+        uploadPath = MsUploadCopyPath()
+        On Error Resume Next
+        fso.CopyFile filePath, uploadPath, True
+        If Err.Number <> 0 Then
+            Dim copyErrNo As Long
+            Dim copyErrSource As String
+            Dim copyErrDescription As String
+            copyErrNo = Err.Number
+            copyErrSource = Err.Source
+            copyErrDescription = Err.Description
+            Err.Clear
+            On Error GoTo 0
+            MsDebugLog "Copy file .mpp untuk upload gagal: " & copyErrDescription
+            Err.Raise copyErrNo, copyErrSource, copyErrDescription & vbCrLf & _
+                "Source file: " & filePath & vbCrLf & _
+                "Upload copy: " & uploadPath
+        End If
+        On Error GoTo 0
+
+        MsDebugLog "Upload copy siap: " & uploadPath
+        MsSaveCurrentProjectForUpload = uploadPath
         Exit Function
     End If
 
-    filePath = MsProjectTempMppPath()
-    MsSaveAsMppSafe filePath
-    MsSaveCurrentProjectForUpload = filePath
+    MsDebugLog "File aktif belum punya path .mpp"
+    Err.Raise vbObjectError + 9205, "MsSaveCurrentProjectForUpload", _
+        "File aktif belum punya path .mpp." & vbCrLf & _
+        "Silakan Save As manual dulu ke file .mpp lokal, lalu jalankan upload/sync lagi."
 End Function
+
+Public Sub Ms_DebugCurrentMppPath()
+    On Error GoTo ErrHandler
+
+    Dim filePath As String
+    filePath = MsCurrentMppFilePath()
+    If Len(filePath) = 0 Then
+        MsDebugLog "Current MPP path tidak ditemukan"
+        MsDebugLog "ActiveProject.FullName: " & ActiveProject.FullName
+        MsDebugLog "ActiveProject.Path: " & ActiveProject.Path
+        MsDebugLog "ActiveProject.Name: " & ActiveProject.Name
+        MsgBox "VBA belum menemukan path .mpp aktif." & vbCrLf & _
+               "ActiveProject.FullName: " & ActiveProject.FullName & vbCrLf & _
+               "ActiveProject.Path: " & ActiveProject.Path & vbCrLf & _
+               "ActiveProject.Name: " & ActiveProject.Name, vbExclamation
+    Else
+        MsDebugLog "Current MPP path: " & filePath
+        MsgBox "Path .mpp aktif:" & vbCrLf & filePath, vbInformation
+    End If
+    Exit Sub
+
+ErrHandler:
+    MsDebugLog "Debug path gagal: " & Err.Description & " | Source: " & Err.Source
+    MsgBox "Debug path gagal:" & vbCrLf & _
+           Err.Description & vbCrLf & vbCrLf & _
+           "Source: " & Err.Source, vbCritical
+End Sub
+
+Public Sub Ms_DebugSaveCurrentProjectForUpload()
+    On Error GoTo ErrHandler
+
+    Dim filePath As String
+    Dim fso As Object
+    Dim fileSize As Double
+    Dim currentPath As String
+
+    currentPath = MsCurrentMppFilePath()
+    filePath = MsSaveCurrentProjectForUpload()
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(filePath) Then fileSize = CDbl(fso.GetFile(filePath).Size)
+
+    MsDebugLog "Save/check .mpp OK"
+    MsDebugLog "Path: " & filePath
+    MsDebugLog "Size: " & CStr(fileSize) & " bytes"
+    MsDebugLog "Current path before save: " & currentPath
+    MsgBox "Save .mpp OK." & vbCrLf & _
+           "Path: " & filePath & vbCrLf & _
+           "Size: " & CStr(fileSize) & " bytes" & vbCrLf & _
+           "Current path before save: " & currentPath, vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsDebugLog "Debug save .mpp gagal: " & Err.Description & " | Source: " & Err.Source
+    MsgBox "Debug save .mpp gagal:" & vbCrLf & _
+           Err.Description & vbCrLf & vbCrLf & _
+           "Source: " & Err.Source, vbCritical
+End Sub
+
+Public Sub Ms_DebugUploadCurrentProjectFileOnly()
+    On Error GoTo ErrHandler
+
+    Dim projectId As String
+    Dim filePath As String
+    Dim responseText As String
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Then
+        MsgBox "Project ID kosong. Publish atau import project dulu.", vbExclamation
+        Exit Sub
+    End If
+
+    filePath = MsSaveCurrentProjectForUpload()
+    MsDebugLog "Upload .mpp start"
+    MsDebugLog "Project ID: " & projectId
+    MsDebugLog "Upload file: " & filePath
+    MsDebugLog "URL path: /projects/" & projectId & "/file"
+    responseText = MsHttpUploadFile("/projects/" & projectId & "/file", "file", filePath)
+
+    MsDebugLog "Upload .mpp OK"
+    MsDebugLog Left$(responseText, 1000)
+    MsgBox "Upload .mpp OK." & vbCrLf & _
+           "Path: " & filePath & vbCrLf & _
+           Left$(responseText, 700), vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsDebugLog "Debug upload .mpp gagal: " & Err.Description & " | Source: " & Err.Source
+    MsgBox "Debug upload .mpp gagal:" & vbCrLf & _
+           Err.Description & vbCrLf & vbCrLf & _
+           "Source: " & Err.Source, vbCritical
+End Sub
 
 Private Sub MsSaveAndUploadCurrentProjectFile()
     Dim projectId As String

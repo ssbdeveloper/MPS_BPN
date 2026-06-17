@@ -90,6 +90,11 @@ Private Function MsSafeProjectName() As String
     MsSafeProjectName = Trim$(ActiveProject.Name)
     If Len(MsSafeProjectName) = 0 Then MsSafeProjectName = Trim$(ActiveProject.ProjectSummaryTask.Name)
     If Len(MsSafeProjectName) = 0 Then MsSafeProjectName = "MS Project Plan"
+    If LCase$(Right$(MsSafeProjectName, 4)) = ".mpp" Then
+        MsSafeProjectName = Left$(MsSafeProjectName, Len(MsSafeProjectName) - 4)
+    End If
+    MsSafeProjectName = Trim$(MsSafeProjectName)
+    If Len(MsSafeProjectName) = 0 Then MsSafeProjectName = "MS Project Plan"
     On Error GoTo 0
 End Function
 

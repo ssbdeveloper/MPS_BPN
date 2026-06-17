@@ -22,7 +22,7 @@ Sync Existing Project
   -> API validasi lock_token + revision_no
   -> API update metadata dan naikkan revision_no
   -> VBA update revision/mapping UUID
-  -> VBA FileSave file .mpp aktif; jika belum ada path .mpp, FileSaveAs ke temp
+  -> VBA upload file .mpp aktif; file harus sudah pernah Save As lokal
   -> VBA upload ulang .mpp, overwrite file server
 ```
 
@@ -112,6 +112,7 @@ Public Const MS_API_BASE_URL As String = "https://100.80.101.53/api/ms-project"
 - Perubahan outline/indent task ikut dikirim lewat `parent_local_task_uid`, `outline_level`, dan `outline_number`.
 - Task baru wajib punya `local_task_uid` dari `Task.UniqueID`; task lama lebih stabil kalau sudah punya `task_id`.
 - File `.mpp` disimpan backend di folder khusus `uploads/ms-project-mpp`, bukan folder SOW.
+- Untuk upload `.mpp`, file MS Project aktif sebaiknya sudah pernah di-Save As manual sebagai file `.mpp` lokal.
 - Jika upload file gagal setelah metadata sukses, jalankan `Ms_UploadCurrentProjectFile` untuk retry.
 
 ## Legacy Modules

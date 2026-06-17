@@ -31,6 +31,17 @@ function nullableText(value) {
   return text || null;
 }
 
+function stripMppExtension(value) {
+  const text = normalizeText(value);
+  if (text.toLowerCase().endsWith(".mpp")) return text.slice(0, -4).trim();
+  return text;
+}
+
+function mppFileName(value, fallback) {
+  const baseName = stripMppExtension(value) || normalizeText(fallback) || "project";
+  return `${baseName}.mpp`;
+}
+
 function assertUuid(value, fieldName = "id") {
   const text = normalizeText(value);
   if (!UUID_RE.test(text)) {
@@ -317,7 +328,7 @@ async function queryProjectPackage(client, projectId) {
 function normalizeProjectPayload(payload, isSync = false) {
   const body = ensureObject(payload, "payload");
   const project = ensureObject(body.project || {}, "project");
-  const projectName = nullableText(project.project_name || project.name);
+  const projectName = nullableText(stripMppExtension(project.project_name || project.name));
 
   if (!isSync && !projectName) {
     throw new ApiError(400, "INVALID_PROJECT", "project.project_name is required");
@@ -1078,6 +1089,695 @@ async function listProjects(query) {
   `;
   const result = await pool().query(sql, values);
   return { rows: result.rows, limit, offset };
+}
+
+async function listProjectTasks(projectIdParam, query = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const values = [projectId];
+  const where = ["t.project_id = $1", "t.is_active = true"];
+  const q = nullableText(query.q);
+  const outlineLevel = toNullableInt(query.outline_level);
+
+  if (q) {
+    values.push(`%${q}%`);
+    where.push(`(
+      t.task_name ilike $${values.length}
+      or t.outline_number ilike $${values.length}
+      or t.order_no ilike $${values.length}
+      or t.operation_no ilike $${values.length}
+      or t.workcenter ilike $${values.length}
+    )`);
+  }
+  if (outlineLevel !== null) {
+    values.push(outlineLevel);
+    where.push(`t.outline_level = $${values.length}`);
+  }
+
+  const result = await pool().query(
+    `select
+       t.task_id,
+       t.project_id,
+       t.parent_task_id,
+       t.task_name,
+       t.outline_level,
+       t.outline_number,
+       t.order_no,
+       t.operation_no,
+       t.ssbr_id,
+       t.sow_id,
+       t.workcenter,
+       t.plan_start,
+       t.plan_finish,
+       t.duration_minutes,
+       t.planned_work_minutes,
+       t.actual_progress,
+       t.is_summary,
+       t.local_task_uid,
+       t.created_at,
+       t.updated_at
+     from ms_project_task t
+     where ${where.join(" and ")}
+     order by ${TASK_OPERATION_ORDER_SQL}`,
+    values
+  );
+
+  return { rows: result.rows };
+}
+
+async function listSowOrders(query = {}) {
+  const values = [];
+  const where = [
+    "s.order_no is not null",
+    "trim(s.order_no) <> ''",
+    "s.operation_no is not null",
+  ];
+  const q = nullableText(query.q);
+
+  if (q) {
+    values.push(`%${q.toLowerCase()}%`);
+    where.push(`(
+      lower(coalesce(s.order_no, '')) like $${values.length}
+      or lower(coalesce(s.ssbr_id, '')) like $${values.length}
+      or lower(coalesce(s.part_name, '')) like $${values.length}
+      or lower(coalesce(s.operation_text, '')) like $${values.length}
+      or lower(coalesce(s.workcenter, '')) like $${values.length}
+      or lower(coalesce(s.operation_no::text, '')) like $${values.length}
+    )`);
+  }
+
+  const limit = clampLimit(query.limit, 50);
+  const offset = clampOffset(query.offset);
+  values.push(limit, offset);
+
+  const result = await pool().query(
+    `select
+       s.order_no,
+       min(s.ssbr_id) as ssbr_id,
+       min(s.part_name) as part_name,
+       min(s.part_number) as part_number,
+       min(s.model) as model,
+       min(s.customer) as customer,
+       min(s.workcenter) as workcenter,
+       count(*)::integer as operation_count,
+       coalesce(sum(s.planhours), 0)::numeric(12,2) as total_planhours,
+       max(s.created_by) as created_by
+     from sow s
+     where ${where.join(" and ")}
+     group by s.order_no
+     order by max(s.idsow) desc, s.order_no desc
+     limit $${values.length - 1} offset $${values.length}`,
+    values
+  );
+
+  return { rows: result.rows, limit, offset };
+}
+
+async function getSowOrderOperations(orderNoParam) {
+  const orderNo = nullableText(orderNoParam);
+  if (!orderNo) {
+    throw new ApiError(400, "INVALID_ORDER_NO", "order_no is required", [{ field: "order_no" }]);
+  }
+
+  const result = await pool().query(
+    `select
+       idsow,
+       order_no,
+       operation_no,
+       operation_text,
+       ssbr_id,
+       part_number,
+       part_name,
+       model,
+       workcenter,
+       workcenterdescription,
+       wct_group,
+       planhours,
+       systemstatus,
+       status,
+       plan_start,
+       plan_finish
+     from sow
+     where ltrim(order_no, '0') = ltrim($1, '0')
+       and operation_no is not null
+     order by operation_no asc, idsow asc`,
+    [orderNo]
+  );
+
+  return { rows: result.rows };
+}
+
+function sortableOperation(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function operationKey(value) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  const number = Number.parseInt(text, 10);
+  return Number.isFinite(number) ? String(number) : text;
+}
+
+function minutesFromHours(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.round(parsed * 60));
+}
+
+function normalizeDateOnly(value, fieldName) {
+  const text = nullableText(value);
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    throw new ApiError(400, "INVALID_DATE", `${fieldName} must use YYYY-MM-DD format`, [{ field: fieldName }]);
+  }
+  const date = new Date(`${text}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    throw new ApiError(400, "INVALID_DATE", `${fieldName} must be a valid date`, [{ field: fieldName }]);
+  }
+  return text;
+}
+
+function normalizeBayCodes(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "bay_codes must be a non-empty array", [{ field: "bay_codes" }]);
+  }
+  const codes = values
+    .map((value) => normalizeText(value).toUpperCase())
+    .filter(Boolean);
+  const uniqueCodes = Array.from(new Set(codes));
+  if (!uniqueCodes.length) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "bay_codes must include at least one bay", [{ field: "bay_codes" }]);
+  }
+  const invalid = uniqueCodes.filter((code) => !/^[A-Z]{1,3}[0-9]{1,3}$/.test(code));
+  if (invalid.length) {
+    throw new ApiError(400, "INVALID_BAY_CODE", "One or more bay codes are invalid", invalid.map((code) => ({ bay_code: code })));
+  }
+  return uniqueCodes;
+}
+
+const TASK_OPERATION_ORDER_SQL = `
+  case when nullif(operation_no, '') is null then 1 else 0 end,
+  case when operation_no ~ '^\\d+$' then operation_no::integer end nulls last,
+  operation_no nulls last,
+  outline_number nulls last,
+  created_at,
+  task_name
+`;
+
+function buildNextOutlineNumberFactory(tasks, parentTask = null) {
+  const numberedTasks = tasks
+    .map((task) => normalizeText(task.outline_number))
+    .filter(Boolean);
+  const lastOutline = numberedTasks[numberedTasks.length - 1] || "";
+  const parts = lastOutline.split(".");
+  const lastPart = Number.parseInt(parts[parts.length - 1], 10);
+
+  if (!lastOutline && parentTask?.outline_number) {
+    let nextChild = 1;
+    return () => `${parentTask.outline_number}.${nextChild++}`;
+  }
+
+  if (!lastOutline || !Number.isFinite(lastPart)) {
+    return () => null;
+  }
+
+  const prefix = parts.slice(0, -1).join(".");
+  let nextNumber = lastPart + 1;
+  return () => {
+    const outlineNumber = prefix ? `${prefix}.${nextNumber}` : String(nextNumber);
+    nextNumber += 1;
+    return outlineNumber;
+  };
+}
+
+async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const orderNo = nullableText(body.order_no);
+  const outlineLevel = toNullableInt(body.outline_level);
+  const targetParentTaskId = optionalUuid(body.target_parent_task_id || body.parent_task_id, "target_parent_task_id");
+  const actor = actorFromBody(body, "web-manufacturing");
+
+  if (!orderNo) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "order_no is required", [{ field: "order_no" }]);
+  }
+  if (!targetParentTaskId && (outlineLevel === null || outlineLevel < 1)) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "target_parent_task_id or outline_level is required", [
+      { field: "target_parent_task_id" },
+      { field: "outline_level" },
+    ]);
+  }
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const projectResult = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
+    const project = projectResult.rows[0];
+    if (!project) {
+      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+
+    const operationsResult = await client.query(
+      `select
+         idsow,
+         order_no,
+         operation_no,
+         operation_text,
+         ssbr_id,
+         workcenter,
+         planhours
+       from sow
+       where ltrim(order_no, '0') = ltrim($1, '0')
+         and operation_no is not null
+       order by operation_no asc, idsow asc`,
+      [orderNo]
+    );
+    const operations = operationsResult.rows.sort((a, b) => sortableOperation(a.operation_no) - sortableOperation(b.operation_no));
+    if (!operations.length) {
+      throw new ApiError(404, "SOW_ORDER_NOT_FOUND", "No SOW operations found for this order", [{ order_no: orderNo }]);
+    }
+
+    let targetParentTask = null;
+    let targetOutlineLevel = outlineLevel;
+    let tasksResult;
+    if (targetParentTaskId) {
+      const parentResult = await client.query(
+        `select *
+         from ms_project_task
+         where project_id = $1
+           and task_id = $2
+           and is_active = true
+         for update`,
+        [projectId, targetParentTaskId]
+      );
+      targetParentTask = parentResult.rows[0];
+      if (!targetParentTask) {
+        throw new ApiError(404, "TARGET_PARENT_TASK_NOT_FOUND", "Target parent task not found", [{ target_parent_task_id: targetParentTaskId }]);
+      }
+      targetOutlineLevel = (toNullableInt(targetParentTask.outline_level) || 0) + 1;
+      tasksResult = await client.query(
+        `select *
+         from ms_project_task
+         where project_id = $1
+           and parent_task_id = $2
+           and is_active = true
+         order by ${TASK_OPERATION_ORDER_SQL}
+         for update`,
+        [projectId, targetParentTaskId]
+      );
+    } else {
+      tasksResult = await client.query(
+        `select *
+         from ms_project_task
+         where project_id = $1
+           and outline_level = $2
+           and is_active = true
+         order by ${TASK_OPERATION_ORDER_SQL}
+         for update`,
+        [projectId, outlineLevel]
+      );
+    }
+
+    const targetTasks = tasksResult.rows;
+    if (!targetParentTaskId && !targetTasks.length) {
+      throw new ApiError(404, "TARGET_TASKS_NOT_FOUND", "No active tasks found for this outline level", [{ outline_level: outlineLevel }]);
+    }
+
+    const availableTasks = [...targetTasks];
+    const mapped = [];
+    const created = [];
+    const lastTargetTask = targetTasks[targetTasks.length - 1] || null;
+    const nextOutlineNumber = buildNextOutlineNumberFactory(targetTasks, targetParentTask);
+
+    for (const operation of operations) {
+      const opKey = operationKey(operation.operation_no);
+      let taskIndex = availableTasks.findIndex((task) => operationKey(task.operation_no) === opKey);
+      if (taskIndex < 0) taskIndex = 0;
+      const task = availableTasks.splice(taskIndex, 1)[0];
+
+      if (task) {
+        const taskName = nullableText(operation.operation_text) || task.task_name;
+        await client.query(
+          `update ms_project_task
+           set task_name = $3,
+               order_no = $4,
+               operation_no = $5,
+               ssbr_id = $6,
+               sow_id = $7,
+               workcenter = $8,
+               planned_work_minutes = coalesce($9, planned_work_minutes),
+               duration_minutes = coalesce($9, duration_minutes),
+               updated_at = now()
+           where project_id = $1 and task_id = $2`,
+          [
+            projectId,
+            task.task_id,
+            taskName,
+            operation.order_no,
+            String(operation.operation_no),
+            operation.ssbr_id || null,
+            operation.idsow || null,
+            operation.workcenter || null,
+            minutesFromHours(operation.planhours),
+          ]
+        );
+
+        mapped.push({
+          task_id: task.task_id,
+          outline_number: task.outline_number,
+          old_task_name: task.task_name,
+          task_name: taskName,
+          order_no: operation.order_no,
+          operation_no: String(operation.operation_no),
+          operation_text: operation.operation_text,
+          sow_id: operation.idsow,
+        });
+        continue;
+      }
+
+      const inserted = await client.query(
+        `insert into ms_project_task (
+           project_id, parent_task_id, task_name, outline_level, outline_number,
+           order_no, operation_no, ssbr_id, sow_id, workcenter,
+           duration_minutes, planned_work_minutes, is_summary, is_active
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, false, true)
+         returning task_id, task_name, outline_number`,
+        [
+          projectId,
+          targetParentTaskId || lastTargetTask?.parent_task_id || null,
+          nullableText(operation.operation_text) || `Operation ${operation.operation_no}`,
+          targetOutlineLevel,
+          nextOutlineNumber(),
+          operation.order_no,
+          String(operation.operation_no),
+          operation.ssbr_id || null,
+          operation.idsow || null,
+          operation.workcenter || null,
+          minutesFromHours(operation.planhours),
+        ]
+      );
+      const createdTask = inserted.rows[0];
+      created.push({
+        task_id: createdTask.task_id,
+        outline_number: createdTask.outline_number,
+        task_name: createdTask.task_name,
+        order_no: operation.order_no,
+        operation_no: String(operation.operation_no),
+        operation_text: operation.operation_text,
+        sow_id: operation.idsow,
+      });
+    }
+
+    await client.query(
+      `update ms_project
+       set updated_by = $2,
+           updated_at = now()
+       where project_id = $1`,
+      [projectId, actor]
+    );
+
+    await writeAuditLog(client, {
+      projectId,
+      action: "MAP_SOW_ORDER",
+      actor,
+      details: {
+        order_no: orderNo,
+        outline_level: targetOutlineLevel,
+        target_parent_task_id: targetParentTaskId,
+        mapped_count: mapped.length,
+        created_count: created.length,
+        untouched_task_count: availableTasks.length,
+      },
+    });
+
+    await client.query("commit");
+    return {
+      project_id: projectId,
+      order_no: operations[0]?.order_no || orderNo,
+      outline_level: targetOutlineLevel,
+      target_parent_task_id: targetParentTaskId,
+      mapped,
+      created,
+      skipped_operations: [],
+      untouched_tasks: availableTasks.map((task) => ({
+        task_id: task.task_id,
+        task_name: task.task_name,
+        outline_number: task.outline_number,
+        operation_no: task.operation_no,
+      })),
+      summary: {
+        mapped_count: mapped.length,
+        created_count: created.length,
+        skipped_operation_count: 0,
+        untouched_task_count: availableTasks.length,
+      },
+    };
+  } catch (err) {
+    await client.query("rollback");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function listBaySchedules(query = {}) {
+  const values = [];
+  const where = ["1 = 1"];
+  const startDate = query.start_date ? normalizeDateOnly(query.start_date, "start_date") : null;
+  const endDate = query.end_date ? normalizeDateOnly(query.end_date, "end_date") : null;
+  const status = nullableText(query.status)?.toUpperCase();
+  const orderNo = nullableText(query.order_no);
+
+  if (startDate) {
+    values.push(startDate);
+    where.push(`s.end_date >= $${values.length}::date`);
+  }
+  if (endDate) {
+    values.push(endDate);
+    where.push(`s.start_date <= $${values.length}::date`);
+  }
+  if (status) {
+    values.push(status);
+    where.push(`s.status = $${values.length}`);
+  } else {
+    where.push("s.status <> 'CANCELLED'");
+  }
+  if (orderNo) {
+    values.push(orderNo);
+    where.push(`ltrim(s.order_no, '0') = ltrim($${values.length}, '0')`);
+  }
+
+  const result = await pool().query(
+    `select
+       s.schedule_id,
+       s.order_no,
+       s.project_id,
+       p.project_name,
+       s.task_id,
+       t.task_name,
+       t.operation_no,
+       s.area_code,
+       s.area_name,
+       s.bay_codes,
+       s.start_date,
+       s.end_date,
+       s.status,
+       s.notes,
+       s.created_by,
+       s.updated_by,
+       s.created_at,
+       s.updated_at
+     from ms_project_bay_schedule s
+     left join ms_project p on p.project_id = s.project_id
+     left join ms_project_task t
+       on t.project_id = s.project_id
+      and t.task_id = s.task_id
+     where ${where.join(" and ")}
+     order by s.start_date, s.area_code, s.bay_codes[1], s.order_no`,
+    values
+  );
+
+  return { rows: result.rows };
+}
+
+async function createBaySchedule(body = {}) {
+  const payload = ensureObject(body, "payload");
+  const orderNo = nullableText(payload.order_no);
+  const areaCode = nullableText(payload.area_code)?.toUpperCase();
+  const areaName = nullableText(payload.area_name) || areaCode;
+  const bayCodes = normalizeBayCodes(payload.bay_codes);
+  const startDate = normalizeDateOnly(payload.start_date, "start_date");
+  const endDate = normalizeDateOnly(payload.end_date, "end_date");
+  const projectId = optionalUuid(payload.project_id, "project_id");
+  const taskId = optionalUuid(payload.task_id, "task_id");
+  const actor = actorFromBody(payload, "web-manufacturing");
+  const notes = nullableText(payload.notes);
+
+  if (!orderNo) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "order_no is required", [{ field: "order_no" }]);
+  }
+  if (!areaCode) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "area_code is required", [{ field: "area_code" }]);
+  }
+  if (endDate < startDate) {
+    throw new ApiError(400, "INVALID_DATE_RANGE", "end_date must be on or after start_date", [
+      { field: "start_date", value: startDate },
+      { field: "end_date", value: endDate },
+    ]);
+  }
+  if (taskId && !projectId) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "project_id is required when task_id is provided", [{ field: "project_id" }]);
+  }
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+
+    const sowResult = await client.query(
+      `select min(order_no) as order_no
+       from sow
+       where ltrim(order_no, '0') = ltrim($1, '0')`,
+      [orderNo]
+    );
+    const resolvedOrderNo = sowResult.rows[0]?.order_no || orderNo;
+
+    if (projectId) {
+      const projectResult = await client.query("select project_id from ms_project where project_id = $1", [projectId]);
+      if (!projectResult.rows[0]) {
+        throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found", [{ project_id: projectId }]);
+      }
+    }
+    if (taskId) {
+      const taskResult = await client.query(
+        `select task_id
+         from ms_project_task
+         where project_id = $1
+           and task_id = $2
+           and is_active = true`,
+        [projectId, taskId]
+      );
+      if (!taskResult.rows[0]) {
+        throw new ApiError(404, "TASK_NOT_FOUND", "Project task not found", [{ task_id: taskId }]);
+      }
+    }
+
+    const conflictResult = await client.query(
+      `select
+         schedule_id,
+         order_no,
+         bay_codes,
+         start_date,
+         end_date,
+         status
+       from ms_project_bay_schedule
+       where status in ('RESERVED', 'CONFIRMED')
+         and bay_codes && $1::text[]
+         and daterange(start_date, end_date, '[]') && daterange($2::date, $3::date, '[]')
+       order by start_date, bay_codes[1]
+       limit 10`,
+      [bayCodes, startDate, endDate]
+    );
+
+    if (conflictResult.rows.length) {
+      throw new ApiError(409, "BAY_SCHEDULE_CONFLICT", "One or more bays are already reserved for this date range", conflictResult.rows);
+    }
+
+    const insertResult = await client.query(
+      `insert into ms_project_bay_schedule (
+         order_no,
+         project_id,
+         task_id,
+         area_code,
+         area_name,
+         bay_codes,
+         start_date,
+         end_date,
+         status,
+         notes,
+         created_by,
+         updated_by
+       )
+       values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $10)
+       returning *`,
+      [
+        resolvedOrderNo,
+        projectId,
+        taskId,
+        areaCode,
+        areaName,
+        bayCodes,
+        startDate,
+        endDate,
+        notes,
+        actor,
+      ]
+    );
+
+    await writeAuditLog(client, {
+      projectId,
+      action: "BAY_SCHEDULE_RESERVE",
+      actor,
+      details: {
+        schedule_id: insertResult.rows[0].schedule_id,
+        order_no: resolvedOrderNo,
+        area_code: areaCode,
+        bay_codes: bayCodes,
+        start_date: startDate,
+        end_date: endDate,
+      },
+    });
+
+    await client.query("commit");
+    return insertResult.rows[0];
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function cancelBaySchedule(scheduleIdParam, body = {}) {
+  const scheduleId = assertUuid(scheduleIdParam, "schedule_id");
+  const actor = actorFromBody(body, "web-manufacturing");
+  const client = await pool().connect();
+
+  try {
+    await client.query("begin");
+    const result = await client.query(
+      `update ms_project_bay_schedule
+       set status = 'CANCELLED',
+           updated_by = $2,
+           updated_at = now()
+       where schedule_id = $1
+         and status <> 'CANCELLED'
+       returning *`,
+      [scheduleId, actor]
+    );
+    const schedule = result.rows[0];
+    if (!schedule) {
+      throw new ApiError(404, "BAY_SCHEDULE_NOT_FOUND", "Bay schedule not found", [{ schedule_id: scheduleId }]);
+    }
+
+    await writeAuditLog(client, {
+      projectId: schedule.project_id,
+      action: "BAY_SCHEDULE_CANCEL",
+      actor,
+      details: {
+        schedule_id: schedule.schedule_id,
+        order_no: schedule.order_no,
+        area_code: schedule.area_code,
+        bay_codes: schedule.bay_codes,
+      },
+    });
+
+    await client.query("commit");
+    return schedule;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function getProjectPackage(projectId) {
@@ -1994,7 +2694,7 @@ async function uploadProjectFile(projectIdParam, file) {
       throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
     }
 
-    const storedFileName = `${projectResult.rows[0].project_name || projectId}.mpp`;
+    const storedFileName = mppFileName(projectResult.rows[0].project_name, projectId);
 
     const result = await client.query(
       `update ms_project
@@ -2329,8 +3029,10 @@ module.exports = {
   ApiError,
   addProjectResources,
   bulkLoadProjectPackages,
+  cancelBaySchedule,
   checkinProject,
   checkoutProject,
+  createBaySchedule,
   deactivateProjectResource,
   forceCheckinProject,
   getConflicts,
@@ -2339,8 +3041,13 @@ module.exports = {
   getProjectResources,
   heartbeatProject,
   health,
+  getSowOrderOperations,
+  listBaySchedules,
   listCalendars,
+  listProjectTasks,
   listProjects,
+  listSowOrders,
+  mapSowOrderToProjectTasks,
   publishCurrentRevision,
   publishProject,
   refreshCalendarsFromShifts,

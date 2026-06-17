@@ -86,6 +86,41 @@ exports.listProjects = route(async (req) => {
   return (res) => success(res, result.rows, 200, { limit: result.limit, offset: result.offset });
 });
 
+exports.listProjectTasks = route(async (req) => {
+  const result = await service.listProjectTasks(req.params.project_id, req.query);
+  return (res) => success(res, result.rows);
+});
+
+exports.listSowOrders = route(async (req) => {
+  const result = await service.listSowOrders(req.query);
+  return (res) => success(res, result.rows, 200, { limit: result.limit, offset: result.offset });
+});
+
+exports.getSowOrderOperations = route(async (req) => {
+  const result = await service.getSowOrderOperations(req.params.order_no);
+  return (res) => success(res, result.rows);
+});
+
+exports.mapSowOrderToProjectTasks = route(async (req) => {
+  const data = await service.mapSowOrderToProjectTasks(req.params.project_id, req.body || {});
+  return (res) => success(res, data, 200, data.summary || {});
+});
+
+exports.listBaySchedules = route(async (req) => {
+  const result = await service.listBaySchedules(req.query);
+  return (res) => success(res, result.rows);
+});
+
+exports.createBaySchedule = route(async (req) => {
+  const data = await service.createBaySchedule(req.body || {});
+  return (res) => success(res, data, 201);
+});
+
+exports.cancelBaySchedule = route(async (req) => {
+  const data = await service.cancelBaySchedule(req.params.schedule_id, req.body || {});
+  return (res) => success(res, data);
+});
+
 exports.getProjectPackage = route(async (req) => {
   const data = await service.getProjectPackage(req.params.project_id);
   return (res) => success(res, data);

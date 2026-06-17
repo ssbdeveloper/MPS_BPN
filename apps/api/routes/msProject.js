@@ -28,8 +28,17 @@ const upload = multer({
 
 router.get("/health", controller.health);
 
+router.get("/sow-orders", controller.listSowOrders);
+router.get("/sow-orders/:order_no/operations", controller.getSowOrderOperations);
+
+router.get("/bay-schedules", controller.listBaySchedules);
+router.post("/bay-schedules", controller.createBaySchedule);
+router.delete("/bay-schedules/:schedule_id", controller.cancelBaySchedule);
+
 router.get("/projects", controller.listProjects);
 router.post("/projects/bulk-load", controller.bulkLoadProjects);
+router.get("/projects/:project_id/tasks", controller.listProjectTasks);
+router.put("/projects/:project_id/tasks/map-sow-order", controller.mapSowOrderToProjectTasks);
 router.get("/projects/:project_id/package", controller.getProjectPackage);
 router.post("/projects", controller.publishProject);
 router.post("/projects/:project_id/file", upload.single("file"), controller.uploadProjectFile);

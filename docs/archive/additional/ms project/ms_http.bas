@@ -60,6 +60,10 @@ Private Sub MsStreamWriteAscii(ByVal stream As Object, ByVal text As String)
     stream.Write bytes
 End Sub
 
+Private Sub MsHttpDebugLog(ByVal message As String)
+    Debug.Print Format$(Now, "yyyy-mm-dd hh:nn:ss") & " | " & message
+End Sub
+
 Public Function MsHttpUploadFile(ByVal path As String, ByVal fieldName As String, ByVal filePath As String) As String
     On Error GoTo ErrHandler
 
@@ -69,6 +73,7 @@ Public Function MsHttpUploadFile(ByVal path As String, ByVal fieldName As String
     Dim fileStream As Object
     Dim http As Object
     Dim fileName As String
+    Dim uploadUrl As String
 
     Set fso = CreateObject("Scripting.FileSystemObject")
     If Not fso.FileExists(filePath) Then
@@ -97,8 +102,12 @@ Public Function MsHttpUploadFile(ByVal path As String, ByVal fieldName As String
     MsStreamWriteAscii body, vbCrLf & "--" & boundary & "--" & vbCrLf
     body.Position = 0
 
+    uploadUrl = MsApiUrl(path)
+    MsHttpDebugLog "HTTP upload start"
+    MsHttpDebugLog "URL: " & uploadUrl
+    MsHttpDebugLog "File: " & filePath
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
-    http.Open "POST", MsApiUrl(path), False
+    http.Open "POST", uploadUrl, False
     http.Option(4) = 13056
     http.SetTimeouts 5000, 5000, MS_HTTP_TIMEOUT_MS, MS_HTTP_TIMEOUT_MS
     http.SetRequestHeader "Accept", "application/json"
@@ -108,20 +117,37 @@ Public Function MsHttpUploadFile(ByVal path As String, ByVal fieldName As String
     http.WaitForResponse
     body.Close
 
+    MsHttpDebugLog "HTTP upload status: " & CStr(http.Status) & " " & http.StatusText
     If http.Status < 200 Or http.Status >= 300 Then
+        MsHttpDebugLog "HTTP upload response: " & Left$(http.ResponseText, 1000)
         Err.Raise vbObjectError + http.Status, "MsHttpUploadFile", _
-            "HTTP " & http.Status & " " & http.StatusText & vbCrLf & Left$(http.ResponseText, 1000)
+            "HTTP " & http.Status & " " & http.StatusText & vbCrLf & _
+            "URL: " & uploadUrl & vbCrLf & _
+            "File: " & filePath & vbCrLf & _
+            Left$(http.ResponseText, 1000)
     End If
 
+    MsHttpDebugLog "HTTP upload response: " & Left$(http.ResponseText, 1000)
     MsHttpUploadFile = http.ResponseText
     Exit Function
 
 ErrHandler:
+    Dim uploadErrNo As Long
+    Dim uploadErrSource As String
+    Dim uploadErrDescription As String
+
+    uploadErrNo = Err.Number
+    uploadErrSource = Err.Source
+    uploadErrDescription = Err.Description
+
+    MsHttpDebugLog "HTTP upload gagal: " & uploadErrDescription & " | Source: " & uploadErrSource
     On Error Resume Next
     If Not fileStream Is Nothing Then fileStream.Close
     If Not body Is Nothing Then body.Close
     On Error GoTo 0
-    Err.Raise Err.Number, Err.Source, Err.Description
+    Err.Raise uploadErrNo, uploadErrSource, uploadErrDescription & vbCrLf & _
+        "URL: " & uploadUrl & vbCrLf & _
+        "File: " & filePath
 End Function
 
 Public Function MsParseSuccess(ByVal responseText As String) As Object
