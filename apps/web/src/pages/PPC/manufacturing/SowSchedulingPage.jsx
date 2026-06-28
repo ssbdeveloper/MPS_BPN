@@ -34,7 +34,7 @@ const MENU_ITEMS = [
     key: 'admin',
     label: 'Super Admin Panel',
     icon: ShieldCheck,
-    to: '/manage-users',
+    to: '/ms-project-admin',
   },
 ];
 

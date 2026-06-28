@@ -90,7 +90,7 @@ const TimesheetListPage = () => {
     }
 
     try {
-      const res = await fetch(`${API_BASE}/timesheet/getsn/${serialnumber}`);
+      const res = await fetch(`${API_BASE}/timesheet/getsn/${serialnumber}?limit=200`);
       if (!res.ok) throw new Error('Gagal load timesheet');
       const data = await res.json();
 

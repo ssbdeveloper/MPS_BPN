@@ -117,6 +117,27 @@ services:
     networks:
       - timesheet-network
 
+  machine-ping-worker:
+    build:
+      context: .
+      dockerfile: jobs/machine_ping/Dockerfile
+    container_name: machine-ping-worker
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - TZ=${TIMEZONE}
+    depends_on:
+      db:
+        condition: service_healthy
+    cap_add:
+      - NET_RAW
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
   fastapi:
     build:
       context: ./apps/fastapi-msproject

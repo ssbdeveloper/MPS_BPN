@@ -10,7 +10,14 @@ import router from './router';
 function App() {
   return (
     <>
-      <RouterProvider router={router} />
+      <RouterProvider
+        router={router}
+        fallbackElement={
+          <div className="flex h-dvh items-center justify-center bg-slate-50 text-sm font-semibold text-slate-600">
+            Loading...
+          </div>
+        }
+      />
       <Toaster
         position="top-right"
         richColors

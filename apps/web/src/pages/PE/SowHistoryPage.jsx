@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { RefreshCw, Save, Search, Trash2, X, ChevronDown, FileText, Printer, Loader2, ArrowRight } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { RefreshCw, Save, Search, Trash2, X, ChevronDown, FileText, Printer, Loader2, ArrowRight, Download, ArrowDownUp } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
 import ssbLogo from '../../assets/ssb.png';
@@ -131,6 +131,7 @@ function fmt(value) {
 
 const INPUT_CLS = `w-full rounded border border-slate-200 px-2 py-1 outline-none focus:border-[#0096c7] text-xs`;
 const SELECT_CLS = `w-full rounded border border-slate-200 px-2 py-1 outline-none focus:border-[#0096c7] appearance-none cursor-pointer bg-white text-xs truncate pr-6`;
+const todayDate = () => new Date().toISOString().slice(0, 10);
 
 const SelectWrapper = ({ children }) => (
   <div className="relative">
@@ -141,10 +142,16 @@ const SelectWrapper = ({ children }) => (
 
 export default function SowHistoryPage() {
   const navigate = useNavigate();
-  const [search, setSearch] = useState('');
+  const [searchParams] = useSearchParams();
+  const initialSearch = searchParams.get('search') || '';
+  const [search, setSearch] = useState(initialSearch);
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 50, total: 0, totalPages: 1 });
+  const [sortDirection, setSortDirection] = useState('desc');
   const [loading, setLoading] = useState(false);
+  const [showExportPanel, setShowExportPanel] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportRange, setExportRange] = useState({ start: todayDate(), end: todayDate() });
   const [showEditor, setShowEditor] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState('');
   const [editRows, setEditRows] = useState([]);
@@ -176,16 +183,16 @@ export default function SowHistoryPage() {
   const partsByModel = useCallback((m) => components.filter(c => c.model === m && c.part_number).sort((a, b) => a.part_number > b.part_number ? 1 : -1), [components]);
   const partInfoByNumber = useCallback((pn) => components.find(c => c.part_number === pn), [components]);
 
-  const loadRows = useCallback(async (page = pagination.page) => {
+  const loadRows = useCallback(async (page = pagination.page, direction = sortDirection) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), limit: String(pagination.limit) });
+      const params = new URLSearchParams({ page: String(page), limit: String(pagination.limit), sort: 'updated_at', direction });
       if (search.trim()) params.set('search', search.trim());
       const payload = await request(`/sow/history-rows?${params.toString()}`);
       setRows(payload.data || []);
       setPagination(payload.pagination || { page, limit: 50, total: 0, totalPages: 1 });
     } catch (err) { toast.error(err.message); setRows([]); } finally { setLoading(false); }
-  }, [pagination.limit, pagination.page, search]);
+  }, [pagination.limit, pagination.page, search, sortDirection]);
 
   const loadOrderDetail = useCallback(async (orderNo, revisionNo = null) => {
     if (!orderNo) return;
@@ -239,6 +246,48 @@ export default function SowHistoryPage() {
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };
 
+  const toggleSortDirection = () => {
+    const next = sortDirection === 'desc' ? 'asc' : 'desc';
+    setSortDirection(next);
+    loadRows(1, next);
+  };
+
+  const exportExcel = async () => {
+    if (!exportRange.start || !exportRange.end) {
+      toast.error('Pilih rentang tanggal created_at');
+      return;
+    }
+    if (exportRange.start > exportRange.end) {
+      toast.error('Tanggal mulai tidak boleh lebih besar dari tanggal akhir');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({ start: exportRange.start, end: exportRange.end, direction: sortDirection });
+      const res = await fetch(`${API_BASE}/sow/history-export?${params.toString()}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sow_history_${exportRange.start}_to_${exportRange.end}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setShowExportPanel(false);
+      toast.success('Export Excel berhasil');
+    } catch (err) {
+      toast.error(err.message || 'Export gagal');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handleOpenOpCard = async () => {
     if (!selectedOrder || editRows.length === 0) return;
     setShowOpCard(true);
@@ -279,7 +328,7 @@ export default function SowHistoryPage() {
             root.render(el);
           });
         } catch { qrDataUrl = ''; }
-        return { ...op, machineid: op.machineid || op.workcenter || '', qrDataUrl };
+        return { ...op, std_hours: op.display_planhours ?? op.std_hours ?? op.planhours, machineid: op.machineid || op.workcenter || '', qrDataUrl };
       }));
       const html = buildOpCardPreviewHtml({ orderNo: selectedOrder, operations: ops, detailInfo, imagesByOpNo, logoDataUrl });
       setOpCardHtml(html);
@@ -294,6 +343,8 @@ export default function SowHistoryPage() {
           <div><h2 className="text-lg font-bold text-slate-900">SOW History</h2><p className="text-sm text-slate-500">{search.trim() ? `Filter: ${search.trim()}` : ''}</p></div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3"><Search className="h-4 w-4 text-slate-400" /><input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadRows(1); }} className="w-60 bg-transparent text-sm outline-none" placeholder="Search order_no / ssbr_id" /></label>
+            <button onClick={toggleSortDirection} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><ArrowDownUp className="h-4 w-4" /> Updated {sortDirection.toUpperCase()}</button>
+            <button onClick={() => setShowExportPanel(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Excel</button>
             <button onClick={() => loadRows(1)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className="h-4 w-4" /> Refresh</button>
             <button onClick={() => setShowEditor(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white hover:bg-[#0077b6]">Edit SOW</button>
           </div>
@@ -307,9 +358,9 @@ export default function SowHistoryPage() {
               <tr>{['Customer','Order No','SSBR ID','Operation Text','Operation No','Plan Hours','WCT Group','Workcenter','Status','Part Number','Part Name','Model'].map(h => (<th key={h} className="border-b border-slate-200 px-3 py-2 font-bold">{h}</th>))}</tr>
             </thead>
             <tbody>
-              {loading ? (<tr><td colSpan={11} className="px-3 py-10 text-center text-slate-500">Loading...</td></tr>) : rows.length === 0 ? (<tr><td colSpan={11} className="px-3 py-10 text-center text-slate-500">Data tidak ditemukan</td></tr>) : rows.map((row, i) => (
+              {loading ? (<tr><td colSpan={12} className="px-3 py-10 text-center text-slate-500">Loading...</td></tr>) : rows.length === 0 ? (<tr><td colSpan={12} className="px-3 py-10 text-center text-slate-500">Data tidak ditemukan</td></tr>) : rows.map((row, i) => (
                 <tr key={`${row.order_no}-${row.operation_no}-${i}`} onClick={() => { loadOrderDetail(row.order_no); setShowEditor(true); }} className="odd:bg-white even:bg-slate-50 hover:bg-[#caf0f8] cursor-pointer transition-colors">
-                  <td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.customer)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.order_no)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.ssbr_id)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.operation_text)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.operation_no)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.planhours)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.wct_group)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.workcenter)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.status)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.part_number)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.part_name)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.model)}</td>
+                  <td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.customer)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.order_no)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.ssbr_id)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.operation_text)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.operation_no)}</td><td className="border-b border-slate-100 px-3 py-2 font-semibold text-slate-800" title={`Operation: ${fmt(row.operation_planhours)} | NNVA: ${fmt(row.nnva_planhours)}`}>{fmt(row.display_planhours ?? row.planhours)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.wct_group)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.workcenter)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.status)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.part_number)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.part_name)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.model)}</td>
                 </tr>))}
             </tbody>
           </table>
@@ -321,6 +372,34 @@ export default function SowHistoryPage() {
         <span>Page {pagination.page} / {pagination.totalPages} ({pagination.total} row)</span>
         <button disabled={pagination.page >= pagination.totalPages || loading} onClick={() => loadRows(Math.min(pagination.totalPages, pagination.page + 1))} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold disabled:opacity-40">Next</button>
       </div>
+
+      {showExportPanel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Export SOW History</h3>
+                <p className="text-xs text-slate-500">Pilih rentang tanggal created_at</p>
+              </div>
+              <button onClick={() => setShowExportPanel(false)} className="min-h-[44px] min-w-[44px] rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"><X className="mx-auto h-4 w-4" /></button>
+            </div>
+            <div className="grid gap-4">
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-slate-600">Tanggal Mulai</span>
+                <input type="date" value={exportRange.start} onChange={e => setExportRange(p => ({ ...p, start: e.target.value }))} className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold text-slate-600">Tanggal Akhir</span>
+                <input type="date" value={exportRange.end} onChange={e => setExportRange(p => ({ ...p, end: e.target.value }))} className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]" />
+              </label>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button onClick={() => setShowExportPanel(false)} disabled={exporting} className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Batal</button>
+              <button onClick={exportExcel} disabled={exporting} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0077b6] disabled:opacity-50">{exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} Export</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showEditor && (
         <div className="fixed inset-0 z-50 flex bg-slate-950/40 backdrop-blur-sm">

@@ -13,7 +13,7 @@ function getWsUrl(interval) {
   return `${proto}//${window.location.host}/api/dashboard/ws?interval=${interval}`;
 }
 
-export default function useDashboardWebSocket(initialInterval = 5000) {
+export default function useDashboardWebSocket(initialInterval = 30000) {
   const [data, setData] = useState(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState(null);

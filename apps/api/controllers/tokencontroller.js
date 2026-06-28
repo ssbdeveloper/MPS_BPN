@@ -1,4 +1,4 @@
-require("dotenv").config()
+require("../config/loadEnv")
 
 exports.verifyToken = (req, res) => {
   try {

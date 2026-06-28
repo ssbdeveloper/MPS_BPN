@@ -43,6 +43,7 @@ router.get("/standard", controller.getSowStandard);
 router.get("/standard/grouped",          controller.getSowStandardGrouped);
 router.get("/standard/component/:component_id", controller.getSowStandardByComponent);
 router.get("/standard/component/:component_id/templates", controller.getSowTemplatesByComponent);
+router.delete("/standard/component/:component_id", controller.deleteSowStandardComponent);
 router.post("/templates",                        controller.createTemplate);
 router.put("/templates/:templateId",             controller.updateTemplate);
 router.delete("/templates/:templateId",          controller.deleteTemplate);
@@ -84,6 +85,7 @@ router.post("/create", controller.createFromBuilder);
 // SOW HISTORY / REVISION EDITOR
 // ============================================
 router.get("/history-rows", controller.getSowHistoryRows);
+router.get("/history-export", controller.exportSowHistoryRows);
 router.get("/history-orders", controller.getSowOrderOptions);
 router.get("/history-order/:orderNo", controller.getSowOrderForRevision);
 router.put("/history-order/:orderNo/info", controller.saveSowOrderInfo);

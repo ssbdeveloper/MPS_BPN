@@ -8,8 +8,8 @@ function paramsFromUrl(url) {
 
 function parseInterval(value) {
   const interval = parseInt(value, 10);
-  if (!Number.isFinite(interval)) return 5000;
-  return Math.min(30000, Math.max(2000, interval));
+  if (!Number.isFinite(interval)) return 30000;
+  return Math.min(120000, Math.max(15000, interval));
 }
 
 function num(value, fallback = 0) {

@@ -29,7 +29,7 @@ const EMPTY_DATA = {
 
 export default function MPDashboardPage() {
   const navigate = useNavigate();
-  const { data, connected } = useDashboardWebSocket(5000);
+  const { data, connected } = useDashboardWebSocket(30000);
 
   const d = data || EMPTY_DATA;
   const liveIndicator = connected;
@@ -156,7 +156,7 @@ export default function MPDashboardPage() {
               <div className="text-sm font-bold text-slate-800">
                 {connected ? "Connected" : "Disconnected"}
               </div>
-              <div className="text-[10px] text-slate-400">WebSocket • 5s interval</div>
+              <div className="text-[10px] text-slate-400">WebSocket - 30s interval</div>
             </div>
             <div>
               <div className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold">Active Orders</div>

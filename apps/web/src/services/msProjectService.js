@@ -98,6 +98,14 @@ export async function cancelBaySchedule(scheduleId) {
   return response.data;
 }
 
+export async function forceCheckinProject(projectId, payload = {}) {
+  const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/force-checkin`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
 export default {
   cancelBaySchedule,
   createBaySchedule,
@@ -106,5 +114,6 @@ export default {
   fetchMsProjectTasks,
   fetchSowOrders,
   fetchSowOrderOperations,
+  forceCheckinProject,
   mapSowOrderToProjectTasks,
 };

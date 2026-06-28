@@ -4,10 +4,10 @@ import { toast } from 'sonner';
 import {
   ArrowLeft,
   BriefcaseBusiness,
-  CalendarClock,
   CheckCircle2,
   ClipboardList,
   LogOut,
+  Monitor,
   RefreshCw,
 } from 'lucide-react';
 
@@ -106,10 +106,6 @@ export default function ManufacturingTimesheetMainMenuPage() {
     }
   };
 
-  const handleOpenMsProject = () => {
-    toast.info('Halaman MS Project manufacturing akan ditambahkan setelah flow final');
-  };
-
   return (
     <div className="flex h-dvh w-screen flex-col overflow-hidden bg-slate-50">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 shadow-sm md:px-6">
@@ -177,11 +173,11 @@ export default function ManufacturingTimesheetMainMenuPage() {
             onClick={() => navigate('/select-job')}
           />
           <ActionButton
-            icon={CalendarClock}
-            label="MS Project"
-            helper="Planning sync"
+            icon={Monitor}
+            label="Select Workcenter"
+            helper="Pilih workcenter"
             tone="outline"
-            onClick={handleOpenMsProject}
+            onClick={() => navigate('/select-machine')}
           />
         </section>
 

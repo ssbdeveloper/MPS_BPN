@@ -308,6 +308,7 @@ export default function SowRevisionEditPage() {
           workcenter: op.machineid,
           workcenterdescription: op.workcenterdescription || null,
           planhours: op.std_hours !== '' ? parseFloat(op.std_hours) : null,
+          source_op_id: op.source_op_id || op._srcId || null,
         })),
       };
       const result = await request(`/sow/history-order/${encodeURIComponent(decodedOrderNo)}`, {

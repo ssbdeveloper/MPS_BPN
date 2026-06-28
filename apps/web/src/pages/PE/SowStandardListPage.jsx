@@ -1113,7 +1113,54 @@ function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNn
 }
 
 // ─── ComponentGroup ───────────────────────────────────────────────────────────
-function ComponentGroup({ group }) {
+function ConfirmDeletePanel({ open, title, message, details, confirmLabel = 'Hapus', loading, onCancel, onConfirm }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm px-0 md:px-4">
+      <div className="w-full md:max-w-md bg-white shadow-xl rounded-t-2xl md:rounded-2xl p-6">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+            <Trash2 size={18} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-bold text-slate-800">{title}</h2>
+            <p className="mt-1 text-sm text-slate-600">{message}</p>
+            {details && (
+              <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {details}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="min-h-[44px] bg-white border border-slate-200 text-slate-700 hover:bg-slate-50
+                       px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            className="min-h-[44px] inline-flex items-center gap-1.5 bg-red-600 hover:bg-red-500 text-white
+                       px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComponentGroup({ group, onDeleted }) {
   const [open, setOpen]             = useState(false);
   const [operations, setOperations] = useState([]);
   const [templates, setTemplates]   = useState([]);
@@ -1121,8 +1168,10 @@ function ComponentGroup({ group }) {
   const [modal, setModal]           = useState(null);
   const [nnvaModal, setNnvaModal]   = useState(null);
   const [deleting, setDeleting]     = useState(null);
+  const [deletingComponent, setDeletingComponent] = useState(false);
   const [deletingTemplate, setDeletingTemplate] = useState(null);
   const [templateModal, setTemplateModal] = useState(null); // { mode, template }
+  const [confirm, setConfirm] = useState(null);
   const [nnvaExpanded, setNnvaExpanded] = useState(new Set());
   const fetched = useRef(false);
 
@@ -1168,7 +1217,6 @@ function ComponentGroup({ group }) {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Hapus operasi ini?')) return;
     setDeleting(id);
     try {
       const res = await fetch(`${API_BASE}/sow/standard/operation/${id}`, { method: 'DELETE' });
@@ -1197,7 +1245,6 @@ function ComponentGroup({ group }) {
   };
 
   const handleDeleteTemplate = async (templateId) => {
-    if (!window.confirm('Hapus package ini?')) return;
     setDeletingTemplate(templateId);
     try {
       const res = await fetch(`${API_BASE}/sow/templates/${templateId}`, { method: 'DELETE' });
@@ -1208,6 +1255,22 @@ function ComponentGroup({ group }) {
       toast.error(err.message);
     } finally {
       setDeletingTemplate(null);
+    }
+  };
+
+  const handleDeleteComponent = async () => {
+    setDeletingComponent(true);
+    try {
+      const res = await fetch(`${API_BASE}/sow/standard/component/${group.component_id}`, { method: 'DELETE' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Gagal hapus komponen');
+      toast.success('Komponen dan relasi SOW standard dihapus');
+      setConfirm(null);
+      onDeleted?.(group.component_id, json.counts);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setDeletingComponent(false);
     }
   };
 
@@ -1222,31 +1285,54 @@ function ComponentGroup({ group }) {
   return (
     <div className="bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden mb-3">
       {/* Group header */}
-      <button
-        className="w-full flex items-center justify-between px-4 py-3 text-left min-h-[56px]
-                   transition-colors hover:bg-slate-50 active:bg-slate-100"
-        onClick={handleToggle}
-      >
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-            <span className="text-sm font-bold text-slate-800 truncate">{group.part_name}</span>
-            <span className="font-mono text-xs text-[#0096c7]">{group.part_number}</span>
+      <div className="flex items-stretch min-h-[56px] transition-colors hover:bg-slate-50">
+        <button
+          type="button"
+          className="flex flex-1 items-center justify-between px-4 py-3 text-left active:bg-slate-100"
+          onClick={handleToggle}
+        >
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+              <span className="text-sm font-bold text-slate-800 truncate">{group.part_name}</span>
+              <span className="font-mono text-xs text-[#0096c7]">{group.part_number}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
+              <span className="text-xs text-slate-500">{group.model}</span>
+              {group.source_plant > 0 && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full
+                                 bg-[#caf0f8] text-[#0077b6] border border-[#90e0ef]">
+                  Plant {group.source_plant}
+                </span>
+              )}
+              <span className="text-[10px] text-slate-400">{group.operation_count} op.</span>
+              {group.template_count > 0 && (
+                <span className="text-[10px] text-slate-400">{group.template_count} package</span>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
-            <span className="text-xs text-slate-500">{group.model}</span>
-            {group.source_plant > 0 && (
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full
-                               bg-[#caf0f8] text-[#0077b6] border border-[#90e0ef]">
-                Plant {group.source_plant}
-              </span>
-            )}
-            <span className="text-[10px] text-slate-400">{group.operation_count} op.</span>
+          <div className="flex-shrink-0 ml-3 text-slate-400">
+            {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </div>
+        </button>
+        <div className="flex items-center pr-3">
+          <button
+            type="button"
+            onClick={() => setConfirm({
+              type: 'component',
+              title: 'Hapus komponen?',
+              message: `${group.part_name || 'Komponen'} akan dihapus dari components beserta SOW standard, package, template lines, NNVA, attachment, dan operation card yang terkait.`,
+              details: `Component ID ${group.component_id} | ${group.operation_count || 0} operation | ${group.template_count || 0} package`,
+            })}
+            disabled={deletingComponent}
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg
+                       bg-white border border-red-200 text-red-500 hover:bg-red-50
+                       transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Hapus komponen"
+          >
+            {deletingComponent ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+          </button>
         </div>
-        <div className="flex-shrink-0 ml-3 text-slate-400">
-          {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-        </div>
-      </button>
+      </div>
 
       {/* Expanded content */}
       {open && (
@@ -1308,7 +1394,16 @@ function ComponentGroup({ group }) {
                             <Pencil size={10} /> Edit
                           </button>
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(template.template_id); }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirm({
+                                type: 'template',
+                                id: template.template_id,
+                                title: 'Hapus package?',
+                                message: `Package ${template.template_name} akan dihapus dari daftar aktif.`,
+                                details: `${template.operation_count} operation tetap aman di SOW standard.`,
+                              });
+                            }}
                             disabled={deletingTemplate === template.template_id}
                             className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-400 hover:text-red-500 py-1 rounded transition-colors hover:bg-white disabled:opacity-40"
                           >
@@ -1350,7 +1445,16 @@ function ComponentGroup({ group }) {
                       key={op.id}
                       op={op}
                       onEdit={(o) => setModal({ mode: 'edit', op: o })}
-                      onDelete={handleDelete}
+                      onDelete={(id) => {
+                        const target = operations.find((item) => item.id === id);
+                        setConfirm({
+                          type: 'operation',
+                          id,
+                          title: 'Hapus operasi?',
+                          message: `Operation ${target?.operation_no || id} akan dihapus dari SOW standard.`,
+                          details: 'Template lines, NNVA, attachment, dan operation card untuk operation ini ikut dibersihkan.',
+                        });
+                      }}
                       deleting={deleting}
                       nnvaExpanded={nnvaExpanded.has(op.id)}
                       onToggleNnva={(id) => setNnvaExpanded(prev => {
@@ -1400,6 +1504,27 @@ function ComponentGroup({ group }) {
           onSaved={handleTemplateSaved}
         />
       )}
+
+      <ConfirmDeletePanel
+        open={!!confirm}
+        title={confirm?.title}
+        message={confirm?.message}
+        details={confirm?.details}
+        confirmLabel={confirm?.type === 'component' ? 'Hapus Komponen' : 'Hapus'}
+        loading={
+          (confirm?.type === 'component' && deletingComponent)
+          || (confirm?.type === 'operation' && deleting === confirm?.id)
+          || (confirm?.type === 'template' && deletingTemplate === confirm?.id)
+        }
+        onCancel={() => {
+          if (!deletingComponent && !deleting && !deletingTemplate) setConfirm(null);
+        }}
+        onConfirm={() => {
+          if (confirm?.type === 'component') handleDeleteComponent();
+          if (confirm?.type === 'operation') handleDelete(confirm.id).then(() => setConfirm(null));
+          if (confirm?.type === 'template') handleDeleteTemplate(confirm.id).then(() => setConfirm(null));
+        }}
+      />
     </div>
   );
 }
@@ -1448,6 +1573,16 @@ const SowStandardListPage = () => {
   const handlePage = (p) => {
     if (p < 1 || p > totalPages) return;
     setPage(p);
+  };
+
+  const handleGroupDeleted = (componentId) => {
+    setGroups((prev) => prev.filter((g) => g.component_id !== componentId));
+    setTotal((prev) => Math.max(0, prev - 1));
+    setTotalPages(() => {
+      const nextTotal = Math.max(0, total - 1);
+      return Math.max(0, Math.ceil(nextTotal / GROUP_LIMIT));
+    });
+    if (groups.length <= 1 && page > 1) setPage((prev) => Math.max(1, prev - 1));
   };
 
   const pageRange = () => {
@@ -1505,7 +1640,13 @@ const SowStandardListPage = () => {
         ) : groups.length === 0 ? (
           <div className="py-12 text-center text-slate-400 text-sm">Tidak ada data ditemukan.</div>
         ) : (
-          groups.map((g) => <ComponentGroup key={g.component_id} group={g} />)
+          groups.map((g) => (
+            <ComponentGroup
+              key={g.component_id}
+              group={g}
+              onDeleted={handleGroupDeleted}
+            />
+          ))
         )}
 
         {/* Pagination */}

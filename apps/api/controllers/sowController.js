@@ -2,9 +2,11 @@ const db = global.pool || require("../db");
 const pgPool = db.pool || db; // normalize: raw Pool (global.pool) vs { query, pool } (db module)
 const path = require('path');
 const fs   = require('fs');
+const ExcelJS = require('exceljs');
 const { v4: uuidv4 } = require('uuid');
 
 const SOW_HISTORY_COLUMNS = `
+  idsow,
   customer,
   order_no,
   ssbr_id,
@@ -17,7 +19,9 @@ const SOW_HISTORY_COLUMNS = `
   status,
   part_number,
   part_name,
-  model
+  model,
+  created_at,
+  updated_at
 `;
 
 const EDITABLE_SOW_COLUMNS = [
@@ -53,7 +57,14 @@ const EDITABLE_SOW_COLUMNS = [
   "actual_hours",
   "progress",
   "revision_no",
+  "source_op_id",
 ];
+
+async function ensureSowRuntimeColumns() {
+  await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0`);
+  await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS source_op_id BIGINT`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_sow_source_op_id ON public.sow (source_op_id)`);
+}
 
 async function ensureSowRevisionHistoryTable() {
   await db.query(`
@@ -73,7 +84,7 @@ async function ensureSowRevisionHistoryTable() {
     CREATE INDEX IF NOT EXISTS idx_sow_revision_history_order_created
       ON sow_revision_history (order_no, created_at DESC)
   `);
-  await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0`);
+  await ensureSowRuntimeColumns();
 }
 
 function normalizeSowOperation(row, fallbackOrderNo) {
@@ -89,6 +100,7 @@ function normalizeSowOperation(row, fallbackOrderNo) {
   item.actual_hours = item.actual_hours === "" || item.actual_hours == null ? null : Number(item.actual_hours);
   item.progress = item.progress === "" || item.progress == null ? null : Number(item.progress);
   item.revision_no = item.revision_no === "" || item.revision_no == null ? 0 : Number(item.revision_no);
+  item.source_op_id = item.source_op_id === "" || item.source_op_id == null ? null : Number(item.source_op_id);
   return item;
 }
 
@@ -96,6 +108,81 @@ const normalizeOrderNo = (value) => {
   const text = String(value ?? '').trim();
   return text ? text.replace(/-/g, '000') : '';
 };
+
+const SOW_STANDARD_MATCH_JOIN = `
+       LEFT JOIN LATERAL (
+         SELECT ss.id
+         FROM public.sow_standard ss
+         LEFT JOIN public.components c ON c.component_id = ss.component_id
+         WHERE s.source_op_id IS NULL
+           AND (
+             regexp_replace(lower(COALESCE(c.part_number, '')), '[^a-z0-9]', '', 'g') =
+             regexp_replace(lower(COALESCE(s.part_number, '')), '[^a-z0-9]', '', 'g')
+             OR (
+               lower(COALESCE(c.model, '')) = lower(COALESCE(s.model, ''))
+               AND lower(COALESCE(c.part_name, '')) = lower(COALESCE(s.part_name, ''))
+             )
+           )
+           AND lower(COALESCE(ss.operation_text, '')) = lower(COALESCE(s.operation_text, ''))
+         ORDER BY
+           (COALESCE(ss.machineid, ss.workcenter, '') = COALESCE(s.workcenter, '')) DESC,
+           ss.id ASC
+         LIMIT 1
+       ) standard_match ON true`;
+
+const SOW_NNVA_TOTAL_JOIN = `
+       LEFT JOIN (
+         SELECT sow_standard_id, SUM(COALESCE(standard_hours, 0)) AS total_nnva_hours
+         FROM sow_nnva_standard
+         GROUP BY sow_standard_id
+       ) nnva ON nnva.sow_standard_id = COALESCE(s.source_op_id, standard_match.id)`;
+
+async function enrichSowRowsWithNnva(query, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
+  const sourceIds = [...new Set(rows.map((row) => Number(row.source_op_id)).filter(Number.isFinite))];
+  if (!sourceIds.length) {
+    return rows.map((row) => ({
+      ...row,
+      operation_planhours: row.operation_planhours ?? row.planhours ?? 0,
+      nnva_planhours: row.nnva_planhours ?? 0,
+      display_planhours: row.display_planhours ?? row.planhours ?? 0,
+      nnva_items: row.nnva_items || [],
+    }));
+  }
+
+  const nnvaResult = await query(
+    `SELECT ns.sow_standard_id,
+            ns.nnva_base_id,
+            ns.standard_hours,
+            nb.name AS nnva_name
+       FROM public.sow_nnva_standard ns
+       JOIN public.sow_nnva_base nb ON nb.id = ns.nnva_base_id
+      WHERE ns.sow_standard_id = ANY($1::bigint[])
+      ORDER BY ns.sow_standard_id, nb.name`,
+    [sourceIds],
+  );
+
+  const bySource = new Map();
+  nnvaResult.rows.forEach((item) => {
+    const key = Number(item.sow_standard_id);
+    const list = bySource.get(key) || [];
+    list.push(item);
+    bySource.set(key, list);
+  });
+
+  return rows.map((row) => {
+    const items = bySource.get(Number(row.source_op_id)) || [];
+    const nnvaHours = items.reduce((sum, item) => sum + (Number(item.standard_hours) || 0), 0);
+    const operationHours = row.operation_planhours ?? row.planhours ?? 0;
+    return {
+      ...row,
+      operation_planhours: operationHours,
+      nnva_planhours: row.nnva_planhours ?? nnvaHours,
+      display_planhours: row.display_planhours ?? ((Number(operationHours) || 0) + nnvaHours),
+      nnva_items: row.nnva_items || items,
+    };
+  });
+}
 
 const OPERATION_CARD_REVISION_ORIGINAL = "Original";
 
@@ -249,6 +336,45 @@ function normalizeStoredImagePath(src) {
   return text;
 }
 
+function collectUploadPaths(...values) {
+  const paths = new Set();
+  const visit = (value) => {
+    if (!value) return;
+    if (typeof value === "string") {
+      const normalized = normalizeStoredImagePath(value);
+      if (normalized?.startsWith("/uploads/")) paths.add(normalized);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value === "object") {
+      visit(value.src);
+      visit(value.image_path);
+      visit(value.file_path);
+    }
+  };
+
+  values.forEach(visit);
+  return [...paths];
+}
+
+function deleteStoredUploadFiles(filePaths) {
+  const uploadsRoot = path.resolve(__dirname, "../uploads");
+  for (const filePath of filePaths) {
+    if (!filePath?.startsWith("/uploads/")) continue;
+    const relativePath = filePath.replace(/^\/uploads\//, "");
+    const fullPath = path.resolve(uploadsRoot, relativePath);
+    if (!fullPath.startsWith(uploadsRoot + path.sep)) continue;
+    try {
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch (err) {
+      console.warn("deleteStoredUploadFiles warning:", err.message);
+    }
+  }
+}
+
 function normalizeOperationNumber(value) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : null;
@@ -321,25 +447,34 @@ exports.getGrouped = async (req, res) => {
 
 exports.getSowHistoryRows = async (req, res) => {
   try {
+    await ensureSowRuntimeColumns();
     const search = String(req.query.search || "").trim();
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const offset = (page - 1) * limit;
+    const direction = String(req.query.direction || req.query.sortDirection || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
 
     const params = [];
     let where = "";
     if (search) {
       params.push(`%${search}%`);
-      where = `WHERE order_no ILIKE $1 OR ssbr_id ILIKE $1`;
+      where = `WHERE s.order_no ILIKE $1 OR s.ssbr_id ILIKE $1`;
     }
 
-    const count = await db.query(`SELECT COUNT(*)::int AS total FROM sow ${where}`, params);
+    const count = await db.query(`SELECT COUNT(*)::int AS total FROM sow s ${where}`, params);
     params.push(limit, offset);
     const result = await db.query(
-      `SELECT ${SOW_HISTORY_COLUMNS}
-       FROM sow
+      `SELECT
+         ${SOW_HISTORY_COLUMNS.split("\n").map((line) => line.trim()).filter(Boolean).map((column) => `s.${column.replace(/,$/, "")}`).join(",\n         ")},
+         COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
+         COALESCE(s.planhours, 0) AS operation_planhours,
+         COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
+         COALESCE(s.planhours, 0) + COALESCE(nnva.total_nnva_hours, 0) AS display_planhours
+       FROM sow s
+       ${SOW_STANDARD_MATCH_JOIN}
+       ${SOW_NNVA_TOTAL_JOIN}
        ${where}
-       ORDER BY order_no ASC, operation_no ASC NULLS LAST
+       ORDER BY s.updated_at ${direction} NULLS LAST, s.order_no ASC, s.operation_no ASC NULLS LAST
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
@@ -355,6 +490,68 @@ exports.getSowHistoryRows = async (req, res) => {
     });
   } catch (err) {
     console.error("getSowHistoryRows error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.exportSowHistoryRows = async (req, res) => {
+  try {
+    await ensureSowRuntimeColumns();
+    const start = String(req.query.start || req.query.from || "").trim();
+    const end = String(req.query.end || req.query.to || "").trim();
+    const direction = String(req.query.direction || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      return res.status(400).json({ error: "start dan end wajib format YYYY-MM-DD" });
+    }
+
+    const result = await db.query(
+      `SELECT
+         ${SOW_HISTORY_COLUMNS.split("\n").map((line) => line.trim()).filter(Boolean).map((column) => `s.${column.replace(/,$/, "")}`).join(",\n         ")},
+         COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
+         COALESCE(s.planhours, 0) AS operation_planhours,
+         COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
+         COALESCE(s.planhours, 0) + COALESCE(nnva.total_nnva_hours, 0) AS display_planhours
+       FROM sow s
+       ${SOW_STANDARD_MATCH_JOIN}
+       ${SOW_NNVA_TOTAL_JOIN}
+       WHERE s.created_at >= $1::date
+         AND s.created_at < ($2::date + interval '1 day')
+       ORDER BY s.updated_at ${direction} NULLS LAST, s.order_no ASC, s.operation_no ASC NULLS LAST`,
+      [start, end],
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "MPS Timesheet";
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet("SOW History");
+    sheet.columns = [
+      { header: "Customer", key: "customer", width: 18 },
+      { header: "Order No", key: "order_no", width: 18 },
+      { header: "SSBR ID", key: "ssbr_id", width: 18 },
+      { header: "Operation Text", key: "operation_text", width: 36 },
+      { header: "Operation No", key: "operation_no", width: 14 },
+      { header: "Plan Hours Total", key: "display_planhours", width: 16 },
+      { header: "Operation Plan Hours", key: "operation_planhours", width: 18 },
+      { header: "NNVA Plan Hours", key: "nnva_planhours", width: 16 },
+      { header: "WCT Group", key: "wct_group", width: 16 },
+      { header: "Workcenter", key: "workcenter", width: 16 },
+      { header: "Status", key: "status", width: 14 },
+      { header: "Part Number", key: "part_number", width: 20 },
+      { header: "Part Name", key: "part_name", width: 28 },
+      { header: "Model", key: "model", width: 18 },
+      { header: "Created At", key: "created_at", width: 24 },
+      { header: "Updated At", key: "updated_at", width: 24 },
+    ];
+    sheet.getRow(1).font = { bold: true };
+    sheet.addRows(result.rows);
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="sow_history_${start}_to_${end}.xlsx"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("exportSowHistoryRows error:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -419,10 +616,16 @@ exports.getSowOrderForRevision = async (req, res) => {
       selectedRevision = requestedRevision;
     } else {
       const result = await db.query(
-        `SELECT *
-         FROM sow
-         WHERE order_no = $1
-         ORDER BY operation_no ASC NULLS LAST, idsow ASC`,
+        `SELECT s.*,
+                COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
+                COALESCE(s.planhours, 0) AS operation_planhours,
+                COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
+                COALESCE(s.planhours, 0) + COALESCE(nnva.total_nnva_hours, 0) AS display_planhours
+         FROM sow s
+         ${SOW_STANDARD_MATCH_JOIN}
+         ${SOW_NNVA_TOTAL_JOIN}
+         WHERE s.order_no = $1
+         ORDER BY s.operation_no ASC NULLS LAST, s.idsow ASC`,
         [orderNo],
       );
       rows = result.rows;
@@ -435,6 +638,7 @@ exports.getSowOrderForRevision = async (req, res) => {
        ORDER BY revision_no DESC`,
       [orderNo],
     );
+    rows = await enrichSowRowsWithNnva(db.query.bind(db), rows);
 
     res.json({
       order_no: orderNo,
@@ -605,22 +809,24 @@ exports.saveSowOrderRevision = async (req, res) => {
   const { orderNo } = req.params;
   const operations = Array.isArray(req.body?.operations) ? req.body.operations : [];
   const changedBy = req.body?.changed_by || req.user?.username || "web";
+  let client;
 
   if (!orderNo) return res.status(400).json({ error: "orderNo wajib diisi" });
   if (operations.length === 0) return res.status(400).json({ error: "operations tidak boleh kosong" });
 
   try {
     await ensureSowRevisionHistoryTable();
-    await db.query("BEGIN");
+    client = await pgPool.connect();
+    await client.query("BEGIN");
 
-    const before = await db.query(
+    const before = await client.query(
       `SELECT *
        FROM sow
        WHERE order_no = $1
        ORDER BY operation_no ASC NULLS LAST, idsow ASC`,
       [orderNo],
     );
-    const revision = await db.query(
+    const revision = await client.query(
       `SELECT COALESCE(MAX(revision_no), 0)::int + 1 AS next_revision
        FROM sow_revision_history
        WHERE order_no = $1`,
@@ -628,7 +834,7 @@ exports.saveSowOrderRevision = async (req, res) => {
     );
     const revisionNo = revision.rows[0]?.next_revision || 1;
 
-    await db.query(`DELETE FROM sow WHERE order_no = $1`, [orderNo]);
+    await client.query(`DELETE FROM sow WHERE order_no = $1`, [orderNo]);
 
     const inserted = [];
     for (const operation of operations) {
@@ -636,7 +842,7 @@ exports.saveSowOrderRevision = async (req, res) => {
       row.revision_no = revisionNo;
       const values = EDITABLE_SOW_COLUMNS.map((column) => row[column]);
       const placeholders = EDITABLE_SOW_COLUMNS.map((_, index) => `$${index + 1}`).join(", ");
-      const result = await db.query(
+      const result = await client.query(
         `INSERT INTO sow (${EDITABLE_SOW_COLUMNS.map((column) => `"${column}"`).join(", ")})
          VALUES (${placeholders})
          RETURNING *`,
@@ -645,7 +851,7 @@ exports.saveSowOrderRevision = async (req, res) => {
       inserted.push(result.rows[0]);
     }
 
-    const history = await db.query(
+    const history = await client.query(
       `INSERT INTO sow_revision_history
        (order_no, revision_no, action, before_data, after_data, changed_by)
        VALUES ($1, $2, 'edit', $3::jsonb, $4::jsonb, $5)
@@ -653,12 +859,16 @@ exports.saveSowOrderRevision = async (req, res) => {
       [orderNo, revisionNo, JSON.stringify(before.rows), JSON.stringify(inserted), changedBy],
     );
 
-    await db.query("COMMIT");
-    res.json({ revision: history.rows[0], rows: inserted });
+    const enrichedInserted = await enrichSowRowsWithNnva(client.query.bind(client), inserted);
+
+    await client.query("COMMIT");
+    res.json({ revision: history.rows[0], rows: enrichedInserted });
   } catch (err) {
-    await db.query("ROLLBACK").catch(() => {});
+    if (client) await client.query("ROLLBACK").catch(() => {});
     console.error("saveSowOrderRevision error:", err);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 };
 
@@ -1535,6 +1745,7 @@ exports.createFromBuilder = async (req, res) => {
   let client = null;
 
   try {
+    await ensureSowRuntimeColumns();
     client = typeof db.connect === 'function' ? await db.connect() : null;
     const query = client ? client.query.bind(client) : db.query.bind(db);
 
@@ -1576,11 +1787,12 @@ exports.createFromBuilder = async (req, res) => {
             "type",
             "group",
             category,
-            remark
+            remark,
+            source_op_id
           )
           VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17, $18, $19
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
           )
           ON CONFLICT (order_no, operation_no)
           DO UPDATE SET
@@ -1601,6 +1813,7 @@ exports.createFromBuilder = async (req, res) => {
             "group" = EXCLUDED."group",
             category = EXCLUDED.category,
             remark = EXCLUDED.remark,
+            source_op_id = EXCLUDED.source_op_id,
             sync = 'new'
           RETURNING *
         `,
@@ -1624,6 +1837,7 @@ exports.createFromBuilder = async (req, res) => {
           group || null,
           category || null,
           op.remark || remark || null,
+          op.source_op_id || null,
         ]
       );
 
@@ -2211,7 +2425,7 @@ exports.deleteOperation = async (req, res) => {
 
 // CREATE part with operations (bulk insert)
 exports.createPartWithOperations = async (req, res) => {
-  const client = await db.query('SELECT 1'); // Get client from pool
+  let client;
   
   try {
     const { part, operations } = req.body;
@@ -2224,10 +2438,11 @@ exports.createPartWithOperations = async (req, res) => {
     }
 
     // Begin transaction
-    await db.query('BEGIN');
+    client = await pgPool.connect();
+    await client.query('BEGIN');
 
     // Insert part
-    const partResult = await db.query(`
+    const partResult = await client.query(`
       INSERT INTO parts (partnumber, partname, model, drawing_path)
       VALUES ($1, $2, $3, $4)
       RETURNING *
@@ -2239,7 +2454,7 @@ exports.createPartWithOperations = async (req, res) => {
     let newOperations = [];
     if (operations && operations.length > 0) {
       for (const op of operations) {
-        const opResult = await db.query(`
+        const opResult = await client.query(`
           INSERT INTO operations
           (part_id, operation_no, operation_text, wct_group, workcenter, planhours, drawing_path, remark)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -2259,7 +2474,7 @@ exports.createPartWithOperations = async (req, res) => {
     }
 
     // Commit transaction
-    await db.query('COMMIT');
+    await client.query('COMMIT');
 
     res.status(201).json({
       part: newPart,
@@ -2267,7 +2482,7 @@ exports.createPartWithOperations = async (req, res) => {
     });
   } catch (err) {
     // Rollback on error
-    await db.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK').catch(() => {});
     
     if (err.code === '23505') {
       return res.status(409).json({ 
@@ -2275,11 +2490,15 @@ exports.createPartWithOperations = async (req, res) => {
       });
     }
     res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 };
 
 // UPDATE part with operations (bulk update)
 exports.updatePartWithOperations = async (req, res) => {
+  let client;
+
   try {
     const { id } = req.params;
     const { part, operations } = req.body;
@@ -2292,10 +2511,11 @@ exports.updatePartWithOperations = async (req, res) => {
     }
 
     // Begin transaction
-    await db.query('BEGIN');
+    client = await pgPool.connect();
+    await client.query('BEGIN');
 
     // Update part
-    const partResult = await db.query(`
+    const partResult = await client.query(`
       UPDATE parts
       SET partnumber = $1,
           partname = $2,
@@ -2307,20 +2527,20 @@ exports.updatePartWithOperations = async (req, res) => {
     `, [part.partnumber, part.partname, part.model, part.drawing_path || null, id]);
     
     if (partResult.rows.length === 0) {
-      await db.query('ROLLBACK');
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: "Part not found" });
     }
 
     const updatedPart = partResult.rows[0];
 
     // Delete existing operations
-    await db.query(`DELETE FROM operations WHERE part_id = $1`, [id]);
+    await client.query(`DELETE FROM operations WHERE part_id = $1`, [id]);
 
     // Insert new operations
     let newOperations = [];
     if (operations && operations.length > 0) {
       for (const op of operations) {
-        const opResult = await db.query(`
+        const opResult = await client.query(`
           INSERT INTO operations
           (part_id, operation_no, operation_text, wct_group, workcenter, planhours, drawing_path, remark)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -2340,7 +2560,7 @@ exports.updatePartWithOperations = async (req, res) => {
     }
 
     // Commit transaction
-    await db.query('COMMIT');
+    await client.query('COMMIT');
 
     res.json({
       part: updatedPart,
@@ -2348,7 +2568,7 @@ exports.updatePartWithOperations = async (req, res) => {
     });
   } catch (err) {
     // Rollback on error
-    await db.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK').catch(() => {});
     
     if (err.code === '23505') {
       return res.status(409).json({ 
@@ -2356,6 +2576,8 @@ exports.updatePartWithOperations = async (req, res) => {
       });
     }
     res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 };
 
@@ -2879,21 +3101,150 @@ exports.updateSowStandardOperation = async (req, res) => {
 
 // DELETE operation
 exports.deleteSowStandardOperation = async (req, res) => {
+  const client = await pgPool.connect();
+  let uploadPaths = [];
   try {
     const { id } = req.params;
-    // Attachments will cascade delete via FK. Also clean up files.
-    const attachments = await db.query(
-      'SELECT file_path FROM sow_standard_attachments WHERE standard_id = $1', [id]
+    await ensureSowOperationCardTable();
+    await client.query('BEGIN');
+
+    const attachments = await client.query(
+      'SELECT file_path FROM sow_standard_attachments WHERE standard_id = $1',
+      [id]
     );
-    for (const row of attachments.rows) {
-      const fullPath = path.join(__dirname, '..', row.file_path);
-      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    const operationCards = await client.query(
+      'SELECT image_path, images FROM public.sow_operationcard WHERE sow_standard_id = $1',
+      [id]
+    );
+    uploadPaths = collectUploadPaths(
+      attachments.rows,
+      operationCards.rows.flatMap((row) => [row.image_path, row.images])
+    );
+
+    await client.query('DELETE FROM public.sow_template_lines WHERE standard_id = $1', [id]);
+    const deletedCards = await client.query(
+      'DELETE FROM public.sow_operationcard WHERE sow_standard_id = $1',
+      [id]
+    );
+    const result = await client.query('DELETE FROM sow_standard WHERE id=$1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Not found' });
     }
-    const result = await db.query('DELETE FROM sow_standard WHERE id=$1 RETURNING id', [id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
-    res.json({ deleted: true });
+
+    await client.query('COMMIT');
+    deleteStoredUploadFiles(uploadPaths);
+    res.json({ deleted: true, operation_cards_deleted: deletedCards.rowCount });
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// DELETE a whole standard component and all SOW standard relations.
+exports.deleteSowStandardComponent = async (req, res) => {
+  const client = await pgPool.connect();
+  let uploadPaths = [];
+  try {
+    const { component_id } = req.params;
+    await ensureSowOperationCardTable();
+    await client.query('BEGIN');
+
+    const component = await client.query(
+      `SELECT component_id, part_name, part_number, model
+       FROM public.components
+       WHERE component_id = $1
+       FOR UPDATE`,
+      [component_id]
+    );
+    if (component.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Component tidak ditemukan' });
+    }
+
+    const attachments = await client.query(
+      `SELECT a.file_path
+       FROM public.sow_standard_attachments a
+       JOIN public.sow_standard ss ON ss.id = a.standard_id
+       WHERE ss.component_id = $1`,
+      [component_id]
+    );
+    const operationCards = await client.query(
+      `SELECT oc.image_path, oc.images
+       FROM public.sow_operationcard oc
+       JOIN public.sow_standard ss ON ss.id = oc.sow_standard_id
+       WHERE ss.component_id = $1`,
+      [component_id]
+    );
+    uploadPaths = collectUploadPaths(
+      attachments.rows,
+      operationCards.rows.flatMap((row) => [row.image_path, row.images])
+    );
+
+    const deletedTemplateLines = await client.query(
+      `DELETE FROM public.sow_template_lines tl
+       WHERE tl.template_id IN (
+         SELECT template_id FROM public.sow_templates WHERE component_id = $1
+       )
+          OR tl.standard_id IN (
+         SELECT id FROM public.sow_standard WHERE component_id = $1
+       )`,
+      [component_id]
+    );
+    const deletedTemplates = await client.query(
+      `DELETE FROM public.sow_templates WHERE component_id = $1`,
+      [component_id]
+    );
+    const deletedOperationCards = await client.query(
+      `DELETE FROM public.sow_operationcard
+       WHERE sow_standard_id IN (
+         SELECT id FROM public.sow_standard WHERE component_id = $1
+       )`,
+      [component_id]
+    );
+    const detachedReceiving = await client.query(
+      `UPDATE public.receiving_components
+       SET component_id = NULL
+       WHERE component_id = $1`,
+      [component_id]
+    );
+    const deletedStandards = await client.query(
+      `DELETE FROM public.sow_standard WHERE component_id = $1`,
+      [component_id]
+    );
+    const deletedComponent = await client.query(
+      `DELETE FROM public.components WHERE component_id = $1 RETURNING component_id`,
+      [component_id]
+    );
+
+    await client.query('COMMIT');
+    deleteStoredUploadFiles(uploadPaths);
+
+    res.json({
+      deleted: true,
+      component_id: deletedComponent.rows[0].component_id,
+      counts: {
+        sow_template_lines: deletedTemplateLines.rowCount,
+        sow_templates: deletedTemplates.rowCount,
+        sow_operationcard: deletedOperationCards.rowCount,
+        receiving_components_detached: detachedReceiving.rowCount,
+        sow_standard: deletedStandards.rowCount,
+        components: deletedComponent.rowCount,
+      },
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.code === '23503') {
+      return res.status(409).json({
+        error: 'Component masih dipakai oleh data lain sehingga tidak bisa dihapus otomatis.',
+        detail: err.detail,
+      });
+    }
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 };
 

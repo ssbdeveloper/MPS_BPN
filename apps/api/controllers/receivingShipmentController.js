@@ -516,6 +516,8 @@ exports.getSowComponentOptions = async (req, res) => {
           rc.part_level,
           rc.part_type,
           rc.production_order,
+          (NULLIF(TRIM(COALESCE(rc.production_order, '')), '') IS NOT NULL) AS has_order_no,
+          NULLIF(TRIM(REPLACE(COALESCE(rc.production_order, ''), '-', '000')), '') AS sow_order_no,
           rc.actual_component,
           rc.component_id AS receiving_component_master_id,
           ro.ssbr_ident,
@@ -531,7 +533,10 @@ exports.getSowComponentOptions = async (req, res) => {
           COALESCE(cm.part_name, rc.part_description) AS part_name,
           COALESCE(cm.part_number, rc.part_number) AS part_number,
           COALESCE(cm.model, rc.model_code) AS model,
-          COUNT(ss.id)::int AS operation_count
+          COUNT(ss.id)::int AS operation_count,
+          COALESCE(sm.sow_exists, false) AS sow_exists,
+          COALESCE(sm.sow_row_count, 0)::int AS sow_row_count,
+          sm.latest_sow_at
         FROM receiving_components rc
         JOIN receiving_orders ro ON ro.id = rc.receiving_order_id
         JOIN customers cust ON cust.id = ro.customer_id
@@ -557,10 +562,21 @@ exports.getSowComponentOptions = async (req, res) => {
             c.component_id ASC
           LIMIT 1
         ) cm ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            (COUNT(*) > 0) AS sow_exists,
+            COUNT(*)::int AS sow_row_count,
+            MAX(s.updated_at) AS latest_sow_at
+          FROM public.sow s
+          WHERE NULLIF(TRIM(COALESCE(rc.production_order, '')), '') IS NOT NULL
+            AND LTRIM(COALESCE(s.order_no, ''), '0') =
+                LTRIM(REPLACE(TRIM(COALESCE(rc.production_order, '')), '-', '000'), '0')
+        ) sm ON true
         LEFT JOIN sow_standard ss ON ss.component_id = COALESCE(cm.component_id, rc.component_id)
         ${whereSql}
         GROUP BY
-          rc.id, ro.id, cust.id, pc.id, cm.component_id, cm.part_name, cm.part_number, cm.model
+          rc.id, ro.id, cust.id, pc.id, cm.component_id, cm.part_name, cm.part_number, cm.model,
+          sm.sow_exists, sm.sow_row_count, sm.latest_sow_at
         ORDER BY
           ro.received_date DESC,
           ro.id DESC,

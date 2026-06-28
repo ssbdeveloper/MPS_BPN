@@ -1,5 +1,18 @@
 const db = global.pool || require("../db");
 
+const clampLimit = (value, fallback = 200, max = 1000) => {
+  if (String(value || "").trim().toLowerCase() === "all") return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 1), max);
+};
+
+const limitSql = (params, limit) => {
+  if (limit == null) return "";
+  params.push(limit);
+  return ` LIMIT $${params.length}`;
+};
+
 function handleError(res, err) {
   res.status(500).json({ error: err.message });
 }
@@ -168,20 +181,27 @@ exports.controls = {
   getAll: async (req, res) => {
     try {
       const { sn, workcenter } = req.query;
+      const limit = clampLimit(req.query.limit);
+      const params = [];
       let result;
 
       if (sn) {
+        params.push(sn);
         result = await db.query(
-          "SELECT * FROM processcontroldata WHERE snssb = $1 ORDER BY id_processcontroldata DESC",
-          [sn]
+          `SELECT * FROM processcontroldata WHERE snssb = $1 ORDER BY id_processcontroldata DESC${limitSql(params, limit)}`,
+          params
         );
       } else if (workcenter) {
+        params.push(workcenter);
         result = await db.query(
-          "SELECT * FROM processcontroldata WHERE workcenter = $1 ORDER BY id_processcontroldata DESC",
-          [workcenter]
+          `SELECT * FROM processcontroldata WHERE workcenter = $1 ORDER BY id_processcontroldata DESC${limitSql(params, limit)}`,
+          params
         );
       } else {
-        result = await db.query("SELECT * FROM processcontroldata ORDER BY id_processcontroldata DESC");
+        result = await db.query(
+          `SELECT * FROM processcontroldata ORDER BY id_processcontroldata DESC${limitSql(params, limit)}`,
+          params
+        );
       }
 
       res.json(result.rows);
@@ -193,9 +213,11 @@ exports.controls = {
   getBySN: async (req, res) => {
     try {
       const { sn } = req.params;
+      const limit = clampLimit(req.query.limit);
+      const params = [sn];
       const result = await db.query(
-        "SELECT * FROM processcontroldata WHERE snssb = $1 ORDER BY id_processcontroldata DESC",
-        [sn]
+        `SELECT * FROM processcontroldata WHERE snssb = $1 ORDER BY id_processcontroldata DESC${limitSql(params, limit)}`,
+        params
       );
       res.json(result.rows);
     } catch (err) {
@@ -206,9 +228,11 @@ exports.controls = {
   getByWCT: async (req, res) => {
     try {
       const { workcenter } = req.params;
+      const limit = clampLimit(req.query.limit);
+      const params = [workcenter];
       const result = await db.query(
-        "SELECT * FROM processcontroldata WHERE workcenter = $1 ORDER BY id_processcontroldata DESC",
-        [workcenter]
+        `SELECT * FROM processcontroldata WHERE workcenter = $1 ORDER BY id_processcontroldata DESC${limitSql(params, limit)}`,
+        params
       );
       res.json(result.rows);
     } catch (err) {
@@ -309,8 +333,11 @@ exports.controls = {
 exports.items = {
   getAll: async (req, res) => {
     try {
+      const limit = clampLimit(req.query.limit, 500, 2000);
+      const params = [];
       const result = await db.query(
-        "SELECT * FROM processcontroldata_item ORDER BY id_processcontroldata_item DESC"
+        `SELECT * FROM processcontroldata_item ORDER BY id_processcontroldata_item DESC${limitSql(params, limit)}`,
+        params
       );
       res.json(result.rows);
     } catch (err) {

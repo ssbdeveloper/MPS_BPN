@@ -32,6 +32,7 @@ router.get("/sow-orders", controller.listSowOrders);
 router.get("/sow-orders/:order_no/operations", controller.getSowOrderOperations);
 
 router.get("/bay-schedules", controller.listBaySchedules);
+router.get("/bay-schedule-tasks", controller.listBayScheduleTasks);
 router.post("/bay-schedules", controller.createBaySchedule);
 router.delete("/bay-schedules/:schedule_id", controller.cancelBaySchedule);
 

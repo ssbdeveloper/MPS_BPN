@@ -111,6 +111,11 @@ exports.listBaySchedules = route(async (req) => {
   return (res) => success(res, result.rows);
 });
 
+exports.listBayScheduleTasks = route(async (req) => {
+  const result = await service.listBayScheduleTasks(req.query);
+  return (res) => success(res, result.rows, 200, result.summary || {});
+});
+
 exports.createBaySchedule = route(async (req) => {
   const data = await service.createBaySchedule(req.body || {});
   return (res) => success(res, data, 201);

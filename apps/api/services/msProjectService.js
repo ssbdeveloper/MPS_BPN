@@ -1599,6 +1599,120 @@ async function listBaySchedules(query = {}) {
   return { rows: result.rows };
 }
 
+async function listBayScheduleTasks(query = {}) {
+  const values = [];
+  const where = ["s.status <> 'CANCELLED'"];
+  const areaCode = nullableText(query.area_code)?.toUpperCase();
+  const bayCode = nullableText(query.bay_code)?.toUpperCase();
+  const workcenter = nullableText(query.workcenter)?.toUpperCase();
+  const q = nullableText(query.q);
+  const startDate = query.start_date ? normalizeDateOnly(query.start_date, "start_date") : null;
+  const endDate = query.end_date ? normalizeDateOnly(query.end_date, "end_date") : null;
+
+  if (areaCode) {
+    values.push(areaCode);
+    where.push(`upper(s.area_code) = $${values.length}`);
+  }
+  if (bayCode) {
+    values.push([bayCode]);
+    where.push(`s.bay_codes && $${values.length}::text[]`);
+  }
+  if (workcenter) {
+    values.push(workcenter);
+    where.push(`upper(coalesce(t.workcenter, '')) = $${values.length}`);
+  }
+  if (startDate) {
+    values.push(startDate);
+    where.push(`s.end_date >= $${values.length}::date`);
+  }
+  if (endDate) {
+    values.push(endDate);
+    where.push(`s.start_date <= $${values.length}::date`);
+  }
+  if (!startDate && !endDate) {
+    where.push("current_date between s.start_date and s.end_date");
+  }
+  if (q) {
+    values.push(`%${q.toLowerCase()}%`);
+    where.push(`(
+      lower(coalesce(s.order_no, '')) like $${values.length}
+      or lower(coalesce(t.task_name, '')) like $${values.length}
+      or lower(coalesce(t.operation_no, '')) like $${values.length}
+      or lower(coalesce(t.ssbr_id, '')) like $${values.length}
+      or lower(coalesce(t.workcenter, '')) like $${values.length}
+    )`);
+  }
+
+  const result = await pool().query(
+    `select
+       s.schedule_id,
+       s.order_no,
+       s.project_id as schedule_project_id,
+       s.task_id as schedule_task_id,
+       s.area_code,
+       s.area_name,
+       s.bay_codes,
+       s.start_date,
+       s.end_date,
+       s.status as schedule_status,
+       s.notes as schedule_notes,
+       t.task_id,
+       t.project_id,
+       t.task_name,
+       t.outline_number,
+       t.order_no as task_order_no,
+       t.operation_no,
+       t.ssbr_id,
+       t.workcenter,
+       t.plan_start,
+       t.plan_finish,
+       t.duration_minutes,
+       t.planned_work_minutes,
+       t.actual_progress,
+       t.is_summary
+     from ms_project_bay_schedule s
+     left join ms_project_task t
+       on t.is_active = true
+      and (
+        (
+          s.project_id is not null
+          and s.task_id is not null
+          and t.project_id = s.project_id
+          and t.task_id = s.task_id
+        )
+        or (
+          s.task_id is null
+          and ltrim(t.order_no, '0') = ltrim(s.order_no, '0')
+        )
+      )
+     where ${where.join(" and ")}
+       and t.task_id is not null
+       and coalesce(t.is_summary, false) = false
+     order by
+       s.start_date,
+       s.area_code,
+       s.bay_codes[1],
+       s.order_no,
+       case when nullif(t.operation_no, '') is null then 1 else 0 end,
+       case when t.operation_no ~ '^\\d+$' then t.operation_no::integer end nulls last,
+       t.operation_no nulls last,
+       t.outline_number nulls last,
+       t.created_at,
+       t.task_name`,
+    values
+  );
+
+  return {
+    rows: result.rows,
+    summary: {
+      area_code: areaCode || null,
+      bay_code: bayCode || null,
+      workcenter: workcenter || null,
+      task_count: result.rows.length,
+    },
+  };
+}
+
 async function createBaySchedule(body = {}) {
   const payload = ensureObject(body, "payload");
   const orderNo = nullableText(payload.order_no);
@@ -3042,6 +3156,7 @@ module.exports = {
   heartbeatProject,
   health,
   getSowOrderOperations,
+  listBayScheduleTasks,
   listBaySchedules,
   listCalendars,
   listProjectTasks,

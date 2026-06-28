@@ -1,9 +1,9 @@
 function parseIntervalMs() {
   const configured = Number(process.env.KANBAN_REFRESH_INTERVAL_MS);
   if (Number.isFinite(configured) && configured > 0) {
-    return Math.max(configured, 30000);
+    return Math.max(configured, 60000);
   }
-  return 60000;
+  return 300000;
 }
 
 function isEnabled() {

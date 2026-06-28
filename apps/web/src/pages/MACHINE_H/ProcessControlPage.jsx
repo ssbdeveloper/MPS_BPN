@@ -46,12 +46,9 @@ const ProcessControlPage = () => {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan'));
       const serialnumber = datakaryawan?.snssb;
       if (!serialnumber) return;
-      const res = await fetch(`${API_BASE}/timesheet/getsn/${serialnumber}`);
+      const res = await fetch(`${API_BASE}/timesheet/getsn/${serialnumber}?limit=100`);
       const data = await res.json();
-      // Sort descending by longdate_checkin dan limit 100 data terakhir
-      const sorted = data
-        .sort((a, b) => new Date(b.longdate_checkin) - new Date(a.longdate_checkin))
-        .slice(0, 100);
+      const sorted = data.sort((a, b) => new Date(b.longdate_checkin) - new Date(a.longdate_checkin));
       setTimesheets(sorted);
     } catch (err) {
       console.error('Error loading timesheets:', err);

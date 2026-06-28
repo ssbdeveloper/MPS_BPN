@@ -6,6 +6,7 @@ import {
   ChevronDown, PenLine, ArrowRight, ArrowLeft, Printer, Info,
   Paperclip, Eye, Image as ImageIcon, FileText, Save,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { QRCodeCanvas } from 'qrcode.react';
 import * as pdfjsLib from 'pdfjs-dist';
@@ -20,6 +21,22 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 export const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
+const getSowOrderNo = (row) => row?.sow_order_no || (row?.production_order ? normalizeProductionOrder(row.production_order) : '');
+const toOrderNumber = (value) => {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const renumberSequential = (items) => items.map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
+const renumberByStandardOrder = (items) => renumberSequential(
+  [...items].sort((a, b) => {
+    const aStd = toOrderNumber(a._standardOperationNo);
+    const bStd = toOrderNumber(b._standardOperationNo);
+    if (aStd != null && bStd != null && aStd !== bStd) return aStd - bStd;
+    if (aStd != null && bStd == null) return -1;
+    if (aStd == null && bStd != null) return 1;
+    return (a._insertSeq || 0) - (b._insertSeq || 0);
+  })
+);
 
 const fmtHours = (v) => (v != null && v !== '' ? parseFloat(v).toFixed(2) : '—');
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -513,6 +530,48 @@ function Checkbox({ checked, indeterminate, className }) {
 
 // ─── PartPanel ────────────────────────────────────────────────────────────────
 // collapsed = !!selected (auto, no separate state needed)
+function StatusIcon({ active, label }) {
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className={`inline-flex h-7 w-7 items-center justify-center rounded-full border ${
+        active
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : 'border-slate-200 bg-slate-50 text-slate-300'
+      }`}
+    >
+      {active ? <Check size={14} /> : <X size={13} />}
+    </span>
+  );
+}
+
+function OrderStatusIcon({ row }) {
+  const hasOrderNo = Boolean(row?.has_order_no || row?.production_order);
+  return <StatusIcon active={hasOrderNo} label={hasOrderNo ? 'Order ada' : 'Order belum ada'} />;
+}
+
+function SowStatusIcon({ row }) {
+  const sowExists = Boolean(row?.sow_exists);
+  const count = row?.sow_row_count ? ` (${row.sow_row_count})` : '';
+  return <StatusIcon active={sowExists} label={sowExists ? `SOW ada${count}` : 'SOW belum ada'} />;
+}
+
+function ReceivingSowStatusBadges({ row }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold text-slate-500">
+      <span className="inline-flex items-center gap-1">
+        <OrderStatusIcon row={row} />
+        Order
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <SowStatusIcon row={row} />
+        SOW
+      </span>
+    </div>
+  );
+}
+
 function PartPanel({ selected, onSelect }) {
   const [inputValue, setInputValue] = useState('');
   const [search, setSearch]         = useState('');
@@ -544,6 +603,9 @@ function PartPanel({ selected, onSelect }) {
   };
 
   const handlePick = (part) => {
+    if (part?.sow_exists) {
+      toast.warning(`SOW untuk order ${part.sow_order_no || part.production_order} sudah ada`);
+    }
     onSelect(part);
     clearSearch();
   };
@@ -572,6 +634,9 @@ function PartPanel({ selected, onSelect }) {
             <p className="text-[10px] text-slate-500 mt-1">
               {selected.ssbr_ident || 'No SSBR'} / {selected.production_order || 'No production order'}
             </p>
+            <div className="mt-2">
+              <ReceivingSowStatusBadges row={selected} compact />
+            </div>
           </div>
         </div>
         <button
@@ -647,6 +712,9 @@ function PartPanel({ selected, onSelect }) {
                   {r.production_order ? <span> / PO {r.production_order}</span> : <span> / PO belum ada</span>}
                   {r.customer_name ? <span> / {r.customer_name}</span> : null}
                 </p>
+                <div className="mt-1.5">
+                  <ReceivingSowStatusBadges row={r} compact />
+                </div>
               </div>
               <ChevronRight size={12} className="flex-shrink-0 text-slate-300" />
             </button>
@@ -668,6 +736,7 @@ function PartPanel({ selected, onSelect }) {
 
 // ─── ChecklistPanel ───────────────────────────────────────────────────────────
 function ReceivingComponentTable({ onSelect }) {
+  const navigate = useNavigate();
   const [inputValue, setInputValue] = useState('');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState([]);
@@ -724,6 +793,15 @@ function ReceivingComponentTable({ onSelect }) {
     setPage(1);
   };
 
+  const handleSelect = (row) => {
+    if (row?.sow_exists) {
+      const orderNo = getSowOrderNo(row);
+      navigate(`/sow-management/history?search=${encodeURIComponent(orderNo)}`);
+      return;
+    }
+    onSelect(row);
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
@@ -773,20 +851,22 @@ function ReceivingComponentTable({ onSelect }) {
                   <th className="px-3 py-3 font-bold">Model</th>
                   <th className="px-3 py-3 font-bold">Customer</th>
                   <th className="px-3 py-3 font-bold">Level</th>
+                  <th className="px-3 py-3 text-center font-bold">Order</th>
+                  <th className="px-3 py-3 text-center font-bold">SOW</th>
                   <th className="px-4 py-3 text-right font-bold">Ops</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                    <td colSpan={9} className="px-4 py-12 text-center text-slate-400">
                       <Loader2 size={18} className="mx-auto mb-2 animate-spin text-[#0096c7]" />
                       Loading receiving components...
                     </td>
                   </tr>
                 ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                    <td colSpan={9} className="px-4 py-12 text-center text-slate-400">
                       Tidak ada receiving component ditemukan.
                     </td>
                   </tr>
@@ -796,7 +876,7 @@ function ReceivingComponentTable({ onSelect }) {
                     <tr
                       key={row.receiving_component_id}
                       onClick={() => setPreview(row)}
-                      onDoubleClick={() => onSelect(row)}
+                      onDoubleClick={() => handleSelect(row)}
                       className={`cursor-pointer transition-colors ${isActive ? 'bg-cyan-50/70' : 'hover:bg-slate-50'}`}
                     >
                       <td className="px-4 py-3">
@@ -825,6 +905,12 @@ function ReceivingComponentTable({ onSelect }) {
                           L{row.part_level} {row.part_type || ''}
                         </span>
                       </td>
+                      <td className="px-3 py-3 text-center">
+                        <OrderStatusIcon row={row} />
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <SowStatusIcon row={row} />
+                      </td>
                       <td className="px-4 py-3 text-right font-mono text-slate-600">{row.operation_count}</td>
                     </tr>
                   );
@@ -849,18 +935,26 @@ function ReceivingComponentTable({ onSelect }) {
                       {preview.operation_count} ops
                     </span>
                   </div>
+                  <div className="mt-3">
+                    <ReceivingSowStatusBadges row={preview} />
+                  </div>
+                  {preview.sow_exists ? (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-700">
+                      Order ini sudah punya SOW. Buka SOW History untuk melihat detail order tersebut.
+                    </div>
+                  ) : null}
                   <button
-                    onClick={() => onSelect(preview)}
+                    onClick={() => handleSelect(preview)}
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-xs font-bold text-white transition-all hover:bg-[#0077b6] active:scale-[0.98]"
                   >
-                    Pilih Component
+                    {preview.sow_exists ? 'Lihat SOW' : 'Pilih Component'}
                     <ChevronRight size={13} />
                   </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <PreviewField label="Production Order" value={preview.production_order || '-'} mono />
-                  <PreviewField label="SOW Order No" value={preview.production_order ? normalizeProductionOrder(preview.production_order) : '-'} mono />
+                  <PreviewField label="SOW Order No" value={preview.sow_order_no || (preview.production_order ? normalizeProductionOrder(preview.production_order) : '-')} mono />
                   <PreviewField label="Customer" value={preview.customer_name || '-'} />
                   <PreviewField label="Location" value={preview.customer_site_name || preview.customer_site_location || '-'} />
                   <PreviewField label="Level / Type" value={`L${preview.part_level}${preview.part_type ? ` / ${preview.part_type}` : ''}`} />
@@ -2573,10 +2667,10 @@ const SowCreatePage = () => {
       const alreadyIn = prev.some((e) => e._srcId === op.id);
       if (alreadyIn) {
         const filtered = prev.filter((e) => e._srcId !== op.id);
-        return filtered.map((e, i) => ({ ...e, operation_no: (i + 1) * 10 }));
+        return renumberByStandardOrder(filtered);
       }
       const appended = [...prev, makeEditEntry(op, 0)];
-      return appended.map((e, i) => ({ ...e, operation_no: (i + 1) * 10 }));
+      return renumberByStandardOrder(appended);
     });
   }, []);
 
@@ -2584,7 +2678,7 @@ const SowCreatePage = () => {
   const handleToggleAll = useCallback((ops, selectAll) => {
     if (selectAll) {
       setCheckedOps(new Set(ops.map((o) => o.id)));
-      setEditOps(ops.map((op, i) => makeEditEntry(op, (i + 1) * 10)));
+      setEditOps(renumberByStandardOrder(ops.map((op) => makeEditEntry(op, 0))));
     } else {
       setCheckedOps(new Set());
       setEditOps([]);
@@ -2630,10 +2724,12 @@ const SowCreatePage = () => {
     });
 
     setEditOps((prev) => {
-      const bySource = new Map(prev.map((op) => [op._srcId, op]));
+      const entryKey = (entry) => entry._srcId != null ? `std-${entry._srcId}` : entry._key;
+      const bySource = new Map(prev.map((op) => [entryKey(op), op]));
       if (selectAll) {
         templateOps.forEach((op) => {
-          if (!bySource.has(op.id)) bySource.set(op.id, makeEditEntry(op, 0));
+          const key = `std-${op.id}`;
+          if (!bySource.has(key)) bySource.set(key, makeEditEntry(op, 0));
         });
       } else {
         // Remove only ops that are NOT in remaining checked templates
@@ -2643,11 +2739,11 @@ const SowCreatePage = () => {
         });
         templateOps.forEach((op) => {
           if (!remainingTemplateOpIds.has(op.id)) {
-            bySource.delete(op.id);
+            bySource.delete(`std-${op.id}`);
           }
         });
       }
-      return Array.from(bySource.values()).map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
+      return renumberByStandardOrder(Array.from(bySource.values()));
     });
   }, []);
 
@@ -2662,7 +2758,7 @@ const SowCreatePage = () => {
   const handleEditDelete = useCallback((key, srcId) => {
     setEditOps((prev) => {
       const filtered = prev.filter((op) => op._key !== key);
-      return filtered.map((e, i) => ({ ...e, operation_no: (i + 1) * 10 }));
+      return renumberByStandardOrder(filtered);
     });
     if (srcId != null) {
       setCheckedOps((prev) => {
@@ -2682,7 +2778,7 @@ const SowCreatePage = () => {
       if (from < 0 || to < 0) return prev;
       const [moved] = items.splice(from, 1);
       items.splice(to, 0, moved);
-      return items.map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
+      return renumberSequential(items);
     });
   }, []);
 
@@ -2693,6 +2789,8 @@ const SowCreatePage = () => {
         _key:           `new-${Date.now()}`,
         _isNew:         true,
         _srcId:         null,
+        _standardOperationNo: null,
+        _insertSeq:     Date.now(),
         operation_text: opData.operation_text,
         machineid:      opData.machineid,
         std_hours:      opData.std_hours,
@@ -2700,7 +2798,7 @@ const SowCreatePage = () => {
         operation_no:   0,
       };
       const appended = [...prev, entry];
-      return appended.map((e, i) => ({ ...e, operation_no: (i + 1) * 10 }));
+      return renumberByStandardOrder(appended);
     });
   }, []);
 
@@ -3172,6 +3270,8 @@ export function makeEditEntry(op, operation_no) {
     _key:           `std-${op.id}`,
     _isNew:         false,
     _srcId:         op.id,
+    _standardOperationNo: op.operation_no ?? null,
+    _insertSeq:     op.id ?? 0,
     operation_text: op.operation_text,
     machineid:      op.machineid || op.workcenter || '',
     std_hours:      op.std_hours ?? '',

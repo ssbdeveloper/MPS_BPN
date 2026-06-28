@@ -1,5 +1,12 @@
 const db = global.pool || require("../db");
 
+function clampLimit(value, fallback = 500, max = 2000) {
+  if (String(value || "").trim().toLowerCase() === "all") return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, 1), max);
+}
+
 /**
  * GET /production-operations
  * Optional query: ?order_number=...&operation_number=...
@@ -7,6 +14,7 @@ const db = global.pool || require("../db");
 exports.getAll = async (req, res) => {
   try {
     const { order_number, operation_number } = req.query;
+    const limit = clampLimit(req.query.limit);
     let conditions = [];
     let params = [];
     let idx = 1;
@@ -21,8 +29,10 @@ exports.getAll = async (req, res) => {
     }
 
     const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const limitSql = limit == null ? "" : ` LIMIT $${idx}`;
+    if (limit != null) params.push(limit);
     const result = await db.query(
-      `SELECT * FROM production_operations ${where} ORDER BY id ASC`,
+      `SELECT * FROM production_operations ${where} ORDER BY id ASC${limitSql}`,
       params
     );
     res.json(result.rows);

@@ -1,30 +1,16 @@
 // server.js
 const path = require('path');
-const dotenv = require('dotenv');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
+const { envPath, loaded: envLoaded } = require('./config/loadEnv');
 const { startKanbanRefreshJob } = require('./jobs/kanbanRefreshJob');
 
 // ========================================
 // ENVIRONMENT SETUP
 // ========================================
-function findUp(filename, startDir) {
-  let current = startDir;
-  while (current && current !== path.dirname(current)) {
-    const candidate = path.join(current, filename);
-    if (require('fs').existsSync(candidate)) return candidate;
-    current = path.dirname(current);
-  }
-  return path.join(startDir, filename);
-}
-
-// Load .env dari root repo saat development.
-const envPath = findUp('.env', __dirname);
-const result = dotenv.config({ path: envPath });
-
-if (result.error) {
+if (!envLoaded) {
   console.warn('⚠️  No .env file found, using environment variables');
 } else {
   console.log('✅ .env loaded from:', envPath);
@@ -71,10 +57,18 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-  options: `-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`
+  max: parseInt(process.env.DB_POOL_MAX || '10', 10),
+  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
+  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
+  query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT_MS || '45000', 10),
+  statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || '45000', 10),
+  idle_in_transaction_session_timeout: parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || '30000', 10),
+  application_name: process.env.DB_APPLICATION_NAME || 'mps2-api',
+  options: [
+    `-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`,
+    `-c statement_timeout=${parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || '45000', 10)}`,
+    `-c idle_in_transaction_session_timeout=${parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || '30000', 10)}`,
+  ].join(' ')
 });
 
 // Test connection
@@ -205,7 +199,10 @@ async function startServer() {
       client.release();
       connected = true;
     } catch (err) {
-      console.error('❌ Database not ready, retrying in 3s...');
+      console.error('❌ Database not ready, retrying in 3s...', {
+        code: err.code,
+        message: err.message,
+      });
       await new Promise(res => setTimeout(res, 3000));
     }
   }

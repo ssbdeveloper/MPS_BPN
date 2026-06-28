@@ -116,6 +116,13 @@ const validateInput = (schema, data) => {
 
 const normalizeText = (value) => (value ?? "").toString().trim();
 
+const clampInteger = (value, fallback, min, max) => {
+  if (String(value || "").trim().toLowerCase() === "all") return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+};
+
 const inferActivityType = ({ id_unprod, activitytype, operation_text, order_no, operation_no }) => {
   const explicit = normalizeText(id_unprod || activitytype);
   if (explicit) return explicit;
@@ -194,6 +201,7 @@ exports.search = async (req, res) => {
   try {
     const { field, value, start, end } = req.query;
     const allowedFields = ["serialnumber", "full_name", "longdate_checkin"];
+    const limit = clampInteger(req.query.limit, 500, 1, 2000);
     
     if (!allowedFields.includes(field)) {
       return res.status(400).json({ error: "Invalid field. Allowed: " + allowedFields.join(', ') });
@@ -230,6 +238,11 @@ exports.search = async (req, res) => {
       return res.status(400).json({ error: "Missing value or range (start/end)" });
     }
 
+    if (limit != null) {
+      query += ` LIMIT $${params.length + 1}`;
+      params.push(limit);
+    }
+
     const result = await db.query(query, params);
     res.json(result.rows);
   } catch (err) {
@@ -244,6 +257,11 @@ exports.search = async (req, res) => {
 exports.getbysn = async (req, res) => {
   try {
     const { snkaryawan } = req.params;
+    const limit = clampInteger(req.query.limit, 200, 1, 2000);
+    const params = [snkaryawan];
+    const limitClause = limit == null ? "" : ` LIMIT $${params.length + 1}`;
+    if (limit != null) params.push(limit);
+
     const result = await db.query(
       `SELECT t.*,
               COALESCE(NULLIF(t.part_name, ''), s.part_name) AS part_name
@@ -252,8 +270,9 @@ exports.getbysn = async (req, res) => {
          ON s.order_no      = t.order_no
         AND s.operation_no  = t.operation_no
        WHERE t.serialnumber = $1
-       ORDER BY t.longdate_checkin DESC`,
-      [snkaryawan]
+       ORDER BY t.longdate_checkin DESC
+       ${limitClause}`,
+      params
     );
     res.json(result.rows);
   } catch (err) {
@@ -685,17 +704,21 @@ const generateExport = async (req, res, format = 'csv') => {
     const validated = validateInput(schemas.export, req.query);
     const { field = 'longdate_checkout', start, end } = validated;
 
+    if (!start || !end) {
+      return res.status(400).json({
+        error: 'Export wajib memakai rentang tanggal start dan end supaya server tidak menarik seluruh timesheet.'
+      });
+    }
+
     const params = [];
     let where = '';
 
-    if (start && end) {
-      if (field === 'longdate_checkin' || field === 'longdate_checkout') {
-        where = `WHERE ${field} >= $1::date AND ${field} < ($2::date + interval '1 day')`;
-      } else {
-        where = `WHERE DATE(${field}) BETWEEN $1 AND $2`;
-      }
-      params.push(start, end);
+    if (field === 'longdate_checkin' || field === 'longdate_checkout') {
+      where = `WHERE ${field} >= $1::date AND ${field} < ($2::date + interval '1 day')`;
+    } else {
+      where = `WHERE DATE(${field}) BETWEEN $1 AND $2`;
     }
+    params.push(start, end);
 
     const result = await db.query(
       `SELECT * FROM timesheet_transaction ${where} ORDER BY tsnumber DESC`,
