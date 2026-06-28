@@ -14,6 +14,7 @@ router.get("/validation-rate", controller.getValidationRate);
 router.get("/operator-heatmap", controller.getOperatorHeatmap);
 router.get("/workcenter-list", controller.getWorkcenterList);
 router.get("/operations-hub", controller.getOperationsHub);
+router.get("/sap-timesheet-staging-log", controller.getSapTimesheetStagingLog);
 
 router.get("/mps-oee-summary", mpsController.getOeeSummary);
 router.get("/mps-oee-trend", mpsController.getOeeTrend);

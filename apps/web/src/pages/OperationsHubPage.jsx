@@ -9,6 +9,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ChevronRight,
+  Database,
   Factory,
   Gauge,
   Hammer,
@@ -25,6 +26,7 @@ import {
   X,
 } from 'lucide-react';
 import sapLogo from '../assets/sap.svg';
+import EwsControlTower from '../components/ews/EwsControlTower';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const SAP_LINKS = {
@@ -48,6 +50,7 @@ const sidebarItems = [
   { title: 'Manage User', icon: UserCog, path: '/manage-user' },
   { title: 'TimeSheet', icon: ShieldCheck, path: '/timesheet-validation' },
   { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver' },
+  { title: 'SAP Log', icon: Database, path: '/sap-log' },
 ];
 
 const emptyHubData = {
@@ -162,45 +165,45 @@ function StatCard({ title, value, helper, icon, tone }) {
 
 function Sidebar({ onNavigate, onLogout }) {
   return (
-    <aside className="border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-screen lg:w-[260px] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
-      <div className="flex h-full flex-col">
-        <div className="border-b border-slate-100 px-4 py-4">
+    <aside className="border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-dvh lg:w-[clamp(180px,16vw,244px)] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="border-b border-slate-100 px-4 py-3 lg:px-3 lg:py-2">
           <button
             type="button"
             onClick={() => onNavigate('/operations-hub')}
-            className="flex w-full items-center gap-3 rounded-lg text-left focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+            className="flex w-full items-center gap-3 rounded-lg text-left focus:outline-none focus:ring-2 focus:ring-[#00b4d8] lg:gap-2"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0096c7] text-white shadow-sm">
-              <Factory size={20} />
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#0096c7] text-white shadow-sm lg:h-8 lg:w-8">
+              <Factory size={18} />
             </div>
-            <div>
-              <p className="text-sm font-extrabold text-slate-900">MPS</p>
-              <p className="text-xs font-medium text-slate-500">Operations</p>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-extrabold text-slate-900 lg:text-xs">MPS</p>
+              <p className="truncate text-xs font-medium text-slate-500 lg:text-[10px]">Operations</p>
             </div>
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3 py-3">
+        <nav className="flex-1 space-y-1 px-3 py-3 lg:min-h-0 lg:space-y-0.5 lg:px-2 lg:py-2 [@media(max-height:720px)]:py-1">
           {sidebarItems.map((item) => (
             <button
               key={item.path}
               type="button"
               onClick={() => onNavigate(item.path)}
-              className="flex min-h-[42px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+              className="flex min-h-[42px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] lg:min-h-[34px] lg:gap-2 lg:px-2 lg:py-1 lg:text-xs [@media(max-height:720px)]:min-h-[30px] [@media(max-height:720px)]:py-0.5"
             >
-              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 text-[#0077b6]">
-                <item.icon size={18} />
+              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-slate-100 text-[#0077b6] lg:h-7 lg:w-7 [@media(max-height:720px)]:h-6 [@media(max-height:720px)]:w-6">
+                <item.icon className="h-[18px] w-[18px] lg:h-4 lg:w-4" />
               </span>
-              {item.title}
+              <span className="truncate">{item.title}</span>
             </button>
           ))}
         </nav>
 
-        <div className="border-t border-slate-200 p-4">
+        <div className="border-t border-slate-200 p-4 lg:p-2">
           <button
             type="button"
             onClick={onLogout}
-            className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50"
+            className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 lg:min-h-[34px] lg:text-xs [@media(max-height:720px)]:min-h-[30px]"
           >
             <LogOut size={17} />
             Lock
@@ -764,7 +767,10 @@ function OperationsHubPage() {
 
   return (
     <div className="min-h-screen bg-[#f6f8fb] text-slate-800 lg:flex">
-      <Sidebar onNavigate={navigate} onLogout={handleLogout} />
+      <Sidebar
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      />
 
       <main className="min-w-0 flex-1">
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -847,6 +853,8 @@ function OperationsHubPage() {
               <StatCard key={card.title} {...card} />
             ))}
           </section>
+
+          <EwsControlTower />
 
           <DashboardCard className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div>

@@ -377,6 +377,103 @@ async function getOperationsHub(req, res) {
   }
 }
 
+// GET /dashboard/sap-timesheet-staging-log
+async function getSapTimesheetStagingLog(req, res) {
+  try {
+    const limit = Math.min(100, Math.max(10, parseInt(req.query.limit, 10) || 30));
+    const cursor = Number.parseInt(req.query.cursor, 10);
+    const status = String(req.query.status || "all").toUpperCase();
+    const search = String(req.query.search || "").trim();
+
+    const where = [];
+    const params = [];
+
+    if (Number.isFinite(cursor) && cursor > 0) {
+      params.push(cursor);
+      where.push(`id < $${params.length}`);
+    }
+
+    if (status !== "ALL") {
+      params.push(status);
+      where.push(`status = $${params.length}`);
+    }
+
+    if (search) {
+      params.push(`%${search}%`);
+      const idx = params.length;
+      where.push(`(
+        source_key ILIKE $${idx}
+        OR source_ref_id ILIKE $${idx}
+        OR ztimesheetid ILIKE $${idx}
+        OR pernr ILIKE $${idx}
+        OR aufnr ILIKE $${idx}
+        OR vornr ILIKE $${idx}
+        OR arbpl ILIKE $${idx}
+        OR sap_response_text ILIKE $${idx}
+        OR sap_error ILIKE $${idx}
+        OR payload::text ILIKE $${idx}
+        OR sap_response::text ILIKE $${idx}
+      )`);
+    }
+
+    const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    params.push(limit + 1);
+
+    const result = await pool.query(
+      `
+      SELECT
+        id,
+        ztimesheetid,
+        source_system,
+        source_key,
+        source_ref_id,
+        werks,
+        pernr,
+        rueck,
+        aufnr,
+        vornr,
+        arbpl,
+        lstar,
+        isdd,
+        isdz,
+        iedd,
+        iedz,
+        total_seconds,
+        source_row_count,
+        status,
+        payload,
+        sap_response,
+        sap_response_text,
+        sap_error,
+        posted_at,
+        created_at,
+        updated_at
+      FROM public.sap_timesheet_staging
+      ${whereClause}
+      ORDER BY id DESC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+
+    const rows = result.rows.slice(0, limit);
+    const extraRow = result.rows[limit];
+
+    res.json({
+      data: rows,
+      pagination: {
+        limit,
+        next_cursor: extraRow ? rows[rows.length - 1]?.id || null : null,
+        has_more: Boolean(extraRow),
+      },
+      meta: meta(),
+    });
+  } catch (err) {
+    console.error("sap-timesheet-staging-log error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // GET /dashboard/kpi
 async function getKpi(req, res) {
   try {
@@ -667,6 +764,7 @@ module.exports = {
   getOperatorHeatmap,
   getWorkcenterList,
   getOperationsHub,
+  getSapTimesheetStagingLog,
   getOrderProgress,
   getOrderActivityDetail,
   getOperationTimesheetHistory,

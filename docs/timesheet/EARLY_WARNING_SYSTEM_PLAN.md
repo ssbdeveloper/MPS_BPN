@@ -1,750 +1,652 @@
-# Early Warning System Plan - Timesheet & Machine Hours
+# Section 28 — POST GOLIVE Early Warning System (EWS)
 
-Tanggal analisis: 2026-06-23  
-Database: `ptssb` dari root `.env` (`D:\website\MPS2\.env`)  
-Scope awal: `timesheet_transaction`, `mch_transaction`, `mch_productiondata`, `sow`, `ph3_order`
+> **Sumber**: Section 28 POST GOLIVE Early Warning System 1.docx  
+> **Project**: MPS2 — Digital Timesheet & Production Monitoring (PT. Sanggar Sarana Baja)  
+> **Path**: `D:\website\MPS2`  
+> **Target**: Implementasi EWS berbasis 5 KPI di dalam aplikasi MPS2 existing
 
-## 1. Goal
+---
 
-Membuat early warning system untuk mendeteksi risiko operasional sebelum menjadi masalah validasi, SAP posting, atau cost overrun.
+## 1. KONSEP BESAR
 
-Fokus utama:
+### 1.1 Apa itu EWS?
 
-1. Planhours habis atau hampir habis berdasarkan akumulasi actual hours.
-2. Selisih antara timesheet manual dan machine hours.
-3. Akurasi data mesin dari `mch_productiondata`.
-4. Data transaction yang tidak bisa di-map ke SOW / SAP order.
-5. Aktivitas open terlalu lama atau durasi tidak masuk akal.
-6. Order TECO / status SAP yang masih menerima transaksi.
+Early Warning System adalah sistem deteksi dini yang memonitor **5 KPI utama** secara real-time. Begitu ada KPI yang turun di bawah threshold, sistem langsung kasih alert + rekomendasi tindakan.
 
-Sistem ini sebaiknya dimulai sebagai dashboard read-only + alert list, lalu baru berkembang menjadi blocking rule atau approval workflow.
+### 1.2 Struktur Layer
 
-## 2. Baseline Data Saat Analisis
-
-Jumlah row aktual:
-
-| Table | Row count |
-|---|---:|
-| `timesheet_transaction` | 104,435 |
-| `mch_transaction` | 444,836 |
-| `mch_productiondata` | 454,879 |
-| `sow` | 76,815 |
-| `ph3_order` | 58,707 |
-
-Temuan awal dari query database:
-
-| Check | Count / Finding |
-|---|---:|
-| `timesheet_transaction` key tidak match ke `sow` | 161 distinct order-operation |
-| `mch_transaction` key tidak match ke `sow` | 11 distinct order-operation |
-| `sow` key tidak match ke `ph3_order` | 20,656 distinct order-operation |
-| `timesheet_transaction` pada PH3 TECO | 3,908 distinct order-operation |
-| `mch_transaction` pada PH3 TECO | 1,425 distinct order-operation |
-| Timesheet open lebih dari 12 jam | 2 row |
-| Machine transaction open lebih dari 12 jam | 64 row |
-| Timesheet duration negatif | 25 row |
-| SOW planhours null atau <= 0 | 25,660 row |
-| Duplicate `sow(order_no, operation_no)` | 0 |
-| Duplicate `ph3_order(order_no, operation_no)` | 2 |
-| Timesheet tanpa `order_no` atau `operation_no` | 55,559 row |
-| MCH tanpa valid `order_no` atau numeric `operation_no` | 173,166 row |
-
-Catatan: transaksi tanpa order-operation mungkin mencakup unproductive / non-job activity. Untuk alert produksi, filter wajib membedakan productive vs non-productive activity supaya tidak menghasilkan false positive.
-
-## 3. Existing Query Yang Sudah Ada
-
-File:
-
-```text
-jobs/etl/sql_anomali_mch_productiondata.sql
+```
+Alert ──→ Detail ──→ Standard Action ──→ Correction ──→ Escalation
 ```
 
-Query tersebut menghitung akurasi `mch_productiondata` per tanggal + machine:
+| Layer | Fungsi | Output |
+|-------|--------|--------|
+| **Alert** | Deteksi masalah lebih awal | 🟢🟡🔴 status |
+| **Detail** | Analisa akar masalah (where/when/why) | Breakdown per machine/operator/shift |
+| **Std Action** | Tindakan wajib yang harus dilakukan | Action list per KPI |
+| **Correction** | Tracking tindakan & PIC | Action_Table (status Open/Closed) |
+| **Escalation** | Eskalasi ke manajemen jika overdue | Auto-notification |
 
-- Valid jika `jobid` prefix `1`, `6`, `3`, atau `7`.
-- Anomaly jika `jobid` prefix `n`, `8`, atau `Karakter Tidak Terdaftar`.
-- Output: `production_date`, `machineno`, `machinename`, `anomaly_count`, `valid_count`, `total_count`, `accuracy_pct`.
+### 1.3 5 KPI
 
-Baseline 30 hari terakhir menunjukkan drop besar:
+| KPI | Formula | Target | Owner |
+|-----|---------|--------|-------|
+| **Uptime** | Online Time / Total Elapsed Time | ≥ 99% | IT (Wira) |
+| **Accuracy** | 1 - (Error Record / Total Record) | ≥ 97% | Foreman/Spv |
+| **Adoption** | 1 - (Missing Time / Total Time) | ≥ 95% | Foreman/Spv |
+| **OEE** | Running Time / Total Time | ≥ 65% | Foreman/Spv/PPIC |
+| **OLE** | Working Time / Total Time | ≥ 85% | Foreman/Spv/PPIC |
 
-| Date | Total | Anomaly | Valid | Accuracy |
-|---|---:|---:|---:|---:|
-| 2026-06-23 | 2,851 | 161 | 2,690 | 94.35% |
-| 2026-06-22 | 3,751 | 383 | 3,368 | 89.79% |
-| 2026-06-21 | 2,507 | 864 | 1,643 | 65.54% |
-| 2026-06-20 | 4,292 | 775 | 3,517 | 81.94% |
+### 1.4 Coverage
 
-Machine dengan akurasi buruk dalam 14 hari terakhir:
+EWS mencakup 5 dimensi: **Data**, **System**, **User**, **Machine**, **Manpower**
 
-| Date | Machine | Name | Total | Anomaly | Accuracy |
-|---|---:|---|---:|---:|---:|
-| 2026-06-23 | 56 | Goodway 2 | 161 | 161 | 0.00% |
-| 2026-06-22 | 56 | Goodway 2 | 30 | 30 | 0.00% |
-| 2026-06-22 | 74 | FAT 4 | 25 | 25 | 0.00% |
-| 2026-06-22 | 50 | WB | 27 | 27 | 0.00% |
-| 2026-06-22 | 55 | DT 3000 2 | 101 | 52 | 48.51% |
-| 2026-06-21 | 66 | Bensaw | 42 | 42 | 0.00% |
-| 2026-06-21 | 73 | Honing 2 | 38 | 38 | 0.00% |
-| 2026-06-21 | 72 | Honing 1 | 55 | 55 | 0.00% |
-| 2026-06-21 | 79 | Shibaura 4 | 52 | 52 | 0.00% |
+---
 
-Kesimpulan: query akurasi ini layak menjadi salah satu warning utama, tetapi perlu threshold dan suppression agar mesin dengan volume kecil tidak terlalu noisy.
+## 2. EWS ARCHITECTURE (CARA KERJA)
 
-## 4. Proposed Warning Categories
-
-### 4.1 Planhours Consumption Warning
-
-Tujuan: mendeteksi order-operation yang actual hours-nya hampir habis atau sudah melewati `sow.planhours`.
-
-Sumber:
-
-- Plan: `sow.order_no + sow.operation_no + sow.planhours`
-- Timesheet actual: `timesheet_transaction.order_no + operation_no`, sum `duration`
-- Machine actual: `mch_transaction.order_no + operation_no`, sum `duration_hours`
-
-Metric:
-
-```text
-timesheet_hours = SUM(timesheet_transaction.duration)
-machine_hours   = SUM(mch_transaction.duration_hours)
-combined_hours  = timesheet_hours + machine_hours
-consume_pct     = combined_hours / sow.planhours * 100
-remaining_hours = sow.planhours - combined_hours
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     SOURCE DATA LAYER                         │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │ HMI Events   │  │ Ping Log     │  │ Production Data    │  │
+│  │ (Timesheet)  │  │ (Uptime)     │  │ (OEE/OLE)         │  │
+│  └──────┬───────┘  └──────┬───────┘  └────────┬───────────┘  │
+├─────────┼─────────────────┼───────────────────┼──────────────┤
+│         ▼                 ▼                   ▼              │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │              ALERT ENGINE (Node.js API)               │    │
+│  │  ┌───────────┐  ┌──────────┐  ┌──────────────────┐   │    │
+│  │  │ Alert      │  │ Detail   │  │ Std Action        │   │    │
+│  │  │ Flag       │──│ Breakdown│──│ Suggestion        │   │    │
+│  │  │ Condition  │  │ Root     │  │ Mapping per KPI   │   │    │
+│  │  │ 🟢🟡🔴    │  │ Cause    │  │                   │   │    │
+│  │  └───────────┘  └──────────┘  └──────────────────┘   │    │
+│  └──────────────────────┬───────────────────────────────┘    │
+├─────────────────────────┼────────────────────────────────────┤
+│                         ▼                                    │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │              PRESENTATION LAYER                        │    │
+│  │  ┌────────────────┐  ┌────────────┐  ┌─────────────┐ │    │
+│  │  │ React Dashboard│  │ Power BI   │  │ TTS / Audio │  │    │
+│  │  │ (apps/web)     │  │ (optional) │  │ Announcer   │  │    │
+│  │  └────────────────┘  └────────────┘  └─────────────┘ │    │
+│  └──────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Severity:
+---
 
-| Severity | Rule |
-|---|---|
-| INFO | `consume_pct >= 70` and `< 85` |
-| WARNING | `consume_pct >= 85` and `< 100` |
-| CRITICAL | `consume_pct >= 100` |
-| CRITICAL | `over_hours >= 8` even if percentage is distorted by very small planhours |
+## 3. DATABASE TABLES (YANG PERLU DIBUAT / DIMODIFIKASI)
 
-Important nuance:
+### 3.1 Tabel yang SUDAH ADA di MPS2
 
-- Jika `planhours <= 0` atau null, jangan hitung overrun. Masukkan ke kategori master data warning.
-- Jika planhours sangat kecil, percentage bisa ekstrem. Perlu tampilkan `over_hours` sebagai metric utama.
-- Perlu keputusan bisnis apakah `timesheet_hours + machine_hours` memang dijumlahkan, atau harus dibandingkan sebagai dua sumber actual berbeda. Untuk early warning awal, tampilkan ketiganya: timesheet, machine, combined.
+| Table | Fungsi | Relevan untuk EWS |
+|-------|--------|-------------------|
+| `event_data_hmi` | Data timesheet HMI (production events) | ✅ Accuracy, Adoption |
+| `hmi_event_with_duration` | HMI event dengan kalkulasi durasi | ✅ Adoption |
+| `fact_machinehours` | Production data per machine | ✅ OEE |
+| `dim_machine` | Master machine | ✅ Semua KPI |
+| `dim_operator` | Master operator | ✅ OLE, Adoption |
+| `dim_shift` | Shift definition | ✅ Semua breakdown |
 
-Temuan contoh tertinggi:
+### 3.2 Tabel BARU yang Perlu Dibuat
 
-| Order | Op | Plan | TS | MCH | Combined | Over | Consume |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 1000124915 | 500 | 0.50 | 1080.97 | 0.66 | 1081.63 | 1081.13 | 216326.4% |
-| 1000124685 | 10 | 2.00 | 4.27 | 773.82 | 778.09 | 776.09 | 38904.7% |
-| 1000121347 | 270 | 4.00 | 2.96 | 655.68 | 658.64 | 654.64 | 16466.0% |
-
-Interpretasi: sebagian besar critical ekstrem kemungkinan bukan sekadar overrun, tetapi mismatch mapping, planhours terlalu kecil, atau machine transaction menempel ke operation yang tidak tepat. Maka alert ini perlu drilldown.
-
-### 4.2 Timesheet vs Machine Hours Variance
-
-Tujuan: mendeteksi selisih besar antara manual timesheet dan machine hours untuk order-operation yang sama.
-
-Metric:
-
-```text
-variance_hours = ABS(timesheet_hours - machine_hours)
-variance_pct   = variance_hours / NULLIF(GREATEST(timesheet_hours, machine_hours), 0)
-```
-
-Severity:
-
-| Severity | Rule |
-|---|---|
-| WARNING | `variance_hours >= 2` and `variance_pct >= 30%` |
-| CRITICAL | `variance_hours >= 8` and `variance_pct >= 50%` |
-
-Use case:
-
-- Operator mencatat manual tetapi mesin tidak jalan.
-- Mesin jalan tetapi tidak ada timesheet operator.
-- Machine mapping ke order-operation salah.
-- Transaksi machine terlalu panjang karena no checkout / stale jobid.
-
-### 4.3 Machine Data Accuracy Warning
-
-Tujuan: menjadikan SQL anomali `mch_productiondata` sebagai health signal per mesin per shift/hari.
-
-Metric:
-
-```text
-accuracy_pct = valid_count / total_count * 100
-anomaly_pct  = anomaly_count / total_count * 100
-```
-
-Severity:
-
-| Severity | Rule |
-|---|---|
-| INFO | `accuracy_pct < 98` and `total_count >= 50` |
-| WARNING | `accuracy_pct < 95` and `total_count >= 50` |
-| CRITICAL | `accuracy_pct < 80` and `total_count >= 50` |
-| CRITICAL | `accuracy_pct = 0` and `total_count >= 20` |
-
-Recommended grouping:
-
-- Daily: untuk trend / dashboard.
-- Shift or rolling 2 hours: untuk early warning real-time.
-- Machine-level: supaya maintenance / admin tahu mesin mana yang bermasalah.
-
-### 4.4 Missing Mapping Warning
-
-Tujuan: mendeteksi transaction yang tidak bisa dihubungkan ke master SOW atau SAP PH3 order.
-
-Rules:
-
-| Warning | Rule |
-|---|---|
-| `TS_WITHOUT_SOW` | productive timesheet key tidak ada di `sow` |
-| `MCH_WITHOUT_SOW` | machine transaction key tidak ada di `sow` |
-| `SOW_WITHOUT_PH3` | SOW key tidak ada di `ph3_order` |
-| `PH3_DUPLICATE_KEY` | duplicate `ph3_order(order_no, operation_no)` |
-| `MISSING_ORDER_OPERATION` | productive row tidak punya order_no / operation_no |
-
-Baseline:
-
-- `TS_WITHOUT_SOW`: 161 distinct key.
-- `MCH_WITHOUT_SOW`: 11 distinct key.
-- `SOW_WITHOUT_PH3`: 20,656 distinct key.
-- `PH3_DUPLICATE_KEY`: 2 distinct key.
-
-Catatan:
-
-- `SOW_WITHOUT_PH3` cukup besar, perlu dibedakan apakah order lama, QH3/PH3 berbeda, atau belum masuk staging.
-- Untuk timesheet dan MCH, filter productive wajib dipastikan dulu. Banyak row tanpa order-operation mungkin legitimate untuk unproductive.
-
-### 4.5 TECO / Closed Order Activity Warning
-
-Tujuan: mendeteksi activity masuk ke order yang sudah TECO / closed di SAP source.
-
-Rule:
-
-```text
-ph3_order.order_description ILIKE '%TECO%'
-AND ada timesheet_transaction atau mch_transaction pada key itu
-```
-
-Baseline:
-
-- Timesheet pada PH3 TECO: 3,908 distinct order-operation.
-- MCH pada PH3 TECO: 1,425 distinct order-operation.
-
-Severity:
-
-| Severity | Rule |
-|---|---|
-| WARNING | Activity baru pada order TECO dalam 7 hari terakhir |
-| CRITICAL | Activity hari ini pada order TECO |
-
-### 4.6 Open Transaction / Stale Checkout Warning
-
-Tujuan: mendeteksi transaksi yang belum checkout / belum end terlalu lama.
-
-Rules:
-
-| Warning | Rule |
-|---|---|
-| `TS_OPEN_GT_8H` | `longdate_checkout IS NULL` and age > 8 hours |
-| `TS_OPEN_GT_12H` | age > 12 hours |
-| `MCH_OPEN_GT_8H` | `enddatetime IS NULL` and age > 8 hours |
-| `MCH_OPEN_GT_12H` | age > 12 hours |
-
-Baseline:
-
-- Timesheet open > 12 jam: 2.
-- Machine transaction open > 12 jam: 64.
-
-Severity:
-
-| Severity | Rule |
-|---|---|
-| WARNING | > 8 hours |
-| CRITICAL | > 12 hours |
-
-### 4.7 Impossible Duration / Human Capacity Warning
-
-Tujuan: mendeteksi durasi tidak masuk akal secara manusia atau teknis.
-
-Rules:
-
-| Warning | Rule |
-|---|---|
-| Negative duration | `duration < 0` atau `duration_hours < 0` |
-| Daily operator overload | total duration per operator per day > 16 hours |
-| Excessive single transaction | single duration > 12 hours |
-| Too many fragmented rows | count row per operator-day > threshold |
-
-Baseline:
-
-- Timesheet duration negatif: 25 row.
-- Operator-day > 16 hours dalam 30 hari terakhir banyak muncul, contoh:
-  - `2763-M` pada 2026-06-02 = 55.18 hours dari 34 row.
-  - `2763-M` pada 2026-06-17 = 50.16 hours dari 44 row.
-  - `11009630` pada 2026-06-19 = 37.65 hours dari 32 row.
-
-Interpretasi: ini bisa berarti multi-row overlap, duration calculation issue, atau operator login di banyak job sekaligus.
-
-### 4.8 Workcenter / Operation Drift Warning
-
-Tujuan: mendeteksi satu order-operation dicatat di banyak workcenter dalam periode pendek.
-
-Baseline 30 hari:
-
-| Order | Op | Distinct WC | Operators | Hours |
-|---|---:|---:|---:|---:|
-| 1000128218 | 50 | 9 | 7 | 32.59 |
-| 1000128218 | 40 | 7 | 5 | 23.55 |
-| 1000128217 | 5001 | 5 | 11 | 146.08 |
-
-Rule awal:
-
-| Severity | Rule |
-|---|---|
-| INFO | `distinct workcentercode >= 3` within 30 days |
-| WARNING | `distinct workcentercode >= 5` within 30 days |
-| CRITICAL | `distinct workcentercode >= 5` and consume_pct >= 100 |
-
-Catatan: bisa legitimate jika operation memang lintas station. Butuh allowlist atau compare ke expected workcenter dari `sow.workcenter`.
-
-### 4.9 SAP Posting Readiness Warning
-
-Tujuan: warning sebelum data gagal post ke SAP.
-
-Sumber:
-
-- `timesheet_transaction`
-- `mch_transaction`
-- `ph3_order`
-- log SAP existing jika tersedia
-
-Rules:
-
-| Warning | Rule |
-|---|---|
-| Missing confirmation | order-operation tidak punya `ph3_order.confirmation_number` |
-| Missing sequence data | `sequence_category`, `sequence_number`, branch/return op missing saat dibutuhkan |
-| Missing activity type | `activitytype` null untuk productive timesheet |
-| Missing employee mapping | `serialnumber` / `sn_employee` tidak match ke `usernfc` |
-| Invalid plant | plant transaction tidak sama dengan `.env PLANT_SSB` untuk mode plant aktif |
-
-## 5. Proposed Data Model
-
-### 5.1 Warning Event Table
-
-Gunakan satu table generic supaya semua warning bisa masuk ke satu inbox.
+#### a) `connectivity_log` — Uptime
 
 ```sql
-CREATE TABLE public.early_warning_event (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  warning_type TEXT NOT NULL,
-  severity TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'OPEN',
-  source_table TEXT,
-  source_key JSONB,
-  order_no TEXT,
-  operation_no INTEGER,
-  workcenter TEXT,
-  machineno INTEGER,
-  serialnumber TEXT,
-  title TEXT NOT NULL,
-  message TEXT,
-  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
-  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  resolved_at TIMESTAMPTZ,
-  resolved_by TEXT,
-  resolution_note TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT chk_early_warning_event_severity
-    CHECK (severity IN ('INFO', 'WARNING', 'CRITICAL')),
-  CONSTRAINT chk_early_warning_event_status
-    CHECK (status IN ('OPEN', 'ACKNOWLEDGED', 'RESOLVED', 'SUPPRESSED'))
+CREATE TABLE ews.connectivity_log (
+    id SERIAL PRIMARY KEY,
+    device_id VARCHAR(50) NOT NULL,
+    ip_address VARCHAR(45),
+    ping_status INTEGER NOT NULL CHECK (ping_status IN (0, 1)), -- 1=success, 0=fail
+    ping_timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    response_ms INTEGER,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_connectivity_device_time ON ews.connectivity_log(device_id, ping_timestamp);
+```
+
+#### b) `data_validation_log` — Accuracy
+
+```sql
+CREATE TABLE ews.data_validation_log (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL,
+    device_id VARCHAR(50),
+    operator_id VARCHAR(50),
+    order_number VARCHAR(100),
+    field_name VARCHAR(100),
+    error_type VARCHAR(50) NOT NULL, -- Missing, Invalid, Inconsistent, Outlier
+    raw_value TEXT,
+    is_error INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_validation_time ON ews.data_validation_log(timestamp);
+CREATE INDEX idx_validation_type ON ews.data_validation_log(error_type);
+```
+
+#### c) `alert_log` — Unified Alert Table
+
+```sql
+CREATE TABLE ews.alert_log (
+    id SERIAL PRIMARY KEY,
+    alert_timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    machine_id VARCHAR(50),
+    kpi_type VARCHAR(50) NOT NULL, -- Uptime, Accuracy, Adoption, OEE, OLE
+    kpi_value DECIMAL(10,6),
+    threshold_value DECIMAL(10,6),
+    severity VARCHAR(20) NOT NULL, -- Normal, Warning, Critical
+    alert_flag INTEGER DEFAULT 0, -- 0=no alert, 1=alert
+    alert_message TEXT,
+    detail_json JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_alert_time ON ews.alert_log(alert_timestamp);
+CREATE INDEX idx_alert_severity ON ews.alert_log(severity, kpi_type);
+CREATE INDEX idx_alert_flag ON ews.alert_log(alert_flag, alert_timestamp);
+```
+
+#### d) `action_table` — Correction Layer
+
+```sql
+CREATE TABLE ews.action_table (
+    action_id SERIAL PRIMARY KEY,
+    alert_id INTEGER REFERENCES ews.alert_log(id),
+    machine_id VARCHAR(50),
+    kpi_type VARCHAR(50),
+    status_reason TEXT,
+    action_taken TEXT NOT NULL,
+    pic VARCHAR(100) NOT NULL,
+    action_status VARCHAR(50) DEFAULT 'Open', -- Open, In Progress, Closed
+    action_date TIMESTAMP DEFAULT NOW(),
+    last_updated TIMESTAMP DEFAULT NOW(),
+    updated_by VARCHAR(100)
+);
+
+CREATE INDEX idx_action_status ON ews.action_table(action_status);
+CREATE INDEX idx_action_machine ON ews.action_table(machine_id);
+```
+
+#### e) `action_history` — Audit Trail
+
+```sql
+CREATE TABLE ews.action_history (
+    id SERIAL PRIMARY KEY,
+    action_id INTEGER REFERENCES ews.action_table(action_id),
+    old_status VARCHAR(50),
+    new_status VARCHAR(50),
+    changed_by VARCHAR(100),
+    change_timestamp TIMESTAMP DEFAULT NOW(),
+    notes TEXT
 );
 ```
 
-Suggested unique identity:
+#### f) `ews_kpi_summary` — Materialized / Aggregate View
 
 ```sql
-CREATE UNIQUE INDEX uq_early_warning_event_open_identity
-ON public.early_warning_event (
-  warning_type,
-  COALESCE(order_no, ''),
-  COALESCE(operation_no, -1),
-  COALESCE(workcenter, ''),
-  COALESCE(machineno, -1),
-  COALESCE(serialnumber, '')
-)
-WHERE status IN ('OPEN', 'ACKNOWLEDGED');
+CREATE TABLE ews.kpi_summary (
+    id SERIAL PRIMARY KEY,
+    calc_timestamp TIMESTAMP NOT NULL,
+    machine_id VARCHAR(50),
+    operator_id VARCHAR(50),
+    shift_id INTEGER,
+    
+    -- Uptime metrics
+    uptime_pct DECIMAL(10,6),
+    uptime_status VARCHAR(20),
+    
+    -- Accuracy metrics
+    accuracy_pct DECIMAL(10,6),
+    error_rate DECIMAL(10,6),
+    accuracy_status VARCHAR(20),
+    
+    -- Adoption metrics
+    adoption_pct DECIMAL(10,6),
+    missing_minutes DECIMAL(10,2),
+    adoption_status VARCHAR(20),
+    
+    -- OEE metrics
+    oee_availability DECIMAL(10,6),
+    oee_status VARCHAR(20),
+    
+    -- OLE metrics
+    ole_availability DECIMAL(10,6),
+    ole_status VARCHAR(20),
+    
+    -- System-level
+    overall_status VARCHAR(20),
+    overall_score DECIMAL(10,6),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_kpi_time ON ews.kpi_summary(calc_timestamp);
+CREATE INDEX idx_kpi_machine ON ews.kpi_summary(machine_id, calc_timestamp);
 ```
 
-### 5.2 Warning Snapshot Views
+---
 
-Recommended views:
+## 4. ALERT THRESHOLD & LOGIC
 
-1. `vw_ew_planhours_consumption`
-2. `vw_ew_timesheet_machine_variance`
-3. `vw_ew_mch_data_accuracy_daily`
-4. `vw_ew_missing_mapping`
-5. `vw_ew_open_transactions`
-6. `vw_ew_sap_readiness`
+### 4.1 Threshold per KPI
 
-Views untuk read/query; table `early_warning_event` untuk persisted inbox, acknowledgement, dan history.
+| KPI | 🟢 Normal | 🟡 Warning | 🔴 Critical |
+|-----|----------|-----------|------------|
+| **Uptime** | ≥ 98% | 95–98% | < 95% |
+| **Accuracy** | ≥ 97% | 95–97% | < 95% |
+| **Adoption** | ≥ 95% | 90–95% | < 90% |
+| **OEE** | ≥ 65% | 50–65% | < 50% |
+| **OLE** | ≥ 85% | 70–85% | < 70% |
 
-## 6. MVP Design
+### 4.2 False Alert Protection
 
-MVP sebaiknya tidak langsung blocking operator. Start dari visibility dulu.
+- **Uptime**: Gunakan "continuous failure" — 6 consecutive fail (6 × 10 detik = 1 menit) baru dianggap real problem
+- **Accuracy**: Minimum record threshold — kalau < 50 record, ignore alert
+- **Adoption**: Status "4" (No Job) dikecualikan dari Total_Time
+- **OEE**: Stop < 1 menit = micro disturbance (bukan real downtime)
+- **OLE**: Cek konteks — OEE tinggi + OLE rendah = mesin OK, operator tidak efektif
 
-### MVP 1 - Read-only Dashboard
+### 4.3 Overall System Status (unified alert)
 
-Deliverable:
-
-- SQL views:
-  - planhours consumption
-  - machine data accuracy daily
-  - open stale transaction
-  - missing mapping
-- API:
-  - `GET /early-warning/summary`
-  - `GET /early-warning/events?severity=&type=&status=&date=`
-  - `GET /early-warning/order/:orderNo/:operationNo`
-- UI:
-  - page dashboard early warning
-  - cards: critical count, warning count, accuracy today, open stale count
-  - table with filter severity/type/workcenter/machine
-
-### MVP 2 - Persisted Event Inbox
-
-Deliverable:
-
-- Table `early_warning_event`.
-- Job scheduled every 5-15 minutes:
-  - reads views
-  - upserts open warning events
-  - marks resolved if rule no longer true after grace window
-- Actions:
-  - acknowledge
-  - suppress
-  - resolve with note
-
-### MVP 3 - Operator Guardrail
-
-Deliverable:
-
-- Reuse / extend `PLANHOURS_GUARD_IMPLEMENTATION_PLAN.md`.
-- Saat pilih job:
-  - show planhours status
-  - block only for hard rules such as TECO or effective limit exhausted
-  - request overrun flow for planhours exhausted
-
-### MVP 4 - Notification
-
-Deliverable:
-
-- Email / Teams / WhatsApp gateway later.
-- Notification only for CRITICAL.
-- Daily digest untuk WARNING.
-
-## 7. SQL Sketch
-
-### 7.1 Planhours Consumption View
-
-```sql
-CREATE OR REPLACE VIEW public.vw_ew_planhours_consumption AS
-WITH sow_plan AS (
-  SELECT
-    order_no,
-    operation_no,
-    MAX(planhours) AS planhours,
-    MAX(part_name) AS part_name,
-    MAX(workcenter) AS expected_workcenter
-  FROM public.sow
-  WHERE order_no IS NOT NULL
-    AND operation_no IS NOT NULL
-  GROUP BY order_no, operation_no
-),
-ts AS (
-  SELECT
-    order_no,
-    operation_no,
-    SUM(COALESCE(duration, 0)) AS timesheet_hours,
-    COUNT(*) AS timesheet_rows,
-    MAX(longdate_checkout) AS last_timesheet_checkout
-  FROM public.timesheet_transaction
-  WHERE order_no IS NOT NULL
-    AND operation_no IS NOT NULL
-    AND COALESCE(state_flag, 0) <> 5
-  GROUP BY order_no, operation_no
-),
-mch AS (
-  SELECT
-    order_no,
-    NULLIF(operation_no, '')::int AS operation_no,
-    SUM(COALESCE(duration_hours, 0)) AS machine_hours,
-    COUNT(*) AS machine_rows,
-    MAX(enddatetime) AS last_machine_end
-  FROM public.mch_transaction
-  WHERE order_no IS NOT NULL
-    AND operation_no ~ '^[0-9]+$'
-  GROUP BY order_no, NULLIF(operation_no, '')::int
-)
-SELECT
-  sp.order_no,
-  sp.operation_no,
-  sp.part_name,
-  sp.expected_workcenter,
-  sp.planhours,
-  COALESCE(ts.timesheet_hours, 0) AS timesheet_hours,
-  COALESCE(mch.machine_hours, 0) AS machine_hours,
-  COALESCE(ts.timesheet_hours, 0) + COALESCE(mch.machine_hours, 0) AS combined_hours,
-  sp.planhours - (COALESCE(ts.timesheet_hours, 0) + COALESCE(mch.machine_hours, 0)) AS remaining_hours,
-  100 * (COALESCE(ts.timesheet_hours, 0) + COALESCE(mch.machine_hours, 0)) / NULLIF(sp.planhours, 0) AS consume_pct,
-  CASE
-    WHEN COALESCE(sp.planhours, 0) <= 0 THEN 'NO_PLAN'
-    WHEN COALESCE(ts.timesheet_hours, 0) + COALESCE(mch.machine_hours, 0) >= sp.planhours THEN 'CRITICAL'
-    WHEN 100 * (COALESCE(ts.timesheet_hours, 0) + COALESCE(mch.machine_hours, 0)) / NULLIF(sp.planhours, 0) >= 85 THEN 'WARNING'
-    WHEN 100 * (COALESCE(ts.timesheet_hours, 0) + COALESCE(mch.machine_hours, 0)) / NULLIF(sp.planhours, 0) >= 70 THEN 'INFO'
-    ELSE 'OK'
-  END AS warning_level,
-  GREATEST(ts.last_timesheet_checkout, mch.last_machine_end::timestamptz) AS last_activity_at
-FROM sow_plan sp
-LEFT JOIN ts
-  ON ts.order_no = sp.order_no
- AND ts.operation_no = sp.operation_no
-LEFT JOIN mch
-  ON mch.order_no = sp.order_no
- AND mch.operation_no = sp.operation_no;
+```
+Jika ada 1 KPI 🔴  → System CRITICAL
+Jika 0 🔴 tapi ada 🟡 → System WARNING
+Jika semua 🟢 → System NORMAL
 ```
 
-### 7.2 Machine Accuracy View
+### 4.4 Severity Scoring (weighted)
 
-Use query from `jobs/etl/sql_anomali_mch_productiondata.sql`, then add severity:
+```
+Alert_Score = (Accuracy × 0.3) + (Adoption × 0.25) + (OEE × 0.2) + (OLE × 0.15) + (Uptime × 0.1)
 
-```sql
-CASE
-  WHEN total_count >= 20 AND accuracy_pct = 0 THEN 'CRITICAL'
-  WHEN total_count >= 50 AND accuracy_pct < 80 THEN 'CRITICAL'
-  WHEN total_count >= 50 AND accuracy_pct < 95 THEN 'WARNING'
-  WHEN total_count >= 50 AND accuracy_pct < 98 THEN 'INFO'
-  ELSE 'OK'
-END AS warning_level
+0.0 – 0.4  → 🟢 Normal
+0.4 – 0.7  → 🟡 Warning  
+> 0.7      → 🔴 Critical
 ```
 
-### 7.3 Open Transaction View
+---
 
-```sql
-SELECT
-  'TIMESHEET' AS source,
-  tsnumber::text AS source_id,
-  order_no,
-  operation_no,
-  workcentercode AS workcenter,
-  serialnumber,
-  full_name,
-  longdate_checkin AS started_at,
-  EXTRACT(EPOCH FROM (now() - longdate_checkin)) / 3600 AS open_hours,
-  CASE
-    WHEN longdate_checkin < now() - interval '12 hours' THEN 'CRITICAL'
-    WHEN longdate_checkin < now() - interval '8 hours' THEN 'WARNING'
-    ELSE 'OK'
-  END AS warning_level
-FROM public.timesheet_transaction
-WHERE longdate_checkout IS NULL
-  AND longdate_checkin IS NOT NULL
-UNION ALL
-SELECT
-  'MACHINE' AS source,
-  proddataid::text AS source_id,
-  order_no,
-  NULLIF(operation_no, '')::int,
-  workcentercode,
-  sn_employee,
-  full_name,
-  startdatetime::timestamptz,
-  EXTRACT(EPOCH FROM (now() - startdatetime::timestamptz)) / 3600,
-  CASE
-    WHEN startdatetime < now() - interval '12 hours' THEN 'CRITICAL'
-    WHEN startdatetime < now() - interval '8 hours' THEN 'WARNING'
-    ELSE 'OK'
-  END
-FROM public.mch_transaction
-WHERE enddatetime IS NULL
-  AND startdatetime IS NOT NULL
-  AND operation_no ~ '^[0-9]+$';
+## 5. STEP-BY-STEP IMPLEMENTATION PLAN
+
+### Phase 1: DATABASE SETUP (2-3 hari)
+
+#### Step 1.1 — Create EWS Schema
+Buat schema `ews` di database `ptssb`. Lokasi file SQL: `database/schema/ews_schema.sql`
+
+**Tindakan**: Buat schema + semua tabel baru yang disebut di Section 3.2
+
+#### Step 1.2 — Seed Data (Test)
+Import sample data untuk testing alert logic:
+- `connectivity_log` — sample ping data dengan beberapa failure
+- `data_validation_log` — sample error records (missing, invalid, etc.)
+
+#### Step 1.3 — Create DB Views / Functions
+Buat PostgreSQL functions untuk kalkulasi KPI:
+- `ews.calc_uptime(machine_id, from_ts, to_ts)` → returns uptime %
+- `ews.calc_accuracy(machine_id, from_ts, to_ts)` → returns accuracy % + error rate
+- `ews.calc_adoption(machine_id, from_ts, to_ts)` → returns adoption % + missing minutes
+- `ews.calc_oee(machine_id, from_ts, to_ts)` → returns OEE availability
+- `ews.calc_ole(machine_id, operator_id, from_ts, to_ts)` → returns OLE
+
+---
+
+### Phase 2: PING / UPTIME MONITOR (2-3 hari)
+
+#### Step 2.1 — Machine Ping Script
+Buat cron job yang ping HMI devices setiap 10 detik.
+
+**File**: `jobs/machine_ping/ping_monitor.js`
+
+**Logic**:
+```
+For each HMI device:
+  ping device → success/fail
+  insert ke ews.connectivity_log
+  jika 6 consecutive fail → trigger alert
 ```
 
-## 8. UI Concept
+**Gunakan existing**: `scripts/ping_m5051_machines.js` sebagai referensi
 
-Route suggestion:
-
-```text
-/early-warning
-```
-
-Layout:
-
-- Header white, page background `bg-slate-50`.
-- Summary cards:
-  - Critical
-  - Warning
-  - Planhours exhausted
-  - Machine accuracy below threshold
-  - Open stale transaction
-  - Missing mapping
-- Tabs:
-  - All
-  - Planhours
-  - Machine Accuracy
-  - Mapping
-  - Open Transactions
-  - SAP Readiness
-- Table columns:
-  - Severity
-  - Type
-  - Order / Operation
-  - Workcenter / Machine
-  - Metric
-  - Last seen
-  - Status
-  - Action
-- Detail drawer:
-  - source rows count
-  - SQL-derived metrics
-  - recommended action
-
-## 9. Recommended Actions Per Warning
-
-| Warning | Recommended user action |
-|---|---|
-| Planhours exhausted | Review SOW planhours, check mapping, request/approve overrun if actual work is valid |
-| TS vs MCH variance | Compare timesheet records vs machine records; check machine jobid mapping |
-| Machine accuracy low | Check machine data capture, operator jobid input, ETL mapping |
-| Missing SOW mapping | Create/update SOW or correct transaction order-operation |
-| SOW without PH3 | Check SAP staging / PH3 ETL completeness |
-| TECO activity | Stop activity, check SAP status, decide reversal/rework flow |
-| Open stale transaction | Force checkout / correct transaction |
-| Negative duration | Correct timestamp/duration calculation |
-| Operator > 16h/day | Check overlapping checkins or fragmented rows |
-
-## 10. Implementation Plan
-
-### Phase 0 - Confirm Rules
-
-1. Confirm whether `combined_hours = timesheet + machine` is correct for plan consumption, or if system should treat them as separate actual sources.
-2. Confirm `state_flag` values and which states must be excluded.
-3. Confirm how to identify productive vs unproductive timesheet rows.
-4. Confirm whether TECO source is only `ph3_order.order_description`, or there is a better SAP status column.
-5. Confirm alert thresholds with PE / production / PPC.
-
-### Phase 1 - Database Views
-
-1. Add migration:
-   - `database/migrations/api/20260623_early_warning_views.sql`
-2. Create views:
-   - `vw_ew_planhours_consumption`
-   - `vw_ew_mch_data_accuracy_daily`
-   - `vw_ew_open_transactions`
-   - `vw_ew_missing_mapping`
-   - `vw_ew_timesheet_machine_variance`
-3. Add indexes if query plan is slow:
-   - `timesheet_transaction(order_no, operation_no)`
-   - `timesheet_transaction(longdate_checkin, longdate_checkout)`
-   - `mch_transaction(order_no, operation_no)`
-   - `mch_transaction(startdatetime, enddatetime)`
-   - `mch_productiondata(startdatetime, machineno, jobid)`
-   - `sow(order_no, operation_no)`
-   - `ph3_order(order_no, operation_no)`
-
-### Phase 2 - API
-
-1. Add routes:
-   - `GET /early-warning/summary`
-   - `GET /early-warning/events`
-   - `GET /early-warning/order/:orderNo/:operationNo`
-2. First version can query views directly.
-3. Return normalized response:
-
+#### Step 2.2 — Uptime Calculator
+Buat API endpoint `/api/ews/uptime` yang return:
 ```json
 {
-  "severity": "CRITICAL",
-  "type": "PLANHOURS_EXHAUSTED",
-  "order_no": "1000124915",
-  "operation_no": 500,
-  "title": "Planhours exhausted",
-  "metrics": {
-    "planhours": 0.5,
-    "timesheet_hours": 1080.97,
-    "machine_hours": 0.66,
-    "consume_pct": 216326.4
-  }
+  "machine_id": "HMI-01",
+  "uptime_pct": 98.5,
+  "status": "🟡 Warning",
+  "downtime_minutes": 2.5,
+  "last_failure": "2026-06-27T08:00:00+07:00",
+  "trend": [...]
 }
 ```
 
-### Phase 3 - Frontend Dashboard
+---
 
-1. Add page under operations/manufacturing area.
-2. Keep it read-only.
-3. Use corporate light color system.
-4. Add filters:
-   - severity
-   - warning type
-   - date range
-   - workcenter
-   - machine
-   - order_no
+### Phase 3: API — ALERT ENGINE (5-7 hari)
 
-### Phase 4 - Persisted Event Table
+#### Step 3.1 — Create EWS Route File
+**File**: `apps/api/routes/ews.js` (atau tambahkan ke server.js)
 
-1. Create `early_warning_event`.
-2. Add scheduled backend job.
-3. Upsert warning events from views.
-4. Add acknowledge / resolve endpoints.
+Endpoints:
 
-### Phase 5 - Guardrails
+| Method | Route | Function |
+|--------|-------|----------|
+| GET | `/api/ews/status` | Overall system status (5 KPI lights) |
+| GET | `/api/ews/uptime` | Uptime per machine + alert |
+| GET | `/api/ews/accuracy` | Accuracy + error breakdown |
+| GET | `/api/ews/adoption` | Adoption + missing time analysis |
+| GET | `/api/ews/oee` | OEE availability + downtime classification |
+| GET | `/api/ews/ole` | OLE per operator + activity breakdown |
+| GET | `/api/ews/alerts` | Active alerts list |
+| GET | `/api/ews/alerts/:id` | Alert detail + root cause |
+| POST | `/api/ews/actions` | Create correction action |
+| PUT | `/api/ews/actions/:id` | Update action status |
+| GET | `/api/ews/actions` | Action tracking list |
 
-1. Integrate with job selection.
-2. Show non-blocking warning first.
-3. Only block:
-   - TECO order
-   - planhours effective limit exhausted after overrun workflow exists
-   - missing critical SAP confirmation data
+#### Step 3.2 — Alert Calculation Logic
+Implement 5 fungsi kalkulasi KPI di `apps/api/services/ewsCalculator.js`:
 
-## 11. Risk & Mitigation
+```javascript
+// Template untuk setiap KPI calculator
+async function calcKPI(machineId, fromTs, toTs) {
+  // 1. Query raw data dari database
+  // 2. Hitung KPI value
+  // 3. Tentukan status (Normal/Warning/Critical) berdasarkan threshold
+  // 4. Generate alert message & suggested action
+  // 5. Insert ke ews.alert_log jika ada alert
+  // 6. Return { value, status, message, action }
+}
+```
 
-| Risk | Mitigation |
-|---|---|
-| Too many false positives | Start with read-only dashboard, tune thresholds |
-| Unproductive rows pollute missing mapping | Add productive filter before counting |
-| Planhours too small causes extreme percentages | Use `over_hours` and minimum planhours guard |
-| Machine data anomaly bursts create noisy alerts | Use minimum `total_count`, rolling windows, and machine-level suppression |
-| PH3 missing because source table incomplete | Separate `SOW_WITHOUT_PH3` from transaction blocking |
-| Query performance | Materialized view or persisted event table after MVP |
+#### Step 3.3 — Accuracy Calculator (Detail)
+```
+Accuracy = 1 - (Error Record / Total Record)
 
-## 12. Open Questions
+Error types:
+  - Missing: field kosong / null
+  - Invalid: runtime negative, output = 0 terus
+  - Inconsistent: processing + waiting ≠ total
+  - Outlier: runtime > 10 jam (tidak masuk akal)
+  - Duplicate: timestamp sama → double record
 
-1. Apakah actual plan consumption harus memakai:
-   - timesheet only,
-   - machine hours only,
-   - atau combined timesheet + machine?
-2. Activity type apa saja yang dianggap productive?
-3. Apakah `ph3_order.order_description ILIKE '%TECO%'` cukup valid untuk status closed?
-4. Apakah operator boleh start job jika planhours sudah 100% tetapi belum ada approval overrun?
-5. Warning dikirim ke siapa:
-   - PE,
-   - PPC,
-   - foreman,
-   - atau admin timesheet?
-6. Apakah warning machine accuracy perlu real-time per 2 jam atau cukup daily?
+Breakdown by: Error Type, Machine, Operator, Shift
+```
 
-## 13. Recommended MVP Priority
+#### Step 3.4 — Adoption Calculator (Detail)
+```
+Adoption = 1 - (Missing Time / Total Time)
 
-Urutan yang paling bernilai:
+Missing Time = waktu tanpa aktivitas tercatat  
+Total Time = SUM duration (excluding status "4" = No Job)
 
-1. `MCH_DATA_ACCURACY_LOW` karena sudah ada SQL dan terlihat ada drop besar.
-2. `PLANHOURS_EXHAUSTED` untuk order-operation yang actual sudah melewati plan.
-3. `OPEN_TRANSACTION_STALE` untuk mengurangi data kotor.
-4. `MISSING_MAPPING` untuk membersihkan sumber gagal join/SAP post.
-5. `TECO_ACTIVITY` untuk mencegah transaksi di order tertutup.
-6. `TS_MCH_VARIANCE` setelah rule combined-hours dipastikan.
+Breakdown by: Machine, Operator, Shift, Time Slot
 
+NOTE: Step ini sudah ada SQL-nya di dokumen asli
+(pakai HMI_Event_With_Duration + Power Query M script)
+Terjemahkan ke PostgreSQL query/JS.
+```
+
+#### Step 3.5 — Unified Alert Engine
+Buat `/api/ews/status` yang mengkombinasikan semua KPI:
+
+```javascript
+// Pseudo-code
+function getOverallStatus() {
+  const kpis = {
+    uptime: calcUptime(),
+    accuracy: calcAccuracy(),
+    adoption: calcAdoption(),
+    oee: calcOEE(),
+    ole: calcOLE()
+  };
+  
+  const critical = Object.values(kpis).filter(k => k.status === 'Critical');
+  const warning = Object.values(kpis).filter(k => k.status === 'Warning');
+  
+  if (critical.length > 0) return { status: 'CRITICAL', color: '#C00000' };
+  if (warning.length > 0) return { status: 'WARNING', color: '#FFC000' };
+  return { status: 'NORMAL', color: '#00B050' };
+}
+```
+
+---
+
+### Phase 4: FRONTEND — EWS DASHBOARD (5-7 hari)
+
+**Path**: `apps/web/src/pages/EWS/` atau tambahkan komponent ke dashboard existing
+
+#### Step 4.1 — Control Tower (Block 1)
+Components:
+```
+┌──────────────────────────────────────────────────────────┐
+│  🟢 SYSTEM NORMAL                          Score: 0.85   │
+├──────────┬──────────┬──────────┬──────────┬──────────────┤
+│ UPTIME   │ ACCURACY │ ADOPTION │ OEE      │ OLE          │
+│   99.2%  │   97.5%  │   96.1%  │   72.3%  │   88.0%      │
+│   🟢     │   🟢     │   🟢     │   🟡     │   🟢         │
+├──────────┴──────────┴──────────┴──────────┴──────────────┤
+│ 🔥 Top 5 Issues                                          │
+│ HMI-03: OEE 48.2%   HMI-07: Adoption 89.1%              │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Step 4.2 — Alert Monitor (Block 2)
+Table of active alerts dengan: Machine, KPI, Status, Severity, Aging, Action
+
+#### Step 4.3 — Detail View (Block 3)
+Drill-down per machine/operator/shift:
+- **Uptime**: Timeline ping (kayak ECG monitor)
+- **Accuracy**: Error by type, machine, operator
+- **Adoption**: Gap timeline (jam kosong)
+- **OEE**: Downtime reason breakdown
+- **OLE**: Activity breakdown (Processing vs Waiting vs Idle)
+
+#### Step 4.4 — Action Board (Block 4)
+Table: Alert → Action → PIC → Status (Open/In Progress/Closed)
+Form input action: Reason, PIC, Action, Status
+
+#### Step 4.5 — Escalation View (Block 5)
+List open issues, aging status, overdue items
+
+---
+
+### Phase 5: ACTION & ESCALATION SYSTEM (3-4 hari)
+
+#### Step 5.1 — Action CRUD API
+Implement POST/PUT/GET untuk `ews.action_table`:
+- Create action item saat alert muncul
+- Update status (Open → In Progress → Closed)
+- Log history ke `ews.action_history`
+
+#### Step 5.2 — Escalation Logic
+```
+Critical > 15 menit → notifikasi supervisor
+Critical > 1 jam   → notifikasi manager
+Critical > 1 shift → notifikasi plant head
+```
+
+#### Step 5.3 — Auto-Notification (Optional - Power Automate)
+Kalau pakai Power Automate:
+- Trigger: SQL query check alert_log
+- Filter: overdue (alert masih open > threshold)
+- Action: kirim email / Teams notification
+
+Alternatif pure Node.js: gunakan `nodemailer` + cron job di `jobs/`
+
+#### Step 5.4 — TTS Announcement Integration
+Gunakan TTS worker existing (`apps/tts-worker/`) untuk announce critical alert:
+- Trigger: alert severity = Critical
+- Format: "Perhatian! [KPI] pada [Machine] status kritis. [Action]"
+
+---
+
+### Phase 6: INTEGRATION & TESTING (3-5 hari)
+
+#### Step 6.1 — API Integration Tests
+Test setiap endpoint dengan sample data
+
+#### Step 6.2 — Frontend-Backend Integration
+Wire up dashboard components ke API
+
+#### Step 6.3 — Database Performance
+- Index optimization untuk query KPI
+- Materialized view untuk `ews.kpi_summary` (refresh setiap 60 detik)
+- Connection pooling via `db.js` existing
+
+#### Step 6.4 — UAT Scenarios
+Testing scenario (dari dokumen):
+- **Case 1**: Accuracy 🔴 + Adoption 🔴 + Uptime 🟢 = system OK, user issue
+- **Case 2**: OEE 🔴 + OLE 🟢 = machine problem, operator OK
+- **Case 3**: Uptime 🔴 + Adoption 🔴 + Accuracy 🔴 = total system failure
+
+---
+
+## 6. STANDARD ACTION MAPPING (UNTUK ALERT ENGINE)
+
+### Uptime
+| Status | Action | PIC |
+|--------|--------|-----|
+| 🔴 Critical | Cek jaringan → cek power device → restart HMI → notify IT | IT (Wira) |
+| 🟡 Warning | Monitor → cek koneksi | IT |
+| 🟢 Normal | No action | - |
+
+Escalation: Critical > 5 min → supervisor, > 15 min → IT, > 30 min → manager
+
+### Accuracy
+| Status | Action | PIC |
+|--------|--------|-----|
+| 🔴 Critical | Cek input operator → validasi data → retraining → fix form HMI | Foreman/Spv |
+| 🟡 Warning | Monitoring → reminder operator | Foreman |
+| 🟢 Normal | No action | - |
+
+Escalation: Critical > 1 shift → supervisor, > 1 hari → manager
+
+### Adoption
+| Status | Action | PIC |
+|--------|--------|-----|
+| 🔴 Critical | Cek alasan tidak input → cek HMI/system → briefing operator | Foreman/Spv |
+| 🟡 Warning | Reminder → monitoring | Foreman |
+| 🟢 Normal | No action | - |
+
+Escalation: Critical > 1 shift → supervisor, > 2 hari → manager
+
+### OEE
+| Status | Action | PIC |
+|--------|--------|-----|
+| 🔴 Critical | Cek mesin (breakdown) → cek material → cek operator → technical support | Foreman/Spv/PPIC |
+| 🟡 Warning | Monitor → preventive check | PPIC |
+| 🟢 Normal | No action | - |
+
+Escalation: Critical > 10 min → supervisor, > 30 min → maintenance, > 1 jam → manager
+
+### OLE
+| Status | Action | PIC |
+|--------|--------|-----|
+| 🔴 Critical | Cek workflow → cek material readiness → cek coordination → coaching operator | Foreman/Spv |
+| 🟡 Warning | Monitoring → improvement ringan | Spv |
+| 🟢 Normal | No action | - |
+
+Escalation: Critical > 1 shift → supervisor, > 2 hari → manager
+
+---
+
+## 7. QUICK START (UNTUK AI AGENT)
+
+Saat AI agent diminta mengerjakan EWS, gunakan prompt seperti ini:
+
+```
+Implement Early Warning System di D:\website\MPS2.
+Baca file D:\website\MPS2\docs\timesheet\EARLY_WARNING_SYSTEM_PLAN.md
+untuk spesifikasi lengkap.
+
+Phase yang akan dikerjakan: [sebutkan phase]
+
+Database: PostgreSQL di 100.86.231.55:5433
+  database: ptssb
+  user: tag
+  pass: @dmintag
+
+Tailscale SOCKS5 proxy: 127.0.0.1:1055
+
+Gunakan tunnel untuk koneksi database:
+  python C:\Users\tee.san\tools\tailscale\tunnel.py 100.86.231.55 5433 5434
+  lalu DB_HOST=localhost DB_PORT=5434
+
+Stack:
+  - Backend: Node.js + Express (apps/api/)
+  - Frontend: React + Vite + Tailwind (apps/web/)
+  - Database: PostgreSQL (skema ews.*)
+  - Jobs: Python/Node.js cron scripts (jobs/)
+
+Kerjakan step by step, mulai dari database schema.
+```
+
+---
+
+## 8. IMPORTANT INSIGHTS (DARI DOKUMEN ASLI)
+
+1. **Ping ≠ 100% reliability** — ping success bisa aja HMI hang. Next level: heartbeat app + user activity + screen update
+
+2. **Accuracy rendah ≠ operator malas** — bisa jadi UI HMI sulit, system lag, atau WI tidak jelas. Jangan "blame people" → lihat system dulu.
+
+3. **Adoption = indikator TRUST** — high adoption → data valid. Low adoption → seluruh system gagal karena data tidak bisa dipakai.
+
+4. **OEE rendah + OLE tinggi** = mesin problem. **OEE tinggi + OLE rendah** = operator tidak efektif. Jangan lihat satu KPI isolasi → selalu cross-reference.
+
+5. **Micro vs Major** distinction penting — jangan setiap 1-2 detik downtime langsung dianggap problem. Gunakan threshold durasi minimum.
+
+6. **Accuracy, Adoption, OEE, OLE** semuanya bisa digabung untuk diagnosis yang lebih akurat — misal: Adoption rendah + OLE rendah = input issue (bukan real inefficiency).
+
+---
+
+## 9. FILE STRUCTURE (SETELAH IMPLEMENTASI)
+
+```
+D:\website\MPS2\
+├── database/
+│   └── schema/
+│       ├── ews_schema.sql          ← TABLES + INDEXES
+│       ├── ews_functions.sql       ← CALCULATION FUNCTIONS
+│       └── ews_seed.sql            ← SAMPLE DATA
+├── apps/
+│   └── api/
+│       ├── routes/
+│       │   └── ews.js              ← API ENDPOINTS
+│       ├── services/
+│       │   └── ewsCalculator.js    ← KPI CALCULATION LOGIC
+│       └── middleware/
+│           └── ewsAuth.js          ← AUTH (kalau perlu)
+│   └── web/
+│       └── src/
+│           ├── pages/
+│           │   └── EWS/
+│           │       ├── ControlTower.jsx
+│           │       ├── AlertMonitor.jsx
+│           │       ├── DetailView.jsx
+│           │       ├── ActionBoard.jsx
+│           │       └── EscalationView.jsx
+│           ├── components/
+│           │   └── ews/
+│           │       ├── KpiCard.jsx
+│           │       ├── TrafficLight.jsx
+│           │       ├── AlertTable.jsx
+│           │       └── ActionForm.jsx
+│           └── hooks/
+│               └── useEWS.js       ← API HOOKS
+├── jobs/
+│   └── machine_ping/
+│       ├── ping_monitor.js         ← UPTIME CRON
+│       └── Dockerfile
+└── docs/
+    └── timesheet/
+        └── EARLY_WARNING_SYSTEM_PLAN.md  ← THIS FILE
+```
+
+---
+
+**Status**: 📋 PLANNING  
+**Last Updated**: 2026-06-27  
+**Next Action**: Phase 1 — Database Schema

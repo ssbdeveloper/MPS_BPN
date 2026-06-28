@@ -45,6 +45,10 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/OperationsHubPage')),
   },
   {
+    path: '/sap-log',
+    lazy: page(() => import('../pages/SapLogPage')),
+  },
+  {
     path: '/order-progress-dashboard',
     lazy: page(() => import('../pages/OrderProgressDashboardPage')),
   },

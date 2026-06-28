@@ -50,12 +50,13 @@ WHERE datname = current_database()
 Butuh user superuser. Setelah `ALTER SYSTEM`, restart container DB.
 
 ```sql
-ALTER SYSTEM SET max_connections = '30';
-ALTER SYSTEM SET shared_buffers = '512MB';
-ALTER SYSTEM SET effective_cache_size = '2GB';
-ALTER SYSTEM SET work_mem = '8MB';
-ALTER SYSTEM SET statement_timeout = '60s';
-ALTER SYSTEM SET idle_in_transaction_session_timeout = '60s';
+ALTER SYSTEM SET max_connections = '50';
+ALTER SYSTEM SET shared_buffers = '4GB';
+ALTER SYSTEM SET effective_cache_size = '12GB';
+ALTER SYSTEM SET work_mem = '16MB';
+ALTER SYSTEM SET maintenance_work_mem = '1GB';
+ALTER SYSTEM SET statement_timeout = '120s';
+ALTER SYSTEM SET idle_in_transaction_session_timeout = '5min';
 ALTER SYSTEM SET log_min_duration_statement = '1000';
 ALTER SYSTEM SET track_io_timing = 'on';
 ```
