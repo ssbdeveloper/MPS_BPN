@@ -20,6 +20,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Set VITE_ENABLE_EXISTING_SOW_HISTORY_LINK=true to restore the SOW History shortcut.
+const ENABLE_EXISTING_SOW_HISTORY_LINK = import.meta.env.VITE_ENABLE_EXISTING_SOW_HISTORY_LINK === 'false';
 export const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
 const getSowOrderNo = (row) => row?.sow_order_no || (row?.production_order ? normalizeProductionOrder(row.production_order) : '');
 const toOrderNumber = (value) => {
@@ -794,7 +796,7 @@ function ReceivingComponentTable({ onSelect }) {
   };
 
   const handleSelect = (row) => {
-    if (row?.sow_exists) {
+    if (ENABLE_EXISTING_SOW_HISTORY_LINK && row?.sow_exists) {
       const orderNo = getSowOrderNo(row);
       navigate(`/sow-management/history?search=${encodeURIComponent(orderNo)}`);
       return;
@@ -940,15 +942,16 @@ function ReceivingComponentTable({ onSelect }) {
                   </div>
                   {preview.sow_exists ? (
                     <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-700">
-                      Order ini sudah punya SOW. Buka SOW History untuk melihat detail order tersebut.
+                      {ENABLE_EXISTING_SOW_HISTORY_LINK
+                        ? 'Order ini sudah punya SOW. Buka SOW History untuk melihat detail order tersebut.'
+                        : 'Order ini sudah punya SOW. Saat ini tombol tetap memilih component.'}
                     </div>
                   ) : null}
                   <button
                     onClick={() => handleSelect(preview)}
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-xs font-bold text-white transition-all hover:bg-[#0077b6] active:scale-[0.98]"
                   >
-                    {preview.sow_exists ? 'Pilih Component' : 'Pilih Component'}
-                    {/* {preview.sow_exists ? 'Lihat SOW' : 'Pilih Component'} */}
+                    {ENABLE_EXISTING_SOW_HISTORY_LINK && preview.sow_exists ? 'Lihat SOW' : 'Pilih Component'}
                     <ChevronRight size={13} />
                   </button>
                 </div>
