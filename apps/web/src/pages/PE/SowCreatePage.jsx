@@ -947,7 +947,8 @@ function ReceivingComponentTable({ onSelect }) {
                     onClick={() => handleSelect(preview)}
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-xs font-bold text-white transition-all hover:bg-[#0077b6] active:scale-[0.98]"
                   >
-                    {preview.sow_exists ? 'Lihat SOW' : 'Pilih Component'}
+                    {preview.sow_exists ? 'Pilih Component' : 'Pilih Component'}
+                    {/* {preview.sow_exists ? 'Lihat SOW' : 'Pilih Component'} */}
                     <ChevronRight size={13} />
                   </button>
                 </div>
