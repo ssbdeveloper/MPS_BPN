@@ -1711,10 +1711,20 @@ export function TravelCardPreview({
   const dateStr  = today.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
   const qrValue  = cardInfo.productionOrder || selectedPart?.part_number || 'TRAVEL-CARD';
 
-  // Calculate total hours including NNVA
+  const getNnvaTotalForOp = useCallback((op) => {
+    const stdId = op._srcId || op.id;
+    return (nnvaMap[stdId] || []).reduce((sum, n) => sum + (parseFloat(n.standard_hours) || 0), 0);
+  }, [nnvaMap]);
+
+  const getTravelCardOperationHours = useCallback((op) => {
+    const operationHours = parseFloat(op.std_hours) || 0;
+    const nnvaHours = getNnvaTotalForOp(op);
+    return Math.max(operationHours - nnvaHours, 0);
+  }, [getNnvaTotalForOp]);
+
+  // Total stays equal to saved SOW planhours: operation rows are reduced by NNVA child rows.
   const directHrs = editOps.reduce((sum, op) => sum + (parseFloat(op.std_hours) || 0), 0);
-  const nnvaHrs = Object.values(nnvaMap).flat().reduce((sum, n) => sum + (parseFloat(n.standard_hours) || 0), 0);
-  const totalHrs = directHrs + nnvaHrs;
+  const totalHrs = directHrs;
   const totalHoursDisplay = totalHrs % 1 === 0 ? String(totalHrs) : totalHrs.toFixed(2);
 
   useEffect(() => {
@@ -1727,7 +1737,9 @@ export function TravelCardPreview({
 
       // Generate rows including NNVA children — store as structured objects for height-aware pagination
       const opsRows = [];
-      editOps.forEach((op) => {
+      editOps.forEach((rawOp) => {
+        const operationHours = getTravelCardOperationHours(rawOp);
+        const op = rawOp.std_hours !== '' && rawOp.std_hours != null ? { ...rawOp, std_hours: operationHours } : rawOp;
         const machineId = esc(op.machineid || '—');
         opsRows.push({
           html: `<tr class="op-row">
@@ -1818,7 +1830,7 @@ export function TravelCardPreview({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [qrValue, selectedPart, editOps, cardInfo, dateStr, totalHoursDisplay, revisionLabel, issuedByName, issuedAt]);
+  }, [qrValue, selectedPart, editOps, cardInfo, dateStr, totalHoursDisplay, revisionLabel, issuedByName, issuedAt, nnvaMap, getTravelCardOperationHours]);
 
   return (
     <div style={{ background: '#e8e6e0', padding: '20px 16px', minHeight: '100%' }}>
@@ -2655,6 +2667,21 @@ const SowCreatePage = () => {
     toast.success('Master component dipilih. Operasi standar siap dimuat.');
   }, []);
 
+  const handleChooseComponentAgain = useCallback(() => {
+    setSelectedPart((prev) => prev ? ({
+      ...prev,
+      component_id: null,
+      resolved_component_id: null,
+    }) : prev);
+    setCheckedOps(new Set());
+    setCheckedTemplates(new Set());
+    checkedTemplateOpsRef.current.clear();
+    setEditOps([]);
+    setOperationCardKeys([]);
+    setActiveOperationKey(null);
+    setOperationCardImages({});
+  }, []);
+
   // ── Toggle single operation (syncs checkedOps ↔ editOps) ──
   const handleToggle = useCallback((op) => {
     // Update checkedOps independently
@@ -3000,15 +3027,26 @@ const SowCreatePage = () => {
                 </span>
               </div>
               {selectedPart && (
-                <button
-                  onClick={() => handleSelectPart(null)}
-                  className="flex items-center gap-1 text-[10px] font-semibold
-                             text-slate-400 hover:text-[#0096c7] transition-colors
-                             min-h-[32px] px-1.5 rounded hover:bg-slate-50"
-                >
-                  <Search size={10} />
-                  Ganti Part
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <button
+                    onClick={handleChooseComponentAgain}
+                    className="flex items-center gap-1 text-[10px] font-semibold
+                               text-slate-500 hover:text-[#0096c7] transition-colors
+                               min-h-[32px] px-1.5 rounded hover:bg-slate-50"
+                  >
+                    <Search size={10} />
+                    Pilih Component
+                  </button>
+                  <button
+                    onClick={() => handleSelectPart(null)}
+                    className="flex items-center gap-1 text-[10px] font-semibold
+                               text-slate-400 hover:text-[#0096c7] transition-colors
+                               min-h-[32px] px-1.5 rounded hover:bg-slate-50"
+                  >
+                    <ArrowLeft size={10} />
+                    Kembali ke Receiving
+                  </button>
+                </div>
               )}
             </div>
             {selectedPart && (

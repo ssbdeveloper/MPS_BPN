@@ -529,7 +529,7 @@ exports.getSowComponentOptions = async (req, res) => {
           cust.site_location AS customer_site_location,
           pc.part_description AS parent_part_name,
           pc.part_number AS parent_part_number,
-          COALESCE(cm.component_id, rc.component_id) AS component_id,
+          cm.component_id AS component_id,
           COALESCE(cm.part_name, rc.part_description) AS part_name,
           COALESCE(cm.part_number, rc.part_number) AS part_number,
           COALESCE(cm.model, rc.model_code) AS model,
@@ -546,19 +546,19 @@ exports.getSowComponentOptions = async (req, res) => {
           FROM components c
           WHERE c.component_id = rc.component_id
              OR (
-               rc.part_number IS NOT NULL
-               AND lower(c.model) = lower(COALESCE(rc.model_code, c.model))
-               AND regexp_replace(lower(c.part_number), '[^a-z0-9]', '', 'g') =
-                   regexp_replace(lower(rc.part_number), '[^a-z0-9]', '', 'g')
+               NULLIF(TRIM(COALESCE(rc.part_number, '')), '') IS NOT NULL
+               AND c.part_number = rc.part_number
+               AND c.model = rc.model_code
              )
              OR (
-               lower(c.model) = lower(COALESCE(rc.model_code, c.model))
-               AND lower(c.part_name) = lower(rc.part_description)
+               NULLIF(TRIM(COALESCE(rc.part_description, '')), '') IS NOT NULL
+               AND c.part_name = rc.part_description
+               AND c.model = rc.model_code
              )
           ORDER BY
             (c.component_id = rc.component_id) DESC,
-            (rc.part_number IS NOT NULL AND regexp_replace(lower(c.part_number), '[^a-z0-9]', '', 'g') =
-              regexp_replace(lower(rc.part_number), '[^a-z0-9]', '', 'g')) DESC,
+            (c.part_number = rc.part_number AND c.model = rc.model_code) DESC,
+            (c.part_name = rc.part_description AND c.model = rc.model_code) DESC,
             c.component_id ASC
           LIMIT 1
         ) cm ON true
@@ -572,7 +572,7 @@ exports.getSowComponentOptions = async (req, res) => {
             AND LTRIM(COALESCE(s.order_no, ''), '0') =
                 LTRIM(REPLACE(TRIM(COALESCE(rc.production_order, '')), '-', '000'), '0')
         ) sm ON true
-        LEFT JOIN sow_standard ss ON ss.component_id = COALESCE(cm.component_id, rc.component_id)
+        LEFT JOIN sow_standard ss ON ss.component_id = cm.component_id
         ${whereSql}
         GROUP BY
           rc.id, ro.id, cust.id, pc.id, cm.component_id, cm.part_name, cm.part_number, cm.model,

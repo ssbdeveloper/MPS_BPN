@@ -43,10 +43,10 @@ function toEditEntry(row, index) {
 
 function buildSelectedPart(first, component) {
   return {
-    component_id: component?.component_id || first.component_id || null,
-    part_number: first.part_number || component?.part_number || '',
-    part_name: first.part_name || component?.part_name || '',
-    model: first.model || component?.model || '',
+    component_id: component?.component_id || null,
+    part_number: component?.part_number || first.part_number || '',
+    part_name: component?.part_name || first.part_name || '',
+    model: component?.model || first.model || '',
     production_order: first.order_no || '',
     ssbr_ident: first.ssbr_id || '',
     customer_name: first.customer || '',
@@ -55,6 +55,28 @@ function buildSelectedPart(first, component) {
     part_type: first.type || '',
     parent_part_name: first.group || '',
   };
+}
+
+function findExactComponent(components, source) {
+  const sourceComponentId = source.component_id == null ? '' : String(source.component_id);
+  const sourcePartNumber = String(source.part_number || '');
+  const sourcePartName = String(source.part_name || '');
+  const sourceModel = String(source.model || '');
+
+  return components.find((item) => sourceComponentId && String(item.component_id) === sourceComponentId)
+    || components.find((item) => (
+      sourcePartNumber
+      && sourceModel
+      && String(item.part_number || '') === sourcePartNumber
+      && String(item.model || '') === sourceModel
+    ))
+    || components.find((item) => (
+      sourcePartName
+      && sourceModel
+      && String(item.part_name || '') === sourcePartName
+      && String(item.model || '') === sourceModel
+    ))
+    || null;
 }
 
 export default function SowRevisionEditPage() {
@@ -118,7 +140,7 @@ export default function SowRevisionEditPage() {
 
       const first = rows[0];
       const componentsPayload = await request('/sow/components');
-      const component = (componentsPayload.data || []).find((item) => item.part_number === first.part_number);
+      const component = findExactComponent(componentsPayload.data || [], first);
       const part = buildSelectedPart(first, component);
       const ops = rows.map(toEditEntry);
       const keys = ops.map(makeOperationCardKey);

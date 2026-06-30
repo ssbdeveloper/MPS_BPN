@@ -178,7 +178,7 @@ async function enrichSowRowsWithNnva(query, rows) {
       ...row,
       operation_planhours: operationHours,
       nnva_planhours: row.nnva_planhours ?? nnvaHours,
-      display_planhours: row.display_planhours ?? ((Number(operationHours) || 0) + nnvaHours),
+      display_planhours: row.display_planhours ?? operationHours,
       nnva_items: row.nnva_items || items,
     };
   });
@@ -469,7 +469,7 @@ exports.getSowHistoryRows = async (req, res) => {
          COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
          COALESCE(s.planhours, 0) AS operation_planhours,
          COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
-         COALESCE(s.planhours, 0) + COALESCE(nnva.total_nnva_hours, 0) AS display_planhours
+         COALESCE(s.planhours, 0) AS display_planhours
        FROM sow s
        ${SOW_STANDARD_MATCH_JOIN}
        ${SOW_NNVA_TOTAL_JOIN}
@@ -511,7 +511,7 @@ exports.exportSowHistoryRows = async (req, res) => {
          COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
          COALESCE(s.planhours, 0) AS operation_planhours,
          COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
-         COALESCE(s.planhours, 0) + COALESCE(nnva.total_nnva_hours, 0) AS display_planhours
+         COALESCE(s.planhours, 0) AS display_planhours
        FROM sow s
        ${SOW_STANDARD_MATCH_JOIN}
        ${SOW_NNVA_TOTAL_JOIN}
@@ -531,7 +531,7 @@ exports.exportSowHistoryRows = async (req, res) => {
       { header: "SSBR ID", key: "ssbr_id", width: 18 },
       { header: "Operation Text", key: "operation_text", width: 36 },
       { header: "Operation No", key: "operation_no", width: 14 },
-      { header: "Plan Hours Total", key: "display_planhours", width: 16 },
+      { header: "Plan Hours", key: "planhours", width: 16 },
       { header: "Operation Plan Hours", key: "operation_planhours", width: 18 },
       { header: "NNVA Plan Hours", key: "nnva_planhours", width: 16 },
       { header: "WCT Group", key: "wct_group", width: 16 },
@@ -620,7 +620,7 @@ exports.getSowOrderForRevision = async (req, res) => {
                 COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
                 COALESCE(s.planhours, 0) AS operation_planhours,
                 COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
-                COALESCE(s.planhours, 0) + COALESCE(nnva.total_nnva_hours, 0) AS display_planhours
+                COALESCE(s.planhours, 0) AS display_planhours
          FROM sow s
          ${SOW_STANDARD_MATCH_JOIN}
          ${SOW_NNVA_TOTAL_JOIN}
