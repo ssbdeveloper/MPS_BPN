@@ -101,6 +101,8 @@ export default function SowRevisionEditPage() {
   const [activeOperationKey, setActiveOperationKey] = useState(null);
   const [operationCardImages, setOperationCardImages] = useState({});
   const [operationCardPaths, setOperationCardPaths] = useState({});
+  const [operationCardsLoadedForRevision, setOperationCardsLoadedForRevision] = useState(null);
+  const [operationCardsLoading, setOperationCardsLoading] = useState(false);
   const [dirtyCardKeys, setDirtyCardKeys] = useState(new Set());
   const [showInfoPanel, setShowInfoPanel] = useState(false);
   const [showPartPicker, setShowPartPicker] = useState(false);
@@ -111,6 +113,10 @@ export default function SowRevisionEditPage() {
   const wcData = useWorkcenterData();
 
   const opCardRevision = selectedRevision > 0 ? String(selectedRevision) : 'Original';
+  const operationCardsLoadKey = useMemo(
+    () => `${opCardRevision}|${editOps.map((op) => op._cardSourceId || makeOperationCardKey(op)).join(',')}`,
+    [editOps, opCardRevision]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -133,7 +139,6 @@ export default function SowRevisionEditPage() {
     try {
       const params = new URLSearchParams();
       if (revisionNo) params.set('revision_no', String(revisionNo));
-      const cardRevision = revisionNo > 0 ? String(revisionNo) : 'Original';
       const payload = await request(`/sow/history-order/${encodeURIComponent(decodedOrderNo)}${params.toString() ? `?${params.toString()}` : ''}`);
       const rows = payload.rows || [];
       if (!rows.length) throw new Error('Data SOW tidak ditemukan');
@@ -160,29 +165,9 @@ export default function SowRevisionEditPage() {
       setSelectedRevision(payload.selected_revision || payload.current_revision || 0);
       setRevisionOptions(payload.revisions || []);
       setDirtyCardKeys(new Set());
-
-      const nextImages = {};
-      const nextPaths = {};
-      await Promise.all(ops.map(async (op) => {
-        if (!op._cardSourceId) return;
-        const key = makeOperationCardKey(op);
-        let card = null;
-        for (const revision of [cardRevision, 'Original']) {
-          try {
-            const result = await request(`/sow/operationcard/${op._cardSourceId}?revision_no=${encodeURIComponent(revision)}`);
-            if (result.data) {
-              card = result.data;
-              break;
-            }
-          } catch {
-            card = null;
-          }
-        }
-        if (card?.images) nextImages[key] = card.images;
-        if (card?.image_path) nextPaths[key] = card.image_path;
-      }));
-      setOperationCardImages(nextImages);
-      setOperationCardPaths(nextPaths);
+      setOperationCardImages({});
+      setOperationCardPaths({});
+      setOperationCardsLoadedForRevision(null);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -309,6 +294,48 @@ export default function SowRevisionEditPage() {
       setPrinting(false);
     }
   }, [printing]);
+
+  const loadOperationCards = useCallback(async () => {
+    const revisionKey = opCardRevision;
+    if (operationCardsLoadedForRevision === operationCardsLoadKey) return;
+
+    setOperationCardsLoading(true);
+    try {
+      const nextImages = {};
+      const nextPaths = {};
+      await Promise.all(editOps.map(async (op) => {
+        if (!op._cardSourceId) return;
+        const key = makeOperationCardKey(op);
+        let card = null;
+        for (const revision of [revisionKey, 'Original']) {
+          try {
+            const result = await request(`/sow/operationcard/${op._cardSourceId}?revision_no=${encodeURIComponent(revision)}`);
+            if (result.data) {
+              card = result.data;
+              break;
+            }
+          } catch {
+            card = null;
+          }
+        }
+        if (card?.images) nextImages[key] = card.images;
+        if (card?.image_path) nextPaths[key] = card.image_path;
+      }));
+      setOperationCardImages(nextImages);
+      setOperationCardPaths(nextPaths);
+      setDirtyCardKeys(new Set());
+      setOperationCardsLoadedForRevision(operationCardsLoadKey);
+    } catch (err) {
+      toast.error(err.message || 'Gagal memuat operation card');
+    } finally {
+      setOperationCardsLoading(false);
+    }
+  }, [editOps, opCardRevision, operationCardsLoadKey, operationCardsLoadedForRevision]);
+
+  const handleGoToOperationCard = useCallback(async () => {
+    await loadOperationCards();
+    setActiveStep('operation-card');
+  }, [loadOperationCards]);
 
   const createRevision = async () => {
     if (!decodedOrderNo || editOps.length === 0) {
@@ -502,8 +529,9 @@ export default function SowRevisionEditPage() {
             </button>
           )}
           {activeStep === 'preview' && (
-            <button onClick={() => setActiveStep('operation-card')} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 text-xs font-bold text-white">
-              Next Operation Card <ArrowRight className="h-3.5 w-3.5" />
+            <button onClick={handleGoToOperationCard} disabled={operationCardsLoading} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 text-xs font-bold text-white disabled:opacity-40">
+              {operationCardsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+              Next Operation Card
             </button>
           )}
         </div>
