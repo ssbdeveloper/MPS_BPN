@@ -177,7 +177,7 @@ Redis should be an event bus here, not the primary source of truth and not requi
 
 Adoption has two supported sources:
 
-- `machine`: lightweight machine-only KPI from `public.mch_productiondata`. It calculates `unidentified_pct = SUM(enddatetime - startdatetime where statusid = 5) / SUM(enddatetime - startdatetime)` and publishes `adoption_pct = 100 - unidentified_pct`, because dashboard thresholds treat higher values as better.
+- `machine`: lightweight machine-only KPI from `public.mch_productiondata`. It calculates gap duration from `statusid = 5` plus `statusid = 2` records whose `enddatetime - startdatetime` is more than 5 minutes, then publishes `adoption_pct = 100 - gap_pct`, because dashboard thresholds treat higher values as better.
 - `all`: older full coverage logic from 5-minute buckets across `mch_transaction` and `timesheet_transaction`.
 
 The current default is `machine`.

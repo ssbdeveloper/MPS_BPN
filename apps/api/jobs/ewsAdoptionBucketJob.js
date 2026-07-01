@@ -294,7 +294,14 @@ async function upsertMachineSummary(client, bounds) {
       SELECT
         COALESCE(NULLIF(BTRIM(pd.machineno::text), ''), 'UNKNOWN') AS machine_key,
         pd.statusid,
-        GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0)::numeric AS duration_seconds
+        GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0)::numeric AS duration_seconds,
+        (
+          pd.statusid = 5
+          OR (
+            pd.statusid = 2
+            AND GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0) > 300
+          )
+        ) AS is_adoption_gap
       FROM public.mch_productiondata pd
       WHERE pd.startdatetime >= $1
         AND pd.startdatetime < $2
@@ -304,13 +311,16 @@ async function upsertMachineSummary(client, bounds) {
     summary AS (
       SELECT
         COUNT(*)::int AS expected_bucket_count,
-        COUNT(*) FILTER (WHERE statusid <> 5)::int AS covered_bucket_count,
+        COUNT(*) FILTER (WHERE NOT is_adoption_gap)::int AS covered_bucket_count,
         0::int AS missing_bucket_count,
         COUNT(*) FILTER (WHERE statusid = 5)::int AS unidentified_bucket_count,
+        COUNT(*) FILTER (WHERE statusid = 2 AND duration_seconds > 300)::int AS long_status_2_count,
         COUNT(DISTINCT machine_key)::int AS machine_count,
         0::int AS operator_count,
         COALESCE(SUM(duration_seconds), 0)::numeric AS total_duration_seconds,
-        COALESCE(SUM(duration_seconds) FILTER (WHERE statusid = 5), 0)::numeric AS unidentified_duration_seconds
+        COALESCE(SUM(duration_seconds) FILTER (WHERE statusid = 5), 0)::numeric AS unidentified_duration_seconds,
+        COALESCE(SUM(duration_seconds) FILTER (WHERE statusid = 2 AND duration_seconds > 300), 0)::numeric AS long_status_2_duration_seconds,
+        COALESCE(SUM(duration_seconds) FILTER (WHERE is_adoption_gap), 0)::numeric AS gap_duration_seconds
       FROM base
     ),
     payload AS (
@@ -318,33 +328,48 @@ async function upsertMachineSummary(client, bounds) {
         s.*,
         CASE
           WHEN s.total_duration_seconds > 0
-            THEN ROUND(((s.total_duration_seconds - s.unidentified_duration_seconds) / s.total_duration_seconds) * 100, 4)
+            THEN ROUND(((s.total_duration_seconds - s.gap_duration_seconds) / s.total_duration_seconds) * 100, 4)
           ELSE NULL
         END AS adoption_pct,
         CASE
           WHEN s.total_duration_seconds > 0
-            THEN ROUND((s.unidentified_duration_seconds / s.total_duration_seconds) * 100, 4)
+            THEN ROUND((s.gap_duration_seconds / s.total_duration_seconds) * 100, 4)
           ELSE NULL
-        END AS unidentified_pct,
+        END AS gap_pct,
         jsonb_build_object(
           'source', 'public.mch_productiondata',
           'adoption_source', 'machine',
           'duration_rule', 'duration_seconds = enddatetime - startdatetime',
           'denominator', 'SUM(duration_seconds) for rows in window with enddatetime > startdatetime',
-          'gap_numerator', 'SUM(duration_seconds) where statusid = 5',
-          'kpi_numerator', 'total_duration_seconds - unidentified_duration_seconds',
+          'gap_numerator', 'SUM(duration_seconds) where statusid = 5 or statusid = 2 duration > 5 minutes',
+          'kpi_numerator', 'total_duration_seconds - gap_duration_seconds',
           'total_duration_seconds', s.total_duration_seconds,
           'unidentified_duration_seconds', s.unidentified_duration_seconds,
+          'long_status_2_duration_seconds', s.long_status_2_duration_seconds,
+          'gap_duration_seconds', s.gap_duration_seconds,
+          'long_status_2_count', s.long_status_2_count,
           'unidentified_pct',
             CASE
               WHEN s.total_duration_seconds > 0
                 THEN ROUND((s.unidentified_duration_seconds / s.total_duration_seconds) * 100, 4)
               ELSE NULL
             END,
+          'long_status_2_pct',
+            CASE
+              WHEN s.total_duration_seconds > 0
+                THEN ROUND((s.long_status_2_duration_seconds / s.total_duration_seconds) * 100, 4)
+              ELSE NULL
+            END,
+          'gap_pct',
+            CASE
+              WHEN s.total_duration_seconds > 0
+                THEN ROUND((s.gap_duration_seconds / s.total_duration_seconds) * 100, 4)
+              ELSE NULL
+            END,
           'helper',
             CONCAT(
-              ROUND(s.unidentified_duration_seconds / 3600.0, 2),
-              'h unidentified / ',
+              ROUND(s.gap_duration_seconds / 3600.0, 2),
+              'h adoption gap / ',
               ROUND(s.total_duration_seconds / 3600.0, 2),
               'h machine duration'
             )
