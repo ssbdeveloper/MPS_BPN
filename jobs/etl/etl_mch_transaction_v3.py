@@ -12,7 +12,7 @@ from public.ph3_order/public.sow using that order_no + operation_no pair.
 Usage:
     python etl_mch_transaction_v3.py
     python etl_mch_transaction_v3.py --from 2026-05-01
-    python etl_mch_transaction_v3.py --from 2026-05-01 --to 2026-05-11
+    python etl_mch_transaction_v3.py --from 2026-06-30 --to 2026-06-30
     python etl_mch_transaction_v3.py --full-rebuild
     python etl_mch_transaction_v3.py --dry-run
 """
@@ -503,6 +503,16 @@ def compute_duration_seconds(startdatetime, enddatetime) -> int:
     return max(int((enddatetime - startdatetime).total_seconds()), 0)
 
 
+def has_v3_job_match(row: dict, ph3_map: dict, sow_map: dict) -> bool:
+    job_id = normalize_jobid(row.get("jobid"))
+    job_key = parse_job_lookup_key(job_id)
+    if not job_id or not job_key:
+        return False
+
+    ph3 = ph3_map.get(job_id, {})
+    return ph3.get("confirmation_number") is not None or job_key in sow_map
+
+
 def build_target_tuple(
     row: dict,
     machine_map: dict,
@@ -633,9 +643,16 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             user_map = fetch_mch_user_maps(cursor, operator_ids)
             sow_map = fetch_sow_maps(cursor, job_keys)
 
+        matched_source_rows = [
+            row
+            for row in source_rows
+            if has_v3_job_match(row, ph3_map, sow_map)
+        ]
+        skipped_no_v3_match = len(source_rows) - len(matched_source_rows)
+
         values = [
             build_target_tuple(row, machine_map, status_map, ph3_map, user_map, sow_map)
-            for row in source_rows
+            for row in matched_source_rows
         ]
 
         operator_lookup_count = sum(1 for row in source_rows if normalize_operatorid(row.get("operatorid")))
@@ -665,10 +682,11 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
                 "Prepared batch offset=%d count=%d operator_lookup_candidates=%d "
                 "operator_rows_matched=%d operator_ids_matched=%d job_rows_parsed=%d "
                 "job_keys_parsed=%d ph3_rows_matched=%d ph3_keys_matched=%d "
-                "sow_rows_matched=%d sow_keys_matched=%d"
+                "sow_rows_matched=%d sow_keys_matched=%d upsert_candidates=%d "
+                "skipped_no_v3_match=%d"
             ),
             offset,
-            len(values),
+            len(source_rows),
             operator_lookup_count,
             operator_rows_matched,
             len(user_map),
@@ -678,16 +696,20 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             ph3_keys_matched,
             sow_rows_matched,
             len(sow_map),
+            len(values),
+            skipped_no_v3_match,
         )
 
         if dry_run:
             total_upserted += len(values)
-        else:
+        elif values:
             with pg_conn.cursor() as cursor:
                 upsert_batch(cursor, values)
             pg_conn.commit()
             total_upserted += len(values)
             log.info("Committed batch offset=%d count=%d", offset, len(values))
+        else:
+            log.info("Skipped commit for batch offset=%d because no V3-matched rows.", offset)
 
         offset += BATCH_SIZE
 

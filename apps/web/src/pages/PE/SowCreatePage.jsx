@@ -41,6 +41,14 @@ const renumberByStandardOrder = (items) => renumberSequential(
 );
 
 const fmtHours = (v) => (v != null && v !== '' ? parseFloat(v).toFixed(2) : '—');
+const fmtTravelCardHours = (value) => {
+  const number = Number.parseFloat(value);
+  if (!Number.isFinite(number)) return '—';
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(number);
+};
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1725,7 +1733,7 @@ export function TravelCardPreview({
   // Total stays equal to saved SOW planhours: operation rows are reduced by NNVA child rows.
   const directHrs = editOps.reduce((sum, op) => sum + (parseFloat(op.std_hours) || 0), 0);
   const totalHrs = directHrs;
-  const totalHoursDisplay = totalHrs % 1 === 0 ? String(totalHrs) : totalHrs.toFixed(2);
+  const totalHoursDisplay = fmtTravelCardHours(totalHrs);
 
   useEffect(() => {
     let cancelled = false;
@@ -1746,7 +1754,7 @@ export function TravelCardPreview({
             <td class="ops-no-tc">${op.operation_no}</td>
             <td>${esc(op.operation_text)}</td>
             <td class="tc">${machineId}</td>
-            <td class="hrs-col">${op.std_hours !== '' && op.std_hours != null ? parseFloat(op.std_hours) : '—'}</td>
+            <td class="hrs-col">${fmtTravelCardHours(op.std_hours)}</td>
             <td></td><td></td><td class="remark-cell">${esc(op.remark || '')}</td>
           </tr>`,
           opText: op.operation_text || '',
@@ -1761,7 +1769,7 @@ export function TravelCardPreview({
               <td class="ops-no"> - </td>
               <td class="ops-no">${esc(n.nnva_name || '')}</td>
               <td class="tc">${machineId}</td>
-              <td class="hrs-col">${n.standard_hours != null ? parseFloat(n.standard_hours) : '—'}</td>
+              <td class="hrs-col">${fmtTravelCardHours(n.standard_hours)}</td>
               <td></td><td></td><td class="remark-cell"></td>
             </tr>`,
             opText: n.nnva_name || '',

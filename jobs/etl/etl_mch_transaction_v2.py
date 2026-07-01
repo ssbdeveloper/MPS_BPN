@@ -478,6 +478,11 @@ def compute_duration_seconds(startdatetime, enddatetime) -> int:
     return max(int((enddatetime - startdatetime).total_seconds()), 0)
 
 
+def has_v2_job_match(row: dict, ph3_map: dict) -> bool:
+    job_id = row.get("jobid")
+    return bool(job_id and job_id in ph3_map)
+
+
 def build_target_tuple(
     row: dict,
     machine_map: dict,
@@ -591,9 +596,16 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             user_map = fetch_mch_user_maps(cursor, operator_ids)
             sow_map = fetch_sow_maps(cursor, ph3_map)
 
+        matched_source_rows = [
+            row
+            for row in source_rows
+            if has_v2_job_match(row, ph3_map)
+        ]
+        skipped_no_v2_match = len(source_rows) - len(matched_source_rows)
+
         values = [
             build_target_tuple(row, machine_map, status_map, ph3_map, user_map, sow_map)
-            for row in source_rows
+            for row in matched_source_rows
         ]
 
         operator_lookup_count = sum(1 for row in source_rows if normalize_operatorid(row.get("operatorid")))
@@ -616,10 +628,11 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             (
                 "Prepared batch offset=%d count=%d operator_lookup_candidates=%d "
                 "operator_rows_matched=%d operator_ids_matched=%d ph3_rows_matched=%d "
-                "ph3_keys_matched=%d sow_rows_matched=%d sow_keys_matched=%d"
+                "ph3_keys_matched=%d sow_rows_matched=%d sow_keys_matched=%d "
+                "upsert_candidates=%d skipped_no_v2_match=%d"
             ),
             offset,
-            len(values),
+            len(source_rows),
             operator_lookup_count,
             operator_rows_matched,
             len(user_map),
@@ -627,16 +640,20 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             len(ph3_map),
             sow_rows_matched,
             len(sow_map),
+            len(values),
+            skipped_no_v2_match,
         )
 
         if dry_run:
             total_upserted += len(values)
-        else:
+        elif values:
             with pg_conn.cursor() as cursor:
                 upsert_batch(cursor, values)
             pg_conn.commit()
             total_upserted += len(values)
             log.info("Committed batch offset=%d count=%d", offset, len(values))
+        else:
+            log.info("Skipped commit for batch offset=%d because no V2-matched rows.", offset)
 
         offset += BATCH_SIZE
 
