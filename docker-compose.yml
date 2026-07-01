@@ -53,8 +53,75 @@ services:
       - SQLSERVER_DATABASE=${SQLSERVER_DATABASE}
       - SQLSERVER_USER=${SQLSERVER_USER}
       - SQLSERVER_PASSWORD=${SQLSERVER_PASSWORD}
+      - EWS_SNAPSHOT_TARGETS=${EWS_SNAPSHOT_TARGETS:-today}
+      - EWS_JOB_INTERVAL_MS=${EWS_JOB_INTERVAL_MS:-60000}
+      - EWS_SNAPSHOT_STALE_MS=${EWS_SNAPSHOT_STALE_MS:-120000}
+      - EWS_SSE_HEARTBEAT_MS=${EWS_SSE_HEARTBEAT_MS:-25000}
+      - EWS_SSE_SNAPSHOT_POLL_MS=${EWS_SSE_SNAPSHOT_POLL_MS:-15000}
+      - EWS_REFRESH_DEBOUNCE_MS=${EWS_REFRESH_DEBOUNCE_MS:-1500}
+      - EWS_SSE_MAX_CLIENTS=${EWS_SSE_MAX_CLIENTS:-1500}
     volumes:
       - ./apps/api/uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  ews-snapshot-job:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ews-snapshot-job
+    command: ["npm", "run", "ews:snapshot"]
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - NODE_ENV=${NODE_ENV}
+      - TIMEZONE=${TIMEZONE}
+      - TZ=${TIMEZONE}
+      - EWS_SNAPSHOT_TARGETS=${EWS_SNAPSHOT_TARGETS:-today}
+      - EWS_JOB_DEBOUNCE_MS=${EWS_JOB_DEBOUNCE_MS:-2500}
+      - EWS_JOB_INTERVAL_MS=${EWS_JOB_INTERVAL_MS:-60000}
+      - EWS_JOB_ADVISORY_LOCK_KEY=${EWS_JOB_ADVISORY_LOCK_KEY:-27112026}
+      - EWS_JOB_DB_POOL_MAX=${EWS_JOB_DB_POOL_MAX:-4}
+      - EWS_JOB_PROGRESS_LOG_MS=${EWS_JOB_PROGRESS_LOG_MS:-15000}
+      - EWS_JOB_QUERY_TIMEOUT_MS=${EWS_JOB_QUERY_TIMEOUT_MS:-120000}
+      - EWS_JOB_STATEMENT_TIMEOUT_MS=${EWS_JOB_STATEMENT_TIMEOUT_MS:-120000}
+      - EWS_CALCULATE_ADOPTION_IN_MAIN=${EWS_CALCULATE_ADOPTION_IN_MAIN:-0}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  ews-adoption-job:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ews-adoption-job
+    command: ["npm", "run", "ews:adoption"]
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - NODE_ENV=${NODE_ENV}
+      - TIMEZONE=${TIMEZONE}
+      - TZ=${TIMEZONE}
+      - EWS_ADOPTION_JOB_INTERVAL_MS=${EWS_ADOPTION_JOB_INTERVAL_MS:-600000}
+      - EWS_ADOPTION_JOB_DEBOUNCE_MS=${EWS_ADOPTION_JOB_DEBOUNCE_MS:-5000}
+      - EWS_ADOPTION_JOB_PROGRESS_LOG_MS=${EWS_ADOPTION_JOB_PROGRESS_LOG_MS:-15000}
+      - EWS_ADOPTION_JOB_QUERY_TIMEOUT_MS=${EWS_ADOPTION_JOB_QUERY_TIMEOUT_MS:-300000}
+      - EWS_ADOPTION_JOB_STATEMENT_TIMEOUT_MS=${EWS_ADOPTION_JOB_STATEMENT_TIMEOUT_MS:-300000}
+      - EWS_ADOPTION_JOB_ADVISORY_LOCK_KEY=${EWS_ADOPTION_JOB_ADVISORY_LOCK_KEY:-27112027}
+      - EWS_ADOPTION_JOB_DB_POOL_MAX=${EWS_ADOPTION_JOB_DB_POOL_MAX:-3}
     depends_on:
       db:
         condition: service_healthy
