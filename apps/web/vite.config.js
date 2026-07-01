@@ -79,7 +79,7 @@ export default defineConfig(({ mode }) => {
             }
           },
           {
-            urlPattern: /\/api\/.*/i,
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/') && url.pathname !== '/api/ews/stream',
             handler: 'NetworkFirst',
             options: {
               cacheName: 'api-cache',

@@ -198,7 +198,7 @@ Risiko:
 
 ### 4. OEE
 
-Target: `>= 65%`
+Target: `>= 80%`
 
 Gunakan:
 

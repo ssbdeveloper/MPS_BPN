@@ -1,6 +1,8 @@
 const pool = global.pool || require("../db");
 
 const meta = () => ({ generated_at: new Date().toISOString() });
+let operationsHubCache = null;
+const OPERATIONS_HUB_TTL_MS = 30 * 1000;
 
 function num(value, fallback = 0) {
   const parsed = Number(value);
@@ -120,7 +122,16 @@ async function getOperationTimesheetHistory(req, res) {
 }
 
 async function getOperationsHub(req, res) {
+  let client;
   try {
+    if (operationsHubCache && Date.now() - operationsHubCache.createdAt < OPERATIONS_HUB_TTL_MS) {
+      res.set("X-Cache", "HIT");
+      res.json(operationsHubCache.payload);
+      return;
+    }
+
+    client = await pool.connect();
+    const q = (text, params) => client.query(text, params);
     const [
       overview,
       machineTrend,
@@ -131,7 +142,7 @@ async function getOperationsHub(req, res) {
       recentActivities,
       topMachines,
     ] = await Promise.all([
-      pool.query(`
+      q(`
         WITH latest_machine_day AS (
           SELECT MAX(startdatetime::date) AS day
           FROM public.mch_productiondata
@@ -194,7 +205,7 @@ async function getOperationsHub(req, res) {
         FROM sow_kpi s
         CROSS JOIN validation_kpi v
       `),
-      pool.query(`
+      q(`
         WITH daily AS (
           SELECT
             startdatetime::date AS day,
@@ -216,7 +227,7 @@ async function getOperationsHub(req, res) {
         FROM daily
         ORDER BY day
       `),
-      pool.query(`
+      q(`
         WITH latest_machine_day AS (
           SELECT MAX(startdatetime::date) AS day
           FROM public.mch_productiondata
@@ -232,7 +243,7 @@ async function getOperationsHub(req, res) {
         ORDER BY hours DESC, event_count DESC
         LIMIT 8
       `),
-      pool.query(`
+      q(`
         SELECT
           COALESCE(NULLIF(full_name, ''), 'Unknown') AS operator,
           COALESCE(NULLIF(workcenter, ''), NULLIF(machineid, ''), '-') AS workcenter,
@@ -248,7 +259,7 @@ async function getOperationsHub(req, res) {
         ORDER BY MAX(createddate) DESC NULLS LAST, COUNT(*) DESC
         LIMIT 6
       `),
-      pool.query(`
+      q(`
         SELECT
           COALESCE(NULLIF(workcenter, ''), 'No Workcenter') AS label,
           ROUND(COALESCE(AVG(progress) FILTER (WHERE progress IS NOT NULL), 0), 1)::float AS value,
@@ -260,7 +271,7 @@ async function getOperationsHub(req, res) {
         ORDER BY operation_count DESC
         LIMIT 6
       `),
-      pool.query(`
+      q(`
         WITH orders AS (
           SELECT
             TRIM(order_no) AS order_no,
@@ -280,7 +291,7 @@ async function getOperationsHub(req, res) {
         ORDER BY eta ASC NULLS LAST, operation_count DESC
         LIMIT 8
       `),
-      pool.query(`
+      q(`
         SELECT *
         FROM (
           SELECT
@@ -312,7 +323,7 @@ async function getOperationsHub(req, res) {
         ORDER BY event_ts DESC NULLS LAST
         LIMIT 6
       `),
-      pool.query(`
+      q(`
         WITH latest_machine_day AS (
           SELECT MAX(startdatetime::date) AS day
           FROM public.mch_productiondata
@@ -345,7 +356,7 @@ async function getOperationsHub(req, res) {
     ]);
 
     const overviewRow = overview.rows[0] || {};
-    res.json({
+    const payload = {
       data: {
         kpi: {
           active_orders: num(overviewRow.active_orders),
@@ -370,10 +381,16 @@ async function getOperationsHub(req, res) {
         top_machines: topMachines.rows,
       },
       meta: meta(),
-    });
+    };
+
+    operationsHubCache = { createdAt: Date.now(), payload };
+    res.set("X-Cache", "MISS");
+    res.json(payload);
   } catch (err) {
     console.error("dashboard operations-hub error:", err);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 }
 

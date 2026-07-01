@@ -6,6 +6,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { envPath, loaded: envLoaded } = require('./config/loadEnv');
 const { startKanbanRefreshJob } = require('./jobs/kanbanRefreshJob');
+const ewsRealtimeHub = require('./services/ewsRealtimeHub');
 
 // ========================================
 // ENVIRONMENT SETUP
@@ -152,6 +153,7 @@ app.use('/consumable', require('./routes/consumable'));
 app.use('/tools', require('./routes/tools'));
 app.use('/auth', require('./routes/auth'));
 app.use('/ms-project', require('./routes/msProject'));
+app.use('/ews', require('./routes/ews'));
 
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (request, socket, head) => {
@@ -214,6 +216,7 @@ async function startServer() {
     console.log(`🌐 Access: http://${HOST}:${PORT}`);
     console.log('================================');
     kanbanRefreshJob = startKanbanRefreshJob({ pool });
+    ewsRealtimeHub.start({ pool });
   });
 }
 
