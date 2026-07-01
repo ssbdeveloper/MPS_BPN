@@ -171,8 +171,8 @@ const insertComponents = async (client, receivingOrderId, components = []) => {
         receivingOrderId,
         parentComponentId,
         level,
-        normalizeEmpty(component.component_id),
         normalizeEmpty(component.part_number),
+        normalizeEmpty(component.component_id),
         component.part_description,
         normalizeEmpty(component.model_code),
         normalizeEmpty(component.part_type),
@@ -750,12 +750,18 @@ exports.remove = async (req, res) => {
 
 exports.getLookups = async (req, res) => {
   try {
+    const includeCustomers = req.query.includeCustomers === "true";
+    const includeComponents = req.query.includeComponents === "true";
     const [customers, users, partCategories, packingTypes, components] = await Promise.all([
-      db.query("SELECT * FROM customers ORDER BY name ASC, site_name ASC NULLS LAST"),
+      includeCustomers
+        ? db.query("SELECT * FROM customers ORDER BY name ASC, site_name ASC NULLS LAST LIMIT 50")
+        : Promise.resolve({ rows: [] }),
       db.query("SELECT id, username, name, role FROM users ORDER BY name ASC"),
       db.query("SELECT * FROM part_categories ORDER BY name ASC"),
       db.query("SELECT * FROM packing_types ORDER BY name ASC"),
-      db.query("SELECT component_id, part_number, part_name, model FROM components ORDER BY part_name ASC, model ASC, part_number ASC"),
+      includeComponents
+        ? db.query("SELECT component_id, part_number, part_name, model FROM components ORDER BY part_name ASC, model ASC, part_number ASC LIMIT 50")
+        : Promise.resolve({ rows: [] }),
     ]);
 
     res.json({
@@ -791,6 +797,131 @@ exports.searchComponents = async (req, res) => {
         FROM components
         ${whereSql}
         ORDER BY part_name ASC, model ASC, part_number ASC
+        LIMIT $${values.length}
+      `,
+      values
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.searchCustomers = async (req, res) => {
+  try {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 25), 100);
+    const values = [limit];
+    let whereSql = "";
+
+    if (req.query.q) {
+      values.unshift(`%${req.query.q}%`);
+      whereSql = `
+        WHERE name ILIKE $1
+           OR site_name ILIKE $1
+           OR site_location ILIKE $1
+           OR contact_person ILIKE $1
+      `;
+    }
+
+    const result = await db.query(
+      `
+        SELECT id, name, site_name, site_location, contact_person, phone, email, address
+        FROM customers
+        ${whereSql}
+        ORDER BY name ASC, site_name ASC NULLS LAST
+        LIMIT $${values.length}
+      `,
+      values
+    );
+
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.createCustomer = async (req, res) => {
+  try {
+    const payload = req.body || {};
+    if (!payload.name) {
+      return res.status(400).json({ error: "Customer name is required" });
+    }
+
+    const result = await db.query(
+      `
+        INSERT INTO customers (
+          name, site_name, site_location, contact_person, phone, email, address
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (name, site_name)
+        DO UPDATE SET
+          site_location = COALESCE(EXCLUDED.site_location, customers.site_location),
+          contact_person = COALESCE(EXCLUDED.contact_person, customers.contact_person),
+          phone = COALESCE(EXCLUDED.phone, customers.phone),
+          email = COALESCE(EXCLUDED.email, customers.email),
+          address = COALESCE(EXCLUDED.address, customers.address),
+          updated_at = NOW()
+        RETURNING id, name, site_name, site_location, contact_person, phone, email, address
+      `,
+      [
+        payload.name,
+        normalizeEmpty(payload.site_name),
+        normalizeEmpty(payload.site_location),
+        normalizeEmpty(payload.contact_person),
+        normalizeEmpty(payload.phone),
+        normalizeEmpty(payload.email),
+        normalizeEmpty(payload.address),
+      ]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.createPartCategory = async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    if (!name) {
+      return res.status(400).json({ error: "Category name is required" });
+    }
+
+    const result = await db.query(
+      `
+        INSERT INTO part_categories (name)
+        VALUES ($1)
+        ON CONFLICT (name)
+        DO UPDATE SET name = EXCLUDED.name
+        RETURNING id, name
+      `,
+      [name]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.searchPartCategories = async (req, res) => {
+  try {
+    const limit = Math.min(parsePositiveInt(req.query.limit, 25), 100);
+    const values = [limit];
+    let whereSql = "";
+
+    if (req.query.q) {
+      values.unshift(`%${req.query.q}%`);
+      whereSql = "WHERE name ILIKE $1";
+    }
+
+    const result = await db.query(
+      `
+        SELECT id, name
+        FROM part_categories
+        ${whereSql}
+        ORDER BY name ASC
         LIMIT $${values.length}
       `,
       values

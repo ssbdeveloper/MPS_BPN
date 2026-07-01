@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { goBackOrFallback } from '../../utils/navigation';
 import {
   AlertCircle,
@@ -23,6 +24,14 @@ import {
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const today = new Date().toISOString().slice(0, 10);
+
+function readAuthUser() {
+  try {
+    return JSON.parse(sessionStorage.getItem('authUser') || 'null');
+  } catch {
+    return null;
+  }
+}
 
 const emptyComponent = (level = 1) => ({
   part_level: level,
@@ -103,11 +112,39 @@ function DashboardCard({ children, className = '' }) {
 function Field({ label, children, required = false }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-wide text-slate-500">
+      <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-wide text-slate-600">
         {label} {required && <span className="text-red-500">*</span>}
       </span>
       {children}
     </label>
+  );
+}
+
+function FormSection({ title, description, icon: Icon, accent = 'cyan', children, actions }) {
+  const tone = {
+    cyan: 'bg-cyan-50 text-[#0077b6] border-[#90e0ef]',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    indigo: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  }[accent] || 'bg-cyan-50 text-[#0077b6] border-[#90e0ef]';
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${tone}`}>
+            {Icon ? <Icon size={18} /> : null}
+          </div>
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-extrabold text-slate-900">{title}</h3>
+            {description && <p className="mt-0.5 truncate text-xs text-slate-500">{description}</p>}
+          </div>
+        </div>
+        {actions}
+      </div>
+      <div className="p-4">
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -145,8 +182,440 @@ function StatusBadge({ shipped }) {
   );
 }
 
+function ComponentPickerModal({ open, onClose, onSelect, initialItems = [] }) {
+  const [search, setSearch] = useState('');
+  const [rows, setRows] = useState(initialItems.slice(0, 25));
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ limit: '50' });
+        if (search.trim()) params.set('q', search.trim());
+        const response = await fetch(`${API_BASE}/receiving-shipment/components?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Failed to load components');
+        const payload = await response.json();
+        setRows(Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setRows([]);
+          toast.error(err.message || 'Gagal memuat component');
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, search]);
+
+  useEffect(() => {
+    if (open) {
+      setSearch('');
+      setRows(initialItems.slice(0, 25));
+    }
+  }, [initialItems, open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/35 px-4" onClick={onClose}>
+      <div className="flex h-[76vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-extrabold text-slate-800">Pilih Master Component</h3>
+            <p className="text-xs text-slate-500">Search by part number, part name, atau model.</p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="border-b border-slate-200 px-4 py-3">
+          <div className="relative">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              autoFocus
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search part number, description, model..."
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-cyan-100"
+            />
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto bg-slate-50">
+          {loading ? (
+            <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-500">
+              <Loader2 size={18} className="mr-2 animate-spin text-[#0096c7]" />
+              Loading components...
+            </div>
+          ) : rows.length ? (
+            <div className="divide-y divide-slate-100 bg-white">
+              {rows.map((item) => (
+                <button
+                  key={item.component_id}
+                  type="button"
+                  onClick={() => onSelect(item)}
+                  className="grid w-full grid-cols-[1fr_auto] gap-3 px-4 py-3 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold text-slate-800">{item.part_name || '-'}</span>
+                    <span className="mt-0.5 block truncate font-mono text-xs text-[#0077b6]">{item.part_number || 'No part number'}</span>
+                  </span>
+                  <span className="self-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600">
+                    {item.model || '-'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+              <PackageCheck size={34} className="text-slate-300" />
+              <p className="mt-3 text-sm font-bold text-slate-600">Component tidak ditemukan</p>
+              <p className="mt-1 text-xs text-slate-400">Coba search part number, part name, atau model lain.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerPickerModal({ open, onClose, onSelect, onCreated }) {
+  const [search, setSearch] = useState('');
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({
+    name: '',
+    site_name: '',
+    site_location: '',
+    contact_person: '',
+    phone: '',
+    email: '',
+  });
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ limit: '50' });
+        if (search.trim()) params.set('q', search.trim());
+        const response = await fetch(`${API_BASE}/receiving-shipment/customers?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Failed to load customers');
+        const payload = await response.json();
+        setRows(Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setRows([]);
+          toast.error(err.message || 'Gagal memuat customer');
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, search]);
+
+  useEffect(() => {
+    if (open) {
+      setSearch('');
+      setDraft({ name: '', site_name: '', site_location: '', contact_person: '', phone: '', email: '' });
+    }
+  }, [open]);
+
+  const createCustomer = async () => {
+    if (!draft.name.trim()) {
+      toast.error('Nama customer wajib diisi');
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const response = await fetch(`${API_BASE}/receiving-shipment/customers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...draft,
+          name: draft.name.trim(),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Failed to create customer');
+      onCreated(payload);
+      onSelect(payload);
+    } catch (err) {
+      toast.error(err.message || 'Gagal menambah customer');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/35 px-4" onClick={onClose}>
+      <div className="flex h-[82vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-extrabold text-slate-800">Pilih Customer</h3>
+            <p className="text-xs text-slate-500">Search customer atau tambah daftar baru.</p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="border-b border-slate-200 px-4 py-3">
+          <div className="relative">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              autoFocus
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search nama customer, site, PIC..."
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-[#00b4d8]/25"
+            />
+          </div>
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[1fr_360px]">
+          <div className="min-h-0 overflow-auto bg-slate-50">
+            {loading ? (
+              <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-500">
+                <Loader2 size={18} className="mr-2 animate-spin text-[#0096c7]" />
+                Loading customers...
+              </div>
+            ) : rows.length ? (
+              <div className="divide-y divide-slate-100 bg-white">
+                {rows.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onSelect(item)}
+                    className="grid w-full grid-cols-[1fr_auto] gap-3 px-4 py-3 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-bold text-slate-800">{item.name}</span>
+                      <span className="mt-0.5 block truncate text-xs text-slate-500">{item.site_name || item.site_location || 'General site'}</span>
+                    </span>
+                    <span className="self-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-bold text-slate-600">
+                      {item.contact_person || '-'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                <PackageCheck size={34} className="text-slate-300" />
+                <p className="mt-3 text-sm font-bold text-slate-600">Customer tidak ditemukan</p>
+                <p className="mt-1 text-xs text-slate-400">Tambahkan customer baru dari form sebelah.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-slate-200 bg-white p-4 md:border-l md:border-t-0">
+            <h4 className="text-xs font-extrabold uppercase tracking-wide text-slate-600">Tambah Customer</h4>
+            <div className="mt-3 grid gap-3">
+              {[
+                ['name', 'Nama customer *'],
+                ['site_name', 'Site name'],
+                ['site_location', 'Site location'],
+                ['contact_person', 'PIC'],
+                ['phone', 'Phone'],
+                ['email', 'Email'],
+              ].map(([key, placeholder]) => (
+                <input
+                  key={key}
+                  value={draft[key]}
+                  onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))}
+                  placeholder={placeholder}
+                  className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-[#00b4d8]/25"
+                />
+              ))}
+              <button
+                type="button"
+                onClick={createCustomer}
+                disabled={creating}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 text-sm font-bold text-white transition hover:bg-[#0077b6] disabled:opacity-60"
+              >
+                {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                Add Customer
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CategoryPickerModal({ open, onClose, onSelect, onCreated, initialItems = [] }) {
+  const [search, setSearch] = useState('');
+  const [rows, setRows] = useState(initialItems.slice(0, 30));
+  const [newName, setNewName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({ limit: '50' });
+        if (search.trim()) params.set('q', search.trim());
+        const response = await fetch(`${API_BASE}/receiving-shipment/part-categories?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('Failed to load categories');
+        const payload = await response.json();
+        setRows(Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setRows([]);
+          toast.error(err.message || 'Gagal memuat category');
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, search]);
+
+  useEffect(() => {
+    if (open) {
+      setSearch('');
+      setNewName('');
+      setRows(initialItems.slice(0, 30));
+    }
+  }, [initialItems, open]);
+
+  const createCategory = async () => {
+    if (!newName.trim()) {
+      toast.error('Nama category wajib diisi');
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const response = await fetch(`${API_BASE}/receiving-shipment/part-categories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'Failed to create category');
+      onCreated(payload);
+      onSelect(payload);
+    } catch (err) {
+      toast.error(err.message || 'Gagal menambah category');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/35 px-4" onClick={onClose}>
+      <div className="flex h-[72vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-extrabold text-slate-800">Pilih Category</h3>
+            <p className="text-xs text-slate-500">Search atau tambah category baru.</p>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="grid gap-3 border-b border-slate-200 px-4 py-3 md:grid-cols-[1fr_auto]">
+          <div className="relative">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              autoFocus
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search category..."
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 text-sm font-medium text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-[#00b4d8]/25"
+            />
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="New category"
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-[#00b4d8]/25 md:w-48"
+            />
+            <button
+              type="button"
+              onClick={createCategory}
+              disabled={creating}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#0096c7] text-white transition hover:bg-[#0077b6] disabled:opacity-60"
+              title="Add category"
+            >
+              {creating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto bg-slate-50">
+          {loading ? (
+            <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-500">
+              <Loader2 size={18} className="mr-2 animate-spin text-[#0096c7]" />
+              Loading categories...
+            </div>
+          ) : rows.length ? (
+            <div className="divide-y divide-slate-100 bg-white">
+              {rows.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelect(item)}
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                >
+                  <span className="text-sm font-bold text-slate-800">{item.name}</span>
+                  <ChevronRight size={16} className="text-slate-400" />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+              <PackageCheck size={34} className="text-slate-300" />
+              <p className="mt-3 text-sm font-bold text-slate-600">Category tidak ditemukan</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ReceivingShipmentPage() {
   const navigate = useNavigate();
+  const [authUser] = useState(readAuthUser);
   const [records, setRecords] = useState([]);
   const [selected, setSelected] = useState(null);
   const [lookups, setLookups] = useState({
@@ -166,6 +635,11 @@ function ReceivingShipmentPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mode, setMode] = useState('create');
   const [form, setForm] = useState(emptyForm);
+  const [componentPickerIndex, setComponentPickerIndex] = useState(null);
+  const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
+  const [categoryPickerIndex, setCategoryPickerIndex] = useState(null);
+  const [pagination, setPagination] = useState({ page: 1, limit: 30, total: 0 });
+  const [loadingMore, setLoadingMore] = useState(false);
   const selectedIdRef = useRef(null);
 
   const stats = useMemo(() => {
@@ -180,6 +654,8 @@ function ReceivingShipmentPage() {
     };
   }, [records]);
 
+  const hasMoreRecords = records.length < pagination.total;
+
   const selectedComponentSummary = useMemo(() => {
     if (!selected?.components?.length) return { parent: 0, child: 0 };
     return selected.components.reduce(
@@ -191,8 +667,17 @@ function ReceivingShipmentPage() {
     );
   }, [selected]);
 
-  const inputClass = 'h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-cyan-100 disabled:bg-slate-50 disabled:text-slate-400';
-  const textAreaClass = 'min-h-[84px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-[#0096c7] focus:ring-2 focus:ring-cyan-100';
+  const selectedCustomer = useMemo(() => (
+    lookups.customers.find((customer) => String(customer.id) === String(form.customer_id)) ||
+    (form.customer_id ? { id: form.customer_id, name: form.customer_name, site_name: form.customer_site_name } : null)
+  ), [form.customer_id, form.customer_name, form.customer_site_name, lookups.customers]);
+
+  const getCategoryName = useCallback((id) => (
+    lookups.part_categories.find((category) => String(category.id) === String(id))?.name || ''
+  ), [lookups.part_categories]);
+
+  const inputClass = 'h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition placeholder-slate-400 hover:border-slate-400 focus:border-[#0096c7] focus:ring-2 focus:ring-[#00b4d8]/25 disabled:bg-slate-50 disabled:text-slate-400';
+  const textAreaClass = 'min-h-[96px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 outline-none transition placeholder-slate-400 hover:border-slate-400 focus:border-[#0096c7] focus:ring-2 focus:ring-[#00b4d8]/25';
 
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;
@@ -223,17 +708,22 @@ function ReceivingShipmentPage() {
       setDetailOpen(true);
     } catch (err) {
       setError(err.message);
+      toast.error(err.message || 'Gagal memuat detail receiving');
     } finally {
       setDetailLoading(false);
     }
   }, []);
 
-  const loadRecords = useCallback(async () => {
-    setLoading(true);
+  const loadRecords = useCallback(async ({ notify = false, page = 1, append = false } = {}) => {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
     setError('');
 
     try {
-      const params = new URLSearchParams({ limit: '75' });
+      const params = new URLSearchParams({ limit: String(pagination.limit), page: String(page) });
       if (query.trim()) params.set('q', query.trim());
       if (shippedFilter) params.set('shipped', shippedFilter);
 
@@ -242,31 +732,43 @@ function ReceivingShipmentPage() {
 
       const payload = await response.json();
       const nextRecords = payload.data || [];
-      setRecords(nextRecords);
+      setRecords((current) => (append ? [...current, ...nextRecords] : nextRecords));
+      setPagination(payload.pagination || { page, limit: pagination.limit, total: nextRecords.length });
+      if (notify) toast.success(`Receiving list refreshed (${nextRecords.length} record)`);
 
       const selectedId = selectedIdRef.current;
-      if (!nextRecords.length || (selectedId && !nextRecords.some((item) => item.id === selectedId))) {
+      if (!append && (!nextRecords.length || (selectedId && !nextRecords.some((item) => item.id === selectedId)))) {
         setSelected(null);
         setDetailOpen(false);
       }
     } catch (err) {
       setError(err.message);
+      toast.error(err.message || 'Gagal memuat data receiving');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, [query, shippedFilter]);
+  }, [pagination.limit, query, shippedFilter]);
 
   useEffect(() => {
-    loadLookups().catch((err) => setError(err.message));
+    loadLookups().catch((err) => {
+      setError(err.message);
+      toast.error(err.message || 'Gagal memuat lookup receiving');
+    });
   }, []);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      loadRecords();
+      loadRecords({ page: 1 });
     }, 250);
 
     return () => window.clearTimeout(timeout);
   }, [loadRecords]);
+
+  const loadMoreRecords = () => {
+    if (loading || loadingMore || !hasMoreRecords) return;
+    loadRecords({ page: pagination.page + 1, append: true });
+  };
 
   const setFormValue = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -305,9 +807,82 @@ function ReceivingShipmentPage() {
     });
   };
 
+  const clearComponentMaster = (index) => {
+    setForm((current) => ({
+      ...current,
+      components: current.components.map((component, componentIndex) => (
+        componentIndex === index
+          ? {
+              ...component,
+              component_id: '',
+              part_number: '',
+              part_description: '',
+              model_code: '',
+            }
+          : component
+      )),
+    }));
+  };
+
+  const applyComponentMaster = (index, master) => {
+    setForm((current) => ({
+      ...current,
+      components: current.components.map((component, componentIndex) => (
+        componentIndex === index
+          ? {
+              ...component,
+              component_id: master.component_id || '',
+              part_number: master.part_number || '',
+              part_description: master.part_name || '',
+              model_code: master.model || '',
+            }
+          : component
+      )),
+    }));
+    setComponentPickerIndex(null);
+    toast.success('Master component dipilih');
+  };
+
+  const applyCustomer = (customer) => {
+    setLookups((current) => ({
+      ...current,
+      customers: current.customers.some((item) => String(item.id) === String(customer.id))
+        ? current.customers
+        : [...current.customers, customer].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+    }));
+    setForm((current) => ({
+      ...current,
+      customer_id: customer.id || '',
+      customer_name: customer.name || '',
+      customer_site_name: customer.site_name || '',
+    }));
+    setCustomerPickerOpen(false);
+    toast.success('Customer dipilih');
+  };
+
+  const applyCategory = (index, category) => {
+    setLookups((current) => ({
+      ...current,
+      part_categories: current.part_categories.some((item) => String(item.id) === String(category.id))
+        ? current.part_categories
+        : [...current.part_categories, category].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+    }));
+    setComponentValue(index, 'part_category_id', category.id || '');
+    setCategoryPickerIndex(null);
+    toast.success('Category dipilih');
+  };
+
   const openCreate = () => {
     setMode('create');
-    setForm(emptyForm);
+    setForm({
+      ...emptyForm,
+      components: [emptyComponent(1)],
+      shipping: { ...emptyShipping },
+      received_by_id: authUser?.id || '',
+    });
+    setComponentPickerIndex(null);
+    setCategoryPickerIndex(null);
+    setCustomerPickerOpen(false);
     setDrawerOpen(true);
   };
 
@@ -344,6 +919,9 @@ function ReceivingShipmentPage() {
         : [emptyComponent(1)],
       shipping: selected.shipping ? { ...emptyShipping, ...selected.shipping } : { ...emptyShipping },
     });
+    setComponentPickerIndex(null);
+    setCategoryPickerIndex(null);
+    setCustomerPickerOpen(false);
     setDrawerOpen(true);
   };
 
@@ -367,6 +945,10 @@ function ReceivingShipmentPage() {
     setError('');
 
     try {
+      if (!form.customer_id && !form.customer_name.trim()) {
+        throw new Error('Pilih atau tambah customer terlebih dahulu');
+      }
+
       const components = form.components
         .filter((component) => component.part_description.trim())
         .map((component) => compactPayload(component));
@@ -411,8 +993,10 @@ function ReceivingShipmentPage() {
       setDrawerOpen(false);
       await loadRecords();
       await loadDetail(saved.id);
+      toast.success(mode === 'edit' ? 'Receiving record berhasil diupdate' : 'Receiving record berhasil dibuat');
     } catch (err) {
       setError(err.message);
+      toast.error(err.message || 'Gagal menyimpan receiving record');
     } finally {
       setSaving(false);
     }
@@ -432,8 +1016,10 @@ function ReceivingShipmentPage() {
       setSelected(null);
       setDetailOpen(false);
       await loadRecords();
+      toast.success('Receiving record berhasil dihapus');
     } catch (err) {
       setError(err.message);
+      toast.error(err.message || 'Gagal menghapus receiving record');
     } finally {
       setSaving(false);
     }
@@ -463,7 +1049,7 @@ function ReceivingShipmentPage() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={loadRecords}
+              onClick={() => loadRecords({ notify: true })}
               disabled={loading}
               className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
             >
@@ -505,9 +1091,7 @@ function ReceivingShipmentPage() {
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h2 className="text-base font-extrabold text-slate-950">Receiving Orders</h2>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Track receiving header, workshop breakdown, and final shipment per SSBR-ID.
-                  </p>
+                  
                 </div>
                 <div className="flex min-w-0 flex-1 gap-2 lg:max-w-xl">
                   <div className="relative flex-1">
@@ -532,11 +1116,11 @@ function ReceivingShipmentPage() {
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-auto">
-              <table className="w-full min-w-[900px] text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500 shadow-[0_1px_0_0_rgba(226,232,240,1)]">
+            <div className="min-h-0 flex-1 overflow-auto bg-slate-50/70">
+              <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
+                <thead className="sticky top-0 z-10 text-[11px] uppercase tracking-wide text-slate-600 shadow-[0_1px_0_0_rgba(148,163,184,0.25)]" style={{ background: '#caf0f8' }}>
                   <tr>
-                    <th className="px-4 py-3 font-bold">SSBR-ID</th>
+                    <th className="sticky left-0 z-20 px-4 py-3 font-bold" style={{ background: '#caf0f8' }}>SSBR-ID</th>
                     <th className="px-4 py-3 font-bold">Customer</th>
                     <th className="px-4 py-3 font-bold">Received</th>
                     <th className="px-4 py-3 font-bold">Components</th>
@@ -545,7 +1129,7 @@ function ReceivingShipmentPage() {
                     <th className="px-4 py-3 font-bold">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {loading ? (
                     <tr>
                       <td colSpan="7" className="px-4 py-12 text-center text-sm font-semibold text-slate-500">
@@ -554,40 +1138,50 @@ function ReceivingShipmentPage() {
                       </td>
                     </tr>
                   ) : records.length ? (
-                    records.map((item) => (
+                    records.map((item) => {
+                      const isSelected = selected?.id === item.id;
+                      const isShipped = Boolean(item.shipping_id);
+                      return (
                       <tr
                         key={item.id}
-                        className={`cursor-pointer transition hover:bg-slate-50 ${
-                          selected?.id === item.id ? 'bg-cyan-50/60' : 'bg-white'
+                        className={`group cursor-pointer transition ${
+                          isSelected ? 'bg-cyan-50' : 'bg-white hover:bg-slate-50'
                         }`}
                         onClick={() => loadDetail(item.id)}
                       >
-                        <td className="px-4 py-3">
-                          <div className="font-mono text-xs font-extrabold text-slate-900">{item.ssbr_ident}</div>
-                          <div className="mt-1 text-[11px] text-slate-400">{item.reff_number || 'No reference'}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="font-bold text-slate-800">{item.customer_name}</div>
-                          <div className="mt-1 text-xs text-slate-500">{item.customer_site_name || 'General site'}</div>
-                        </td>
-                        <td className="px-4 py-3 text-xs font-semibold text-slate-600">{formatDate(item.received_date)}</td>
-                        <td className="px-4 py-3">
-                          <div className="font-bold text-slate-800">{item.component_count || 0}</div>
-                          <div className="text-[11px] text-slate-500">
-                            {item.parent_component_count || 0} parent / {item.child_component_count || 0} child
+                        <td className={`sticky left-0 z-[1] border-b border-slate-100 px-4 py-3 shadow-[1px_0_0_0_rgba(226,232,240,0.9)] ${isSelected ? 'bg-cyan-50' : 'bg-white group-hover:bg-slate-50'}`}>
+                          <div className="flex items-center gap-3">
+                            <span className={`h-10 w-1 rounded-full ${isShipped ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                            <span className="min-w-0">
+                              <span className="block font-mono text-xs font-extrabold text-slate-900">{item.ssbr_ident}</span>
+                              <span className="mt-1 block truncate text-[11px] text-slate-400">{item.reff_number || 'No reference'}</span>
+                            </span>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="font-mono text-xs font-bold text-slate-700">{item.delivery_note_number || '-'}</div>
-                          <div className="mt-1 text-xs text-slate-500">{item.destination || 'Not shipped'}</div>
+                        <td className="border-b border-slate-100 px-4 py-3">
+                          <div className="max-w-[220px] truncate font-bold text-slate-800">{item.customer_name}</div>
+                          <div className="mt-1 max-w-[220px] truncate text-xs text-slate-500">{item.customer_site_name || 'General site'}</div>
                         </td>
-                        <td className="px-4 py-3">
-                          <StatusBadge shipped={Boolean(item.shipping_id)} />
+                        <td className="border-b border-slate-100 px-4 py-3 text-xs font-semibold text-slate-600 whitespace-nowrap">{formatDate(item.received_date)}</td>
+                        <td className="border-b border-slate-100 px-4 py-3">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
+                            <span className="text-xs font-extrabold text-slate-800">{item.component_count || 0}</span>
+                            <span className="text-[11px] font-semibold text-slate-500">
+                              {item.parent_component_count || 0}P / {item.child_component_count || 0}C
+                            </span>
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="border-b border-slate-100 px-4 py-3">
+                          <div className="max-w-[180px] truncate font-mono text-xs font-bold text-slate-700">{item.delivery_note_number || '-'}</div>
+                          <div className="mt-1 max-w-[180px] truncate text-xs text-slate-500">{item.destination || 'Not shipped'}</div>
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3">
+                          <StatusBadge shipped={isShipped} />
+                        </td>
+                        <td className="border-b border-slate-100 px-4 py-3">
                           <button
                             type="button"
-                            className="inline-flex h-8 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
+                            className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#90e0ef] bg-white px-2.5 text-xs font-bold text-[#0077b6] transition hover:bg-[#caf0f8]"
                             onClick={(event) => {
                               event.stopPropagation();
                               loadDetail(item.id);
@@ -598,7 +1192,8 @@ function ReceivingShipmentPage() {
                           </button>
                         </td>
                       </tr>
-                    ))
+                    );
+                    })
                   ) : (
                     <tr>
                       <td colSpan="7" className="px-4 py-12 text-center text-sm font-semibold text-slate-500">
@@ -608,6 +1203,22 @@ function ReceivingShipmentPage() {
                   )}
                 </tbody>
               </table>
+              {!loading && (
+                <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
+                  <p className="text-xs font-semibold text-slate-500">
+                    Showing {records.length} of {pagination.total} receiving records
+                  </p>
+                  <button
+                    type="button"
+                    onClick={loadMoreRecords}
+                    disabled={!hasMoreRecords || loadingMore}
+                    className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-xs font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loadingMore ? <Loader2 size={15} className="animate-spin text-[#0096c7]" /> : null}
+                    {hasMoreRecords ? 'Load More' : 'All Loaded'}
+                  </button>
+                </div>
+              )}
             </div>
           </DashboardCard>
 
@@ -624,7 +1235,7 @@ function ReceivingShipmentPage() {
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="text-base font-extrabold text-slate-950">SSBR Detail</h2>
-                <p className="mt-1 text-xs text-slate-500">Receiving, breakdown, and shipment context.</p>
+                
               </div>
               <div className="flex gap-2">
                 <button
@@ -774,40 +1385,48 @@ function ReceivingShipmentPage() {
       </main>
 
       {drawerOpen && (
-        <div className="fixed inset-0 z-40">
-          <button
-            type="button"
-            className="absolute inset-0 bg-slate-950/30"
-            onClick={() => setDrawerOpen(false)}
-            aria-label="Close drawer"
-          />
-          <aside className="absolute right-0 top-0 flex h-full w-[calc(100vw-20px)] max-w-[1440px] flex-col bg-white shadow-2xl">
-            <form onSubmit={handleSubmit} className="flex h-full flex-col">
-              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-[#0096c7]">
-                    {mode === 'edit' ? 'Edit receiving shipment' : 'New receiving shipment'}
-                  </p>
-                  <h2 className="mt-1 text-xl font-extrabold text-slate-950">
-                    {mode === 'edit' ? form.ssbr_ident : 'Create SSBR record'}
+        <div className="fixed inset-0 z-40 bg-slate-100">
+          <section className="flex h-full w-full flex-col bg-slate-100">
+            <form onSubmit={handleSubmit} className="flex h-full min-h-0 flex-col">
+              <div className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-slate-300 bg-white px-5 py-4 shadow-sm lg:px-7">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full border border-[#90e0ef] bg-[#caf0f8] px-2.5 py-1 text-[11px] font-extrabold uppercase tracking-wider text-[#0077b6]">
+                      {mode === 'edit' ? 'Edit Record' : 'New Record'}
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-bold text-slate-500">
+                      {form.components.length} component
+                    </span>
+                    {hasShippingValue(form.shipping) && (
+                      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                        Shipment filled
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="mt-2 truncate text-xl font-extrabold text-slate-950">
+                    {mode === 'edit' ? form.ssbr_ident || 'Edit SSBR record' : 'Create SSBR record'}
                   </h2>
+                  
                 </div>
                 <button
                   type="button"
                   onClick={() => setDrawerOpen(false)}
                   className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50"
+                  title="Close form"
                 >
                   <X size={18} />
                 </button>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-5">
-                <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-                  <DashboardCard className="p-4">
-                    <h3 className="mb-4 flex items-center gap-2 text-sm font-extrabold text-slate-900">
-                      <ClipboardList size={17} className="text-[#0096c7]" />
-                      Receiving Header
-                    </h3>
+              <div className="min-h-0 flex-1 overflow-y-auto bg-slate-100/70 px-5 py-5 lg:px-7">
+                <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-4">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.72fr)]">
+                  <FormSection
+                    title="Receiving Main Information"
+                    description=""
+                    icon={ClipboardList}
+                    accent="cyan"
+                  >
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       <Field label="SSBR-ID" required>
                         <input value={form.ssbr_ident} onChange={(event) => setFormValue('ssbr_ident', event.target.value)} className={inputClass} required />
@@ -816,33 +1435,46 @@ function ReceivingShipmentPage() {
                         <input type="date" value={form.received_date} onChange={(event) => setFormValue('received_date', event.target.value)} className={inputClass} required />
                       </Field>
                       <Field label="Customer">
-                        <select value={form.customer_id} onChange={(event) => setFormValue('customer_id', event.target.value)} className={inputClass}>
-                          <option value="">New customer / manual</option>
-                          {lookups.customers.map((customer) => (
-                            <option key={customer.id} value={customer.id}>
-                              {customer.name}{customer.site_name ? ` - ${customer.site_name}` : ''}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setCustomerPickerOpen(true)}
+                            className="flex h-10 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm font-semibold text-slate-800 transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/25"
+                          >
+                            <span className="min-w-0 truncate">
+                              {selectedCustomer?.name || 'Pilih customer'}
+                              {selectedCustomer?.site_name ? ` - ${selectedCustomer.site_name}` : ''}
+                            </span>
+                            <Search size={15} className="shrink-0 text-[#0077b6]" />
+                          </button>
+                          {form.customer_id && (
+                            <button
+                              type="button"
+                              onClick={() => setForm((current) => ({ ...current, customer_id: '', customer_name: '', customer_site_name: '' }))}
+                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-800"
+                              title="Clear customer"
+                            >
+                              <X size={15} />
+                            </button>
+                          )}
+                        </div>
                       </Field>
                       <Field label="Received By">
-                        <select value={form.received_by_id} onChange={(event) => setFormValue('received_by_id', event.target.value)} className={inputClass}>
+                        <select
+                          value={form.received_by_id}
+                          onChange={(event) => setFormValue('received_by_id', event.target.value)}
+                          disabled={mode === 'create' && Boolean(authUser?.id)}
+                          className={inputClass}
+                        >
                           <option value="">-</option>
+                          {authUser?.id && !lookups.users.some((user) => String(user.id) === String(authUser.id)) && (
+                            <option value={authUser.id}>{authUser.name || authUser.username}</option>
+                          )}
                           {lookups.users.map((user) => (
                             <option key={user.id} value={user.id}>{user.name}</option>
                           ))}
                         </select>
                       </Field>
-                      {!form.customer_id && (
-                        <>
-                          <Field label="Customer Name" required>
-                            <input value={form.customer_name} onChange={(event) => setFormValue('customer_name', event.target.value)} className={inputClass} required={!form.customer_id} />
-                          </Field>
-                          <Field label="Site Name">
-                            <input value={form.customer_site_name} onChange={(event) => setFormValue('customer_site_name', event.target.value)} className={inputClass} />
-                          </Field>
-                        </>
-                      )}
                       <Field label="Reference Number">
                         <input value={form.reff_number} onChange={(event) => setFormValue('reff_number', event.target.value)} className={inputClass} />
                       </Field>
@@ -872,13 +1504,14 @@ function ReceivingShipmentPage() {
                         </Field>
                       </div>
                     </div>
-                  </DashboardCard>
+                  </FormSection>
 
-                  <DashboardCard className="p-4">
-                    <h3 className="mb-4 flex items-center gap-2 text-sm font-extrabold text-slate-900">
-                      <Truck size={17} className="text-[#0096c7]" />
-                      Shipment
-                    </h3>
+                  <FormSection
+                    title="Shipment"
+                    description=""
+                    icon={Truck}
+                    accent="emerald"
+                  >
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       <Field label="Delivery Note">
                         <input value={form.shipping.delivery_note_number || ''} onChange={(event) => setShippingValue('delivery_note_number', event.target.value)} className={inputClass} />
@@ -916,31 +1549,32 @@ function ReceivingShipmentPage() {
                         <input type="date" value={form.shipping.dn_submit_date || ''} onChange={(event) => setShippingValue('dn_submit_date', event.target.value)} className={inputClass} />
                       </Field>
                     </div>
-                  </DashboardCard>
+                  </FormSection>
                 </div>
 
-                <DashboardCard className="mt-4 overflow-hidden">
-                  <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                    <div>
-                      <h3 className="text-sm font-extrabold text-slate-900">Component Breakdown</h3>
-                      <p className="mt-1 text-xs text-slate-500">Level 1 becomes parent. Level 2 rows attach to the latest level 1.</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => addComponentRow(1)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                <FormSection
+                  title="Component Breakdown"
+                  description=""
+                  icon={Layers3}
+                  accent="indigo"
+                  actions={(
+                    <div className="flex shrink-0 gap-2">
+                      <button type="button" onClick={() => addComponentRow(1)} className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50">
                         Add Parent
                       </button>
-                      <button type="button" onClick={() => addComponentRow(2)} className="h-9 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white hover:bg-slate-700">
+                      <button type="button" onClick={() => addComponentRow(2)} className="h-9 rounded-lg bg-[#0096c7] px-3 text-xs font-bold text-white hover:bg-[#0077b6]">
                         Add Child
                       </button>
                     </div>
-                  </div>
+                  )}
+                >
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[1480px] text-left text-sm">
-                      <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                  <div className="overflow-hidden rounded-xl border border-slate-300 bg-white">
+                    <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1320px] border-separate border-spacing-0 text-left text-sm">
+                      <thead className="text-[11px] uppercase tracking-wide text-slate-600" style={{ background: '#caf0f8' }}>
                         <tr>
                           <th className="px-3 py-3">Level</th>
-                          <th className="px-3 py-3">Master Component</th>
                           <th className="px-3 py-3">Part Number</th>
                           <th className="px-3 py-3">Part Name</th>
                           <th className="px-3 py-3">Model</th>
@@ -950,53 +1584,84 @@ function ReceivingShipmentPage() {
                           <th className="px-3 py-3">Action</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody>
                         {form.components.map((component, index) => (
-                          <tr key={`${index}-${component.part_level}`}>
-                            <td className="px-3 py-3">
-                              <select value={component.part_level} onChange={(event) => setComponentValue(index, 'part_level', Number(event.target.value))} className={`${inputClass} min-w-[150px]`}>
-                                <option value={1}>Level 1 Parent</option>
-                                <option value={2}>Level 2 Child</option>
-                              </select>
+                          <tr key={`${index}-${component.part_level}`} className="group bg-white transition hover:bg-slate-50">
+                            <td className="border-t border-slate-100 px-3 py-3">
+                              <div className="flex min-w-[150px] items-center gap-2">
+                                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-extrabold ${
+                                  Number(component.part_level) === 1 ? 'bg-cyan-50 text-[#0077b6]' : 'bg-indigo-50 text-indigo-700'
+                                }`}>
+                                  L{component.part_level}
+                                </span>
+                                <select value={component.part_level} onChange={(event) => setComponentValue(index, 'part_level', Number(event.target.value))} className={inputClass}>
+                                  <option value={1}>Parent</option>
+                                  <option value={2}>Child</option>
+                                </select>
+                              </div>
                             </td>
-                            <td className="px-3 py-3">
-                              <select value={component.component_id || ''} onChange={(event) => setComponentValue(index, 'component_id', event.target.value)} className={`${inputClass} min-w-[300px]`}>
-                                <option value="">Join only / no master</option>
-                                {lookups.components.map((master) => (
-                                  <option key={master.component_id} value={master.component_id}>
-                                    {master.part_number} - {master.part_name} ({master.model})
-                                  </option>
-                                ))}
-                              </select>
+                            <td className="border-t border-slate-100 px-3 py-3">
+                              <div className="flex min-w-[210px] items-center gap-2">
+                                <input value={component.part_number || ''} onChange={(event) => setComponentValue(index, 'part_number', event.target.value)} className={`${inputClass} min-w-[140px]`} />
+                                <button
+                                  type="button"
+                                  onClick={() => setComponentPickerIndex(index)}
+                                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#90e0ef] bg-white text-[#0077b6] transition hover:bg-[#caf0f8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                                  title="Pilih master component"
+                                >
+                                  <Search size={15} />
+                                </button>
+                                {(component.component_id || component.part_number || component.part_description || component.model_code) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => clearComponentMaster(index)}
+                                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                                    title="Clear part data"
+                                  >
+                                    <X size={15} />
+                                  </button>
+                                )}
+                              </div>
                             </td>
-                            <td className="px-3 py-3">
-                              <input value={component.part_number || ''} onChange={(event) => setComponentValue(index, 'part_number', event.target.value)} className={`${inputClass} min-w-[150px]`} />
-                            </td>
-                            <td className="px-3 py-3">
+                            <td className="border-t border-slate-100 px-3 py-3">
                               <input value={component.part_description || ''} onChange={(event) => setComponentValue(index, 'part_description', event.target.value)} className={`${inputClass} min-w-[260px]`} required />
                             </td>
-                            <td className="px-3 py-3">
+                            <td className="border-t border-slate-100 px-3 py-3">
                               <input value={component.model_code || ''} onChange={(event) => setComponentValue(index, 'model_code', event.target.value)} className={`${inputClass} min-w-[90px]`} />
                             </td>
-                            <td className="px-3 py-3">
+                            <td className="border-t border-slate-100 px-3 py-3">
                               <select value={component.part_type || ''} onChange={(event) => setComponentValue(index, 'part_type', event.target.value)} className={`${inputClass} min-w-[130px]`}>
                                 <option value="">-</option>
                                 <option value="Group">Group</option>
                                 <option value="Single">Single</option>
                               </select>
                             </td>
-                            <td className="px-3 py-3">
-                              <select value={component.part_category_id || ''} onChange={(event) => setComponentValue(index, 'part_category_id', event.target.value)} className={`${inputClass} min-w-[150px]`}>
-                                <option value="">-</option>
-                                {lookups.part_categories.map((category) => (
-                                  <option key={category.id} value={category.id}>{category.name}</option>
-                                ))}
-                              </select>
+                            <td className="border-t border-slate-100 px-3 py-3">
+                              <div className="flex min-w-[170px] items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setCategoryPickerIndex(index)}
+                                  className="flex h-10 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm font-semibold text-slate-800 transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/25"
+                                >
+                                  <span className="truncate">{getCategoryName(component.part_category_id) || '-'}</span>
+                                  <Search size={14} className="shrink-0 text-[#0077b6]" />
+                                </button>
+                                {component.part_category_id && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setComponentValue(index, 'part_category_id', '')}
+                                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+                                    title="Clear category"
+                                  >
+                                    <X size={15} />
+                                  </button>
+                                )}
+                              </div>
                             </td>
-                            <td className="px-3 py-3">
+                            <td className="border-t border-slate-100 px-3 py-3">
                               <input value={component.production_order || ''} onChange={(event) => setComponentValue(index, 'production_order', event.target.value)} className={`${inputClass} min-w-[130px]`} />
                             </td>
-                            <td className="px-3 py-3">
+                            <td className="border-t border-slate-100 px-3 py-3">
                               <button
                                 type="button"
                                 onClick={() => removeComponentRow(index)}
@@ -1010,19 +1675,21 @@ function ReceivingShipmentPage() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   </div>
-                </DashboardCard>
+                </FormSection>
+                </div>
               </div>
 
-              <div className="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-4">
+              <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-slate-300 bg-white px-5 py-4 shadow-[0_-1px_8px_rgba(15,23,42,0.04)] lg:px-7">
                 <p className="text-xs font-semibold text-slate-500">
-                  
+                   
                 </p>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setDrawerOpen(false)}
-                    className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                    className="h-10 rounded-xl border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50"
                   >
                     Cancel
                   </button>
@@ -1037,9 +1704,49 @@ function ReceivingShipmentPage() {
                 </div>
               </div>
             </form>
-          </aside>
+          </section>
         </div>
       )}
+
+      <ComponentPickerModal
+        open={componentPickerIndex !== null}
+        initialItems={lookups.components}
+        onClose={() => setComponentPickerIndex(null)}
+        onSelect={(component) => {
+          if (componentPickerIndex !== null) applyComponentMaster(componentPickerIndex, component);
+        }}
+      />
+
+      <CustomerPickerModal
+        open={customerPickerOpen}
+        onClose={() => setCustomerPickerOpen(false)}
+        onCreated={(customer) => {
+          setLookups((current) => ({
+            ...current,
+            customers: current.customers.some((item) => String(item.id) === String(customer.id))
+              ? current.customers
+              : [...current.customers, customer].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+          }));
+        }}
+        onSelect={applyCustomer}
+      />
+
+      <CategoryPickerModal
+        open={categoryPickerIndex !== null}
+        initialItems={lookups.part_categories}
+        onClose={() => setCategoryPickerIndex(null)}
+        onCreated={(category) => {
+          setLookups((current) => ({
+            ...current,
+            part_categories: current.part_categories.some((item) => String(item.id) === String(category.id))
+              ? current.part_categories
+              : [...current.part_categories, category].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+          }));
+        }}
+        onSelect={(category) => {
+          if (categoryPickerIndex !== null) applyCategory(categoryPickerIndex, category);
+        }}
+      />
     </div>
   );
 }
