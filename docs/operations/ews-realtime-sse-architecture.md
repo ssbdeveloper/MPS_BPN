@@ -61,6 +61,7 @@ EWS_JOB_PROGRESS_LOG_MS=15000
 EWS_JOB_QUERY_TIMEOUT_MS=120000
 EWS_JOB_STATEMENT_TIMEOUT_MS=120000
 EWS_CALCULATE_ADOPTION_IN_MAIN=0
+EWS_ADOPTION_SOURCE=machine
 EWS_ADOPTION_JOB_INTERVAL_MS=600000
 EWS_ADOPTION_JOB_RUN_ONCE=0
 EWS_SSE_HEARTBEAT_MS=25000
@@ -174,20 +175,37 @@ Redis should be an event bus here, not the primary source of truth and not requi
 
 ## Adoption Cadence
 
-Adoption is the most expensive KPI because it needs 5-minute bucket coverage across `mch_transaction` and `timesheet_transaction`. It is not suitable for every realtime snapshot when the window is `today`.
+Adoption has two supported sources:
+
+- `machine`: lightweight machine-only KPI from `public.mch_productiondata`. It calculates `unidentified_pct = SUM(enddatetime - startdatetime where statusid = 5) / SUM(enddatetime - startdatetime)` and publishes `adoption_pct = 100 - unidentified_pct`, because dashboard thresholds treat higher values as better.
+- `all`: older full coverage logic from 5-minute buckets across `mch_transaction` and `timesheet_transaction`.
+
+The current default is `machine`.
 
 Current rule:
 
 - Main EWS snapshot does not calculate Adoption by default.
 - `EWS_CALCULATE_ADOPTION_IN_MAIN=1` can force old behavior for testing only.
-- Main snapshot reuses the latest cached Adoption value from `ews.kpi_snapshot` if available, otherwise shows `NO DATA`.
+- Main snapshot reuses the latest cached Adoption value from `ews.adoption_summary_snapshot` for `EWS_ADOPTION_SOURCE`, then falls back to `ews.kpi_snapshot` if available.
+
+Switch source:
+
+```text
+EWS_ADOPTION_SOURCE=machine
+```
+
+or:
+
+```text
+EWS_ADOPTION_SOURCE=all
+```
 
 Recommended next step:
 
 - Dedicated tables now exist:
   - `ews.adoption_bucket_snapshot`
   - `ews.adoption_summary_snapshot`
-- Fill them from `npm run ews:adoption` every 10 minutes.
+- Fill the selected source from `npm run ews:adoption` every 10 minutes.
 - For one-shot local verification, run `EWS_ADOPTION_JOB_RUN_ONCE=1 node jobs/ewsAdoptionBucketJob.js`.
 - Keep dashboard SSE reading only the compact `ews.kpi_snapshot`.
 - Use drilldown endpoints for bucket samples and missing-time detail on demand.

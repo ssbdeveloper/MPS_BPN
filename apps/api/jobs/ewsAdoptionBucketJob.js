@@ -14,6 +14,7 @@ const STATEMENT_TIMEOUT_MS = Number.parseInt(process.env.EWS_ADOPTION_JOB_STATEM
 const ADVISORY_LOCK_KEY = Number.parseInt(process.env.EWS_ADOPTION_JOB_ADVISORY_LOCK_KEY || "27112027", 10);
 const requestedPoolMax = Number.parseInt(process.env.EWS_ADOPTION_JOB_DB_POOL_MAX || "3", 10);
 const POOL_MAX = Math.max(3, Number.isFinite(requestedPoolMax) ? requestedPoolMax : 3);
+const ADOPTION_SOURCE = String(process.env.EWS_ADOPTION_SOURCE || "machine").toLowerCase() === "all" ? "all" : "machine";
 
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -49,9 +50,48 @@ function scheduleRun(reason = "interval") {
 
 async function getTodayBounds(client) {
   const result = await client.query(`
-    SELECT date_trunc('day', now()) AS window_start, now() AS window_end
-  `);
+    SELECT
+      date_trunc('day', now() AT TIME ZONE $1) AT TIME ZONE $1 AS window_start,
+      now() AS window_end
+  `, [process.env.TIMEZONE || "Asia/Makassar"]);
   return result.rows[0];
+}
+
+async function hasColumn(client, schema, table, column) {
+  const result = await client.query(
+    `
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = $1
+        AND table_name = $2
+        AND column_name = $3
+    ) AS exists
+    `,
+    [schema, table, column],
+  );
+  return Boolean(result.rows[0]?.exists);
+}
+
+async function ensureAdoptionSourceColumn(client) {
+  if (await hasColumn(client, "ews", "adoption_summary_snapshot", "adoption_source")) return;
+  await client.query(`
+    ALTER TABLE ews.adoption_summary_snapshot
+      ADD COLUMN IF NOT EXISTS adoption_source text NOT NULL DEFAULT 'all'
+  `);
+  await client.query(`
+    ALTER TABLE ews.adoption_summary_snapshot
+      DROP CONSTRAINT IF EXISTS adoption_summary_snapshot_window_start_window_end_grain_key
+  `);
+  await client.query(`
+    ALTER TABLE ews.adoption_summary_snapshot
+      ADD CONSTRAINT adoption_summary_snapshot_window_grain_source_key
+      UNIQUE (window_start, window_end, grain, adoption_source)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_ews_adoption_summary_source_latest
+      ON ews.adoption_summary_snapshot (grain, adoption_source, window_end DESC, calculated_at DESC)
+  `);
 }
 
 async function upsertBuckets(client, bounds) {
@@ -203,6 +243,7 @@ async function upsertSummary(client, bounds) {
       window_start,
       window_end,
       grain,
+      adoption_source,
       expected_bucket_count,
       covered_bucket_count,
       missing_bucket_count,
@@ -217,6 +258,7 @@ async function upsertSummary(client, bounds) {
       $1,
       $2,
       'today',
+      'all',
       expected_bucket_count,
       covered_bucket_count,
       missing_bucket_count,
@@ -227,7 +269,119 @@ async function upsertSummary(client, bounds) {
       detail_json,
       now()
     FROM payload
-    ON CONFLICT (window_start, window_end, grain)
+    ON CONFLICT (window_start, window_end, grain, adoption_source)
+    DO UPDATE SET
+      expected_bucket_count = EXCLUDED.expected_bucket_count,
+      covered_bucket_count = EXCLUDED.covered_bucket_count,
+      missing_bucket_count = EXCLUDED.missing_bucket_count,
+      unidentified_bucket_count = EXCLUDED.unidentified_bucket_count,
+      machine_count = EXCLUDED.machine_count,
+      operator_count = EXCLUDED.operator_count,
+      adoption_pct = EXCLUDED.adoption_pct,
+      detail_json = EXCLUDED.detail_json,
+      calculated_at = now()
+    RETURNING *
+    `,
+    [bounds.window_start, bounds.window_end],
+  );
+  return result.rows[0];
+}
+
+async function upsertMachineSummary(client, bounds) {
+  const result = await client.query(
+    `
+    WITH base AS (
+      SELECT
+        COALESCE(NULLIF(BTRIM(pd.machineno::text), ''), 'UNKNOWN') AS machine_key,
+        pd.statusid,
+        GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0)::numeric AS duration_seconds
+      FROM public.mch_productiondata pd
+      WHERE pd.startdatetime >= $1
+        AND pd.startdatetime < $2
+        AND pd.enddatetime IS NOT NULL
+        AND pd.enddatetime > pd.startdatetime
+    ),
+    summary AS (
+      SELECT
+        COUNT(*)::int AS expected_bucket_count,
+        COUNT(*) FILTER (WHERE statusid <> 5)::int AS covered_bucket_count,
+        0::int AS missing_bucket_count,
+        COUNT(*) FILTER (WHERE statusid = 5)::int AS unidentified_bucket_count,
+        COUNT(DISTINCT machine_key)::int AS machine_count,
+        0::int AS operator_count,
+        COALESCE(SUM(duration_seconds), 0)::numeric AS total_duration_seconds,
+        COALESCE(SUM(duration_seconds) FILTER (WHERE statusid = 5), 0)::numeric AS unidentified_duration_seconds
+      FROM base
+    ),
+    payload AS (
+      SELECT
+        s.*,
+        CASE
+          WHEN s.total_duration_seconds > 0
+            THEN ROUND(((s.total_duration_seconds - s.unidentified_duration_seconds) / s.total_duration_seconds) * 100, 4)
+          ELSE NULL
+        END AS adoption_pct,
+        CASE
+          WHEN s.total_duration_seconds > 0
+            THEN ROUND((s.unidentified_duration_seconds / s.total_duration_seconds) * 100, 4)
+          ELSE NULL
+        END AS unidentified_pct,
+        jsonb_build_object(
+          'source', 'public.mch_productiondata',
+          'adoption_source', 'machine',
+          'duration_rule', 'duration_seconds = enddatetime - startdatetime',
+          'denominator', 'SUM(duration_seconds) for rows in window with enddatetime > startdatetime',
+          'gap_numerator', 'SUM(duration_seconds) where statusid = 5',
+          'kpi_numerator', 'total_duration_seconds - unidentified_duration_seconds',
+          'total_duration_seconds', s.total_duration_seconds,
+          'unidentified_duration_seconds', s.unidentified_duration_seconds,
+          'unidentified_pct',
+            CASE
+              WHEN s.total_duration_seconds > 0
+                THEN ROUND((s.unidentified_duration_seconds / s.total_duration_seconds) * 100, 4)
+              ELSE NULL
+            END,
+          'helper',
+            CONCAT(
+              ROUND(s.unidentified_duration_seconds / 3600.0, 2),
+              'h unidentified / ',
+              ROUND(s.total_duration_seconds / 3600.0, 2),
+              'h machine duration'
+            )
+        ) AS detail_json
+      FROM summary s
+    )
+    INSERT INTO ews.adoption_summary_snapshot (
+      window_start,
+      window_end,
+      grain,
+      adoption_source,
+      expected_bucket_count,
+      covered_bucket_count,
+      missing_bucket_count,
+      unidentified_bucket_count,
+      machine_count,
+      operator_count,
+      adoption_pct,
+      detail_json,
+      calculated_at
+    )
+    SELECT
+      $1,
+      $2,
+      'today',
+      'machine',
+      expected_bucket_count,
+      covered_bucket_count,
+      missing_bucket_count,
+      unidentified_bucket_count,
+      machine_count,
+      operator_count,
+      adoption_pct,
+      detail_json,
+      now()
+    FROM payload
+    ON CONFLICT (window_start, window_end, grain, adoption_source)
     DO UPDATE SET
       expected_bucket_count = EXCLUDED.expected_bucket_count,
       covered_bucket_count = EXCLUDED.covered_bucket_count,
@@ -260,6 +414,7 @@ async function runAdoption(reason = "manual") {
   try {
     console.log("[EWS adoption job] run started", {
       reason,
+      adoption_source: ADOPTION_SOURCE,
       interval_ms: INTERVAL_MS,
       pool_max: POOL_MAX,
       query_timeout_ms: QUERY_TIMEOUT_MS,
@@ -286,11 +441,15 @@ async function runAdoption(reason = "manual") {
     }
 
     const bounds = await getTodayBounds(client);
-    const upsertedCount = await upsertBuckets(client, bounds);
-    const summary = await upsertSummary(client, bounds);
+    await ensureAdoptionSourceColumn(client);
+    const upsertedCount = ADOPTION_SOURCE === "all" ? await upsertBuckets(client, bounds) : 0;
+    const summary = ADOPTION_SOURCE === "all"
+      ? await upsertSummary(client, bounds)
+      : await upsertMachineSummary(client, bounds);
 
     console.log("[EWS adoption job] summary updated", {
       reason,
+      adoption_source: ADOPTION_SOURCE,
       upserted_count: upsertedCount,
       adoption_pct: summary?.adoption_pct,
       expected_bucket_count: summary?.expected_bucket_count,

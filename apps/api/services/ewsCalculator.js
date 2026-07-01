@@ -56,18 +56,44 @@ function shouldCalculateAdoptionInMain() {
   return process.env.EWS_CALCULATE_ADOPTION_IN_MAIN === "1";
 }
 
+function getAdoptionSource() {
+  const source = String(process.env.EWS_ADOPTION_SOURCE || "machine").toLowerCase();
+  return source === "all" ? "all" : "machine";
+}
+
+async function columnExists(schema, table, column) {
+  const result = await db.query(
+    `
+    SELECT EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = $1
+        AND table_name = $2
+        AND column_name = $3
+    ) AS exists
+    `,
+    [schema, table, column],
+  );
+  return Boolean(result.rows[0]?.exists);
+}
+
 async function getCachedAdoptionCalculation(grain) {
+  const adoptionSource = getAdoptionSource();
   if (await tableExists("ews", "adoption_summary_snapshot")) {
+    const hasAdoptionSource = await columnExists("ews", "adoption_summary_snapshot", "adoption_source");
+    const sourceFilter = hasAdoptionSource ? "AND adoption_source = $2" : "";
+    const queryParams = hasAdoptionSource ? [grain || "today", adoptionSource] : [grain || "today"];
     const summaryResult = await db.query(
       `
       SELECT *
       FROM ews.adoption_summary_snapshot
       WHERE grain = $1
+        ${sourceFilter}
         AND adoption_pct IS NOT NULL
       ORDER BY window_end DESC, calculated_at DESC
       LIMIT 1
       `,
-      [grain || "today"],
+      queryParams,
     );
 
     const summary = summaryResult.rows[0];
@@ -76,9 +102,10 @@ async function getCachedAdoptionCalculation(grain) {
       const missingMinutes = (num(summary.missing_bucket_count, 0) + num(summary.unidentified_bucket_count, 0)) * 5;
       return {
         value: num(summary.adoption_pct),
-        helper: `${num(summary.covered_bucket_count, 0)}/${num(summary.expected_bucket_count, 0)} buckets covered`,
+        helper: summary.detail_json?.helper || `${num(summary.covered_bucket_count, 0)}/${num(summary.expected_bucket_count, 0)} units covered`,
         detail: {
           bucket_minutes: 5,
+          adoption_source: summary.adoption_source || "all",
           expected_bucket_count: num(summary.expected_bucket_count, 0),
           covered_bucket_count: num(summary.covered_bucket_count, 0),
           missing_bucket_count: num(summary.missing_bucket_count, 0),
@@ -87,6 +114,9 @@ async function getCachedAdoptionCalculation(grain) {
           operator_count: num(summary.operator_count, 0),
           expected_minutes: expectedMinutes,
           missing_minutes: missingMinutes,
+          total_duration_seconds: num(summary.detail_json?.total_duration_seconds, 0),
+          unidentified_duration_seconds: num(summary.detail_json?.unidentified_duration_seconds, 0),
+          unidentified_pct: num(summary.detail_json?.unidentified_pct),
           missing_time_buckets: summary.detail_json?.missing_time_buckets || [],
           source: "ews.adoption_summary_snapshot",
           cache_hit: true,
@@ -213,11 +243,15 @@ async function calculateUptime(bounds, options = {}) {
   }
 
   const useTodayPingWindow = options.grain === "today" && options.role !== "previous";
+  const timezone = process.env.TIMEZONE || "Asia/Makassar";
   const result = await db.query(
     `
     WITH effective_bounds AS (
       SELECT
-        CASE WHEN $3::boolean THEN date_trunc('day', now()) ELSE $1::timestamptz END AS window_start,
+        CASE
+          WHEN $3::boolean THEN date_trunc('day', now() AT TIME ZONE $4) AT TIME ZONE $4
+          ELSE $1::timestamptz
+        END AS window_start,
         CASE WHEN $3::boolean THEN now() ELSE $2::timestamptz END AS window_end
     )
     SELECT
@@ -233,7 +267,7 @@ async function calculateUptime(bounds, options = {}) {
     WHERE checked_at >= b.window_start
       AND checked_at < b.window_end
     `,
-    [bounds.window_start, bounds.window_end, useTodayPingWindow],
+    [bounds.window_start, bounds.window_end, useTodayPingWindow, timezone],
   );
 
   const row = result.rows[0] || {};
@@ -251,7 +285,7 @@ async function calculateUptime(bounds, options = {}) {
       down_samples: num(row.down_samples, 0),
       avg_latency_ms: num(row.avg_latency_ms),
       max_packet_loss_percent: num(row.max_packet_loss_percent),
-      window_rule: useTodayPingWindow ? "today ping samples only" : "provided window bounds",
+      window_rule: useTodayPingWindow ? `today ping samples only by checked_at in ${timezone}` : "provided window bounds",
       denominator: "SUM(ping_count)",
       numerator: "SUM(success_count)",
     },
