@@ -316,7 +316,7 @@ Compose sekarang memakai PgBouncer hanya untuk `api`:
 
 ```yaml
 pgbouncer:
-  image: bitnami/pgbouncer:latest
+  image: bitnamilegacy/pgbouncer:latest
   container_name: pgbouncer
   environment:
     - PGBOUNCER_DATABASE=ptssb

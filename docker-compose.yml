@@ -77,7 +77,7 @@ services:
       - timesheet-network
 
   pgbouncer:
-    image: bitnami/pgbouncer:latest
+    image: bitnamilegacy/pgbouncer:latest
     container_name: timesheet-pgbouncer
     environment:
       - POSTGRESQL_HOST=db
