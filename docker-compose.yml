@@ -32,11 +32,12 @@ services:
     expose:
       - "3001"
     environment:
-      - DB_HOST=db
-      - DB_PORT=5432
+      - DB_HOST=pgbouncer
+      - DB_PORT=6432
       - DB_NAME=${DB_NAME}
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
+      - DB_POOL_MAX=${DB_POOL_MAX:-5}
       - PORT=${PORT}
       - NODE_ENV=${NODE_ENV}
       - PLANT_SSB=${PLANT_SSB}
@@ -61,8 +62,37 @@ services:
       - EWS_REFRESH_DEBOUNCE_MS=${EWS_REFRESH_DEBOUNCE_MS:-1500}
       - EWS_SSE_MAX_CLIENTS=${EWS_SSE_MAX_CLIENTS:-1500}
       - EWS_ADOPTION_SOURCE=${EWS_ADOPTION_SOURCE:-machine}
+      - EWS_DB_HOST=db
+      - EWS_DB_PORT=5432
+      - EWS_LISTENER_DB_POOL_MAX=${EWS_LISTENER_DB_POOL_MAX:-1}
     volumes:
       - ./apps/api/uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    container_name: timesheet-pgbouncer
+    environment:
+      - POSTGRESQL_HOST=db
+      - POSTGRESQL_PORT=5432
+      - POSTGRESQL_DATABASE=${DB_NAME}
+      - POSTGRESQL_USERNAME=${DB_USER}
+      - POSTGRESQL_PASSWORD=${DB_PASSWORD}
+      - PGBOUNCER_DATABASE=${DB_NAME}
+      - PGBOUNCER_PORT=6432
+      - PGBOUNCER_POOL_MODE=transaction
+      - PGBOUNCER_DEFAULT_POOL_SIZE=${PGBOUNCER_DEFAULT_POOL_SIZE:-15}
+      - PGBOUNCER_RESERVE_POOL_SIZE=${PGBOUNCER_RESERVE_POOL_SIZE:-5}
+      - PGBOUNCER_MAX_CLIENT_CONN=${PGBOUNCER_MAX_CLIENT_CONN:-200}
+      - PGBOUNCER_SERVER_IDLE_TIMEOUT=${PGBOUNCER_SERVER_IDLE_TIMEOUT:-600}
+      - TZ=${TIMEZONE}
     depends_on:
       db:
         condition: service_healthy

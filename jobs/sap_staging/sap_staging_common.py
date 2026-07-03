@@ -164,6 +164,23 @@ CREATE TABLE IF NOT EXISTS sap_stage_cursor (
     source_system IN ('TIMESHEET', 'MCH_HOURS')
   )
 );
+
+CREATE TABLE IF NOT EXISTS sap_staging_eligibility_audit (
+  source_system text NOT NULL,
+  source_key text NOT NULL,
+  source_ref_id text,
+  source_date date,
+  plant text NOT NULL DEFAULT '',
+  eligibility_status text NOT NULL,
+  block_reason text,
+  block_detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+  observed_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (source_system, source_key)
+);
+
+CREATE INDEX IF NOT EXISTS sap_staging_eligibility_audit_date_idx
+  ON sap_staging_eligibility_audit (source_system, source_date, eligibility_status);
 """
 
 
@@ -310,6 +327,50 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
 
     conn.commit()
     return max(inserted, 0)
+
+
+def upsert_eligibility_audit(conn, rows: list[dict]) -> int:
+    if not rows:
+        return 0
+
+    columns = [
+        "source_system",
+        "source_key",
+        "source_ref_id",
+        "source_date",
+        "plant",
+        "eligibility_status",
+        "block_reason",
+        "block_detail",
+    ]
+    values = [[row.get(column) for column in columns] for row in rows]
+    columns_sql = ", ".join(columns)
+
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            f"""
+            INSERT INTO sap_staging_eligibility_audit ({columns_sql})
+            VALUES %s
+            ON CONFLICT (source_system, source_key)
+            DO UPDATE SET
+              source_ref_id = EXCLUDED.source_ref_id,
+              source_date = EXCLUDED.source_date,
+              plant = EXCLUDED.plant,
+              eligibility_status = EXCLUDED.eligibility_status,
+              block_reason = EXCLUDED.block_reason,
+              block_detail = EXCLUDED.block_detail,
+              observed_at = now(),
+              updated_at = now()
+            """,
+            values,
+            template="(%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+            page_size=1000,
+        )
+        count = cur.rowcount
+
+    conn.commit()
+    return max(count, 0)
 
 
 def parse_csv_ints(value: str | None) -> list[int]:

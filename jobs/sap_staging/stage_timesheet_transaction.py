@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from datetime import datetime, timedelta
 
@@ -21,6 +22,7 @@ from sap_staging_common import (
     quote_table_name,
     setup_logging,
     update_stage_cursor,
+    upsert_eligibility_audit,
 )
 
 log = setup_logging("stage_timesheet_transaction")
@@ -110,6 +112,99 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
             return [dict(row) for row in cur.fetchall()]
 
 
+def audit_rows_for_staged(rows: list[dict]) -> list[dict]:
+    return [
+        {
+            "source_system": row["source_system"],
+            "source_key": row["source_key"],
+            "source_ref_id": row.get("source_ref_id"),
+            "source_date": row.get("source_min_start").date() if row.get("source_min_start") else None,
+            "plant": row.get("werks") or plant_code(),
+            "eligibility_status": "STAGED",
+            "block_reason": None,
+            "block_detail": json.dumps({"staged_to": "sap_timesheet_staging"}),
+        }
+        for row in rows
+    ]
+
+
+def fetch_blocked_today_rows() -> list[dict]:
+    ph3_table = quote_table_name(ph3_order_table())
+    timezone = app_timezone()
+
+    sql = f"""
+    WITH base AS (
+      SELECT
+        t.tsnumber,
+        t.plant,
+        (t.longdate_checkin AT TIME ZONE %s)::date AS source_date,
+        t.activitytype,
+        t.order_no,
+        t.operation_no,
+        EXISTS (
+          SELECT 1
+          FROM {ph3_table} po
+          WHERE LTRIM(COALESCE(po.order_no, ''), '0') = LTRIM(COALESCE(t.order_no, ''), '0')
+            AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
+        ) AS has_sow_match
+      FROM timesheet_transaction t
+      WHERE t.longdate_checkin IS NOT NULL
+        AND (t.longdate_checkin AT TIME ZONE %s)::date = (now() AT TIME ZONE %s)::date
+        AND COALESCE(t.state_flag, 0) <> 5
+    ),
+    flags AS (
+      SELECT
+        *,
+        (NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NULL) AS missing_order,
+        (NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL AND operation_no IS NULL) AS missing_operation,
+        (
+          NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL
+          AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
+          AND operation_no IS NOT NULL
+          AND NOT has_sow_match
+        ) AS sow_no_match
+      FROM base
+    )
+    SELECT *
+    FROM flags
+    WHERE missing_order OR missing_operation OR sow_no_match
+    ORDER BY tsnumber
+    """
+
+    with connect_source() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (timezone, timezone, timezone))
+            rows = [dict(row) for row in cur.fetchall()]
+
+    audit_rows = []
+    for row in rows:
+        reasons = []
+        if row.get("missing_order"):
+            reasons.append("missing_order")
+        if row.get("missing_operation"):
+            reasons.append("missing_operation")
+        if row.get("sow_no_match"):
+            reasons.append("sow_no_match")
+
+        audit_rows.append({
+            "source_system": "TIMESHEET",
+            "source_key": str(row["tsnumber"]),
+            "source_ref_id": str(row["tsnumber"]),
+            "source_date": row.get("source_date"),
+            "plant": row.get("plant") or plant_code(),
+            "eligibility_status": "BLOCKED",
+            "block_reason": ",".join(reasons),
+            "block_detail": json.dumps({
+                "missing_order": bool(row.get("missing_order")),
+                "missing_operation": bool(row.get("missing_operation")),
+                "sow_no_match": bool(row.get("sow_no_match")),
+                "order_no": row.get("order_no"),
+                "operation_no": row.get("operation_no"),
+            }),
+        })
+    return audit_rows
+
+
 def run_once(args: argparse.Namespace) -> bool:
     cursor_mode = not (args.from_ts or args.to_ts)
 
@@ -136,17 +231,22 @@ def run_once(args: argparse.Namespace) -> bool:
     with connect_staging() as conn:
         ensure_staging_schema(conn)
         inserted = insert_staging_rows(conn, rows)
+        audited = upsert_eligibility_audit(conn, [
+            *audit_rows_for_staged(rows),
+            *fetch_blocked_today_rows(),
+        ])
         if cursor_mode:
             cursor_to = max((row["source_max_end"] for row in rows), default=to_ts)
             update_stage_cursor(conn, "TIMESHEET", plant_code(), cursor_to)
             conn.commit()
 
     log.info(
-        "Timesheet staging window=%s..%s prepared=%s inserted=%s cursor_mode=%s",
+        "Timesheet staging window=%s..%s prepared=%s inserted=%s audited=%s cursor_mode=%s",
         from_ts,
         to_ts,
         len(rows),
         inserted,
+        audited,
         cursor_mode,
     )
     return cursor_to > from_ts

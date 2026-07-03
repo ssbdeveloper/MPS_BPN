@@ -45,6 +45,10 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/OperationsHubPage')),
   },
   {
+    path: '/ews/:type/detail',
+    lazy: page(() => import('../pages/EwsDetailPage')),
+  },
+  {
     path: '/sap-log',
     lazy: page(() => import('../pages/SapLogPage')),
   },
@@ -135,10 +139,6 @@ const router = createBrowserRouter([
   {
     path: '/dashboard',
     lazy: page(() => import('../pages/DashboardPage')),
-  },
-  {
-    path: '/mps-dashboard',
-    lazy: page(() => import('../pages/MPDashboardPage')),
   },
   {
     path: '/setting',

@@ -18,6 +18,7 @@ const KPI_FALLBACK = {
 };
 
 let poolRef = null;
+let listenPoolRef = null;
 let listenClient = null;
 let listenerConnected = false;
 let reconnectTimer = null;
@@ -366,10 +367,11 @@ function startSnapshotPoll() {
 }
 
 async function connectListener() {
-  if (!poolRef || listenClient) return;
+  const listenerPool = listenPoolRef || poolRef;
+  if (!listenerPool || listenClient) return;
 
   try {
-    listenClient = await poolRef.connect();
+    listenClient = await listenerPool.connect();
     listenClient.on("notification", (message) => {
       let payload = null;
       try {
@@ -415,8 +417,9 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(connectListener, 5000);
 }
 
-function start({ pool }) {
+function start({ pool, listenPool }) {
   poolRef = pool;
+  listenPoolRef = listenPool || pool;
   startHeartbeat();
   startSnapshotPoll();
   connectListener();

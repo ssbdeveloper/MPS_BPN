@@ -45,31 +45,62 @@ console.log("===== DEBUG ENV DB =====");
 console.log({
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
+  ewsHost: process.env.EWS_DB_HOST || process.env.DB_HOST,
+  ewsPort: process.env.EWS_DB_PORT || process.env.DB_PORT,
   user: process.env.DB_USER,
   db: process.env.DB_NAME,
   nodeEnv: process.env.NODE_ENV
 });
 console.log("========================");
 
+function createPgPool({
+  host,
+  port,
+  max,
+  applicationName,
+  queryTimeoutMs,
+  statementTimeoutMs,
+  idleInTransactionTimeoutMs,
+}) {
+  return new Pool({
+    host,
+    port: parseInt(port, 10) || 5432,
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    max,
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
+    query_timeout: queryTimeoutMs,
+    statement_timeout: statementTimeoutMs,
+    idle_in_transaction_session_timeout: idleInTransactionTimeoutMs,
+    application_name: applicationName,
+    options: [
+      `-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`,
+      `-c statement_timeout=${statementTimeoutMs}`,
+      `-c idle_in_transaction_session_timeout=${idleInTransactionTimeoutMs}`,
+    ].join(' ')
+  });
+}
 
-const pool = new Pool({
+const pool = createPgPool({
   host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT) || 5432,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT,
   max: parseInt(process.env.DB_POOL_MAX || '10', 10),
-  idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
-  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
-  query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT_MS || '45000', 10),
-  statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || '45000', 10),
-  idle_in_transaction_session_timeout: parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || '30000', 10),
-  application_name: process.env.DB_APPLICATION_NAME || 'mps2-api',
-  options: [
-    `-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`,
-    `-c statement_timeout=${parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || '45000', 10)}`,
-    `-c idle_in_transaction_session_timeout=${parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || '30000', 10)}`,
-  ].join(' ')
+  applicationName: process.env.DB_APPLICATION_NAME || 'mps2-api',
+  queryTimeoutMs: parseInt(process.env.DB_QUERY_TIMEOUT_MS || '45000', 10),
+  statementTimeoutMs: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || '45000', 10),
+  idleInTransactionTimeoutMs: parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || '30000', 10),
+});
+
+const ewsListenerPool = createPgPool({
+  host: process.env.EWS_DB_HOST || process.env.DB_HOST,
+  port: process.env.EWS_DB_PORT || process.env.DB_PORT,
+  max: parseInt(process.env.EWS_LISTENER_DB_POOL_MAX || '1', 10),
+  applicationName: process.env.EWS_LISTENER_DB_APPLICATION_NAME || 'mps2-api-ews-listener',
+  queryTimeoutMs: parseInt(process.env.EWS_LISTENER_QUERY_TIMEOUT_MS || '0', 10),
+  statementTimeoutMs: parseInt(process.env.EWS_LISTENER_STATEMENT_TIMEOUT_MS || '0', 10),
+  idleInTransactionTimeoutMs: parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || '30000', 10),
 });
 
 // Test connection
@@ -162,7 +193,9 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 require('./websocket/machineHoursSqlServerSocket')(wss);
-require('./websocket/mpsDashboardSocket')(wss);
+if (process.env.ENABLE_MPS_DASHBOARD_WS === '1') {
+  require('./websocket/mpsDashboardSocket')(wss);
+}
 
 // ========================================
 // ERROR HANDLERS
@@ -216,7 +249,7 @@ async function startServer() {
     console.log(`🌐 Access: http://${HOST}:${PORT}`);
     console.log('================================');
     kanbanRefreshJob = startKanbanRefreshJob({ pool });
-    ewsRealtimeHub.start({ pool });
+    ewsRealtimeHub.start({ pool, listenPool: ewsListenerPool });
   });
 }
 

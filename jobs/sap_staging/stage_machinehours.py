@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from datetime import timedelta
 
@@ -15,6 +16,7 @@ from sap_staging_common import (
     plant_code,
     setup_logging,
     update_stage_cursor,
+    upsert_eligibility_audit,
 )
 
 log = setup_logging("stage_machinehours")
@@ -45,6 +47,50 @@ def floor_hour(value):
     return value.replace(minute=0, second=0, microsecond=0)
 
 
+def fetch_blocked_today_production_rows() -> list[dict]:
+    sql = """
+    SELECT
+      pd.proddataid,
+      pd.machineno,
+      pd.jobid,
+      pd.statusid,
+      pd.startdatetime::date AS source_date,
+      pd.startdatetime,
+      pd.enddatetime
+    FROM mch_productiondata pd
+    LEFT JOIN mch_transaction mt
+      ON mt.proddataid = pd.proddataid
+    WHERE pd.startdatetime::date = now()::date
+      AND mt.proddataid IS NULL
+    ORDER BY pd.startdatetime DESC, pd.proddataid
+    """
+    with connect_source() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+
+    return [
+        {
+            "source_system": "MCH_PRODUCTIONDATA",
+            "source_key": str(row[0]),
+            "source_ref_id": str(row[0]),
+            "source_date": row[4],
+            "plant": plant_code(),
+            "eligibility_status": "BLOCKED",
+            "block_reason": "missing_mch_transaction",
+            "block_detail": json.dumps({
+                "proddataid": row[0],
+                "machineno": row[1],
+                "jobid": row[2],
+                "statusid": row[3],
+                "startdatetime": row[5].isoformat() if row[5] else None,
+                "enddatetime": row[6].isoformat() if row[6] else None,
+            }),
+        }
+        for row in rows
+    ]
+
+
 def run_once(args: argparse.Namespace) -> bool:
     cursor_mode = not (args.from_ts or args.to_ts)
 
@@ -71,6 +117,11 @@ def run_once(args: argparse.Namespace) -> bool:
 
     rows = fetch_machine_hour_rows(from_ts, to_ts)
     inserted = stage_rows(rows, args.dry_run)
+    audited = 0
+    if not args.dry_run:
+        with connect_staging() as staging_conn:
+            ensure_staging_schema(staging_conn)
+            audited = upsert_eligibility_audit(staging_conn, fetch_blocked_today_production_rows())
     cursor_to = to_ts
     if cursor_mode and not args.dry_run:
         if not rows and args.fast_forward_empty:
@@ -83,11 +134,12 @@ def run_once(args: argparse.Namespace) -> bool:
             update_stage_cursor(staging_conn, "MCH_HOURS", plant_code(), cursor_to)
             staging_conn.commit()
     log.info(
-        "Machine-hour staging window=%s..%s prepared=%s inserted=%s cursor_mode=%s",
+        "Machine-hour staging window=%s..%s prepared=%s inserted=%s audited=%s cursor_mode=%s",
         from_ts,
         to_ts,
         len(rows),
         inserted,
+        audited,
         cursor_mode,
     )
     return cursor_to > from_ts

@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Clock3,
   Gauge,
   RadioTower,
@@ -178,7 +180,60 @@ function TrendIndicator({ comparison }) {
   );
 }
 
-function KpiTile({ item }) {
+function MiniSnapshotTrend({ data, status }) {
+  const points = (Array.isArray(data) ? data : [])
+    .map((item) => Number(item.value))
+    .filter((value) => Number.isFinite(value));
+  const lineColor = status === 'critical'
+    ? '#dc2626'
+    : status === 'watch'
+      ? '#f59e0b'
+      : status === 'normal'
+        ? '#0096c7'
+        : '#94a3b8';
+
+  if (points.length < 2) {
+    return (
+      <div className="mt-3 flex h-10 items-center rounded-lg border border-slate-100 bg-slate-50 px-2" aria-label="7 day snapshot trend unavailable">
+        <div className="h-px w-full bg-slate-200" />
+      </div>
+    );
+  }
+
+  const width = 180;
+  const height = 40;
+  const paddingX = 6;
+  const paddingY = 7;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const span = max - min || 1;
+  const step = (width - paddingX * 2) / Math.max(points.length - 1, 1);
+  const path = points
+    .map((value, index) => {
+      const x = paddingX + index * step;
+      const y = paddingY + (1 - ((value - min) / span)) * (height - paddingY * 2);
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(' ');
+
+  return (
+    <div className="mt-3 h-10 overflow-hidden rounded-lg border border-slate-100 bg-slate-50/80 px-1.5 py-1" aria-label="7 day snapshot trend">
+      <svg className="h-full w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-hidden="true">
+        <line x1="6" x2="174" y1="32" y2="32" stroke="#e2e8f0" strokeWidth="1" />
+        <polyline
+          points={path}
+          fill="none"
+          stroke={lineColor}
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function KpiTile({ item, onOpenDetail }) {
   const Icon = item.icon;
   const tone = toneClass[item.tone];
   const numericValue = Number(item.value);
@@ -189,14 +244,14 @@ function KpiTile({ item }) {
 
   return (
     <div
-      className={`rounded-xl border p-3 shadow-sm transition-colors duration-500 ${cardStatusClass[status] || cardStatusClass.no_data}`}
+      className={`flex h-full flex-col rounded-xl border p-3 shadow-sm transition-colors duration-500 ${cardStatusClass[status] || cardStatusClass.no_data}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#90e0ef] bg-[#caf0f8] text-[#0077b6]">
           <Icon size={18} />
         </div>
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${statusClass[status] || tone.soft}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass[status] || statusDotClass.no_data} ${item.key === 'uptime' ? 'ews-dot-heartbeat' : 'ews-dot-pulse'}`} />
+          <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass[status] || statusDotClass.no_data} ews-dot-pulse`} />
           {statusLabel || 'NO DATA'}
         </span>
       </div>
@@ -219,51 +274,54 @@ function KpiTile({ item }) {
         />
       </div>
 
-      {item.key === 'uptime' && (
-        <div className="mt-3 overflow-hidden rounded-lg border border-[#90e0ef] bg-[#caf0f8]/60 px-2 py-1.5">
-          <svg className="h-8 w-full" viewBox="0 0 180 32" role="img" aria-label="Uptime heartbeat signal">
-            <path
-              d="M0 18 H24 L30 18 L35 11 L40 24 L48 5 L56 18 H84 L90 18 L96 13 L102 22 L111 9 L120 18 H180"
-              fill="none"
-              stroke="#0077b6"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="ews-ecg-line"
-            />
-            <path
-              d="M0 18 H24 L30 18 L35 11 L40 24 L48 5 L56 18 H84 L90 18 L96 13 L102 22 L111 9 L120 18 H180"
-              fill="none"
-              stroke="#48cae4"
-              strokeWidth="5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="ews-ecg-glow"
-            />
-          </svg>
-        </div>
-      )}
+      <MiniSnapshotTrend data={item.trend} status={status} />
 
       <div className="mt-3 flex items-center justify-between gap-2 text-[11px] font-bold">
-        <span className="truncate text-slate-500">{item.helper}</span>
+        <span className="min-w-0 truncate text-slate-500">{item.helper}</span>
         <span className="whitespace-nowrap text-slate-400">Tgt {item.target}%</span>
       </div>
+
+      <button
+        type="button"
+        onClick={() => onOpenDetail(item.key)}
+        className="mt-auto inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 transition hover:border-[#90e0ef] hover:bg-slate-50 hover:text-[#0077b6] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] active:scale-95"
+      >
+        Detail
+        <ChevronRight size={15} />
+      </button>
     </div>
   );
 }
 
 function EwsControlTower() {
+  const navigate = useNavigate();
   const [summary, setSummary] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [connectionState, setConnectionState] = useState('connecting');
   const [freshnessState, setFreshnessState] = useState('NO_SNAPSHOT');
+  const [trendByKpi, setTrendByKpi] = useState({});
   const hasSummaryRef = useRef(false);
   const versionRef = useRef(0);
 
   useEffect(() => {
     hasSummaryRef.current = Boolean(summary);
   }, [summary]);
+
+  const loadTrend = useCallback(async () => {
+    try {
+      const response = await fetch('/api/ews/trend?days=7');
+      if (!response.ok) throw new Error('Failed to load EWS trend');
+      const payload = await response.json();
+      setTrendByKpi(payload?.data || {});
+    } catch {
+      setTrendByKpi({});
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTrend();
+  }, [loadTrend]);
 
   useEffect(() => {
     function updateFreshness() {
@@ -328,7 +386,7 @@ function EwsControlTower() {
       try {
         const message = JSON.parse(event.data);
         setError(message.error || 'EWS stream error');
-      } catch (_err) {
+      } catch {
         setError('EWS stream error');
       }
       setIsLoading(false);
@@ -351,9 +409,10 @@ function EwsControlTower() {
         value: apiItem?.value ?? null,
         status: apiItem?.status || 'no_data',
         helper: apiItem?.helper || 'Waiting for EWS data',
+        trend: trendByKpi[item.key] || [],
       };
     })
-  ), [summary]);
+  ), [summary, trendByKpi]);
 
   const issues = summary?.issues || [];
   const queue = summary?.correction_queue || {};
@@ -483,7 +542,11 @@ function EwsControlTower() {
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           {liveKpis.map((item) => (
-            <KpiTile key={item.key} item={item} />
+            <KpiTile
+              key={item.key}
+              item={item}
+              onOpenDetail={(key) => navigate(`/ews/${key}/detail`)}
+            />
           ))}
         </div>
 

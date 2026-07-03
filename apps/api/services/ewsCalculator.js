@@ -1,18 +1,18 @@
 const db = global.pool || require("../db");
 
 const KPI_DEFS = {
-  uptime: { label: "Uptime", target: 99, owner: "IT" },
-  accuracy: { label: "Accuracy", target: 97, owner: "Foreman" },
-  adoption: { label: "Adoption", target: 95, owner: "Spv" },
-  oee: { label: "OEE", target: 65, owner: "PPIC" },
-  ole: { label: "OLE", target: 85, owner: "Spv" },
+  uptime: { label: "Uptime", target: 99, owner: "IT (Wira)" },
+  accuracy: { label: "Accuracy", target: 98, owner: "Foreman/Spv" },
+  adoption: { label: "Adoption", target: 95, owner: "Foreman/Spv" },
+  oee: { label: "OEE", target: 80, owner: "Foreman/Spv/PPIC" },
+  ole: { label: "OLE", target: 85, owner: "Foreman/Spv/PPIC" },
 };
 
 const DEFAULT_THRESHOLDS = {
-  uptime: { normal_min: 98, warning_min: 95, critical_below: 95 },
-  accuracy: { normal_min: 97, warning_min: 95, critical_below: 95 },
+  uptime: { normal_min: 99, warning_min: 98, critical_below: 98 },
+  accuracy: { normal_min: 98, warning_min: 95, critical_below: 95 },
   adoption: { normal_min: 95, warning_min: 90, critical_below: 90 },
-  oee: { normal_min: 65, warning_min: 50, critical_below: 50 },
+  oee: { normal_min: 80, warning_min: 65, critical_below: 65 },
   ole: { normal_min: 85, warning_min: 70, critical_below: 70 },
 };
 
@@ -215,6 +215,25 @@ async function getTodayBounds() {
   return result.rows[0];
 }
 
+function assertIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) {
+    throw new Error("Invalid EWS date. Use YYYY-MM-DD.");
+  }
+}
+
+async function getDateBounds(dateText) {
+  assertIsoDate(dateText);
+  const result = await db.query(
+    `
+    SELECT
+      $1::date::timestamptz AS window_start,
+      ($1::date + interval '1 day')::timestamptz AS window_end
+    `,
+    [dateText],
+  );
+  return result.rows[0];
+}
+
 async function getThresholds() {
   if (!(await tableExists("ews", "kpi_threshold"))) return DEFAULT_THRESHOLDS;
 
@@ -298,11 +317,24 @@ async function calculateUptime(bounds, options = {}) {
 }
 
 async function calculateAccuracy(bounds) {
+  const hasSapStaging = await tableExists("public", "sap_timesheet_staging");
+  const sapReadyExpression = hasSapStaging
+    ? `
+        EXISTS (
+          SELECT 1
+          FROM public.sap_timesheet_staging s
+          WHERE s.source_system = 'TIMESHEET'
+            AND s.source_key = t.tsnumber::text
+        )
+      `
+    : "false";
+
   const tsResult = await db.query(
     `
     WITH base AS (
       SELECT
         t.*,
+        ${sapReadyExpression} AS is_sap_staged,
         EXISTS (
           SELECT 1
           FROM public.sow s
@@ -321,82 +353,79 @@ async function calculateAccuracy(bounds) {
     flags AS (
       SELECT
         *,
-        (activitytype IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NULL) AS missing_order,
-        (activitytype IS NULL AND operation_no IS NULL) AS missing_operation,
-        (longdate_checkin IS NULL) AS missing_checkin,
-        (longdate_checkout IS NULL AND longdate_checkin < now() - interval '30 minutes') AS stale_open_checkout,
-        (duration IS NULL OR duration < 0) AS invalid_duration,
-        (longdate_checkout IS NOT NULL AND duration_delta_hours > 0.10) AS duration_mismatch,
-        (activitytype IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL AND operation_no IS NOT NULL AND NOT has_sow_match) AS sow_no_match,
-        (activitytype IS NULL AND planhours IS NULL) AS missing_planhours
+        (NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NULL) AS missing_order,
+        (NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL AND operation_no IS NULL) AS missing_operation,
+        (
+          NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL
+          AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
+          AND operation_no IS NOT NULL
+          AND NOT has_sow_match
+        ) AS sow_no_match
       FROM base
     )
     SELECT
       COUNT(*)::int AS total_records,
+      COUNT(*) FILTER (WHERE is_sap_staged)::int AS ready_records,
       COUNT(*) FILTER (
-        WHERE missing_order OR missing_operation OR missing_checkin OR stale_open_checkout
-           OR invalid_duration OR duration_mismatch OR sow_no_match OR missing_planhours
+        WHERE missing_order OR missing_operation OR sow_no_match
       )::int AS error_records,
       COUNT(*) FILTER (WHERE missing_order)::int AS missing_order,
       COUNT(*) FILTER (WHERE missing_operation)::int AS missing_operation,
-      COUNT(*) FILTER (WHERE stale_open_checkout)::int AS stale_open_checkout,
-      COUNT(*) FILTER (WHERE invalid_duration)::int AS invalid_duration,
-      COUNT(*) FILTER (WHERE duration_mismatch)::int AS duration_mismatch,
       COUNT(*) FILTER (WHERE sow_no_match)::int AS sow_no_match,
-      COUNT(*) FILTER (WHERE missing_planhours)::int AS missing_planhours
+      COUNT(*) FILTER (WHERE NOT is_sap_staged)::int AS not_staged_records
     FROM flags
     `,
     [bounds.window_start, bounds.window_end],
   );
 
   const row = tsResult.rows[0] || {};
-  let sapTotal = 0;
-  let sapFailed = 0;
-  let sapPending = 0;
+  const mchResult = await db.query(
+    `
+    SELECT
+      COUNT(*)::int AS total_records,
+      COUNT(*) FILTER (WHERE mt.proddataid IS NOT NULL)::int AS ready_records,
+      COUNT(*) FILTER (WHERE mt.proddataid IS NULL)::int AS missing_mch_transaction
+    FROM public.mch_productiondata pd
+    LEFT JOIN public.mch_transaction mt
+      ON mt.proddataid = pd.proddataid
+    WHERE pd.startdatetime >= $1
+      AND pd.startdatetime < $2
+    `,
+    [bounds.window_start, bounds.window_end],
+  );
 
-  if (await tableExists("public", "sap_timesheet_staging")) {
-    const sapResult = await db.query(
-      `
-      SELECT
-        COUNT(*)::int AS total_records,
-        COUNT(*) FILTER (WHERE UPPER(status) = 'FAILED')::int AS failed_records,
-        COUNT(*) FILTER (WHERE UPPER(status) = 'PENDING')::int AS pending_records
-      FROM public.sap_timesheet_staging
-      WHERE created_at >= $1
-        AND created_at < $2
-      `,
-      [bounds.window_start, bounds.window_end],
-    );
-    sapTotal = num(sapResult.rows[0]?.total_records, 0);
-    sapFailed = num(sapResult.rows[0]?.failed_records, 0);
-    sapPending = num(sapResult.rows[0]?.pending_records, 0);
-  }
-
-  const total = num(row.total_records, 0) + sapTotal;
-  const errors = num(row.error_records, 0) + sapFailed;
-  const value = total > 0 ? Math.max(0, (1 - errors / total) * 100) : null;
+  const mchRow = mchResult.rows[0] || {};
+  const timesheetTotal = num(row.total_records, 0);
+  const timesheetReady = num(row.ready_records, 0);
+  const machineTotal = num(mchRow.total_records, 0);
+  const machineReady = num(mchRow.ready_records, 0);
+  const total = timesheetTotal + machineTotal;
+  const ready = timesheetReady + machineReady;
+  const errors = Math.max(0, total - ready);
+  const value = total > 0 ? Math.max(0, Math.min(100, (ready / total) * 100)) : null;
 
   return {
     value,
-    helper: value === null ? "No timesheet record in window" : `${errors}/${total} error records`,
+    helper: value === null ? "No source record in window" : `${ready}/${total} SAP-ready source records`,
     detail: {
       total_records: total,
-      timesheet_records: num(row.total_records, 0),
+      ready_records: ready,
+      not_ready_records: errors,
+      timesheet_records: timesheetTotal,
+      timesheet_ready_records: timesheetReady,
+      machine_records: machineTotal,
+      machine_ready_records: machineReady,
       error_records: errors,
-      sap_total: sapTotal,
-      sap_failed: sapFailed,
-      sap_pending_backlog: sapPending,
+      timesheet_not_staged_records: num(row.not_staged_records, 0),
+      machine_missing_mch_transaction: num(mchRow.missing_mch_transaction, 0),
       error_breakdown: {
         missing_order: num(row.missing_order, 0),
         missing_operation: num(row.missing_operation, 0),
-        stale_open_checkout: num(row.stale_open_checkout, 0),
-        invalid_duration: num(row.invalid_duration, 0),
-        duration_mismatch: num(row.duration_mismatch, 0),
         sow_no_match: num(row.sow_no_match, 0),
-        missing_planhours: num(row.missing_planhours, 0),
+        machine_missing_mch_transaction: num(mchRow.missing_mch_transaction, 0),
       },
-      denominator: "timesheet records + SAP staging rows in window",
-      numerator: "1 - (timesheet errors + SAP FAILED) / denominator",
+      denominator: "timesheet_transaction rows today + mch_productiondata rows today",
+      numerator: "timesheet rows present in sap_timesheet_staging + mch_productiondata rows present in mch_transaction",
       minimum_sample_met: total >= 50,
     },
   };
@@ -530,24 +559,42 @@ async function calculateAdoption(bounds) {
 async function calculateOee(bounds) {
   const result = await db.query(
     `
+    WITH base AS (
+      SELECT
+        duration_hours::float AS duration_hours,
+        statusid,
+        COALESCE(status_activitytype, '') AS status_activitytype,
+        LOWER(BTRIM(COALESCE(status_description, ''))) AS status_description
+      FROM public.mch_transaction
+      WHERE startdatetime >= $1
+        AND startdatetime < $2
+        AND COALESCE(duration_hours, 0) > 0
+    )
     SELECT
       COALESCE(SUM(duration_hours) FILTER (
-        WHERE COALESCE(status_activitytype, '') = 'M1'
-           OR LOWER(COALESCE(status_description, '')) = 'productive'
+        WHERE status_activitytype IN ('M1', 'M2')
+           OR status_description = 'productive'
       ), 0)::float AS running_hours,
       COALESCE(SUM(duration_hours) FILTER (
-        WHERE COALESCE(duration_hours, 0) > 0
-          AND LOWER(COALESCE(status_description, '')) NOT IN ('no job', 'off')
+        WHERE status_description NOT IN (
+          'no job',
+          'off',
+          'preventive',
+          'breakdown',
+          'coffee break / lunch',
+          'daily pm'
+        )
       ), 0)::float AS denominator_hours,
       COALESCE(SUM(duration_hours) FILTER (
-        WHERE LOWER(COALESCE(status_description, '')) IN ('downtime', 'breakdown')
+        WHERE status_description = 'downtime'
       ), 0)::float AS downtime_hours,
       COALESCE(SUM(duration_hours) FILTER (
-        WHERE COALESCE(status_activitytype, '') = 'M2'
-      ), 0)::float AS setup_hours
-    FROM public.mch_transaction
-    WHERE startdatetime >= $1
-      AND startdatetime < $2
+        WHERE status_activitytype = 'M2'
+      ), 0)::float AS setup_hours,
+      COALESCE(SUM(duration_hours) FILTER (WHERE statusid = 5), 0)::float AS missing_hours,
+      COALESCE(SUM(duration_hours) FILTER (WHERE statusid = 4), 0)::float AS nojob_hours,
+      COALESCE(SUM(duration_hours), 0)::float AS total_hours
+    FROM base
     `,
     [bounds.window_start, bounds.window_end],
   );
@@ -557,14 +604,18 @@ async function calculateOee(bounds) {
     value,
     helper: value === null
       ? "No machine event in window"
-      : `${round1(row.running_hours)}h productive / ${round1(row.denominator_hours)}h counted`,
+      : `${round1(row.running_hours)}h running / ${round1(row.denominator_hours)}h counted`,
     detail: {
       running_hours: num(row.running_hours, 0),
       denominator_hours: num(row.denominator_hours, 0),
       downtime_hours: num(row.downtime_hours, 0),
       setup_hours: num(row.setup_hours, 0),
-      denominator: "Productive + M2 + Downtime + Idle, excluding No Job and Off",
-      numerator: "Productive machine event time",
+      missing_hours: num(row.missing_hours, 0),
+      nojob_hours: num(row.nojob_hours, 0),
+      total_hours: num(row.total_hours, 0),
+      denominator: "Positive machine time excluding No Job, Off, Preventive, Breakdown, Coffee Break/Lunch, and Daily PM",
+      numerator: "M1 + M2 + Productive machine event time",
+      note: "This is an EWS time-based OEE proxy, not classic Availability x Performance x Quality OEE.",
     },
   };
 }
@@ -776,6 +827,22 @@ function withComparison(currentKpis, previousKpis) {
 }
 
 async function resolveSummaryBounds(options = {}) {
+  if (options.basis === "date") {
+    const bounds = await getDateBounds(options.date);
+    return {
+      // Manual date mode is for safe local/debug analysis only.
+      // It uses live reads and is intentionally not written into ews.kpi_snapshot.
+      basis: "date",
+      grain: "date",
+      read_only: true,
+      current: {
+        window_start: bounds.window_start,
+        window_end: bounds.window_end,
+      },
+      previous: null,
+    };
+  }
+
   if (options.basis === "today") {
     const bounds = await getTodayBounds();
     return {
@@ -843,14 +910,16 @@ async function calculateSystemSummary(input = {}) {
     },
   };
 
-  await saveSnapshot({
-    windowStart: resolved.current.window_start,
-    windowEnd: resolved.current.window_end,
-    grain: resolved.grain,
-    payload,
-  }).catch((err) => {
-    console.error("EWS saveSnapshot error:", err.message);
-  });
+  if (!resolved.read_only) {
+    await saveSnapshot({
+      windowStart: resolved.current.window_start,
+      windowEnd: resolved.current.window_end,
+      grain: resolved.grain,
+      payload,
+    }).catch((err) => {
+      console.error("EWS saveSnapshot error:", err.message);
+    });
+  }
 
   return payload;
 }

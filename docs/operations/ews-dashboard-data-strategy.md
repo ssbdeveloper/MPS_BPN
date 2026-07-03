@@ -209,29 +209,38 @@ Gunakan:
 Formula sesuai dokumen yang sederhana:
 
 ```text
-oee_pct = running_time / total_time * 100
+oee_pct = running_time / denominator_time * 100
 ```
 
 Mapping status:
 
-- Running/Productive: `status_description = 'Productive'` atau `status_activitytype = 'M1'`
-- Setup/NNVA machine activities: `status_activitytype = 'M2'`
-- Downtime: `status_description IN ('Downtime', 'Breakdown')` atau activity type downtime.
-- Exclude/segregate: `No Job`, `Off`, break/lunch tergantung definisi final denominator.
+- Running/Productive numerator: `status_activitytype IN ('M1', 'M2')` atau `status_description = 'Productive'`.
+- VA detail bucket: `status_activitytype = 'M1'` atau `status_description = 'Productive'`.
+- NNVA detail bucket: `status_activitytype = 'M2'`. M2 ikut numerator EWS OEE, tetapi tetap ditampilkan sebagai NNVA pada detail.
+- Missing detail bucket: `statusid = 5`.
+- NoJob detail bucket: `statusid = 4` atau `status_description IN ('No Job', 'Off')`.
+- NVA detail bucket: machine time selain VA/NNVA/Missing/NoJob.
 
 Rekomendasi denominator tahap 1:
 
 ```text
-total_time = Productive + M2 + Downtime + Idle
-running_time = Productive
+denominator_time = duration_hours > 0
+  excluding No Job, Off, Preventive, Breakdown, Coffee Break / Lunch, Daily PM
+
+running_time = M1 + M2 + Productive
 ```
 
 Breakdown:
 
-- Machine.
-- Status description.
-- Downtime reason.
+- Waterfall: Total Time -> Missing (`statusid = 5`, red) -> NNVA (`M2`) -> NoJob (`statusid = 4`) -> NVA -> VA.
+- 100% stacked bar per machine: VA, NNVA, NVA, NoJob.
+- By machine OEE: `(VA + NNVA) / denominator_time * 100`.
 - Workcenter/order/operation jika tersedia.
+
+Catatan akurasi istilah:
+
+- Ini adalah **EWS time-based OEE proxy**, bukan OEE klasik `Availability x Performance x Quality`.
+- `Breakdown` dikeluarkan dari denominator sesuai definisi EWS saat ini. Jika bisnis ingin breakdown menurunkan OEE sebagai unplanned loss, hapus `breakdown` dari daftar exclude.
 
 Tabel baru:
 
