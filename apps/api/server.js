@@ -62,6 +62,16 @@ function createPgPool({
   statementTimeoutMs,
   idleInTransactionTimeoutMs,
 }) {
+  const usesPgbouncer = String(host || '').toLowerCase().includes('pgbouncer') || String(port || '') === '6432';
+  const startupOptions = [`-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`];
+
+  if (!usesPgbouncer) {
+    startupOptions.push(
+      `-c statement_timeout=${statementTimeoutMs}`,
+      `-c idle_in_transaction_session_timeout=${idleInTransactionTimeoutMs}`,
+    );
+  }
+
   return new Pool({
     host,
     port: parseInt(port, 10) || 5432,
@@ -72,14 +82,12 @@ function createPgPool({
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10),
     connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '5000', 10),
     query_timeout: queryTimeoutMs,
-    statement_timeout: statementTimeoutMs,
-    idle_in_transaction_session_timeout: idleInTransactionTimeoutMs,
+    ...(usesPgbouncer ? {} : {
+      statement_timeout: statementTimeoutMs,
+      idle_in_transaction_session_timeout: idleInTransactionTimeoutMs,
+    }),
     application_name: applicationName,
-    options: [
-      `-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`,
-      `-c statement_timeout=${statementTimeoutMs}`,
-      `-c idle_in_transaction_session_timeout=${idleInTransactionTimeoutMs}`,
-    ].join(' ')
+    options: startupOptions.join(' ')
   });
 }
 
