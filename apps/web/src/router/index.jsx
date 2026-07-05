@@ -161,6 +161,10 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/PPC/SowSchedulingPage')),
   },
   {
+    path: '/sow-verification',
+    lazy: page(() => import('../pages/PPC/salvaging/SowVerificationPage')),
+  },
+  {
     path: '/shift-definition',
     lazy: protectedPage(() => import('../pages/PPC/ShiftDefinitionPage')),
   },
