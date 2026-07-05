@@ -1,19 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Activity,
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
-  Clock3,
+  ClipboardCheck,
   Gauge,
+  HardHat,
   RadioTower,
-  ShieldCheck,
   TrendingUp,
-  Users,
+  UserCheck,
   Wifi,
 } from 'lucide-react';
+import { badgeStyle, dotStyle, solidColor } from '../../theme/ewsStatus';
 
+// Icon per KPI dipilih sesuai definisi masing-masing:
+//  Uptime   → Wifi          (konektivitas / mesin online)
+//  Accuracy → ClipboardCheck (record data tervalidasi & benar)
+//  Adoption → UserCheck      (operator benar-benar mengisi timesheet)
+//  OEE      → Gauge          (utilisasi / efisiensi mesin)
+//  OLE      → HardHat        (efektivitas tenaga kerja / operator)
 const kpis = [
   {
     key: 'uptime',
@@ -22,25 +28,22 @@ const kpis = [
     owner: 'IT',
     icon: Wifi,
     tone: 'emerald',
-    animated: 'heartbeat',
   },
   {
     key: 'accuracy',
     label: 'Accuracy',
     target: 97,
     owner: 'Foreman',
-    icon: ShieldCheck,
+    icon: ClipboardCheck,
     tone: 'cyan',
-    animated: 'scan',
   },
   {
     key: 'adoption',
     label: 'Adoption',
     target: 95,
     owner: 'Spv',
-    icon: Users,
+    icon: UserCheck,
     tone: 'sky',
-    animated: 'rise',
   },
   {
     key: 'oee',
@@ -49,58 +52,19 @@ const kpis = [
     owner: 'PPIC',
     icon: Gauge,
     tone: 'amber',
-    animated: 'flicker',
   },
   {
     key: 'ole',
     label: 'OLE',
     target: 85,
     owner: 'Spv',
-    icon: Activity,
+    icon: HardHat,
     tone: 'indigo',
-    animated: 'rise',
   },
 ];
 
-const toneClass = {
-  emerald: {
-    soft: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  },
-  cyan: {
-    soft: 'bg-cyan-50 text-[#0077b6] border-cyan-200',
-  },
-  sky: {
-    soft: 'bg-sky-50 text-sky-700 border-sky-200',
-  },
-  amber: {
-    soft: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  indigo: {
-    soft: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-  },
-};
-
-const statusClass = {
-  normal: 'border-[#90e0ef] bg-[#caf0f8] text-[#0077b6]',
-  watch: 'border-amber-200 bg-amber-50 text-amber-700',
-  critical: 'border-red-200 bg-red-50 text-red-700',
-  no_data: 'border-slate-200 bg-slate-50 text-slate-500',
-};
-
-const statusDotClass = {
-  normal: 'bg-[#0096c7]',
-  watch: 'bg-amber-500',
-  critical: 'bg-red-600',
-  no_data: 'bg-slate-400',
-};
-
-const statusBarClass = {
-  normal: 'from-[#0096c7] to-[#48cae4]',
-  watch: 'from-amber-500 to-amber-300',
-  critical: 'from-red-600 to-red-400',
-  no_data: 'from-slate-300 to-slate-200',
-};
-
+// Status colours come from the shared token module (see theme/ewsStatus.js).
+// Only the CRITICAL card tint/border is kept as a Tailwind class set here.
 const cardStatusClass = {
   normal: 'border-slate-200 bg-white',
   watch: 'border-amber-200 bg-amber-50/30',
@@ -119,6 +83,28 @@ function normalizeStatus(value) {
 function formatPercent(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed.toFixed(1) : '--';
+}
+
+function ageMsFrom(value) {
+  const t = new Date(value || 0).getTime();
+  return Number.isFinite(t) && t > 0 ? Date.now() - t : 0;
+}
+
+function formatAge(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return 'baru';
+  const totalMin = Math.floor(ms / 60000);
+  if (totalMin < 60) return `${totalMin}m`;
+  const hours = Math.floor(totalMin / 60);
+  if (hours < 24) return `${hours}j ${totalMin % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}h ${hours % 24}j`;
+}
+
+function ageToneKey(ms) {
+  const hours = ms / 3.6e6;
+  if (hours >= 3) return 'critical';
+  if (hours >= 1) return 'watch';
+  return 'normal';
 }
 
 function AnimatedPercent({ value }) {
@@ -184,13 +170,8 @@ function MiniSnapshotTrend({ data, status }) {
   const points = (Array.isArray(data) ? data : [])
     .map((item) => Number(item.value))
     .filter((value) => Number.isFinite(value));
-  const lineColor = status === 'critical'
-    ? '#dc2626'
-    : status === 'watch'
-      ? '#f59e0b'
-      : status === 'normal'
-        ? '#0096c7'
-        : '#94a3b8';
+  // Sparkline follows the card's status colour (option b) so status reads from a distance.
+  const lineColor = solidColor(status);
 
   if (points.length < 2) {
     return (
@@ -233,25 +214,33 @@ function MiniSnapshotTrend({ data, status }) {
   );
 }
 
-function KpiTile({ item, onOpenDetail }) {
+function KpiTile({ item, index = 0, onOpenDetail }) {
   const Icon = item.icon;
-  const tone = toneClass[item.tone];
   const numericValue = Number(item.value);
   const hasValue = Number.isFinite(numericValue);
   const width = `${hasValue ? Math.min(Math.max(numericValue, 0), 100) : 0}%`;
   const statusLabel = item.status === 'no_data' ? 'NO DATA' : item.status?.toUpperCase();
   const status = normalizeStatus(item.status);
+  const isCritical = status === 'critical';
 
   return (
     <div
-      className={`flex h-full flex-col rounded-xl border p-3 shadow-sm transition-colors duration-500 ${cardStatusClass[status] || cardStatusClass.no_data}`}
+      style={{ animationDelay: `${index * 70}ms` }}
+      className={`ews-tile relative flex h-full flex-col overflow-hidden rounded-xl border p-3 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md ${cardStatusClass[status] || cardStatusClass.no_data}`}
     >
+      {isCritical && (
+        <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-red-600 to-red-400 ews-critical-bar" aria-hidden="true" />
+      )}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-[#90e0ef] bg-[#caf0f8] text-[#0077b6]">
+        {/* Neutral icon chip — icon accent must not read as a status colour. */}
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-500">
           <Icon size={18} />
         </div>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${statusClass[status] || tone.soft}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${statusDotClass[status] || statusDotClass.no_data} ews-dot-pulse`} />
+        <span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-extrabold" style={badgeStyle(status)}>
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${isCritical ? 'ews-critical-dot' : 'ews-dot-pulse'}`}
+            style={dotStyle(status)}
+          />
           {statusLabel || 'NO DATA'}
         </span>
       </div>
@@ -269,8 +258,8 @@ function KpiTile({ item, onOpenDetail }) {
 
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
         <div
-          className={`ews-fill h-full rounded-full bg-gradient-to-r transition-all duration-700 ${statusBarClass[status] || statusBarClass.no_data}`}
-          style={{ '--ews-width': width }}
+          className="ews-fill h-full rounded-full transition-all duration-700"
+          style={{ '--ews-width': width, backgroundColor: solidColor(status) }}
         />
       </div>
 
@@ -301,6 +290,7 @@ function EwsControlTower() {
   const [connectionState, setConnectionState] = useState('connecting');
   const [freshnessState, setFreshnessState] = useState('NO_SNAPSHOT');
   const [trendByKpi, setTrendByKpi] = useState({});
+  const [correctionActions, setCorrectionActions] = useState([]);
   const hasSummaryRef = useRef(false);
   const versionRef = useRef(0);
 
@@ -318,6 +308,24 @@ function EwsControlTower() {
       setTrendByKpi({});
     }
   }, []);
+
+  // Real correction queue straight from ews.action_table (open items only).
+  const loadCorrectionQueue = useCallback(async () => {
+    try {
+      const response = await fetch('/api/ews/actions?status=Open');
+      if (!response.ok) throw new Error('Failed to load correction queue');
+      const payload = await response.json();
+      setCorrectionActions(Array.isArray(payload?.data) ? payload.data : []);
+    } catch {
+      setCorrectionActions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCorrectionQueue();
+    const timer = window.setInterval(loadCorrectionQueue, 60000);
+    return () => window.clearInterval(timer);
+  }, [loadCorrectionQueue]);
 
   useEffect(() => {
     loadTrend();
@@ -405,7 +413,6 @@ function EwsControlTower() {
         ...apiItem,
         icon: item.icon,
         tone: item.tone,
-        animated: item.animated,
         value: apiItem?.value ?? null,
         status: apiItem?.status || 'no_data',
         helper: apiItem?.helper || 'Waiting for EWS data',
@@ -415,67 +422,70 @@ function EwsControlTower() {
   ), [summary, trendByKpi]);
 
   const issues = summary?.issues || [];
-  const queue = summary?.correction_queue || {};
+  const openCount = correctionActions.length;
+  const criticalOpen = correctionActions.filter((a) => String(a.severity || '').toLowerCase() === 'critical').length;
+  const agedActions = [...correctionActions].sort(
+    (a, b) => new Date(a.action_date || 0).getTime() - new Date(b.action_date || 0).getTime(),
+  );
+  const oldestAgeMs = agedActions.length ? ageMsFrom(agedActions[0].action_date) : 0;
   const overallStatus = summary?.overall_status || (error ? 'ERROR' : 'NO_DATA');
   const overallStatusKey = normalizeStatus(overallStatus);
   const overallScore = Number.isFinite(Number(summary?.overall_score))
     ? Number(summary.overall_score).toFixed(2)
     : '--';
   const snapshotVersion = summary?.version ?? summary?.meta?.version ?? '--';
+  const liveState = connectionState !== 'live'
+    ? 'sync'
+    : freshnessState === 'STALE'
+      ? 'stale'
+      : 'live';
 
   return (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <style>
         {`
-          @keyframes ewsHeartbeat {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.30); }
-            18% { transform: scale(1.10); box-shadow: 0 0 0 7px rgba(16, 185, 129, 0.12); }
-            32% { transform: scale(0.98); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18); }
-            48% { transform: scale(1.06); box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
-          }
-          @keyframes ewsPulseSoft {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.22); opacity: 0.72; }
-          }
           @keyframes ewsFill {
             from { width: 0%; }
             to { width: var(--ews-width); }
           }
           @keyframes ewsTileIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
+            from { opacity: 0; transform: translateY(10px) scale(.985); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          @keyframes ewsDotPulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.35); opacity: 0.55; }
+          }
+          @keyframes ewsLiveRing {
+            0% { box-shadow: 0 0 0 0 rgba(16,185,129,.55); }
+            70% { box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+            100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
           }
           @keyframes ewsCriticalCard {
-            0%, 100% { box-shadow: 0 1px 3px rgba(0,0,0,.06); border-color: rgb(252 165 165); }
-            50% { box-shadow: 0 0 0 3px rgba(239,68,68,.12); border-color: rgb(220 38 38); }
+            0%, 100% { box-shadow: inset 0 0 0 0 rgba(220,38,38,0); border-color: rgb(252 165 165); }
+            50% { box-shadow: inset 0 0 0 2px rgba(220,38,38,.22); border-color: rgb(220 38 38); }
           }
-          @keyframes ewsScan {
-            0%, 100% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
+          @keyframes ewsCriticalDot {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220,38,38,.6); }
+            50% { transform: scale(1.18); box-shadow: 0 0 0 5px rgba(220,38,38,0); }
           }
-          @keyframes ewsFlicker {
-            0%, 100% { border-color: rgb(226 232 240); }
-            50% { border-color: rgb(253 230 138); }
+          @keyframes ewsCriticalBar {
+            0%, 100% { opacity: .6; }
+            50% { opacity: 1; }
           }
-          @keyframes ewsEcgDash {
-            0% { stroke-dashoffset: 220; opacity: 0.35; }
-            18% { opacity: 1; }
-            100% { stroke-dashoffset: -220; opacity: 0.35; }
+          .ews-tile { animation: ewsTileIn 480ms cubic-bezier(.2,.8,.2,1) both; }
+          .ews-fill { width: var(--ews-width); animation: ewsFill 900ms cubic-bezier(.2,.8,.2,1) both; }
+          .ews-dot-pulse { animation: ewsDotPulse 1800ms ease-in-out infinite; }
+          .ews-live-dot { animation: ewsDotPulse 1500ms ease-in-out infinite; }
+          .ews-live-ring { animation: ewsLiveRing 1800ms ease-out infinite; }
+          .ews-critical-card { animation: ewsCriticalCard 1500ms ease-in-out infinite; }
+          .ews-critical-dot { animation: ewsCriticalDot 1150ms ease-in-out infinite; }
+          .ews-critical-bar { animation: ewsCriticalBar 1150ms ease-in-out infinite; }
+          @media (prefers-reduced-motion: reduce) {
+            .ews-tile, .ews-dot-pulse, .ews-live-dot, .ews-live-ring,
+            .ews-critical-card, .ews-critical-dot, .ews-critical-bar { animation: none !important; }
+            .ews-fill { animation: none !important; width: var(--ews-width); }
           }
-          @keyframes ewsEcgGlow {
-            0%, 100% { opacity: 0.10; transform: translateY(0); }
-            35% { opacity: 0.35; transform: translateY(-1px); }
-            55% { opacity: 0.20; transform: translateY(1px); }
-          }
-          .ews-critical-card { animation: ewsCriticalCard 1600ms ease-in-out infinite; }
-          .ews-fill { width: var(--ews-width); }
-          .ews-dot-heartbeat { animation: ewsHeartbeat 1500ms ease-in-out infinite; }
-          .ews-dot-pulse { animation: ewsPulseSoft 1800ms ease-in-out infinite; }
-          .ews-heartbeat { animation-name: ewsTileIn, ewsFlicker; animation-duration: 520ms, 2400ms; animation-timing-function: ease, ease-in-out; animation-iteration-count: 1, infinite; }
-          .ews-scan .ews-fill { background-size: 180% 180%; animation: ewsFill 1100ms cubic-bezier(.2,.8,.2,1) both, ewsScan 2600ms ease-in-out infinite; }
-          .ews-flicker { animation-name: ewsTileIn, ewsFlicker; animation-duration: 520ms, 2200ms; animation-timing-function: ease, ease-in-out; animation-iteration-count: 1, infinite; }
-          .ews-ecg-line { stroke-dasharray: 90 130; animation: ewsEcgDash 1650ms linear infinite; filter: drop-shadow(0 0 4px rgba(16,185,129,.35)); }
-          .ews-ecg-glow { opacity: .18; animation: ewsEcgGlow 1500ms ease-in-out infinite; }
         `}
       </style>
 
@@ -484,7 +494,7 @@ function EwsControlTower() {
           <div className="flex items-center gap-3">
             <div className="relative flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-cyan-200 bg-cyan-50 text-[#0077b6]">
               <RadioTower size={22} />
-              <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 ews-dot-heartbeat" />
+              <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 ews-live-dot" />
             </div>
             <div>
               <p className="text-[11px] font-extrabold uppercase tracking-wide text-[#0077b6]">EWS Control Tower</p>
@@ -493,7 +503,7 @@ function EwsControlTower() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-xs font-extrabold ${statusClass[overallStatusKey] || statusClass.no_data}`}>
+            <span className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-xs font-extrabold" style={badgeStyle(overallStatusKey)}>
               <CheckCircle2 size={14} />
               SYSTEM {overallStatus}
             </span>
@@ -501,27 +511,26 @@ function EwsControlTower() {
               <TrendingUp size={14} className="text-[#0077b6]" />
               Score {overallScore}
             </span>
-            <span className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-bold text-slate-500">
-              <Clock3 size={14} />
-              {isLoading ? 'Loading' : summary?.basis === 'today' ? 'Today' : `${summary?.grain || '15m'} window`}
-            </span>
-            <span className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-xs font-extrabold ${
-              connectionState === 'live'
-                ? statusClass.normal
-                : 'border-amber-200 bg-amber-50 text-amber-700'
-            }`}>
-              <RadioTower size={14} />
-              {connectionState === 'live' ? 'SSE LIVE' : 'RECONNECTING'}
-            </span>
-            <span className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-xs font-extrabold ${
-              freshnessState === 'FRESH'
-                ? statusClass.normal
-                : freshnessState === 'STALE'
-                  ? 'border-amber-200 bg-amber-50 text-amber-700'
-                  : 'border-red-200 bg-red-50 text-red-700'
-            }`}>
-              <Clock3 size={14} />
-              {freshnessState} v{snapshotVersion}
+            {/* One consolidated live indicator (replaces SSE LIVE / FRESH v / window chips) */}
+            <span
+              title={`Live stream ${connectionState} · ${freshnessState} · basis ${summary?.basis === 'today' ? 'today' : (summary?.grain || '15m')} · snapshot v${snapshotVersion}`}
+              className={`inline-flex min-h-[32px] items-center gap-2 rounded-full border px-3 text-xs font-extrabold ${
+                liveState === 'live'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : liveState === 'stale'
+                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                    : 'border-slate-200 bg-slate-50 text-slate-500'
+              }`}
+            >
+              <span className="relative flex h-2 w-2">
+                {liveState === 'live' && (
+                  <span className="absolute inline-flex h-2 w-2 rounded-full bg-emerald-500 ews-live-ring" />
+                )}
+                <span className={`relative inline-flex h-2 w-2 rounded-full ${
+                  liveState === 'live' ? 'bg-emerald-500' : liveState === 'stale' ? 'bg-amber-500' : 'bg-slate-400'
+                }`} />
+              </span>
+              {liveState === 'live' ? 'Live' : liveState === 'stale' ? 'Stale' : isLoading ? 'Connecting' : 'Reconnecting'}
             </span>
           </div>
         </div>
@@ -541,10 +550,11 @@ function EwsControlTower() {
         )}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {liveKpis.map((item) => (
+          {liveKpis.map((item, index) => (
             <KpiTile
               key={item.key}
               item={item}
+              index={index}
               onOpenDetail={(key) => navigate(`/ews/${key}/detail`)}
             />
           ))}
@@ -566,7 +576,7 @@ function EwsControlTower() {
                 <div key={`${issue.machine}-${issue.kpi}`} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-mono text-xs font-extrabold text-slate-800">{issue.machine}</p>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${statusClass[normalizeStatus(issue.severity)] || statusClass.watch}`}>
+                    <span className="rounded-full border px-2 py-0.5 text-[10px] font-extrabold" style={badgeStyle(issue.severity)}>
                       {issue.severity}
                     </span>
                   </div>
@@ -578,23 +588,62 @@ function EwsControlTower() {
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="flex items-center gap-2">
-              <AlertTriangle size={16} className="text-amber-600" />
-              <h3 className="text-xs font-extrabold uppercase text-slate-600">Correction Queue</h3>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={16} className="text-amber-600" />
+                <h3 className="text-xs font-extrabold uppercase text-slate-600">Correction Queue</h3>
+              </div>
+              <span className="font-mono text-[10px] font-bold text-slate-400">action_table</span>
             </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-center">
+                <div className="text-[10px] font-bold uppercase text-slate-500">Open</div>
+                <div className="text-lg font-black text-slate-900">{openCount}</div>
+              </div>
+              <div className={`rounded-lg border px-2 py-2 text-center ${criticalOpen > 0 ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'}`}>
+                <div className="text-[10px] font-bold uppercase text-slate-500">Critical</div>
+                <div className={`text-lg font-black ${criticalOpen > 0 ? 'text-red-700' : 'text-emerald-700'}`}>{criticalOpen}</div>
+              </div>
+              <div className="rounded-lg border px-2 py-2 text-center" style={openCount ? badgeStyle(ageToneKey(oldestAgeMs)) : { borderColor: '#E2E8F0', backgroundColor: '#F8FAFC' }}>
+                <div className="text-[10px] font-bold uppercase text-slate-500">Oldest</div>
+                <div className="text-sm font-black leading-tight">{openCount ? formatAge(oldestAgeMs) : '-'}</div>
+              </div>
+            </div>
+
             <div className="mt-3 space-y-2">
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                <span className="text-xs font-bold text-slate-600">Open actions</span>
-                <span className="text-sm font-black text-slate-900">{queue.open_actions ?? 0}</span>
-              </div>
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                <span className="text-xs font-bold text-slate-600">Critical aging</span>
-                <span className="text-sm font-black text-emerald-700">{queue.critical_aging ?? 0}</span>
-              </div>
-              <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                <span className="text-xs font-bold text-slate-600">Next escalation</span>
-                <span className="text-xs font-extrabold text-slate-500">{queue.next_escalation_minutes ?? 15} min</span>
-              </div>
+              {openCount === 0 ? (
+                <div className="rounded-lg border border-dashed border-emerald-200 bg-emerald-50/50 px-3 py-3 text-center text-[11px] font-bold text-emerald-600">
+                  ✓ Semua koreksi sudah selesai.
+                </div>
+              ) : (
+                agedActions.slice(0, 4).map((action) => {
+                  const ms = ageMsFrom(action.action_date);
+                  const toneKey = ageToneKey(ms);
+                  return (
+                    <button
+                      key={action.action_id}
+                      type="button"
+                      onClick={() => navigate(`/ews/${String(action.kpi_type || 'accuracy').toLowerCase()}/detail`)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left transition hover:border-[#90e0ef] hover:bg-white focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-bold text-slate-800">{action.issue_description || action.error_type || action.kpi_type}</span>
+                        <span className="flex-shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-extrabold" style={badgeStyle(toneKey)}>
+                          {formatAge(ms)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-2">
+                        <span className="truncate text-[11px] font-semibold text-slate-500">{action.pic || '—'} · {String(action.kpi_type || '').toUpperCase()}</span>
+                        <span className="flex-shrink-0 text-[10px] font-bold text-slate-400">{action.escalation_level}</span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+              {openCount > 4 && (
+                <p className="pt-1 text-center text-[10px] font-bold text-slate-400">+{openCount - 4} issue lain di queue</p>
+              )}
             </div>
           </div>
         </div>

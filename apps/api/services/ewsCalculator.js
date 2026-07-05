@@ -826,6 +826,54 @@ function withComparison(currentKpis, previousKpis) {
   });
 }
 
+// Adoption is read from a cached "today" snapshot, so its "previous window"
+// value equals the current one (delta 0). Pull yesterday's real adoption from
+// the historical daily snapshot instead so the comparison is meaningful.
+async function getYesterdayAdoption() {
+  if (!(await tableExists("ews", "kpi_snapshot"))) return null;
+  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const result = await db.query(
+    `
+    SELECT adoption_pct::float AS value
+    FROM ews.kpi_snapshot
+    WHERE scope_type = 'system'
+      AND scope_key = 'ALL'
+      AND adoption_pct IS NOT NULL
+      AND (window_end AT TIME ZONE $1)::date = ((now() AT TIME ZONE $1)::date - 1)
+    ORDER BY window_end DESC
+    LIMIT 1
+    `,
+    [timezone],
+  );
+  return result.rows[0] ? num(result.rows[0].value) : null;
+}
+
+async function applyYesterdayAdoptionComparison(kpis) {
+  let previousAdoption = null;
+  try {
+    previousAdoption = await getYesterdayAdoption();
+  } catch (err) {
+    console.error("EWS yesterday adoption comparison error:", err.message);
+    return kpis;
+  }
+  return kpis.map((kpi) => {
+    if (kpi.key !== "adoption") return kpi;
+    const current = num(kpi.value);
+    const delta = current === null || previousAdoption === null
+      ? null
+      : Math.round((current - previousAdoption) * 10) / 10;
+    return {
+      ...kpi,
+      comparison: {
+        previous_value: previousAdoption,
+        delta,
+        direction: delta === null ? "flat" : delta > 0 ? "up" : delta < 0 ? "down" : "flat",
+        label: "vs kemarin",
+      },
+    };
+  });
+}
+
 async function resolveSummaryBounds(options = {}) {
   if (options.basis === "date") {
     const bounds = await getDateBounds(options.date);
@@ -882,6 +930,7 @@ async function calculateSystemSummary(input = {}) {
     const previousKpis = await calculateKpisForBounds(resolved.previous, thresholds, { grain: resolved.grain, role: "previous" });
     previousSummary = overall(previousKpis);
     kpis = withComparison(kpis, previousKpis);
+    kpis = await applyYesterdayAdoptionComparison(kpis);
   }
 
   const summary = overall(kpis);

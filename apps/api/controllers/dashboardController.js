@@ -136,11 +136,10 @@ async function getOperationsHub(req, res) {
       overview,
       machineTrend,
       machineStatus,
-      validationQueue,
       progressStatus,
-      orderSummaries,
-      recentActivities,
-      topMachines,
+      sapPosting,
+      laborByWorkcenter,
+      topOperators,
     ] = await Promise.all([
       q(`
         WITH latest_machine_day AS (
@@ -245,22 +244,6 @@ async function getOperationsHub(req, res) {
       `),
       q(`
         SELECT
-          COALESCE(NULLIF(full_name, ''), 'Unknown') AS operator,
-          COALESCE(NULLIF(workcenter, ''), NULLIF(machineid, ''), '-') AS workcenter,
-          COUNT(*)::int AS item_count,
-          MAX(createddate) AS latest_at,
-          CASE
-            WHEN COUNT(*) FILTER (WHERE validation_status IS NULL OR validation_status = '') > 0 THEN 'Pending'
-            ELSE 'Ready'
-          END AS status
-        FROM public.processcontroldata
-        WHERE validation_status IS NULL OR validation_status = ''
-        GROUP BY 1, 2
-        ORDER BY MAX(createddate) DESC NULLS LAST, COUNT(*) DESC
-        LIMIT 6
-      `),
-      q(`
-        SELECT
           COALESCE(NULLIF(workcenter, ''), 'No Workcenter') AS label,
           ROUND(COALESCE(AVG(progress) FILTER (WHERE progress IS NOT NULL), 0), 1)::float AS value,
           COUNT(*)::int AS operation_count,
@@ -272,86 +255,59 @@ async function getOperationsHub(req, res) {
         LIMIT 6
       `),
       q(`
-        WITH orders AS (
+        SELECT
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'PENDING')::int AS pending,
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'FAILED')::int AS failed,
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'POSTED' AND created_at >= now() - interval '7 days')::int AS posted_7d,
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE created_at >= now() - interval '7 days')::int AS staged_7d
+      `),
+      q(`
+        WITH base AS (
           SELECT
-            TRIM(order_no) AS order_no,
-            (ARRAY_AGG(NULLIF(part_name, '') ORDER BY operation_no))[1] AS part_name,
-            (ARRAY_AGG(NULLIF(customer, '') ORDER BY operation_no))[1] AS customer,
-            (ARRAY_AGG(NULLIF(workcenter, '') ORDER BY operation_no))[1] AS owner,
-            ROUND(COALESCE(AVG(progress) FILTER (WHERE progress IS NOT NULL), 0), 1)::float AS progress,
-            MIN(plan_finish) AS eta,
-            COUNT(*)::int AS operation_count,
-            ROUND(COALESCE(SUM(planhours), 0), 2)::float AS plan_hours
-          FROM public.sow
-          WHERE COALESCE(systemstatus, '') NOT IN ('TECO', 'CLSD')
-          GROUP BY TRIM(order_no)
+            COALESCE(NULLIF(BTRIM(workcentercode), ''), '-') AS wc,
+            workcenterdescription AS wd,
+            duration::float AS d,
+            activitytype,
+            order_no
+          FROM public.timesheet_transaction
+          WHERE longdate_checkin >= now() - interval '24 hours'
+            AND COALESCE(state_flag, 1) <> 5
+            AND COALESCE(duration, 0) > 0
         )
-        SELECT *
-        FROM orders
-        ORDER BY eta ASC NULLS LAST, operation_count DESC
+        SELECT
+          wc AS workcenter,
+          MAX(wd) AS workcenter_name,
+          ROUND(SUM(d)::numeric, 1)::float AS total_hours,
+          ROUND(COALESCE(SUM(d) FILTER (
+            WHERE activitytype IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
+          ), 0)::numeric, 1)::float AS productive_hours
+        FROM base
+        GROUP BY wc
+        ORDER BY total_hours DESC
         LIMIT 8
       `),
       q(`
-        SELECT *
-        FROM (
+        WITH base AS (
           SELECT
-            'Process validation recorded' AS title,
-            COALESCE(production_order, operation_text, workcenter, '-') AS meta,
-            createddate AS event_ts,
-            'validation' AS type
-          FROM public.processcontroldata
-          WHERE createddate IS NOT NULL
-          UNION ALL
-          SELECT
-            'Timesheet activity logged' AS title,
-            CONCAT_WS(' - ', full_name, order_no, workcentercode) AS meta,
-            longdate_checkin AS event_ts,
-            'timesheet' AS type
+            COALESCE(NULLIF(BTRIM(full_name), ''), NULLIF(BTRIM(serialnumber), ''), 'UNKNOWN') AS name,
+            duration::float AS d,
+            activitytype,
+            order_no
           FROM public.timesheet_transaction
-          WHERE longdate_checkin IS NOT NULL
-          UNION ALL
-          SELECT
-            'Machine status captured' AS title,
-            CONCAT_WS(' - ', m.machineid, st.description, p.jobid) AS meta,
-            p.startdatetime AS event_ts,
-            'machine' AS type
-          FROM public.mch_productiondata p
-          LEFT JOIN public.mch_machines m ON m.machineno = p.machineno
-          LEFT JOIN public.mch_statustypes st ON st.statusid = p.statusid
-          WHERE p.startdatetime >= (SELECT MAX(startdatetime) - interval '7 days' FROM public.mch_productiondata)
-        ) recent
-        ORDER BY event_ts DESC NULLS LAST
-        LIMIT 6
-      `),
-      q(`
-        WITH latest_machine_day AS (
-          SELECT MAX(startdatetime::date) AS day
-          FROM public.mch_productiondata
-        ),
-        machine_hours AS (
-          SELECT
-            p.machineno,
-            COALESCE(m.machineid, 'Machine ' || p.machineno::text) AS machineid,
-            COALESCE(NULLIF(m.machinename, ''), m.description, '-') AS machinename,
-            SUM(CASE WHEN p.statusid = 1 THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(p.enddatetime, p.startdatetime) - p.startdatetime)), 0) ELSE 0 END) / 3600.0 AS productive_hours,
-            SUM(GREATEST(EXTRACT(EPOCH FROM (COALESCE(p.enddatetime, p.startdatetime) - p.startdatetime)), 0)) / 3600.0 AS total_hours,
-            COUNT(*)::int AS event_count
-          FROM public.mch_productiondata p
-          JOIN latest_machine_day d ON p.startdatetime::date = d.day
-          LEFT JOIN public.mch_machines m ON m.machineno = p.machineno
-          GROUP BY p.machineno, COALESCE(m.machineid, 'Machine ' || p.machineno::text), COALESCE(NULLIF(m.machinename, ''), m.description, '-')
+          WHERE longdate_checkin >= now() - interval '24 hours'
+            AND COALESCE(state_flag, 1) <> 5
+            AND COALESCE(duration, 0) > 0
         )
         SELECT
-          machineno,
-          machineid,
-          machinename,
-          ROUND(productive_hours, 2)::float AS productive_hours,
-          ROUND(total_hours, 2)::float AS total_hours,
-          ROUND(productive_hours / NULLIF(total_hours, 0) * 100.0, 1)::float AS productive_pct,
-          event_count
-        FROM machine_hours
-        ORDER BY total_hours DESC
-        LIMIT 6
+          name,
+          ROUND(COALESCE(SUM(d) FILTER (
+            WHERE activitytype IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
+          ), 0)::numeric, 1)::float AS productive_hours,
+          ROUND(SUM(d)::numeric, 1)::float AS total_hours
+        FROM base
+        GROUP BY name
+        ORDER BY productive_hours DESC, total_hours DESC
+        LIMIT 8
       `),
     ]);
 
@@ -374,11 +330,10 @@ async function getOperationsHub(req, res) {
         },
         machine_trend: machineTrend.rows,
         machine_status: machineStatus.rows,
-        validation_queue: validationQueue.rows,
         progress_status: progressStatus.rows,
-        order_summaries: orderSummaries.rows,
-        recent_activities: recentActivities.rows,
-        top_machines: topMachines.rows,
+        sap_posting: sapPosting.rows[0] || {},
+        labor_by_workcenter: laborByWorkcenter.rows,
+        top_operators: topOperators.rows,
       },
       meta: meta(),
     };

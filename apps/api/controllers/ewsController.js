@@ -4,6 +4,8 @@ const db = global.pool || require("../db");
 
 const summaryCache = new Map();
 const SUMMARY_TTL_MS = 60 * 1000;
+const detailCache = new Map();
+const DETAIL_TTL_MS = 60 * 1000;
 const VALID_KPIS = new Set(["uptime", "accuracy", "adoption", "oee", "ole"]);
 
 function getPool() {
@@ -339,10 +341,24 @@ async function buildUptimeSourceDetail(windowStart, windowEnd) {
           ORDER BY checked_at DESC
           LIMIT 50
         ) bad_rows
-      ) AS sample_rows
+      ) AS sample_rows,
+      (
+        SELECT COALESCE(jsonb_agg(row_to_json(h) ORDER BY h.hour_ts), '[]'::jsonb)
+        FROM (
+          SELECT
+            to_char(date_trunc('hour', checked_at AT TIME ZONE $3), 'HH24:00') AS hour_label,
+            MIN(checked_at) AS hour_ts,
+            SUM(ping_count)::int AS ping_count,
+            SUM(success_count)::int AS success_count,
+            SUM(failed_count)::int AS failed_count,
+            ROUND(((SUM(success_count)::numeric / NULLIF(SUM(ping_count), 0)) * 100)::numeric, 2)::float AS uptime_pct
+          FROM base
+          GROUP BY 1
+        ) h
+      ) AS hourly
     FROM per_machine
     `,
-    [windowStart, windowEnd],
+    [windowStart, windowEnd, process.env.TIMEZONE || "Asia/Makassar"],
   );
 
   const row = result.rows[0] || {};
@@ -350,6 +366,7 @@ async function buildUptimeSourceDetail(windowStart, windowEnd) {
     source_tables: ["public.mch_machine_ping_log"],
     false_alert_rule: "Real problem when max_consecutive_fail >= 6 samples",
     by_machine: row.by_machine || [],
+    hourly: row.hourly || [],
     sample_rows: row.sample_rows || [],
   };
 }
@@ -846,18 +863,29 @@ async function buildOleSourceDetail(windowStart, windowEnd) {
          SELECT
            COALESCE(workcentercode, 'UNKNOWN') AS machine_id,
            MAX(workcenterdescription) AS machine_name,
-           SUM(duration_hours) AS total_hours,
-           SUM(duration_hours) FILTER (WHERE activity_bucket = 'Processing') AS working_hours,
-           SUM(duration_hours) FILTER (WHERE activity_bucket <> 'Processing') AS nva_hours
+           COALESCE(SUM(duration_hours), 0)::float AS total_hours,
+           COALESCE(SUM(duration_hours) FILTER (WHERE activity_bucket = 'Processing'), 0)::float AS working_hours,
+           COALESCE(SUM(duration_hours) FILTER (WHERE activity_bucket <> 'Processing'), 0)::float AS nva_hours
          FROM base
          GROUP BY COALESCE(workcentercode, 'UNKNOWN')
+         HAVING COALESCE(SUM(duration_hours) FILTER (WHERE activity_bucket <> 'Processing'), 0) > 0
+         ORDER BY nva_hours DESC
          LIMIT 20
        ) x) AS by_machine,
       (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY hours DESC), '[]'::jsonb)
        FROM (
-         SELECT activity_bucket, SUM(duration_hours)::float AS hours, COUNT(*)::int AS record_count
-         FROM base
-         GROUP BY activity_bucket
+         SELECT
+           b.activitytype AS activity_bucket,
+           COALESCE(r.description, 'Aktivitas ' || b.activitytype) AS activity_label,
+           SUM(b.duration_hours)::float AS hours,
+           COUNT(*)::int AS record_count
+         FROM (
+           SELECT NULLIF(BTRIM(activitytype), '') AS activitytype, duration_hours
+           FROM base
+           WHERE NULLIF(BTRIM(activitytype), '') IS NOT NULL
+         ) b
+         LEFT JOIN ews.activity_type_ref r ON r.activitytype = b.activitytype
+         GROUP BY b.activitytype, COALESCE(r.description, 'Aktivitas ' || b.activitytype)
        ) x) AS by_activity,
       (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY longdate_checkin DESC), '[]'::jsonb)
        FROM (
@@ -1102,6 +1130,24 @@ async function getHealth(req, res) {
 async function getKpiDetailWithSource(req, res) {
   try {
     const type = String(req.params.type || "").toLowerCase();
+
+    // Short-lived cache: the KPI recompute + per-KPI aggregation is expensive.
+    // Serving a value up to DETAIL_TTL_MS old keeps repeat loads / navigation instant
+    // and prevents the heavy query from running on every page load.
+    const cacheKey = JSON.stringify({
+      type,
+      basis: req.query.basis || "rolling",
+      window: req.query.window || "",
+      date: req.query.date || "",
+      live: req.query.live || "",
+    });
+    const cached = detailCache.get(cacheKey);
+    if (cached && Date.now() - cached.createdAt < DETAIL_TTL_MS) {
+      res.set("X-Cache", "HIT");
+      res.json(cached.payload);
+      return;
+    }
+
     const isManualDate = req.query.basis === "date" && req.query.date;
     const summary = req.query.live === "1" || isManualDate
       ? await ewsCalculator.calculateSystemSummary({
@@ -1115,7 +1161,7 @@ async function getKpiDetailWithSource(req, res) {
     if (!kpi) return res.status(404).json({ error: "Unknown KPI type" });
 
     const sourceDetail = await buildKpiSourceDetail(type, summary);
-    res.json({
+    const payload = {
       data: {
         ...kpi,
         source_detail: sourceDetail,
@@ -1125,7 +1171,10 @@ async function getKpiDetailWithSource(req, res) {
         window_end: summary.window_end,
         generated_at: new Date().toISOString(),
       },
-    });
+    };
+    detailCache.set(cacheKey, { createdAt: Date.now(), payload });
+    res.set("X-Cache", "MISS");
+    res.json(payload);
   } catch (err) {
     console.error("ews kpi detail error:", err);
     res.status(500).json({ error: err.message });
