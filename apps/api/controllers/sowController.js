@@ -60,31 +60,52 @@ const EDITABLE_SOW_COLUMNS = [
   "source_op_id",
 ];
 
+let sowRuntimeColumnsReady = false;
+let sowRuntimeColumnsPromise = null;
+let sowRevisionHistoryReady = false;
+let sowRevisionHistoryPromise = null;
+
 async function ensureSowRuntimeColumns() {
-  await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0`);
-  await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS source_op_id BIGINT`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_sow_source_op_id ON public.sow (source_op_id)`);
+  if (sowRuntimeColumnsReady) return;
+  if (sowRuntimeColumnsPromise) return sowRuntimeColumnsPromise;
+  sowRuntimeColumnsPromise = (async () => {
+    await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0`);
+    await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS source_op_id BIGINT`);
+    await db.query(`CREATE INDEX IF NOT EXISTS idx_sow_source_op_id ON public.sow (source_op_id)`);
+    sowRuntimeColumnsReady = true;
+  })().finally(() => {
+    sowRuntimeColumnsPromise = null;
+  });
+  return sowRuntimeColumnsPromise;
 }
 
 async function ensureSowRevisionHistoryTable() {
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS sow_revision_history (
-      id BIGSERIAL PRIMARY KEY,
-      order_no TEXT NOT NULL,
-      revision_no INTEGER NOT NULL,
-      action TEXT NOT NULL DEFAULT 'edit',
-      before_data JSONB,
-      after_data JSONB,
-      changed_by TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (order_no, revision_no)
-    )
-  `);
-  await db.query(`
-    CREATE INDEX IF NOT EXISTS idx_sow_revision_history_order_created
-      ON sow_revision_history (order_no, created_at DESC)
-  `);
-  await ensureSowRuntimeColumns();
+  if (sowRevisionHistoryReady) return;
+  if (sowRevisionHistoryPromise) return sowRevisionHistoryPromise;
+  sowRevisionHistoryPromise = (async () => {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sow_revision_history (
+        id BIGSERIAL PRIMARY KEY,
+        order_no TEXT NOT NULL,
+        revision_no INTEGER NOT NULL,
+        action TEXT NOT NULL DEFAULT 'edit',
+        before_data JSONB,
+        after_data JSONB,
+        changed_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (order_no, revision_no)
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_sow_revision_history_order_created
+        ON sow_revision_history (order_no, created_at DESC)
+    `);
+    await ensureSowRuntimeColumns();
+    sowRevisionHistoryReady = true;
+  })().finally(() => {
+    sowRevisionHistoryPromise = null;
+  });
+  return sowRevisionHistoryPromise;
 }
 
 function normalizeSowOperation(row, fallbackOrderNo) {
@@ -102,6 +123,56 @@ function normalizeSowOperation(row, fallbackOrderNo) {
   item.revision_no = item.revision_no === "" || item.revision_no == null ? 0 : Number(item.revision_no);
   item.source_op_id = item.source_op_id === "" || item.source_op_id == null ? null : Number(item.source_op_id);
   return item;
+}
+
+function isBlankInfoValue(value) {
+  const text = String(value ?? "").trim();
+  return !text || text === "-";
+}
+
+function fillMissingOrderInfo(rows, info) {
+  if (!Array.isArray(rows) || !info) return rows || [];
+  return rows.map((row) => ({
+    ...row,
+    customer: isBlankInfoValue(row.customer) ? info.customer || row.customer : row.customer,
+    ssbr_id: isBlankInfoValue(row.ssbr_id) ? info.ssbr_id || row.ssbr_id : row.ssbr_id,
+    part_number: isBlankInfoValue(row.part_number) ? info.part_number || row.part_number : row.part_number,
+    part_name: isBlankInfoValue(row.part_name) ? info.part_name || row.part_name : row.part_name,
+    model: isBlankInfoValue(row.model) ? info.model || row.model : row.model,
+  }));
+}
+
+function inferLegacyWctGroup(workcenter, operationText) {
+  const code = String(workcenter || "").trim().toUpperCase();
+  const text = String(operationText || "").trim().toLowerCase();
+  if (code === "M5051DIS") return "DIS";
+  if (code === "M5051QC1") {
+    if (text.includes("testing")) return "QCT";
+    if (text.includes("final inspect")) return "QCF";
+    return "QCI";
+  }
+  return null;
+}
+
+async function resolveWctGroup(query, workcenter, existingGroup = null, operationText = "") {
+  if (existingGroup) return existingGroup;
+  const code = String(workcenter || "").trim();
+  if (!code) return null;
+  const result = await query(
+    `SELECT DISTINCT groupname
+     FROM public.workcenter
+     WHERE groupname IS NOT NULL
+       AND (
+         machineid = $1
+         OR workcenterot = $1
+         OR workcenternew = $1
+         OR workcenterold = $1
+       )
+     ORDER BY groupname`,
+    [code]
+  );
+  if (result.rows.length === 1) return result.rows[0].groupname;
+  return inferLegacyWctGroup(code, operationText);
 }
 
 const normalizeOrderNo = (value) => {
@@ -631,6 +702,19 @@ exports.getSowOrderForRevision = async (req, res) => {
       rows = result.rows;
     }
 
+    const infoResult = await db.query(
+      `SELECT
+         MAX(NULLIF(NULLIF(BTRIM(customer), ''), '-')) AS customer,
+         MAX(NULLIF(NULLIF(BTRIM(ssbr_id), ''), '-')) AS ssbr_id,
+         MAX(NULLIF(NULLIF(BTRIM(part_number), ''), '-')) AS part_number,
+         MAX(NULLIF(NULLIF(BTRIM(part_name), ''), '-')) AS part_name,
+         MAX(NULLIF(NULLIF(BTRIM(model), ''), '-')) AS model
+       FROM sow
+       WHERE order_no = $1`,
+      [orderNo],
+    );
+    rows = fillMissingOrderInfo(rows, infoResult.rows[0] || null);
+
     const revisions = await db.query(
       `SELECT revision_no, changed_by, created_at
        FROM sow_revision_history
@@ -840,6 +924,7 @@ exports.saveSowOrderRevision = async (req, res) => {
     for (const operation of operations) {
       const row = normalizeSowOperation(operation, orderNo);
       row.revision_no = revisionNo;
+      row.wct_group = await resolveWctGroup(client.query.bind(client), row.workcenter, row.wct_group, row.operation_text);
       const values = EDITABLE_SOW_COLUMNS.map((column) => row[column]);
       const placeholders = EDITABLE_SOW_COLUMNS.map((_, index) => `$${index + 1}`).join(", ");
       const result = await client.query(
@@ -1588,6 +1673,8 @@ exports.upsert = async (req, res) => {
     for (let idx = 0; idx < operations.length; idx++) {
       const op = operations[idx];
       console.log(`Processing operation ${idx + 1}/${operations.length}:`, op.operation_no);
+      const workcenterCode = op.workcenter || op.machineid || null;
+      const wctGroup = await resolveWctGroup(db.query.bind(db), workcenterCode, op.wct_group || null, op.operation_text);
       
       const checkQuery = `
         SELECT idsow FROM sow 
@@ -1634,8 +1721,8 @@ exports.upsert = async (req, res) => {
           model,
           customer,
           location,
-          op.wct_group,
-          op.workcenter,
+          wctGroup,
+          workcenterCode,
           op.operation_text,
           op.planhours,
           op.remark,
@@ -1671,8 +1758,8 @@ exports.upsert = async (req, res) => {
           model,
           customer,
           location,
-          op.wct_group,
-          op.workcenter,
+          wctGroup,
+          workcenterCode,
           op.operation_text,
           op.planhours,
           op.remark,
@@ -1765,6 +1852,8 @@ exports.createFromBuilder = async (req, res) => {
           : op.std_hours !== undefined && op.std_hours !== ''
             ? Number.parseFloat(op.std_hours)
             : null;
+      const workcenterCode = op.workcenter || op.machineid || null;
+      const wctGroup = await resolveWctGroup(query, workcenterCode, op.wct_group || null, op.operation_text);
 
       const result = await query(
         `
@@ -1826,8 +1915,8 @@ exports.createFromBuilder = async (req, res) => {
           model || null,
           customer || null,
           location || null,
-          op.wct_group || null,
-          op.workcenter || op.machineid || null,
+          wctGroup,
+          workcenterCode,
           op.operation_text || null,
           op.workcenterdescription || null,
           Number.isFinite(planhours) ? planhours : null,

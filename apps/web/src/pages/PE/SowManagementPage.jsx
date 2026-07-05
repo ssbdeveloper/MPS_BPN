@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { List, PlusCircle, Clock, ChevronLeft } from 'lucide-react';
+import { useCan } from '../../rbac';
 
 const navItems = [
   {
@@ -14,6 +15,7 @@ const navItems = [
     icon: PlusCircle,
     path: '/sow-management/create',
     description: 'Tambah SOW baru',
+    requiresWrite: true, // hidden for read_only roles
   },
   {
     label: 'SOW History',
@@ -26,6 +28,8 @@ const navItems = [
 const SowManagementPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const canWriteSow = useCan('sow_management', 'write');
+  const visibleNavItems = navItems.filter((item) => !item.requiresWrite || canWriteSow);
 
   return (
     <div className="h-screen h-dvh w-screen flex flex-col bg-slate-50">
@@ -62,7 +66,7 @@ const SowManagementPage = () => {
 
           {/* Nav items */}
           <nav className="flex flex-row md:flex-col px-2 py-2 gap-1">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const isActive = location.pathname === item.path;
               const Icon = item.icon;
 

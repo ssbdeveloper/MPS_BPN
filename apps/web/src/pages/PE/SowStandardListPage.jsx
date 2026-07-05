@@ -5,6 +5,7 @@ import {
   Save, AlertCircle, Paperclip, Image as ImageIcon, Download, FileSpreadsheet,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useCan } from '../../rbac';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const GROUP_LIMIT = 20;
@@ -1019,15 +1020,15 @@ function TemplateEditorModal({ mode, componentId, template, operations, nextKey,
 }
 
 // ─── OperationRow ─────────────────────────────────────────────────────────────
-function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNnva }) {
+function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNnva, canWrite = true }) {
   const nnva = op._nnva || [];
   const hasNnva = nnva.length > 0;
 
   return (
     <>
       <tr
-        className={`hover:bg-slate-50 cursor-pointer transition-colors ${nnvaExpanded ? 'bg-[#caf0f8]/30' : ''}`}
-        onClick={() => onEdit(op)}
+        className={`transition-colors ${canWrite ? 'hover:bg-slate-50 cursor-pointer' : ''} ${nnvaExpanded ? 'bg-[#caf0f8]/30' : ''}`}
+        onClick={() => canWrite && onEdit(op)}
       >
         <td className="px-3 py-2 font-mono text-xs text-slate-700 whitespace-nowrap">
           {op.operation_no}
@@ -1067,27 +1068,31 @@ function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNn
                 {op.attachments.length}
               </span>
             )}
-            <button
-              onClick={() => onEdit(op)}
-              className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
-                         border border-slate-200 text-slate-500 hover:bg-slate-50
-                         hover:border-slate-300 transition-all"
-              title="Edit"
-            >
-              <Pencil size={12} />
-            </button>
-            <button
-              onClick={() => onDelete(op.id)}
-              disabled={deleting === op.id}
-              className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
-                         border border-slate-200 text-red-400 hover:bg-red-50
-                         hover:border-red-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Hapus"
-            >
-              {deleting === op.id
-                ? <Loader2 size={12} className="animate-spin" />
-                : <Trash2 size={12} />}
-            </button>
+            {canWrite && (
+              <>
+                <button
+                  onClick={() => onEdit(op)}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                             border border-slate-200 text-slate-500 hover:bg-slate-50
+                             hover:border-slate-300 transition-all"
+                  title="Edit"
+                >
+                  <Pencil size={12} />
+                </button>
+                <button
+                  onClick={() => onDelete(op.id)}
+                  disabled={deleting === op.id}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-white
+                             border border-slate-200 text-red-400 hover:bg-red-50
+                             hover:border-red-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Hapus"
+                >
+                  {deleting === op.id
+                    ? <Loader2 size={12} className="animate-spin" />
+                    : <Trash2 size={12} />}
+                </button>
+              </>
+            )}
           </div>
         </td>
       </tr>
@@ -1161,6 +1166,7 @@ function ConfirmDeletePanel({ open, title, message, details, confirmLabel = 'Hap
 }
 
 function ComponentGroup({ group, onDeleted }) {
+  const canWrite = useCan('sow_management', 'write');
   const [open, setOpen]             = useState(false);
   const [operations, setOperations] = useState([]);
   const [templates, setTemplates]   = useState([]);
@@ -1314,24 +1320,26 @@ function ComponentGroup({ group, onDeleted }) {
             {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
           </div>
         </button>
-        <div className="flex items-center pr-3">
-          <button
-            type="button"
-            onClick={() => setConfirm({
-              type: 'component',
-              title: 'Hapus komponen?',
-              message: `${group.part_name || 'Komponen'} akan dihapus dari components beserta SOW standard, package, template lines, NNVA, attachment, dan operation card yang terkait.`,
-              details: `Component ID ${group.component_id} | ${group.operation_count || 0} operation | ${group.template_count || 0} package`,
-            })}
-            disabled={deletingComponent}
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg
-                       bg-white border border-red-200 text-red-500 hover:bg-red-50
-                       transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Hapus komponen"
-          >
-            {deletingComponent ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
-          </button>
-        </div>
+        {canWrite && (
+          <div className="flex items-center pr-3">
+            <button
+              type="button"
+              onClick={() => setConfirm({
+                type: 'component',
+                title: 'Hapus komponen?',
+                message: `${group.part_name || 'Komponen'} akan dihapus dari components beserta SOW standard, package, template lines, NNVA, attachment, dan operation card yang terkait.`,
+                details: `Component ID ${group.component_id} | ${group.operation_count || 0} operation | ${group.template_count || 0} package`,
+              })}
+              disabled={deletingComponent}
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg
+                         bg-white border border-red-200 text-red-500 hover:bg-red-50
+                         transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Hapus komponen"
+            >
+              {deletingComponent ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Expanded content */}
@@ -1341,14 +1349,16 @@ function ComponentGroup({ group, onDeleted }) {
             <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">
               Operations
             </span>
-            <button
-              onClick={() => setModal({ mode: 'create' })}
-              className="flex items-center gap-1 text-xs font-semibold text-white px-2.5 py-1.5
-                         rounded-lg bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95"
-            >
-              <Plus size={12} />
-              Tambah
-            </button>
+            {canWrite && (
+              <button
+                onClick={() => setModal({ mode: 'create' })}
+                className="flex items-center gap-1 text-xs font-semibold text-white px-2.5 py-1.5
+                           rounded-lg bg-[#0096c7] hover:bg-[#0077b6] transition-all active:scale-95"
+              >
+                <Plus size={12} />
+                Tambah
+              </button>
+            )}
           </div>
 
           {loadingOps ? (
@@ -1365,13 +1375,15 @@ function ComponentGroup({ group, onDeleted }) {
                     <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
                       Packages
                     </span>
-                    <button
-                      onClick={() => setTemplateModal({ mode: 'create' })}
-                      className="flex items-center gap-1 text-[10px] font-semibold text-[#0096c7] hover:text-[#0077b6] transition-colors"
-                    >
-                      <Plus size={11} />
-                      Package
-                    </button>
+                    {canWrite && (
+                      <button
+                        onClick={() => setTemplateModal({ mode: 'create' })}
+                        className="flex items-center gap-1 text-[10px] font-semibold text-[#0096c7] hover:text-[#0077b6] transition-colors"
+                      >
+                        <Plus size={11} />
+                        Package
+                      </button>
+                    )}
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {templates.map((template) => (
@@ -1386,37 +1398,39 @@ function ComponentGroup({ group, onDeleted }) {
                           <span className="font-mono">Key {template.template_key}</span>
                           <span>{fmtHours(template.total_std_hours)} h</span>
                         </div>
-                        <div className="mt-1.5 flex items-center gap-1 border-t border-slate-200 pt-1.5">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setTemplateModal({ mode: 'edit', template }); }}
-                            className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-500 hover:text-[#0096c7] py-1 rounded transition-colors hover:bg-white"
-                          >
-                            <Pencil size={10} /> Edit
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirm({
-                                type: 'template',
-                                id: template.template_id,
-                                title: 'Hapus package?',
-                                message: `Package ${template.template_name} akan dihapus dari daftar aktif.`,
-                                details: `${template.operation_count} operation tetap aman di SOW standard.`,
-                              });
-                            }}
-                            disabled={deletingTemplate === template.template_id}
-                            className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-400 hover:text-red-500 py-1 rounded transition-colors hover:bg-white disabled:opacity-40"
-                          >
-                            {deletingTemplate === template.template_id ? <Loader2 size={10} className="animate-spin" /> : <Trash2 size={10} />}
-                            Delete
-                          </button>
-                        </div>
+                        {canWrite && (
+                          <div className="mt-1.5 flex items-center gap-1 border-t border-slate-200 pt-1.5">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setTemplateModal({ mode: 'edit', template }); }}
+                              className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-500 hover:text-[#0096c7] py-1 rounded transition-colors hover:bg-white"
+                            >
+                              <Pencil size={10} /> Edit
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirm({
+                                  type: 'template',
+                                  id: template.template_id,
+                                  title: 'Hapus package?',
+                                  message: `Package ${template.template_name} akan dihapus dari daftar aktif.`,
+                                  details: `${template.operation_count} operation tetap aman di SOW standard.`,
+                                });
+                              }}
+                              disabled={deletingTemplate === template.template_id}
+                              className="flex-1 flex items-center justify-center gap-1 text-[10px] font-semibold text-slate-400 hover:text-red-500 py-1 rounded transition-colors hover:bg-white disabled:opacity-40"
+                            >
+                              {deletingTemplate === template.template_id ? <Loader2 size={10} className="animate-spin" /> : <Trash2 size={10} />}
+                              Delete
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-              {templates.length === 0 && operations.length > 0 && (
+              {canWrite && templates.length === 0 && operations.length > 0 && (
                 <div className="border-b border-slate-100 bg-white px-4 py-3 flex items-center justify-between">
                   <span className="text-[11px] font-medium text-slate-400">Belum ada package. Kelompokkan operasi ke dalam package.</span>
                   <button
@@ -1444,6 +1458,7 @@ function ComponentGroup({ group, onDeleted }) {
                     <OperationRow
                       key={op.id}
                       op={op}
+                      canWrite={canWrite}
                       onEdit={(o) => setModal({ mode: 'edit', op: o })}
                       onDelete={(id) => {
                         const target = operations.find((item) => item.id === id);

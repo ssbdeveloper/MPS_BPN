@@ -1,102 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { RefreshCw, Save, Search, Trash2, X, ChevronDown, FileText, Printer, Loader2, ArrowRight, Download, ArrowDownUp } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw, Save, Search, Trash2, X, ChevronDown, Loader2, ArrowRight, Download, ArrowDownUp, Printer } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { QRCodeCanvas } from 'qrcode.react';
-import ssbLogo from '../../assets/ssb.png';
-import operationCardHtml from '../../templates/operation-card.html?raw';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-const operationCardStyle = operationCardHtml.match(/<style>([\s\S]*?)<\/style>/i)?.[1] || '';
-const operationCardBody = operationCardHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)?.[1] || operationCardHtml;
-
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
-
 const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');
-const resolveAssetUrl = (src) => {
-  if (!src) return '';
-  if (String(src).startsWith('/uploads/')) {
-    const base = API_BASE.replace(/\/$/, '');
-    if (base === '/api') return src;
-    if (base.endsWith('/api')) {
-      try {
-        return `${new URL(base, window.location.origin).origin}${src}`;
-      } catch {
-        return src;
-      }
-    }
-    return `${base}${src}`;
-  }
-  return src;
-};
-
-function buildOpCardPreviewHtml({ orderNo, operations, detailInfo, imagesByOpNo, logoDataUrl }) {
-  const cards = operations.map((op) => {
-    const pn = detailInfo.part_number || '-';
-    const images = (imagesByOpNo[op.operation_no] || []).map((img) => {
-      const left = (img.x / 700) * 100;
-      const top = (img.y / 560) * 100;
-      const width = (img.width / 700) * 100;
-      const height = (img.height / 560) * 100;
-      return `<img class="main-box-image" src="${escAttr(resolveAssetUrl(img.src))}" alt="" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${width.toFixed(2)}%;height:${height.toFixed(2)}%;" />`;
-    }).join('');
-
-    return `
-      <div class="a4-page">
-        <table class="top-table"><tr>
-          <td class="qr-col"><img src="${escAttr(op.qrDataUrl || '')}" class="qr-img" /></td>
-          <td class="title-col"><div class="title">Operation Card</div><div class="brand"><img src="${escAttr(logoDataUrl)}" class="logo" /><span class="brand-name"><span class="red">SANGGAR</span><span>SARANA BAJA</span></span></div></td>
-          <td class="meta-col"><table class="meta-table">
-            <tr><td class="ml">Order No</td><td class="mv">${esc(orderNo)}</td></tr>
-            <tr><td class="ml">Part No</td><td class="mv">${esc(pn)}</td></tr>
-            <tr><td class="ml">Part Name</td><td class="mv">${esc(detailInfo.part_name || '-')}</td></tr>
-            <tr><td class="ml">Model</td><td class="mv">${esc(detailInfo.model || '-')}</td></tr>
-            <tr><td class="ml">Customer</td><td class="mv">${esc(detailInfo.customer || '-')}</td></tr>
-          </table></td>
-        </tr></table>
-        <table class="info-table"><tr>
-          <td class="il">Ops No</td><td class="iv">${op.operation_no}</td>
-          <td class="il">WC</td><td class="iv">${esc(op.machineid || op.workcenter || '-')}</td>
-        </tr><tr>
-          <td class="il">Op Text</td><td class="iv" colspan="3">${esc(op.operation_text || '-')}</td>
-        </tr><tr>
-          <td class="il">Std Hrs</td><td class="iv"><b>${op.std_hours ?? op.planhours ?? '-'}</b></td>
-          <td class="il">WC Desc</td><td class="iv">${esc(op.workcenterdescription || '-')}</td>
-        </tr></table>
-        <div class="main-box">${images}</div>
-      </div>
-    `;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-    @page { size: A4 portrait; margin: 0; }
-    *{margin:0;padding:0;box-sizing:border-box;}
-    body{font-family:Arial,sans-serif;background:#e8e6e0;display:block;padding:20px;}
-    .a4-page{width:794px;background:#fff;margin:0 auto 20px;border:2px solid #000;page-break-after:always;}
-    .top-table{width:100%;border-collapse:collapse;border-bottom:2px solid #000;}
-    .qr-col{width:120px;text-align:center;padding:8px;border-right:2px solid #000;}
-    .qr-img{width:90px;height:90px;}
-    .title-col{text-align:center;padding:8px;border-right:2px solid #000;}
-    .title{font-size:24px;font-weight:900;text-transform:uppercase;letter-spacing:4px;}
-    .brand{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:2px;}
-    .logo{width:28px;height:28px;}
-    .brand-name{font-size:8px;font-weight:700;text-align:left;line-height:1.2;}
-    .red{color:#0300c0;}
-    .meta-col{width:160px;vertical-align:top;padding:0;}
-    .meta-table{width:100%;border-collapse:collapse;}
-    .meta-table td{padding:2px 4px;font-size:7px;border-bottom:1px solid #ddd;}
-    .ml{font-weight:600;color:#555;white-space:nowrap;}
-    .mv{color:#1a1a1a;}
-    .info-table{width:100%;border-collapse:collapse;border-bottom:2px solid #000;}
-    .il{font-size:10px;font-weight:600;padding:4px 8px;border-right:1px solid #ccc;background:#d9d9d9;width:80px;}
-    .iv{font-size:11px;padding:4px 8px;border-right:1px solid #ccc;}
-    .main-box{width:700px;height:560px;margin:19px auto;border:2px solid #000;position:relative;overflow:hidden;background:#fff;}
-    .main-box-image{position:absolute;object-fit:contain;pointer-events:none;}
-    ${operationCardStyle}
-  </style></head><body>${cards}</body></html>`;
-}
 
 const emptyOperation = (orderNo = '', info) => ({
   order_no: orderNo,
@@ -129,6 +39,21 @@ function fmt(value) {
   return String(value);
 }
 
+function firstFilled(rows, key) {
+  const row = (rows || []).find((item) => String(item?.[key] ?? '').trim());
+  return row ? String(row[key]).trim() : '';
+}
+
+function getOrderDetailInfo(rows) {
+  return {
+    customer: firstFilled(rows, 'customer'),
+    ssbr_id: firstFilled(rows, 'ssbr_id'),
+    part_number: firstFilled(rows, 'part_number'),
+    part_name: firstFilled(rows, 'part_name'),
+    model: firstFilled(rows, 'model'),
+  };
+}
+
 const INPUT_CLS = `w-full rounded border border-slate-200 px-2 py-1 outline-none focus:border-[#0096c7] text-xs`;
 const SELECT_CLS = `w-full rounded border border-slate-200 px-2 py-1 outline-none focus:border-[#0096c7] appearance-none cursor-pointer bg-white text-xs truncate pr-6`;
 const todayDate = () => new Date().toISOString().slice(0, 10);
@@ -153,6 +78,7 @@ export default function SowHistoryPage() {
   const [exporting, setExporting] = useState(false);
   const [exportRange, setExportRange] = useState({ start: todayDate(), end: todayDate() });
   const [showEditor, setShowEditor] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState('');
   const [editRows, setEditRows] = useState([]);
   const [currentRevision, setCurrentRevision] = useState(0);
@@ -160,11 +86,12 @@ export default function SowHistoryPage() {
   const [revisionOptions, setRevisionOptions] = useState([]);
   const [saving, setSaving] = useState(false);
   const [savingInfo, setSavingInfo] = useState(false);
-  const [showOpCard, setShowOpCard] = useState(false);
-  const [opCardHtml, setOpCardHtml] = useState('');
-  const [opCardLoading, setOpCardLoading] = useState(false);
-  const qrRef = useRef(null);
-  const opCardPrintRef = useRef(null);
+  const showOpCard = false;
+  const setShowOpCard = () => {};
+  const opCardLoading = false;
+  const opCardHtml = '';
+  const opCardPrintRef = { current: null };
+  const detailRequestRef = useRef(0);
 
   const [detailInfo, setDetailInfo] = useState({ customer: '', ssbr_id: '', part_number: '', part_name: '', model: '' });
 
@@ -176,11 +103,33 @@ export default function SowHistoryPage() {
 
   const [customers, setCustomers] = useState([]);
   useEffect(() => { fetch(`${API_BASE}/sow/customers`).then(r => r.json()).then(d => setCustomers(d.data || [])).catch(() => {}); }, []);
+  const customerOptions = useMemo(() => {
+    const values = new Set(customers.map(c => String(c || '').trim()).filter(Boolean));
+    if (detailInfo.customer) values.add(detailInfo.customer);
+    return [...values].sort();
+  }, [customers, detailInfo.customer]);
 
   const [components, setComponents] = useState([]);
   useEffect(() => { fetch(`${API_BASE}/sow/components`).then(r => r.json()).then(d => setComponents(d.data || [])).catch(() => {}); }, []);
-  const models = useMemo(() => [...new Set(components.map(c => c.model).filter(Boolean))].sort(), [components]);
-  const partsByModel = useCallback((m) => components.filter(c => c.model === m && c.part_number).sort((a, b) => a.part_number > b.part_number ? 1 : -1), [components]);
+  const models = useMemo(() => {
+    const values = new Set(components.map(c => String(c.model || '').trim()).filter(Boolean));
+    if (detailInfo.model) values.add(detailInfo.model);
+    return [...values].sort();
+  }, [components, detailInfo.model]);
+  const partsByModel = useCallback((m, currentPart = '') => {
+    const rows = components
+      .filter(c => (!m || c.model === m) && c.part_number)
+      .sort((a, b) => String(a.part_number).localeCompare(String(b.part_number)));
+    if (currentPart && !rows.some(c => c.part_number === currentPart)) {
+      rows.unshift({
+        component_id: `current-${currentPart}`,
+        model: m,
+        part_number: currentPart,
+        part_name: detailInfo.part_name,
+      });
+    }
+    return rows;
+  }, [components, detailInfo.part_name]);
   const partInfoByNumber = useCallback((pn) => components.find(c => c.part_number === pn), [components]);
 
   const loadRows = useCallback(async (page = pagination.page, direction = sortDirection) => {
@@ -196,18 +145,39 @@ export default function SowHistoryPage() {
 
   const loadOrderDetail = useCallback(async (orderNo, revisionNo = null) => {
     if (!orderNo) return;
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    setShowEditor(true);
+    setDetailLoading(true);
+    setSelectedOrder(orderNo);
+    setSelectedRevision(revisionNo || 0);
+    setEditRows([]);
+    setRevisionOptions([]);
+    setDetailInfo({ customer: '', ssbr_id: '', part_number: '', part_name: '', model: '' });
     try {
       const params = new URLSearchParams();
       if (revisionNo) params.set('revision_no', String(revisionNo));
       const data = await request(`/sow/history-order/${encodeURIComponent(orderNo)}${params.toString() ? `?${params.toString()}` : ''}`);
+      if (detailRequestRef.current !== requestId) return;
       setSelectedOrder(orderNo);
       setEditRows((data.rows || []).map(r => ({ ...r, operation_name: r.workcenterdescription || '' })));
       setCurrentRevision(data.current_revision || 0);
       setSelectedRevision(data.selected_revision || data.current_revision || 0);
       setRevisionOptions(data.revisions || []);
-      const first = (data.rows || [])[0] || {};
-      setDetailInfo({ customer: first.customer || '', ssbr_id: first.ssbr_id || '', part_number: first.part_number || '', part_name: first.part_name || '', model: first.model || '' });
-    } catch (err) { toast.error(err.message); setEditRows([]); }
+      setDetailInfo(getOrderDetailInfo(data.rows || []));
+    } catch (err) {
+      if (detailRequestRef.current !== requestId) return;
+      toast.error(err.message);
+      setEditRows([]);
+    } finally {
+      if (detailRequestRef.current === requestId) setDetailLoading(false);
+    }
+  }, []);
+
+  const closeEditor = useCallback(() => {
+    detailRequestRef.current += 1;
+    setShowEditor(false);
+    setDetailLoading(false);
   }, []);
 
   useEffect(() => { loadRows(1); }, []);
@@ -288,54 +258,6 @@ export default function SowHistoryPage() {
     }
   };
 
-  const handleOpenOpCard = async () => {
-    if (!selectedOrder || editRows.length === 0) return;
-    setShowOpCard(true);
-    setOpCardLoading(true);
-    try {
-      const logoDataUrl = ssbLogo;
-      const imagesByOpNo = {};
-      await Promise.all(editRows.map(async (op) => {
-        const opNo = String(op.operation_no);
-        try {
-          const res = await fetch(`${API_BASE}/sow/operationcard/${op.idsow}`);
-          const json = await res.json();
-          if (json.data && Array.isArray(json.data.images)) {
-            imagesByOpNo[opNo] = json.data.images;
-          }
-        } catch { imagesByOpNo[opNo] = []; }
-      }));
-      const ops = await Promise.all(editRows.map(async (op) => {
-        let qrDataUrl = '';
-        try {
-          const partNumber = detailInfo.part_number || '-';
-          const qrValue = `OPERATION_CARD|PO:${normalizeProductionOrder(selectedOrder)}|PART:${partNumber}|OP:${op.operation_no}|WC:${op.workcenter || '-'}`;
-          qrDataUrl = await new Promise((resolve) => {
-            const tempDiv = document.createElement('div');
-            tempDiv.style.position = 'absolute';
-            tempDiv.style.left = '-9999px';
-            document.body.appendChild(tempDiv);
-            const { createRoot } = require('react-dom/client');
-            const root = createRoot(tempDiv);
-            const el = React.createElement(QRCodeCanvas, { value: qrValue, size: 90, level: 'M', bgColor: '#ffffff', fgColor: '#000000', ref: (node) => {
-              setTimeout(() => {
-                const canvas = tempDiv.querySelector('canvas');
-                resolve(canvas ? canvas.toDataURL('image/png') : '');
-                root.unmount();
-                document.body.removeChild(tempDiv);
-              }, 100);
-            }});
-            root.render(el);
-          });
-        } catch { qrDataUrl = ''; }
-        return { ...op, std_hours: op.planhours ?? op.std_hours ?? '', machineid: op.machineid || op.workcenter || '', qrDataUrl };
-      }));
-      const html = buildOpCardPreviewHtml({ orderNo: selectedOrder, operations: ops, detailInfo, imagesByOpNo, logoDataUrl });
-      setOpCardHtml(html);
-    } catch (err) { toast.error('Gagal generate operation card'); }
-    finally { setOpCardLoading(false); }
-  };
-
   return (
     <div className="flex h-full flex-col gap-3 p-4">
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -359,7 +281,7 @@ export default function SowHistoryPage() {
             </thead>
             <tbody>
               {loading ? (<tr><td colSpan={12} className="px-3 py-10 text-center text-slate-500">Loading...</td></tr>) : rows.length === 0 ? (<tr><td colSpan={12} className="px-3 py-10 text-center text-slate-500">Data tidak ditemukan</td></tr>) : rows.map((row, i) => (
-                <tr key={`${row.order_no}-${row.operation_no}-${i}`} onClick={() => { loadOrderDetail(row.order_no); setShowEditor(true); }} className="odd:bg-white even:bg-slate-50 hover:bg-[#caf0f8] cursor-pointer transition-colors">
+                <tr key={`${row.order_no}-${row.operation_no}-${i}`} onClick={() => loadOrderDetail(row.order_no)} className="odd:bg-white even:bg-slate-50 hover:bg-[#caf0f8] cursor-pointer transition-colors">
                   <td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.customer)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.order_no)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.ssbr_id)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.operation_text)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.operation_no)}</td><td className="border-b border-slate-100 px-3 py-2 font-semibold text-slate-800" title={`Operation: ${fmt(row.operation_planhours ?? row.planhours)} | NNVA: ${fmt(row.nnva_planhours)}`}>{fmt(row.planhours)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.wct_group)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.workcenter)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.status)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.part_number)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.part_name)}</td><td className="border-b border-slate-100 px-3 py-2 text-slate-700">{fmt(row.model)}</td>
                 </tr>))}
             </tbody>
@@ -402,26 +324,32 @@ export default function SowHistoryPage() {
       )}
 
       {showEditor && (
-        <div className="fixed inset-0 z-50 flex bg-slate-950/40 backdrop-blur-sm">
-          <div className="ml-auto flex h-full w-full max-w-7xl flex-col bg-white shadow-2xl">
+        <div className="fixed inset-0 z-50 flex bg-slate-950/40 backdrop-blur-sm" onMouseDown={closeEditor}>
+          <div className="ml-auto flex h-full w-full max-w-7xl flex-col bg-white shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3 flex-shrink-0">
-              <div><h3 className="text-lg font-bold text-slate-900">Edit SOW Revision</h3><p className="text-sm text-slate-500">{selectedOrder ? `${selectedOrder} — rev ${currentRevision}` : 'Pilih order_no untuk mulai edit'}</p></div>
-              <button onClick={() => setShowEditor(false)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"><X className="h-4 w-4" /></button>
+              <div><h3 className="text-lg font-bold text-slate-900">Edit SOW Revision</h3><p className="text-sm text-slate-500">{selectedOrder ? `${selectedOrder} - ${detailLoading ? 'loading...' : `rev ${currentRevision}`}` : 'Pilih order_no untuk mulai edit'}</p></div>
+              <button onClick={closeEditor} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"><X className="h-4 w-4" /></button>
             </div>
             <div className="min-h-0 flex-1 flex flex-col">
               <section className="flex min-w-0 min-h-0 flex-col">
-                {selectedOrder && (
+                {detailLoading && (
+                  <div className="flex min-h-[180px] items-center justify-center gap-3 border-b border-slate-200 text-sm font-semibold text-slate-500">
+                    <Loader2 className="h-5 w-5 animate-spin text-[#0096c7]" />
+                    Loading {selectedOrder}...
+                  </div>
+                )}
+                {!detailLoading && selectedOrder && (
                   <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 flex-shrink-0">
                     <div className="flex items-center justify-between mb-3"><span className="text-xs font-bold uppercase tracking-widest text-slate-500">Detail Info</span>
                       <button onClick={saveDetailInfo} disabled={savingInfo} className="inline-flex items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0077b6] disabled:opacity-50">{savingInfo ? 'Saving...' : <><Save size={12} /> Save Info</>}</button>
                     </div>
                     <div className="grid grid-cols-2 gap-3 mb-3">
-                      <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Customer</label><SelectWrapper><select value={detailInfo.customer} onChange={e => setDetailInfo(p => ({ ...p, customer: e.target.value }))} className={SELECT_CLS}><option value="">— Pilih Customer —</option>{customers.map(c => <option key={c} value={c}>{c}</option>)}</select></SelectWrapper></div>
+                      <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Customer</label><SelectWrapper><select value={detailInfo.customer} onChange={e => setDetailInfo(p => ({ ...p, customer: e.target.value }))} className={SELECT_CLS}><option value="">— Pilih Customer —</option>{customerOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></SelectWrapper></div>
                       <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">SSBR ID</label><input value={detailInfo.ssbr_id} onChange={e => setDetailInfo(p => ({ ...p, ssbr_id: e.target.value }))} className={INPUT_CLS} /></div>
                     </div>
                     <div className="grid grid-cols-3 gap-3">
                       <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Model</label><SelectWrapper><select value={detailInfo.model} onChange={e => { const m = e.target.value; setDetailInfo(p => ({ ...p, model: m, part_number: '', part_name: '' })); }} className={SELECT_CLS}><option value="">— Pilih Model —</option>{models.map(m => <option key={m} value={m}>{m}</option>)}</select></SelectWrapper></div>
-                      <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Number</label><SelectWrapper><select value={detailInfo.part_number} onChange={e => { const pn = e.target.value; const info = partInfoByNumber(pn); setDetailInfo(p => ({ ...p, part_number: pn, part_name: info?.part_name || '' })); }} disabled={!detailInfo.model} className={`${SELECT_CLS} ${!detailInfo.model ? 'opacity-40' : ''}`}><option value="">— Pilih Part —</option>{partsByModel(detailInfo.model).map(c => (<option key={c.component_id} value={c.part_number}>{c.part_number}</option>))}</select></SelectWrapper></div>
+                      <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Number</label><SelectWrapper><select value={detailInfo.part_number} onChange={e => { const pn = e.target.value; const info = partInfoByNumber(pn); setDetailInfo(p => ({ ...p, part_number: pn, part_name: info?.part_name || p.part_name || '' })); }} className={SELECT_CLS}><option value="">— Pilih Part —</option>{partsByModel(detailInfo.model, detailInfo.part_number).map(c => (<option key={c.component_id} value={c.part_number}>{c.part_number}</option>))}</select></SelectWrapper></div>
                       <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Name</label><input value={detailInfo.part_name} readOnly className={`${INPUT_CLS} bg-slate-100 text-slate-500`} placeholder="Auto-filled" /></div>
                     </div>
                   </div>
@@ -433,6 +361,7 @@ export default function SowHistoryPage() {
                       <select
                         value={selectedRevision || 0}
                         onChange={(e) => loadOrderDetail(selectedOrder, Number(e.target.value))}
+                        disabled={detailLoading || !selectedOrder}
                         className={`${SELECT_CLS} min-h-[38px] w-36`}
                       >
                         <option value={0}>Latest</option>
@@ -441,13 +370,9 @@ export default function SowHistoryPage() {
                         ))}
                       </select>
                     </SelectWrapper>
-                    <button onClick={handleOpenOpCard} disabled={!selectedOrder || editRows.length === 0 || opCardLoading}
-                      className="inline-flex min-h-[38px] items-center gap-2 rounded-lg border border-purple-200 bg-white px-3 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-40">
-                      {opCardLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} Op Card
-                    </button>
                     <button
                       onClick={() => navigate(`/sow-edit/revision/${encodeURIComponent(selectedOrder)}${selectedRevision ? `?revision_no=${selectedRevision}` : ''}`)}
-                      disabled={!selectedOrder}
+                      disabled={!selectedOrder || detailLoading}
                       className="inline-flex min-h-[38px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white disabled:opacity-40"
                     >
                       <ArrowRight className="h-4 w-4" /> Create Revision
@@ -464,11 +389,15 @@ export default function SowHistoryPage() {
                         const wcOpts = workcentersByGroup(row.wct_group);
                         return (
                           <tr key={`${row.idsow || 'new'}-${index}`}>
-                            <td className="border-b border-slate-100 px-2 py-1"><input type="number" value={row.operation_no ?? ''} onChange={e => updateEditRow(index, 'operation_no', e.target.value)} className={`${INPUT_CLS} w-[64px]`} /></td>
+                            <td className="border-b border-slate-100 px-2 py-1">
+                              <span className="inline-flex min-h-[30px] w-[64px] items-center justify-center rounded border border-slate-200 bg-slate-50 px-2 font-mono text-xs font-bold text-slate-700">
+                                {fmt(row.operation_no)}
+                              </span>
+                            </td>
                             <td className="border-b border-slate-100 px-2 py-1"><input type="text" value={row.operation_text ?? ''} onChange={e => updateEditRow(index, 'operation_text', e.target.value)} className={`${INPUT_CLS} min-w-[300px]`} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><SelectWrapper><select value={row.wct_group || ''} onChange={e => updateEditRow(index, 'wct_group', e.target.value)} className={`${SELECT_CLS} w-[120px]`}><option value="">—</option>{groupnames.map(g => <option key={g} value={g}>{g}</option>)}</select></SelectWrapper></td>
                             <td className="border-b border-slate-100 px-2 py-1"><SelectWrapper><select value={row.workcenter || ''} onChange={e => updateEditRow(index, 'workcenter', e.target.value)} disabled={wcOpts.length === 0} className={`${SELECT_CLS} w-[120px] ${wcOpts.length === 0 ? 'opacity-40' : ''}`}><option value="">—</option>{wcOpts.map(wc => <option key={wc.workcenternew} value={wc.workcenternew}>{wc.workcenternew}</option>)}</select></SelectWrapper></td>
-                            <td className="border-b border-slate-100 px-2 py-1"><input type="number" step="0.01" value={row.planhours ?? ''} onChange={e => updateEditRow(index, 'planhours', e.target.value)} className={`${INPUT_CLS} w-[62px] text-right`} /></td>
+                            <td className="border-b border-slate-100 px-2 py-1"><input type="text" inputMode="decimal" value={row.planhours ?? ''} onChange={e => updateEditRow(index, 'planhours', e.target.value.replace(/[^0-9.]/g, ''))} className={`${INPUT_CLS} w-[62px] text-right`} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><input type="text" value={row.workcenterdescription ?? ''} readOnly className={`${INPUT_CLS} w-[160px] bg-slate-50 text-slate-500`} title={row.workcenterdescription || ''} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><input type="text" value={row.status ?? ''} readOnly className={`${INPUT_CLS} w-[70px] bg-slate-50 text-slate-500 text-center`} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><button onClick={() => removeOperation(index)} className="rounded border border-red-200 p-1.5 text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /></button></td>

@@ -41,6 +41,27 @@ function toEditEntry(row, index) {
   };
 }
 
+function toOrderNumber(value) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isGeneralServiceOperation(op) {
+  const text = String(op?.operation_text || '').trim().toLowerCase();
+  const desiredNo = toOrderNumber(op?.operation_no ?? op?._standardOperationNo);
+  return text.startsWith('general service') || (desiredNo != null && desiredNo >= 5000);
+}
+
+function allocateRevisionOperationNo(items, op) {
+  const used = new Set(items.map((item) => toOrderNumber(item.operation_no)).filter((number) => number != null));
+  const desired = toOrderNumber(op.operation_no ?? op._standardOperationNo);
+  if (desired != null && !used.has(desired)) return desired;
+
+  const general = isGeneralServiceOperation(op);
+  const numbers = [...used].filter((number) => general ? number >= 5000 : number < 5000);
+  return Math.max(general ? 5000 : 0, ...numbers) + (general ? 1 : 10);
+}
+
 function buildSelectedPart(first, component) {
   return {
     component_id: component?.component_id || null,
@@ -214,8 +235,9 @@ export default function SowRevisionEditPage() {
     });
     setEditOps((prev) => {
       const already = prev.some((item) => item._srcId === op.id);
-      if (already) return prev.filter((item) => item._srcId !== op.id).map((item, i) => ({ ...item, operation_no: (i + 1) * 10 }));
-      return [...prev, makeEditEntry(op, 0)].map((item, i) => ({ ...item, operation_no: (i + 1) * 10 }));
+      if (already) return prev.filter((item) => item._srcId !== op.id);
+      const entry = makeEditEntry(op, allocateRevisionOperationNo(prev, op));
+      return [...prev, entry];
     });
   }, []);
 
@@ -227,10 +249,10 @@ export default function SowRevisionEditPage() {
     });
     setEditOps((prev) => {
       const existingIds = new Set(prev.map((item) => item._srcId).filter(Boolean));
-      let next = checked
-        ? [...prev, ...ops.filter((op) => !existingIds.has(op.id)).map((op) => makeEditEntry(op, 0))]
-        : prev.filter((item) => !ops.some((op) => op.id === item._srcId));
-      return next.map((item, i) => ({ ...item, operation_no: (i + 1) * 10 }));
+      if (!checked) return prev.filter((item) => !ops.some((op) => op.id === item._srcId));
+      return ops
+        .filter((op) => !existingIds.has(op.id))
+        .reduce((items, op) => [...items, makeEditEntry(op, allocateRevisionOperationNo(items, op))], prev);
     });
   }, []);
 
@@ -239,7 +261,7 @@ export default function SowRevisionEditPage() {
   }, []);
 
   const handleDelete = useCallback((key, sourceId) => {
-    setEditOps((prev) => prev.filter((op) => op._key !== key).map((op, i) => ({ ...op, operation_no: (i + 1) * 10 })));
+    setEditOps((prev) => prev.filter((op) => op._key !== key));
     if (sourceId) setCheckedOps((prev) => { const next = new Set(prev); next.delete(sourceId); return next; });
   }, []);
 
@@ -251,7 +273,7 @@ export default function SowRevisionEditPage() {
       const next = [...prev];
       const [moved] = next.splice(from, 1);
       next.splice(to, 0, moved);
-      return next.map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
+      return next;
     });
   }, []);
 
@@ -264,9 +286,9 @@ export default function SowRevisionEditPage() {
         operation_text: opData.operation_text,
         machineid: opData.machineid,
         std_hours: opData.std_hours,
-        operation_no: 0,
+        operation_no: allocateRevisionOperationNo(prev, opData),
       }];
-      return appended.map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
+      return appended;
     });
   }, []);
 

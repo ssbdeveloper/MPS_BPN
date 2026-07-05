@@ -28,8 +28,45 @@ const toOrderNumber = (value) => {
   const parsed = Number.parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
-const renumberSequential = (items) => items.map((op, i) => ({ ...op, operation_no: (i + 1) * 10 }));
-const renumberByStandardOrder = (items) => renumberSequential(
+const isGeneralServiceOperation = (op) => {
+  const text = String(op?.operation_text || '').trim().toLowerCase();
+  const standardNo = toOrderNumber(op?._standardOperationNo ?? op?.operation_no);
+  return text.startsWith('general service') || (standardNo != null && standardNo >= 5000);
+};
+const renumberNormalSequential = (items) => {
+  let normalIndex = 0;
+  const used = new Set();
+  return items.map((op) => {
+    if (isGeneralServiceOperation(op)) {
+      const standardNo = toOrderNumber(op._standardOperationNo);
+      const currentNo = toOrderNumber(op.operation_no);
+      let operationNo = standardNo != null ? standardNo : currentNo != null ? currentNo : 5001;
+      while (used.has(operationNo)) operationNo += 1;
+      used.add(operationNo);
+      return {
+        ...op,
+        operation_no: operationNo,
+      };
+    }
+    normalIndex += 1;
+    let operationNo = normalIndex * 10;
+    while (used.has(operationNo)) {
+      normalIndex += 1;
+      operationNo = normalIndex * 10;
+    }
+    used.add(operationNo);
+    return { ...op, operation_no: operationNo };
+  });
+};
+const getNextOperationNo = (items, op) => {
+  const general = isGeneralServiceOperation(op);
+  const numbers = items
+    .map((item) => toOrderNumber(item.operation_no))
+    .filter((number) => number != null && (general ? number >= 5000 : number < 5000));
+  const fallback = general ? 5000 : 0;
+  return Math.max(fallback, ...numbers) + (general ? 1 : 10);
+};
+const renumberByStandardOrder = (items) => renumberNormalSequential(
   [...items].sort((a, b) => {
     const aStd = toOrderNumber(a._standardOperationNo);
     const bStd = toOrderNumber(b._standardOperationNo);
@@ -494,10 +531,35 @@ export function useWorkcenterData() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Unique machineid values from the workcenter table, sorted
-  const machineIds = [...new Set(rows.map((r) => r.machineid).filter(Boolean))].sort();
+  const sortedRows = [...rows]
+    .filter((row) => row.machineid)
+    .sort((a, b) => {
+      const groupCompare = String(a.groupname || a.machineid || '').localeCompare(String(b.groupname || b.machineid || ''));
+      if (groupCompare !== 0) return groupCompare;
+      const aPos = Number.isFinite(Number(a.position)) ? Number(a.position) : Number.MAX_SAFE_INTEGER;
+      const bPos = Number.isFinite(Number(b.position)) ? Number(b.position) : Number.MAX_SAFE_INTEGER;
+      if (aPos !== bPos) return aPos - bPos;
+      return String(a.machineid || '').localeCompare(String(b.machineid || ''));
+    });
+  const machineIds = [...new Set(sortedRows.map((r) => r.machineid).filter(Boolean))];
+  const groupOptions = [];
+  const machineToGroup = {};
+  const groupToMachine = {};
 
-  return { machineIds, loading };
+  sortedRows.forEach((row) => {
+    const machineid = row.machineid;
+    const groupname = row.groupname || machineid;
+    if (!machineid || !groupname) return;
+    [row.machineid, row.workcenterot, row.workcenternew, row.workcenterold].forEach((code) => {
+      if (code) machineToGroup[code] = groupname;
+    });
+    if (!groupToMachine[groupname]) {
+      groupToMachine[groupname] = machineid;
+      groupOptions.push({ groupname, machineid });
+    }
+  });
+
+  return { machineIds, groupOptions, machineToGroup, groupToMachine, loading };
 }
 
 // ─── StepBadge ────────────────────────────────────────────────────────────────
@@ -1329,18 +1391,21 @@ export function ChecklistPanel({ componentId, selectedPart, checked, checkedTemp
 }
 
 // ─── WorkcenterSelect ────────────────────────────────────────────────────────
-// Flat list of machineid values from the workcenter table
-function WorkcenterSelect({ value, onChange, machineIds, loading, className }) {
-  // Always include the current value as an option so sow_standard.machineid always shows
-  const options = value && !machineIds.includes(value)
-    ? [value, ...machineIds]
-    : machineIds;
+function WorkcenterSelect({ value, onChange, groupOptions = [], machineToGroup = {}, loading, className }) {
+  const currentGroup = value ? (machineToGroup[value] || value) : '';
+  const hasCurrentGroup = currentGroup && groupOptions.some((option) => option.groupname === currentGroup);
+  const options = hasCurrentGroup || !currentGroup
+    ? groupOptions
+    : [{ groupname: currentGroup, machineid: value }, ...groupOptions];
 
   return (
     <div className="relative">
       <select
-        value={value || ''}
-        onChange={onChange}
+        value={currentGroup}
+        onChange={(event) => {
+          const selected = options.find((option) => option.groupname === event.target.value);
+          onChange(selected?.machineid || event.target.value);
+        }}
         disabled={loading}
         className={`w-full pl-2 pr-5 py-1.5 bg-white border border-slate-200 text-slate-700
                     rounded text-[11px] focus:outline-none focus:ring-1 focus:ring-[#00b4d8]
@@ -1348,9 +1413,9 @@ function WorkcenterSelect({ value, onChange, machineIds, loading, className }) {
                     ${loading ? 'opacity-50 cursor-not-allowed' : ''}
                     ${className || ''}`}
       >
-        <option value="">— WC —</option>
-        {options.map((id) => (
-          <option key={id} value={id}>{id}</option>
+        <option value="">-- WC --</option>
+        {options.map((option) => (
+          <option key={option.groupname} value={option.groupname}>{option.groupname}</option>
         ))}
       </select>
       <ChevronDown
@@ -1363,7 +1428,7 @@ function WorkcenterSelect({ value, onChange, machineIds, loading, className }) {
 
 // ─── EditPanel ────────────────────────────────────────────────────────────────
 export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData }) {
-  const { machineIds, loading: wcLoading } = wcData;
+  const { groupOptions, machineToGroup, loading: wcLoading } = wcData;
 
   const [dragKey, setDragKey]         = useState(null);
   const [dragOverKey, setDragOverKey] = useState(null);
@@ -1513,8 +1578,9 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                       <WorkcenterSelect
                         key={`${op._key}-${wcLoading}`}
                         value={op.machineid}
-                        onChange={(e) => handleWcChange(op._key, e.target.value)}
-                        machineIds={machineIds}
+                        onChange={(value) => handleWcChange(op._key, value)}
+                        groupOptions={groupOptions}
+                        machineToGroup={machineToGroup}
                         loading={wcLoading}
                       />
                     </td>
@@ -1591,24 +1657,15 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
 
               {/* Workcenter + Std Hours row */}
               <div className="flex gap-2">
-                {/* Workcenter flat select (machineid from workcenter table) */}
+                {/* Workcenter group select; saved value remains machineid. */}
                 <div className="flex-1 relative">
-                  <select
+                  <WorkcenterSelect
                     value={newOp.machineid}
-                    onChange={(e) => setNewOp((p) => ({ ...p, machineid: e.target.value }))}
-                    disabled={wcLoading}
-                    className="w-full pl-2.5 pr-6 py-2 bg-white border border-slate-200 text-slate-700
-                               rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[#00b4d8]
-                               focus:border-[#0096c7] transition-all appearance-none cursor-pointer"
-                  >
-                    <option value="">— Workcenter —</option>
-                    {machineIds.map((id) => (
-                      <option key={id} value={id}>{id}</option>
-                    ))}
-                  </select>
-                  <ChevronDown
-                    size={10}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+                    onChange={(value) => setNewOp((p) => ({ ...p, machineid: value }))}
+                    groupOptions={groupOptions}
+                    machineToGroup={machineToGroup}
+                    loading={wcLoading}
+                    className="py-2 rounded-lg text-xs focus:ring-2"
                   />
                 </div>
 
@@ -2817,7 +2874,7 @@ const SowCreatePage = () => {
       if (from < 0 || to < 0) return prev;
       const [moved] = items.splice(from, 1);
       items.splice(to, 0, moved);
-      return renumberSequential(items);
+      return renumberNormalSequential(items);
     });
   }, []);
 
@@ -2834,7 +2891,7 @@ const SowCreatePage = () => {
         machineid:      opData.machineid,
         std_hours:      opData.std_hours,
         remark:         opData.remark || '',
-        operation_no:   0,
+        operation_no:   getNextOperationNo(prev, opData),
       };
       const appended = [...prev, entry];
       return renumberByStandardOrder(appended);
