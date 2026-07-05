@@ -1733,13 +1733,13 @@ function deviationFlagsFor(effectiveStatus, row = {}) {
   return flags;
 }
 
-async function fetchEffectiveRow(client, { productionOrder, operationNo, workcenter, statusDate }) {
+async function fetchEffectiveRow(client, { productionOrder, operationNo, machineCode, statusDate }) {
   const result = await client.query(
     `SELECT effective_status, comparison_status, queue_variance
      FROM public.vw_sow_operation_actual
-     WHERE production_order = $1 AND operation_no = $2 AND workcenter = $3 AND schedule_date = $4
+     WHERE production_order = $1 AND operation_no = $2 AND machine_code = $3 AND schedule_date = $4
      LIMIT 1`,
-    [productionOrder, operationNo, workcenter, statusDate]
+    [productionOrder, operationNo, machineCode, statusDate]
   );
   return result.rows[0] || null;
 }
@@ -1793,7 +1793,9 @@ exports.upsertOperationStatus = async (req, res) => {
   const payload = req.body || {};
   const productionOrder = normalizeText(payload.production_order);
   const operationNo = toInt(payload.operation_no, null);
-  const workcenter = normalizeText(payload.workcenter);
+  // Physical machine (= machineid). Client must echo the canonical machine_code
+  // returned by GET /operation-status (normal/OT already collapsed there).
+  const machineCode = normalizeText(payload.machine_code || payload.machineid);
   const manualFlag = normalizeText(payload.manual_flag).toLowerCase();
   const statusDate = payload.status_date ? normalizeDate(payload.status_date, "status_date") : todayDate();
   const blockedReason = normalizeText(payload.blocked_reason) || null;
@@ -1802,8 +1804,8 @@ exports.upsertOperationStatus = async (req, res) => {
   const overrideNote = normalizeText(payload.override_note) || null;
   const note = normalizeText(payload.note) || null;
 
-  if (!productionOrder || operationNo === null || !workcenter) {
-    return res.status(400).json({ error: "production_order, operation_no and workcenter are required" });
+  if (!productionOrder || operationNo === null || !machineCode) {
+    return res.status(400).json({ error: "production_order, operation_no and machine_code are required" });
   }
   if (!MANUAL_FLAGS.has(manualFlag)) {
     return res.status(400).json({ error: "manual_flag must be 'dilewati' or 'nyangkut'" });
@@ -1821,16 +1823,15 @@ exports.upsertOperationStatus = async (req, res) => {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    // Workcenter consistency guard: the base view derives workcenter canonically
-    // (COALESCE(NULLIF(workcenter,''), machine_code) — and a different expression for
-    // unplanned actuals). We store ONLY a workcenter string that already exists as a
-    // view row for this op/date, so the join s.workcenter = b.workcenter can never miss
-    // (turns a silent lost-override into a loud 400). Client must echo the canonical
-    // `workcenter` returned by GET /operation-status.
-    const beforeRow = await fetchEffectiveRow(client, { productionOrder, operationNo, workcenter, statusDate });
+    // Machine consistency guard: store ONLY a machine_code that already exists as a
+    // view row for this op/date, so the join s.machine_code = b.machine_code can never
+    // miss (turns a silent lost-override into a loud 400). machine_code in the view is
+    // the physical machineid (normal/OT collapsed); client must echo the canonical
+    // machine_code from GET /operation-status.
+    const beforeRow = await fetchEffectiveRow(client, { productionOrder, operationNo, machineCode, statusDate });
     if (!beforeRow) {
       const error = new Error(
-        "no matching scheduled/actual operation for that production_order/operation_no/workcenter/date — send the canonical workcenter from GET /operation-status"
+        "no matching scheduled/actual operation for that production_order/operation_no/machine_code/date — send the canonical machine_code from GET /operation-status"
       );
       error.status = 400;
       throw error;
@@ -1839,12 +1840,12 @@ exports.upsertOperationStatus = async (req, res) => {
 
     const upsert = await client.query(
       `INSERT INTO public.sow_operation_status (
-         production_order, operation_no, workcenter, manual_flag, blocked_reason,
+         production_order, operation_no, machine_code, manual_flag, blocked_reason,
          blocked_by_machine_code, blocked_by_order, override_note,
          status_date, updated_by, updated_by_name, updated_at
        )
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
-       ON CONFLICT (production_order, operation_no, workcenter, status_date)
+       ON CONFLICT (production_order, operation_no, machine_code, status_date)
        DO UPDATE SET
          manual_flag = EXCLUDED.manual_flag,
          blocked_reason = EXCLUDED.blocked_reason,
@@ -1855,21 +1856,21 @@ exports.upsertOperationStatus = async (req, res) => {
          updated_by_name = EXCLUDED.updated_by_name,
          updated_at = now()
        RETURNING *`,
-      [productionOrder, operationNo, workcenter, manualFlag, blockedReason, blockedByMachine, blockedByOrder, overrideNote, statusDate, user.id, user.name]
+      [productionOrder, operationNo, machineCode, manualFlag, blockedReason, blockedByMachine, blockedByOrder, overrideNote, statusDate, user.id, user.name]
     );
 
-    const afterRow = await fetchEffectiveRow(client, { productionOrder, operationNo, workcenter, statusDate });
+    const afterRow = await fetchEffectiveRow(client, { productionOrder, operationNo, machineCode, statusDate });
     const after = afterRow?.effective_status || manualFlag;
     const flags = deviationFlagsFor(after, afterRow || {});
 
     await client.query(
       `INSERT INTO public.sow_verification_log (
-         verification_date, production_order, operation_no, workcenter,
+         verification_date, production_order, operation_no, machine_code,
          status_before, status_after, deviation_flags,
          verified_by, verified_by_name, note
        )
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`,
-      [statusDate, productionOrder, operationNo, workcenter, before, after, JSON.stringify(flags), user.id, user.name, note]
+      [statusDate, productionOrder, operationNo, machineCode, before, after, JSON.stringify(flags), user.id, user.name, note]
     );
 
     await client.query("COMMIT");
@@ -1910,7 +1911,7 @@ exports.clearOperationStatus = async (req, res) => {
     const key = {
       productionOrder: row.production_order,
       operationNo: row.operation_no,
-      workcenter: row.workcenter,
+      machineCode: row.machine_code,
       statusDate: row.status_date,
     };
     const beforeRow = await fetchEffectiveRow(client, key);
@@ -1923,12 +1924,12 @@ exports.clearOperationStatus = async (req, res) => {
 
     await client.query(
       `INSERT INTO public.sow_verification_log (
-         verification_date, production_order, operation_no, workcenter,
+         verification_date, production_order, operation_no, machine_code,
          status_before, status_after, deviation_flags,
          verified_by, verified_by_name, note
        )
        VALUES ($1,$2,$3,$4,$5,$6,'[]'::jsonb,$7,$8,$9)`,
-      [row.status_date, row.production_order, row.operation_no, row.workcenter, before, after, user.id, user.name, "cleared manual status"]
+      [row.status_date, row.production_order, row.operation_no, row.machine_code, before, after, user.id, user.name, "cleared manual status"]
     );
 
     await client.query("COMMIT");
