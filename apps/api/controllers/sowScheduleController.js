@@ -1710,3 +1710,265 @@ exports.getOvertimeSummaryReport = (req, res) => queryReportView(
   "vw_sow_overtime_summary",
   "overtime_date DESC, shift_id NULLS LAST, machine_code, created_at DESC"
 );
+
+// ===========================================================================
+// F2 — Daily verification layer.
+// The manual overlay (sow_operation_status) COMPLEMENTS the actual views; it
+// only stores what the views cannot know: `dilewati` (skipped) / `nyangkut`
+// (blocked + reason) + override. "sudah/belum" stays auto-derived. Effective
+// status = override wins, but vw_sow_operation_actual also exposes view_status
+// (original) for audit. Never writes plan tables (I3); never touches batch (I1).
+// ===========================================================================
+
+const MANUAL_FLAGS = new Set(["dilewati", "nyangkut"]);
+
+function deviationFlagsFor(effectiveStatus, row = {}) {
+  const flags = [];
+  if (effectiveStatus === "dilewati") flags.push("skipped");
+  if (effectiveStatus === "nyangkut") flags.push("blocked");
+  if (row.comparison_status === "MACHINE_CHANGED") flags.push("machine");
+  if (row.queue_variance !== null && row.queue_variance !== undefined && Number(row.queue_variance) !== 0) {
+    flags.push("sequence");
+  }
+  return flags;
+}
+
+async function fetchEffectiveRow(client, { productionOrder, operationNo, workcenter, statusDate }) {
+  const result = await client.query(
+    `SELECT effective_status, comparison_status, queue_variance
+     FROM public.vw_sow_operation_actual
+     WHERE production_order = $1 AND operation_no = $2 AND workcenter = $3 AND schedule_date = $4
+     LIMIT 1`,
+    [productionOrder, operationNo, workcenter, statusDate]
+  );
+  return result.rows[0] || null;
+}
+
+// Audit integrity: verification writes must be attributable. getRequestUser falls
+// back to name "web" with a null id when no auth header is present, so guard against
+// writing an anonymous log entry (real role enforcement lands in F4).
+function resolveVerifier(req) {
+  const user = getRequestUser(req);
+  if (user.id === null || user.id === undefined) {
+    const error = new Error("verifier identity is required (missing x-user-id header)");
+    error.status = 400;
+    throw error;
+  }
+  return user;
+}
+
+// GET /sow-schedule/operation-status?date=&production_order=&machine_code=
+// Combined effective + view + manual overlay for the day (consumed by Fitur C UI).
+exports.getOperationStatus = async (req, res) => {
+  const scheduleDate = req.query.date ? normalizeDate(req.query.date, "date") : todayDate();
+  const productionOrder = normalizeText(req.query.production_order);
+  const machineCode = normalizeText(req.query.machine_code);
+  const params = [scheduleDate];
+  const filters = ["schedule_date = $1"];
+  if (productionOrder) {
+    params.push(productionOrder);
+    filters.push(`production_order = $${params.length}`);
+  }
+  if (machineCode) {
+    params.push(machineCode);
+    filters.push(`machine_code = $${params.length}`);
+  }
+  try {
+    const result = await db.query(
+      `SELECT *
+       FROM public.vw_sow_operation_actual
+       WHERE ${filters.join(" AND ")}
+       ORDER BY machine_code, production_order, operation_no`,
+      params
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+// POST /sow-schedule/operation-status  — upsert a manual mark (dilewati/nyangkut).
+// Validates input, records status_before/after + deviation flags in the audit log.
+exports.upsertOperationStatus = async (req, res) => {
+  const payload = req.body || {};
+  const productionOrder = normalizeText(payload.production_order);
+  const operationNo = toInt(payload.operation_no, null);
+  const workcenter = normalizeText(payload.workcenter);
+  const manualFlag = normalizeText(payload.manual_flag).toLowerCase();
+  const statusDate = payload.status_date ? normalizeDate(payload.status_date, "status_date") : todayDate();
+  const blockedReason = normalizeText(payload.blocked_reason) || null;
+  const blockedByMachine = normalizeText(payload.blocked_by_machine_code || payload.blocked_by_machine_id) || null;
+  const blockedByOrder = normalizeText(payload.blocked_by_order) || null;
+  const overrideNote = normalizeText(payload.override_note) || null;
+  const note = normalizeText(payload.note) || null;
+
+  if (!productionOrder || operationNo === null || !workcenter) {
+    return res.status(400).json({ error: "production_order, operation_no and workcenter are required" });
+  }
+  if (!MANUAL_FLAGS.has(manualFlag)) {
+    return res.status(400).json({ error: "manual_flag must be 'dilewati' or 'nyangkut'" });
+  }
+  if (manualFlag === "nyangkut" && !blockedReason) {
+    return res.status(400).json({ error: "blocked_reason is required when manual_flag is 'nyangkut'" });
+  }
+
+  let user;
+  try {
+    user = resolveVerifier(req);
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message });
+  }
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    // Workcenter consistency guard: the base view derives workcenter canonically
+    // (COALESCE(NULLIF(workcenter,''), machine_code) — and a different expression for
+    // unplanned actuals). We store ONLY a workcenter string that already exists as a
+    // view row for this op/date, so the join s.workcenter = b.workcenter can never miss
+    // (turns a silent lost-override into a loud 400). Client must echo the canonical
+    // `workcenter` returned by GET /operation-status.
+    const beforeRow = await fetchEffectiveRow(client, { productionOrder, operationNo, workcenter, statusDate });
+    if (!beforeRow) {
+      const error = new Error(
+        "no matching scheduled/actual operation for that production_order/operation_no/workcenter/date — send the canonical workcenter from GET /operation-status"
+      );
+      error.status = 400;
+      throw error;
+    }
+    const before = beforeRow.effective_status || null;
+
+    const upsert = await client.query(
+      `INSERT INTO public.sow_operation_status (
+         production_order, operation_no, workcenter, manual_flag, blocked_reason,
+         blocked_by_machine_code, blocked_by_order, override_note,
+         status_date, updated_by, updated_by_name, updated_at
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+       ON CONFLICT (production_order, operation_no, workcenter, status_date)
+       DO UPDATE SET
+         manual_flag = EXCLUDED.manual_flag,
+         blocked_reason = EXCLUDED.blocked_reason,
+         blocked_by_machine_code = EXCLUDED.blocked_by_machine_code,
+         blocked_by_order = EXCLUDED.blocked_by_order,
+         override_note = EXCLUDED.override_note,
+         updated_by = EXCLUDED.updated_by,
+         updated_by_name = EXCLUDED.updated_by_name,
+         updated_at = now()
+       RETURNING *`,
+      [productionOrder, operationNo, workcenter, manualFlag, blockedReason, blockedByMachine, blockedByOrder, overrideNote, statusDate, user.id, user.name]
+    );
+
+    const afterRow = await fetchEffectiveRow(client, { productionOrder, operationNo, workcenter, statusDate });
+    const after = afterRow?.effective_status || manualFlag;
+    const flags = deviationFlagsFor(after, afterRow || {});
+
+    await client.query(
+      `INSERT INTO public.sow_verification_log (
+         verification_date, production_order, operation_no, workcenter,
+         status_before, status_after, deviation_flags,
+         verified_by, verified_by_name, note
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`,
+      [statusDate, productionOrder, operationNo, workcenter, before, after, JSON.stringify(flags), user.id, user.name, note]
+    );
+
+    await client.query("COMMIT");
+    res.status(201).json({ data: upsert.rows[0], effective_status: after, deviation_flags: flags });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    sendError(res, err);
+  } finally {
+    client.release();
+  }
+};
+
+// DELETE /sow-schedule/operation-status/:id — clear a manual mark (revert to the
+// view conclusion). Logs the revert; the plan/view data is untouched.
+exports.clearOperationStatus = async (req, res) => {
+  const id = toInt(req.params.id, null);
+  if (!id) return res.status(400).json({ error: "valid operation status id required" });
+
+  let user;
+  try {
+    user = resolveVerifier(req);
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message });
+  }
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM public.sow_operation_status WHERE id = $1 LIMIT 1`,
+      [id]
+    );
+    if (existing.rowCount === 0) {
+      const error = new Error("operation status not found");
+      error.status = 404;
+      throw error;
+    }
+    const row = existing.rows[0];
+    const key = {
+      productionOrder: row.production_order,
+      operationNo: row.operation_no,
+      workcenter: row.workcenter,
+      statusDate: row.status_date,
+    };
+    const beforeRow = await fetchEffectiveRow(client, key);
+    const before = beforeRow?.effective_status || null;
+
+    await client.query(`DELETE FROM public.sow_operation_status WHERE id = $1`, [id]);
+
+    const afterRow = await fetchEffectiveRow(client, key);
+    const after = afterRow?.effective_status || null;
+
+    await client.query(
+      `INSERT INTO public.sow_verification_log (
+         verification_date, production_order, operation_no, workcenter,
+         status_before, status_after, deviation_flags,
+         verified_by, verified_by_name, note
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,'[]'::jsonb,$7,$8,$9)`,
+      [row.status_date, row.production_order, row.operation_no, row.workcenter, before, after, user.id, user.name, "cleared manual status"]
+    );
+
+    await client.query("COMMIT");
+    res.json({ data: { id }, effective_status: after });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    sendError(res, err);
+  } finally {
+    client.release();
+  }
+};
+
+// GET /sow-schedule/verification-log?date=&production_order=&limit=
+exports.getVerificationLog = async (req, res) => {
+  const productionOrder = normalizeText(req.query.production_order);
+  const verificationDate = req.query.date ? normalizeDate(req.query.date, "date") : null;
+  const limit = clampLimit(req.query.limit);
+  const params = [];
+  const filters = [];
+  if (verificationDate) {
+    params.push(verificationDate);
+    filters.push(`verification_date = $${params.length}`);
+  }
+  if (productionOrder) {
+    params.push(productionOrder);
+    filters.push(`production_order = $${params.length}`);
+  }
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  params.push(limit);
+  try {
+    const result = await db.query(
+      `SELECT *
+       FROM public.sow_verification_log
+       ${where}
+       ORDER BY verified_at DESC
+       LIMIT $${params.length}`,
+      params
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+};

@@ -35,6 +35,12 @@ router.delete("/overtime/:id", controller.deleteOvertime);
 
 router.get("/manpower", controller.getManpower);
 
+// F2 — daily verification layer (manual overlay complements the actual views)
+router.get("/operation-status", controller.getOperationStatus);
+router.post("/operation-status", controller.upsertOperationStatus);
+router.delete("/operation-status/:id", controller.clearOperationStatus);
+router.get("/verification-log", controller.getVerificationLog);
+
 router.get("/", controller.getSchedules);
 router.post("/", controller.createSchedule);
 router.put("/:id", controller.updateSchedule);
