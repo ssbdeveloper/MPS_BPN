@@ -1869,8 +1869,8 @@ exports.upsertOperationStatus = async (req, res) => {
          status_before, status_after, deviation_flags,
          verified_by, verified_by_name, note
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`,
-      [statusDate, productionOrder, operationNo, machineCode, before, after, JSON.stringify(flags), user.id, user.name, note]
+       VALUES (CURRENT_DATE,$1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)`,
+      [productionOrder, operationNo, machineCode, before, after, JSON.stringify(flags), user.id, user.name, note]
     );
 
     await client.query("COMMIT");
@@ -1928,8 +1928,8 @@ exports.clearOperationStatus = async (req, res) => {
          status_before, status_after, deviation_flags,
          verified_by, verified_by_name, note
        )
-       VALUES ($1,$2,$3,$4,$5,$6,'[]'::jsonb,$7,$8,$9)`,
-      [row.status_date, row.production_order, row.operation_no, row.machine_code, before, after, user.id, user.name, "cleared manual status"]
+       VALUES (CURRENT_DATE,$1,$2,$3,$4,$5,'[]'::jsonb,$6,$7,$8)`,
+      [row.production_order, row.operation_no, row.machine_code, before, after, user.id, user.name, "cleared manual status"]
     );
 
     await client.query("COMMIT");
@@ -1969,6 +1969,91 @@ exports.getVerificationLog = async (req, res) => {
       params
     );
     res.json({ data: result.rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+// ===========================================================================
+// F3b — verification UI read endpoints (order-first).
+// ===========================================================================
+
+// GET /sow-schedule/order-progress?date=YYYY-MM-DD
+// Orders ACTIVE on the date (have a row in the actual view that day) + their
+// cross-day frontier/debt summary from v_sow_order_progress, sorted red->amber->green.
+// Fallback: if the requested date has no data (tz/empty), use the latest data date.
+exports.getOrderProgress = async (req, res) => {
+  const requested = req.query.date ? normalizeDate(req.query.date, "date") : todayDate();
+  try {
+    const activeCheck = await db.query(
+      `SELECT EXISTS(SELECT 1 FROM public.vw_sow_operation_actual WHERE schedule_date = $1) AS has_data`,
+      [requested]
+    );
+    let effectiveDate = requested;
+    let fallback = false;
+    if (!activeCheck.rows[0]?.has_data) {
+      const latest = await db.query(
+        `SELECT max(schedule_date)::text AS d FROM public.vw_sow_operation_actual`
+      );
+      if (latest.rows[0]?.d) {
+        effectiveDate = latest.rows[0].d;
+        fallback = effectiveDate !== requested;
+      }
+    }
+    const result = await db.query(
+      `SELECT p.*
+       FROM public.v_sow_order_progress p
+       WHERE p.production_order IN (
+         SELECT DISTINCT production_order
+         FROM public.vw_sow_operation_actual
+         WHERE schedule_date = $1
+       )
+       ORDER BY CASE p.status_color WHEN 'red' THEN 0 WHEN 'amber' THEN 1 ELSE 2 END,
+                p.production_order`,
+      [effectiveDate]
+    );
+    res.json({ date: effectiveDate, requested_date: requested, fallback, data: result.rows });
+  } catch (err) {
+    sendError(res, err);
+  }
+};
+
+// GET /sow-schedule/order-operations?production_order=...
+// The order's op ladder for the expand view: one row per (op, physical machine) at its
+// LATEST occurrence — the concrete (machine_code, schedule_date) a manual mark targets
+// (guaranteed to exist => F2 guard passes). Flags is_frontier / is_behind_frontier from
+// v_sow_order_progress. Read-only.
+exports.getOrderOperations = async (req, res) => {
+  const productionOrder = normalizeText(req.query.production_order);
+  if (!productionOrder) {
+    return res.status(400).json({ error: "production_order is required" });
+  }
+  try {
+    const summaryRes = await db.query(
+      `SELECT * FROM public.v_sow_order_progress WHERE production_order = $1`,
+      [productionOrder]
+    );
+    const summary = summaryRes.rows[0] || null;
+    const opsRes = await db.query(
+      `WITH ladder AS (
+         SELECT DISTINCT ON (operation_no, machine_code)
+           operation_no, machine_code, machine_name, schedule_date,
+           effective_status, view_status, machine_deviation, sequence_deviation,
+           manual_status_id, manual_flag, blocked_reason
+         FROM public.vw_sow_operation_actual
+         WHERE production_order = $1
+         ORDER BY operation_no, machine_code, schedule_date DESC
+       )
+       SELECT l.*,
+         (l.operation_no = $2::int) AS is_frontier,
+         (l.effective_status <> 'sudah'
+           AND $3::int IS NOT NULL
+           AND l.operation_no < $3::int) AS is_behind_frontier
+       FROM ladder l
+       ORDER BY l.operation_no, l.machine_code`,
+      [productionOrder, summary?.frontier_op ?? null, summary?.highest_done_op ?? null]
+    );
+    res.json({ production_order: productionOrder, summary, operations: opsRes.rows });
   } catch (err) {
     sendError(res, err);
   }

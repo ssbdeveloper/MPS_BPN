@@ -41,6 +41,10 @@ router.post("/operation-status", controller.upsertOperationStatus);
 router.delete("/operation-status/:id", controller.clearOperationStatus);
 router.get("/verification-log", controller.getVerificationLog);
 
+// F3b — verification UI read endpoints (order-first)
+router.get("/order-progress", controller.getOrderProgress);
+router.get("/order-operations", controller.getOrderOperations);
+
 router.get("/", controller.getSchedules);
 router.post("/", controller.createSchedule);
 router.put("/:id", controller.updateSchedule);
