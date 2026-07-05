@@ -1,6 +1,6 @@
 {
     "ZTIMESHEETID": "505151",  // PLANT_SSB + id (505101)
-    "PERNR":"16502",    // sn_employee
+    "PERNR":"00000000",    // sn_employee (dummy — scrubbed)
     "RUECK":"64727824",  // confirmation_number
     "AUFNR":"1000073558", // order_no
     "VORNR":"20",         // operation_no

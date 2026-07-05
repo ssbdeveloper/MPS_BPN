@@ -68,3 +68,22 @@ Thumbs.db
 # Docker - keep ignore files, ignore compose override
 docker-compose.override.yml
 docker-compose.override.yaml
+
+# === TAHAP 1: amankan kredensial & cegah binari/output (2026-07-05) ===
+# TTS worker: FITUR HIDUP — script .py tetap tracked; hanya binari & output di-ignore
+apps/tts-worker/models/
+apps/tts-worker/output/
+apps/tts-worker/tools/
+apps/tts-worker/test_output.mp3
+
+# Rahasia / catatan pribadi — JANGAN pernah commit
+**/ssh guide*
+**/*.pem
+**/*credential*
+
+# File lock sementara MS Office
+~$*
+
+# Model & arsip binari besar (download ulang)
+*.onnx
+*.zip
