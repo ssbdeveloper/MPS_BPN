@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Activity,
   AlertCircle,
   BarChart2,
   BookOpen,
   Boxes,
   CalendarClock,
   CheckCircle2,
-  ChevronRight,
   Database,
   Factory,
   Gauge,
@@ -25,8 +23,22 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import {
+  Area,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  Line,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import sapLogo from '../assets/sap.svg';
 import EwsControlTower from '../components/ews/EwsControlTower';
+import { usePermissions, routeToFeature } from '../rbac';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const SAP_LINKS = {
@@ -70,19 +82,21 @@ const emptyHubData = {
   },
   machine_trend: [],
   machine_status: [],
-  validation_queue: [],
   progress_status: [],
-  order_summaries: [],
-  recent_activities: [],
-  top_machines: [],
+  sap_posting: {},
+  labor_by_workcenter: [],
+  top_operators: [],
 };
-
-const progressTones = ['bg-emerald-500', 'bg-sky-500', 'bg-indigo-500', 'bg-amber-500', 'bg-cyan-500', 'bg-slate-500'];
 
 function formatNumber(value, fallback = '0') {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 }).format(number);
+}
+
+function toNum(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
 }
 
 function formatDateLabel(value) {
@@ -103,22 +117,6 @@ function formatTodayClock(value) {
   });
 }
 
-function formatDateTimeLabel(value) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
-  return date.toLocaleString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function progressTone(index) {
-  return progressTones[index % progressTones.length];
-}
-
 function readAuthUser() {
   try {
     return JSON.parse(sessionStorage.getItem('authUser') || 'null');
@@ -136,21 +134,27 @@ function readSapEnv() {
   }
 }
 
-function DashboardCard({ children, className = '' }) {
+function DashboardCard({ children, className = '', style }) {
   return (
-    <section className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}>
+    <section style={style} className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}>
       {children}
     </section>
   );
 }
 
-function StatCard({ title, value, helper, icon, tone }) {
+function StatCard({ title, value, helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0 }) {
   const IconComponent = icon;
+  const hasDelta = Number.isFinite(Number(delta));
+  const up = Number(delta) > 0;
+  const flat = Number(delta) === 0;
 
   return (
-    <DashboardCard className="p-4">
+    <DashboardCard
+      className="hub-card p-4 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
+      style={{ animationDelay: `${index * 60}ms`, borderTop: `2px solid ${accent}` }}
+    >
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="text-[11px] font-bold uppercase text-slate-500">{title}</p>
           <p className="mt-2 text-2xl font-extrabold text-slate-950">{value}</p>
         </div>
@@ -158,12 +162,52 @@ function StatCard({ title, value, helper, icon, tone }) {
           {React.createElement(IconComponent, { size: 18 })}
         </div>
       </div>
-      <p className="mt-2 truncate text-xs font-medium text-slate-500">{helper}</p>
+      <div className="mt-2 flex items-center gap-2">
+        {hasDelta && (
+          <span className={`inline-flex flex-shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${
+            flat ? 'bg-slate-100 text-slate-500' : up ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+          }`}>
+            {flat ? '■' : up ? '▲' : '▼'} {up ? '+' : ''}{Number(delta).toFixed(1)}{deltaLabel}
+          </span>
+        )}
+        <p className="min-w-0 truncate text-xs font-medium text-slate-500">{helper}</p>
+      </div>
     </DashboardCard>
   );
 }
 
+function InsightStrip({ items }) {
+  const toneMap = {
+    red: 'border-red-200 bg-red-50 text-red-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  };
+  return (
+    <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      {items.map((item, index) => {
+        const Ico = item.tone === 'emerald' ? CheckCircle2 : AlertCircle;
+        return (
+          <div
+            key={item.text}
+            style={{ animationDelay: `${index * 60}ms` }}
+            className={`hub-card flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs font-bold ${toneMap[item.tone] || toneMap.emerald}`}
+          >
+            <Ico size={15} className="mt-0.5 flex-shrink-0" />
+            <span className="leading-snug">{item.text}</span>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 function Sidebar({ onNavigate, onLogout }) {
+  const { canRead } = usePermissions();
+  // Menu auto-follows permission: hide items the role can't read.
+  const items = sidebarItems.filter((item) => {
+    const feature = routeToFeature(item.path);
+    return !feature || canRead(feature);
+  });
   return (
     <aside className="border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-dvh lg:w-[clamp(180px,16vw,244px)] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
       <div className="flex h-full min-h-0 flex-col">
@@ -184,7 +228,7 @@ function Sidebar({ onNavigate, onLogout }) {
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-3 lg:min-h-0 lg:space-y-0.5 lg:px-2 lg:py-2 [@media(max-height:720px)]:py-1">
-          {sidebarItems.map((item) => (
+          {items.map((item) => (
             <button
               key={item.path}
               type="button"
@@ -385,255 +429,299 @@ function ChangePasswordPanel({ user, onClose }) {
   );
 }
 
-function TrendChart({ data }) {
-  const maxHours = Math.max(1, ...data.map((item) => Number(item.total_hours || 0)));
+const UTIL_COLORS = ['#0096c7', '#48cae4', '#f59e0b', '#94a3b8', '#e24b4a', '#7c3aed'];
+
+function InfoTile({ label, value, sub, tone = 'neutral' }) {
+  const map = {
+    good: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    bad: 'bg-red-50 text-red-700 border-red-200',
+    warn: 'bg-amber-50 text-amber-700 border-amber-200',
+    info: 'bg-sky-50 text-sky-700 border-sky-200',
+    neutral: 'bg-slate-50 text-slate-700 border-slate-200',
+  };
+  return (
+    <div className={`rounded-lg border px-2.5 py-2 ${map[tone] || map.neutral}`}>
+      <div className="text-[10px] font-bold uppercase tracking-wide opacity-80">{label}</div>
+      <div className="text-lg font-black leading-none">{value}</div>
+      {sub ? <div className="mt-0.5 text-[10px] font-semibold opacity-70">{sub}</div> : null}
+    </div>
+  );
+}
+
+function BarList({ items, valueOf, labelOf, subOf, valueFmt, color = '#0096c7', empty = 'Tidak ada data' }) {
+  if (!items?.length) {
+    return <p className="py-8 text-center text-sm font-semibold text-slate-400">{empty}</p>;
+  }
+  const max = Math.max(...items.map((i) => toNum(valueOf(i))), 1);
+  return (
+    <ul className="space-y-3">
+      {items.map((item, idx) => {
+        const raw = toNum(valueOf(item));
+        const w = Math.max(3, (raw / max) * 100);
+        const fill = typeof color === 'function' ? color(item) : color;
+        return (
+          <li key={idx}>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="truncate text-xs font-bold text-slate-700">{labelOf(item)}</span>
+              <span className="flex-shrink-0 text-xs font-extrabold text-slate-800">{valueFmt ? valueFmt(item) : formatNumber(raw)}</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full" style={{ width: `${w}%`, background: fill }} />
+            </div>
+            {subOf ? <div className="mt-0.5 text-[10px] font-semibold text-slate-500">{subOf(item)}</div> : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function MachineActivityChart({ data }) {
+  const rows = Array.isArray(data) ? data : [];
+  const pctSeries = rows.map((r) => toNum(r.productive_pct)).filter((v) => Number.isFinite(v) && v > 0);
+  const avgPct = pctSeries.length ? pctSeries.reduce((a, b) => a + b, 0) / pctSeries.length : null;
+  const todayPct = rows.length ? toNum(rows[rows.length - 1].productive_pct) : null;
+  const delta = avgPct != null && todayPct != null ? todayPct - avgPct : null;
 
   return (
-    <DashboardCard className="p-5">
+    <DashboardCard className="hub-card p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-extrabold text-slate-900">Machine Activity</h2>
+          <p className="mt-0.5 text-xs font-semibold text-slate-500">
+            Productive vs support/loss · 7 hari
+            {todayPct != null && (
+              <>
+                {' · today '}
+                <span className="font-bold text-slate-700">{todayPct.toFixed(0)}%</span>
+                {delta != null && (
+                  <span className={delta >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                    {' '}({delta >= 0 ? '+' : ''}{delta.toFixed(1)} pt)
+                  </span>
+                )}
+              </>
+            )}
+          </p>
         </div>
-        <span className="text-xs font-bold text-slate-400">7 days</span>
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-bold text-slate-500">7 days</span>
       </div>
 
-      {data.length === 0 ? (
+      {rows.length === 0 ? (
         <p className="py-16 text-center text-sm font-semibold text-slate-400">No machine activity data</p>
       ) : (
-        <div className="mt-5 flex h-48 items-end gap-3 border-b border-slate-200 pb-3">
-          {data.map((item) => {
-            const productiveHeight = Math.max(4, (Number(item.productive_hours || 0) / maxHours) * 100);
-            const supportHeight = Math.max(4, (Number(item.support_loss_hours || 0) / maxHours) * 100);
-            return (
-              <div key={item.day || item.label} className="flex flex-1 flex-col items-center gap-2">
-                <div className="flex h-36 w-full items-end justify-center gap-1.5">
-                  <div
-                    className="w-3 rounded-t-full bg-slate-200"
-                    style={{ height: `${supportHeight}%` }}
-                    title={`Support/loss ${formatNumber(item.support_loss_hours)} hrs`}
-                  />
-                  <div
-                    className="w-3 rounded-t-full bg-[#0096c7]"
-                    style={{ height: `${productiveHeight}%` }}
-                    title={`Productive ${formatNumber(item.productive_hours)} hrs`}
-                  />
-                </div>
-                <span className="text-[11px] font-bold text-slate-400">{item.label}</span>
-              </div>
-            );
-          })}
-        </div>
+        <ResponsiveContainer width="100%" height={240}>
+          <ComposedChart data={rows} margin={{ top: 12, right: 6, left: -10, bottom: 0 }}>
+            <defs>
+              <linearGradient id="hubProd" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#0096c7" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="#0096c7" stopOpacity={0.04} />
+              </linearGradient>
+              <linearGradient id="hubSup" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#94a3b8" stopOpacity={0.28} />
+                <stop offset="100%" stopColor="#94a3b8" stopOpacity={0.03} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis yAxisId="left" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}h`} width={42} />
+            <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} width={40} />
+            <Tooltip
+              formatter={(value, name) => (
+                name === 'productive_pct'
+                  ? [`${formatNumber(value)}%`, 'Productive %']
+                  : [`${formatNumber(value)}h`, name === 'productive_hours' ? 'Productive' : 'Support/loss']
+              )}
+            />
+            <Area yAxisId="left" type="monotone" dataKey="productive_hours" stackId="1" stroke="#0096c7" strokeWidth={2} fill="url(#hubProd)" />
+            <Area yAxisId="left" type="monotone" dataKey="support_loss_hours" stackId="1" stroke="#94a3b8" strokeWidth={1.5} fill="url(#hubSup)" />
+            <Line yAxisId="right" type="monotone" dataKey="productive_pct" stroke="#059669" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 4 }} />
+          </ComposedChart>
+        </ResponsiveContainer>
       )}
 
-      <div className="mt-4 flex items-center gap-5 text-xs font-semibold text-slate-500">
-        <span className="inline-flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-slate-200" />
-          Support
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-[#0096c7]" />
-          Productive
-        </span>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-semibold text-slate-500">
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#0096c7]" />Productive</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-slate-400" />Support / loss</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-600" />Productive %</span>
       </div>
     </DashboardCard>
   );
 }
 
-function ActivityList({ items }) {
-  return (
-    <DashboardCard className="p-5">
-      <h2 className="text-sm font-extrabold text-slate-900">Activity</h2>
-      <div className="mt-5 space-y-4">
-        {items.length === 0 ? (
-          <p className="py-8 text-center text-sm font-semibold text-slate-400">No recent activity</p>
-        ) : items.map((item) => {
-          const tone = item.type === 'machine'
-            ? 'bg-sky-50 text-sky-700'
-            : item.type === 'validation'
-              ? 'bg-emerald-50 text-emerald-700'
-              : 'bg-indigo-50 text-indigo-700';
-          return (
-            <div key={`${item.title}-${item.event_ts}-${item.meta}`} className="flex gap-3">
-              <div className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${tone}`}>
-                <Activity size={17} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold text-slate-800">{item.title}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-500">{item.meta || '-'}</p>
-              </div>
-              <span className="text-[11px] font-semibold text-slate-400">{formatDateTimeLabel(item.event_ts)}</span>
-            </div>
-          );
-        })}
-      </div>
-    </DashboardCard>
-  );
-}
+function MachineUtilization({ statuses, productivePct }) {
+  const rows = (Array.isArray(statuses) ? statuses : [])
+    .filter((s) => toNum(s.hours) > 0)
+    .slice(0, 6)
+    .map((s, i) => ({ name: s.status, hours: toNum(s.hours), fill: UTIL_COLORS[i % UTIL_COLORS.length] }));
 
-function ValidationQueue({ items, onReview }) {
   return (
-    <DashboardCard className="overflow-hidden">
-      <div className="border-b border-slate-200 px-5 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-extrabold text-slate-900">Validation Queue</h2>
-          <button
-            type="button"
-            onClick={onReview}
-            className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
-          >
-            Open
-          </button>
-        </div>
-      </div>
-      <div className="divide-y divide-slate-100">
-        {items.length === 0 ? (
-          <p className="px-5 py-10 text-center text-sm font-semibold text-slate-400">No pending validation</p>
-        ) : items.map((item) => (
-          <div key={`${item.operator}-${item.workcenter}-${item.latest_at}`} className="grid grid-cols-[1fr_auto] gap-3 px-5 py-4 sm:grid-cols-[1fr_82px_80px_auto] sm:items-center">
-            <div>
-              <p className="text-sm font-bold text-slate-800">{item.operator}</p>
-              <p className="mt-0.5 text-xs text-slate-500">{item.workcenter}</p>
-            </div>
-            <p className="hidden text-sm font-bold text-slate-700 sm:block">{formatNumber(item.item_count)} item</p>
-            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-center text-[11px] font-bold text-amber-700">
-              {item.status}
-            </span>
-            <ChevronRight size={16} className="hidden text-slate-300 sm:block" />
-          </div>
-        ))}
-      </div>
-    </DashboardCard>
-  );
-}
+    <DashboardCard className="hub-card flex h-full flex-col p-5">
+      <h2 className="text-sm font-extrabold text-slate-900">Machine Utilization</h2>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Jam per status · hari operasi terakhir</p>
 
-function ProgressStatusCards({ items }) {
-  return (
-    <DashboardCard className="p-5">
-      <h2 className="text-sm font-extrabold text-slate-900">Workcenter Progress</h2>
-      <div className="mt-5 space-y-4">
-        {items.length === 0 ? (
-          <p className="py-8 text-center text-sm font-semibold text-slate-400">No SOW progress data</p>
-        ) : items.map((item, index) => (
-          <div key={item.label}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-bold text-slate-800">{item.label}</p>
-                <p className="text-xs text-slate-500">{formatNumber(item.operation_count)} ops | {formatNumber(item.plan_hours)} plan hrs</p>
-              </div>
-              <p className="text-sm font-extrabold text-slate-900">{item.value}%</p>
-            </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-              <div className={`h-full rounded-full ${progressTone(index)}`} style={{ width: `${Math.min(Math.max(Number(item.value || 0), 0), 100)}%` }} />
+      {rows.length === 0 ? (
+        <p className="py-12 text-center text-sm font-semibold text-slate-400">No status data</p>
+      ) : (
+        <div className="mt-3 flex items-center gap-3">
+          <div className="relative h-[136px] w-[136px] flex-shrink-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={rows} dataKey="hours" nameKey="name" innerRadius={45} outerRadius={64} paddingAngle={2}>
+                  {rows.map((r) => <Cell key={r.name} fill={r.fill} />)}
+                </Pie>
+                <Tooltip formatter={(v, n) => [`${formatNumber(v)}h`, n]} />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-xl font-black text-slate-900">{formatNumber(productivePct)}%</span>
+              <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">productive</span>
             </div>
           </div>
-        ))}
-      </div>
-    </DashboardCard>
-  );
-}
-
-function OrderSummaryTable({ items, onView }) {
-  return (
-    <DashboardCard className="overflow-hidden">
-      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-        <div>
-          <h2 className="text-sm font-extrabold text-slate-900">Orders</h2>
-        </div>
-        <button
-          type="button"
-          onClick={onView}
-          className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
-        >
-          View
-        </button>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] text-left text-sm">
-          <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="px-5 py-3 font-bold">Order</th>
-              <th className="px-4 py-3 font-bold">Part</th>
-              <th className="px-4 py-3 font-bold">Owner</th>
-              <th className="px-4 py-3 font-bold">Progress</th>
-              <th className="px-5 py-3 font-bold">ETA</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {items.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm font-semibold text-slate-400">No open order data</td>
-              </tr>
-            ) : items.map((item) => (
-              <tr key={item.order_no} className="hover:bg-slate-50">
-                <td className="px-5 py-3 font-mono text-xs font-bold text-slate-700">{item.order_no}</td>
-                <td className="px-4 py-3 font-semibold text-slate-800">{item.part_name || '-'}</td>
-                <td className="px-4 py-3 text-slate-500">{item.owner || item.customer || '-'}</td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <div className="h-2 w-20 overflow-hidden rounded-full bg-slate-100">
-                      <div className="h-full rounded-full bg-[#0096c7]" style={{ width: `${item.progress}%` }} />
-                    </div>
-                    <span className="text-xs font-bold text-slate-600">{item.progress}%</span>
-                  </div>
-                </td>
-                <td className="px-5 py-3 text-xs font-bold text-slate-500">{formatDateLabel(item.eta)}</td>
-              </tr>
+          <ul className="min-w-0 flex-1 space-y-1.5">
+            {rows.map((r) => (
+              <li key={r.name} className="flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: r.fill }} />
+                  <span className="truncate text-xs font-semibold text-slate-600">{r.name}</span>
+                </span>
+                <span className="flex-shrink-0 text-xs font-bold text-slate-800">{formatNumber(r.hours)}h</span>
+              </li>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </ul>
+        </div>
+      )}
     </DashboardCard>
   );
 }
 
-function MachineStatusPanel({ statuses, machines }) {
-  const totalStatusHours = statuses.reduce((sum, item) => sum + Number(item.hours || 0), 0);
+function LaborByWorkcenter({ items }) {
+  const rows = (Array.isArray(items) ? items : []).filter((r) => toNum(r.total_hours) > 0).slice(0, 8);
+  const max = Math.max(...rows.map((r) => toNum(r.total_hours)), 1);
 
   return (
-    <DashboardCard className="p-5">
-      <h2 className="text-sm font-extrabold text-slate-900">Machine Status</h2>
+    <DashboardCard className="hub-card p-5">
+      <h2 className="text-sm font-extrabold text-slate-900">Labor by Workcenter</h2>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Jam aktual · 24 jam terakhir</p>
 
-      <div className="mt-5 space-y-3">
-        {statuses.length === 0 ? (
-          <p className="py-5 text-center text-sm font-semibold text-slate-400">No status data</p>
-        ) : statuses.slice(0, 5).map((item, index) => {
-          const pct = totalStatusHours > 0 ? (Number(item.hours || 0) / totalStatusHours) * 100 : 0;
-          return (
-            <div key={item.status}>
-              <div className="flex items-center justify-between gap-3 text-xs font-bold">
-                <span className="truncate text-slate-700">{item.status}</span>
-                <span className="text-slate-500">{formatNumber(item.hours)}h</span>
-              </div>
-              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
-                <div className={`h-full rounded-full ${progressTone(index)}`} style={{ width: `${Math.max(2, pct)}%` }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {rows.length === 0 ? (
+        <p className="py-8 text-center text-sm font-semibold text-slate-400">No labor data</p>
+      ) : (
+        <ul className="mt-4 space-y-3">
+          {rows.map((r, idx) => {
+            const total = toNum(r.total_hours);
+            const prod = toNum(r.productive_hours);
+            const w = Math.max(3, (total / max) * 100);
+            const prodPct = total > 0 ? (prod / total) * 100 : 0;
+            return (
+              <li key={idx}>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="truncate text-xs font-bold text-slate-700">{r.workcenter_name || r.workcenter}</span>
+                  <span className="flex-shrink-0 text-xs font-extrabold text-slate-800">{formatNumber(total)}h</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className="flex h-full" style={{ width: `${w}%` }}>
+                    <div className="h-full" style={{ width: `${prodPct}%`, background: '#059669' }} />
+                    <div className="h-full" style={{ width: `${100 - prodPct}%`, background: '#0096c7' }} />
+                  </div>
+                </div>
+                <div className="mt-0.5 text-[10px] font-semibold text-slate-500">produktif {formatNumber(prod)}h ({formatNumber(prodPct)}%)</div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
-      <div className="mt-5 border-t border-slate-100 pt-4">
-        <h3 className="text-xs font-extrabold uppercase text-slate-500">Top Machines</h3>
-        <div className="mt-3 space-y-2">
-          {machines.length === 0 ? (
-            <p className="py-3 text-center text-sm font-semibold text-slate-400">No machine data</p>
-          ) : machines.slice(0, 4).map((item) => (
-            <div key={`${item.machineno}-${item.machineid}`} className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-extrabold text-slate-800">{item.machineid}</p>
-                <p className="truncate text-[11px] text-slate-500">{item.machinename}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs font-extrabold text-slate-900">{formatNumber(item.total_hours)}h</p>
-                <p className="text-[11px] text-slate-500">{formatNumber(item.productive_pct)}% prod</p>
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="mt-3 flex gap-4 text-[11px] font-semibold text-slate-500">
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-600" />Produktif</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#0096c7]" />Support / idle</span>
       </div>
     </DashboardCard>
   );
 }
+
+function TopOperators({ items }) {
+  const rows = (Array.isArray(items) ? items : []).filter((r) => toNum(r.total_hours) > 0).slice(0, 8);
+  return (
+    <DashboardCard className="hub-card p-5">
+      <h2 className="text-sm font-extrabold text-slate-900">Top Operators</h2>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Jam produktif · 24 jam terakhir</p>
+      <div className="mt-4">
+        <BarList
+          items={rows}
+          valueOf={(r) => toNum(r.productive_hours)}
+          labelOf={(r) => r.name}
+          valueFmt={(r) => `${formatNumber(r.productive_hours)}h`}
+          subOf={(r) => `dari ${formatNumber(r.total_hours)}h tercatat`}
+          color="#059669"
+          empty="No operator data"
+        />
+      </div>
+    </DashboardCard>
+  );
+}
+
+function WorkcenterWorkload({ items }) {
+  const rows = (Array.isArray(items) ? items : []).filter((r) => toNum(r.plan_hours) > 0).slice(0, 8);
+  return (
+    <DashboardCard className="hub-card p-5">
+      <h2 className="text-sm font-extrabold text-slate-900">Workcenter Workload</h2>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Plan hours & operasi terbuka · SOW aktif</p>
+      <div className="mt-4">
+        <BarList
+          items={rows}
+          valueOf={(r) => toNum(r.plan_hours)}
+          labelOf={(r) => r.label}
+          valueFmt={(r) => `${formatNumber(r.plan_hours)}h`}
+          subOf={(r) => `${formatNumber(r.operation_count)} operasi · ${formatNumber(r.value)}% avg progress`}
+          color="#0077b6"
+          empty="No workload data"
+        />
+      </div>
+    </DashboardCard>
+  );
+}
+
+function SapPostingHealth({ data }) {
+  const d = data || {};
+  const staged = toNum(d.staged_7d);
+  const posted = toNum(d.posted_7d);
+  const failed = toNum(d.failed);
+  const pending = toNum(d.pending);
+  const postedRate = staged > 0 ? (posted / staged) * 100 : 0;
+
+  return (
+    <DashboardCard className="hub-card flex h-full flex-col p-5">
+      <div className="flex items-center gap-2">
+        <img src={sapLogo} alt="" className="h-4 w-auto" aria-hidden="true" />
+        <h2 className="text-sm font-extrabold text-slate-900">SAP Posting Health</h2>
+      </div>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Outbound timesheet → SAP · 7 hari</p>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <InfoTile label="Posted 7d" value={formatNumber(posted)} tone="good" />
+        <InfoTile label="Failed" value={formatNumber(failed)} tone={failed > 0 ? 'bad' : 'good'} />
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-1 flex items-center justify-between text-[10px] font-bold text-slate-500">
+          <span>Posted rate (7d)</span>
+          <span>{formatNumber(postedRate)}%</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, postedRate)}%` }} />
+        </div>
+        <div className="mt-1 text-[10px] font-semibold text-slate-400">{formatNumber(posted)} dari {formatNumber(staged)} staged</div>
+      </div>
+
+      <div className="mt-auto rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+        <div className="text-[10px] font-bold uppercase tracking-wide text-amber-600">Pending backlog</div>
+        <div className="text-2xl font-black leading-none text-amber-700">{formatNumber(pending)}</div>
+        <div className="mt-0.5 text-[10px] font-semibold text-amber-600/80">menunggu posting ke SAP</div>
+      </div>
+    </DashboardCard>
+  );
+}
+
 
 function OperationsHubPage() {
   const navigate = useNavigate();
@@ -691,36 +779,80 @@ function OperationsHubPage() {
   }, [isVerified]);
 
   const kpi = hubData.kpi;
+
+  const machineAvgPct = useMemo(() => {
+    const series = (hubData.machine_trend || [])
+      .map((item) => toNum(item.productive_pct))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    return series.length ? series.reduce((a, b) => a + b, 0) / series.length : null;
+  }, [hubData.machine_trend]);
+
+  const productiveDelta = machineAvgPct != null
+    ? toNum(kpi.machine_productive_pct) - machineAvgPct
+    : null;
+  const onTimeOrders = Math.max(0, toNum(kpi.active_orders) - toNum(kpi.overdue_orders));
+  const overduePct = toNum(kpi.active_orders) > 0
+    ? (toNum(kpi.overdue_orders) / toNum(kpi.active_orders)) * 100
+    : 0;
+
   const summaryCards = useMemo(() => [
     {
       title: 'Active Orders',
       value: formatNumber(kpi.active_orders),
-      helper: 'In progress',
+      helper: `${formatNumber(onTimeOrders)} on-time · avg ${formatNumber(kpi.avg_progress)}%`,
       icon: Factory,
       tone: 'bg-sky-50 text-sky-700',
+      accent: '#0096c7',
     },
     {
       title: 'Overdue Orders',
       value: formatNumber(kpi.overdue_orders),
-      helper: 'Past due',
+      helper: toNum(kpi.overdue_orders) > 0 ? `${overduePct.toFixed(0)}% of active orders` : 'All orders on schedule',
       icon: TimerReset,
-      tone: 'bg-amber-50 text-amber-700',
-    },
-    {
-      title: 'Latest Labor Hours',
-      value: formatNumber(kpi.latest_labor_hours),
-      helper: hubData.basis_dates.labor_date ? formatDateLabel(hubData.basis_dates.labor_date) : 'No date',
-      icon: Activity,
-      tone: 'bg-emerald-50 text-emerald-700',
+      tone: toNum(kpi.overdue_orders) > 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700',
+      accent: toNum(kpi.overdue_orders) > 0 ? '#dc2626' : '#059669',
     },
     {
       title: 'Machine Productive',
       value: `${formatNumber(kpi.machine_productive_pct)}%`,
-      helper: hubData.basis_dates.machine_date ? formatDateLabel(hubData.basis_dates.machine_date) : 'No date',
+      helper: machineAvgPct != null
+        ? `7d avg ${machineAvgPct.toFixed(1)}%`
+        : (hubData.basis_dates.machine_date ? formatDateLabel(hubData.basis_dates.machine_date) : 'No date'),
       icon: BarChart2,
       tone: 'bg-indigo-50 text-indigo-700',
+      accent: '#4f46e5',
+      delta: productiveDelta,
+      deltaLabel: 'pt',
     },
-  ], [hubData.basis_dates.labor_date, hubData.basis_dates.machine_date, kpi]);
+    {
+      title: 'Validation Pending',
+      value: formatNumber(kpi.validation_pending),
+      helper: `of ${formatNumber(kpi.validation_total)} process records`,
+      icon: ClipboardList,
+      tone: toNum(kpi.validation_pending) > 0 ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
+      accent: toNum(kpi.validation_pending) > 0 ? '#d97706' : '#059669',
+    },
+  ], [hubData.basis_dates.machine_date, kpi, machineAvgPct, onTimeOrders, overduePct, productiveDelta]);
+
+  const insights = useMemo(() => {
+    const list = [];
+    if (toNum(kpi.overdue_orders) > 0) {
+      list.push({ tone: 'red', text: `${formatNumber(kpi.overdue_orders)} order overdue — perlu percepatan atau reschedule.` });
+    }
+    if (productiveDelta != null && productiveDelta <= -2) {
+      list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% di bawah rata-rata 7 hari (${machineAvgPct.toFixed(1)}%).` });
+    }
+    if (productiveDelta != null && productiveDelta >= 2) {
+      list.push({ tone: 'emerald', text: `Machine productive naik ${productiveDelta.toFixed(1)} pt vs rata-rata 7 hari.` });
+    }
+    if (toNum(kpi.validation_pending) > 0) {
+      list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} proses menunggu validasi foreman/supervisor.` });
+    }
+    if (!list.length) {
+      list.push({ tone: 'emerald', text: 'Semua indikator operasional dalam kondisi baik.' });
+    }
+    return list.slice(0, 3);
+  }, [kpi, machineAvgPct, productiveDelta]);
 
   const handleLogout = useCallback(() => {
     sessionStorage.removeItem('isVerified');
@@ -730,14 +862,6 @@ function OperationsHubPage() {
     setIsVerified(false);
     setKpiStatus('idle');
   }, []);
-
-  const handleReviewValidation = useCallback(() => {
-    navigate('/timesheet-validation');
-  }, [navigate]);
-
-  const handleViewOrders = useCallback(() => {
-    navigate('/sow-orders');
-  }, [navigate]);
 
   const handleViewOrderProgress = useCallback(() => {
     navigate('/order-progress-dashboard');
@@ -847,12 +971,26 @@ function OperationsHubPage() {
           />
         )}
 
+        <style>
+          {`
+            @keyframes hubIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+            .hub-card { animation: hubIn 460ms cubic-bezier(.2,.8,.2,1) both; }
+            .hub-bar { transition: height .6s cubic-bezier(.2,.8,.2,1); }
+            @media (prefers-reduced-motion: reduce) {
+              .hub-card { animation: none !important; }
+              .hub-bar { transition: none !important; }
+            }
+          `}
+        </style>
+
         <div className="space-y-4 px-4 py-4 md:px-6">
           <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            {summaryCards.map((card) => (
-              <StatCard key={card.title} {...card} />
+            {summaryCards.map((card, index) => (
+              <StatCard key={card.title} index={index} {...card} />
             ))}
           </section>
+
+          <InsightStrip items={insights} />
 
           <EwsControlTower />
 
@@ -860,7 +998,7 @@ function OperationsHubPage() {
             <div>
               <h2 className="text-sm font-extrabold text-slate-900">Order Progress</h2>
               <p className="mt-1 text-xs font-semibold text-slate-500">
-                
+                Avg progress {formatNumber(kpi.avg_progress)}% · {formatNumber(kpi.active_orders)} active · {formatNumber(kpi.overdue_orders)} overdue
               </p>
             </div>
             <button
@@ -873,30 +1011,29 @@ function OperationsHubPage() {
             </button>
           </DashboardCard>
 
+          {/* Machine — trend + today's utilization mix */}
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
             <div className="xl:col-span-8">
-              <TrendChart data={hubData.machine_trend} />
+              <MachineActivityChart data={hubData.machine_trend} />
             </div>
             <div className="xl:col-span-4">
-              <ValidationQueue items={hubData.validation_queue} onReview={handleReviewValidation} />
+              <MachineUtilization statuses={hubData.machine_status} productivePct={kpi.machine_productive_pct} />
             </div>
           </section>
 
-          <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-            <div className="xl:col-span-7">
-              <OrderSummaryTable items={hubData.order_summaries} onView={handleViewOrders} />
-            </div>
-            <div className="xl:col-span-5">
-              <MachineStatusPanel statuses={hubData.machine_status} machines={hubData.top_machines} />
-            </div>
+          {/* Throughput — who and where the work happened (last 24h) */}
+          <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <LaborByWorkcenter items={hubData.labor_by_workcenter} />
+            <TopOperators items={hubData.top_operators} />
           </section>
 
+          {/* Backlog & pipeline — planned load + SAP outbound health */}
           <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-            <div className="xl:col-span-5">
-              <ProgressStatusCards items={hubData.progress_status} />
+            <div className="xl:col-span-8">
+              <WorkcenterWorkload items={hubData.progress_status} />
             </div>
-            <div className="xl:col-span-7">
-              <ActivityList items={hubData.recent_activities} />
+            <div className="xl:col-span-4">
+              <SapPostingHealth data={hubData.sap_posting} />
             </div>
           </section>
         </div>

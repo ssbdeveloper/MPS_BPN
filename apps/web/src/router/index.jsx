@@ -1,5 +1,6 @@
 import { createBrowserRouter } from 'react-router-dom';
 import ProtectedRoute from '../components/auth/ProtectedRoute';
+import RequireFeature from '../rbac/RequireFeature';
 
 const page = (loader) => async () => {
   const module = await loader();
@@ -14,6 +15,20 @@ const protectedPage = (loader) => async () => {
       <ProtectedRoute>
         <Page />
       </ProtectedRoute>
+    ),
+  };
+};
+
+// RBAC route guard: blocks `no_access` before render. Adding a guard to a
+// route = wrap it here with the feature id from the feature registry.
+const guardedPage = (loader, feature) => async () => {
+  const module = await loader();
+  const Page = module.default;
+  return {
+    Component: () => (
+      <RequireFeature feature={feature}>
+        <Page />
+      </RequireFeature>
     ),
   };
 };
@@ -178,11 +193,11 @@ const router = createBrowserRouter([
   },
   {
     path: '/manage-user',
-    lazy: protectedPage(() => import('../pages/PPC/ManageUserPage')),
+    lazy: guardedPage(() => import('../pages/PPC/ManageUserPage'), 'manage_users'),
   },
   {
     path: '/manage-users',
-    lazy: protectedPage(() => import('../pages/PPC/ManageUsersPage')),
+    lazy: guardedPage(() => import('../pages/PPC/ManageUsersPage'), 'manage_users'),
   },
   {
     path: '/nfc-users',
@@ -202,19 +217,19 @@ const router = createBrowserRouter([
   },
   {
     path: '/sow-orders',
-    lazy: page(() => import('../pages/OrderListPage')),
+    lazy: guardedPage(() => import('../pages/OrderListPage'), 'sow_management'),
   },
   {
     path: '/sow-edit/revision/:orderNo',
-    lazy: page(() => import('../pages/PE/SowRevisionEditPage')),
+    lazy: guardedPage(() => import('../pages/PE/SowRevisionEditPage'), 'sow_management'),
   },
   {
     path: '/sow-edit/:id',
-    lazy: page(() => import('../pages/PE/SowEditPage')),
+    lazy: guardedPage(() => import('../pages/PE/SowEditPage'), 'sow_management'),
   },
   {
     path: '/sow-management',
-    lazy: page(() => import('../pages/PE/SowManagementPage')),
+    lazy: guardedPage(() => import('../pages/PE/SowManagementPage'), 'sow_management'),
     children: [
       {
         path: 'list',
