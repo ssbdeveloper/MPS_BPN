@@ -96,7 +96,10 @@ export default defineConfig(({ mode }) => {
         ]
       },
       devOptions: {
-        enabled: true
+        // Keep the service worker OFF during `npm run dev`. When enabled it caches
+        // the app shell and serves a stale bundle after code changes, so edits look
+        // like "nothing changed" until the SW is manually unregistered.
+        enabled: false
       }
     })
   ],
