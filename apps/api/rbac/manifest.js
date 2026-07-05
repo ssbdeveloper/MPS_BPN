@@ -64,6 +64,8 @@ const MANIFEST = [
   { m: 'POST',   p: '/sow-schedule/operation-status',         f: 'sow_verification', a: W },
   { m: 'DELETE', p: '/sow-schedule/operation-status/:id',     f: 'sow_verification', a: W },
   { m: 'POST',   p: '/sow-schedule',                          f: 'sow_scheduling',   a: W },
+  { m: 'POST',   p: '/sow-schedule/:id/reschedule',           f: 'sow_scheduling',   a: W },
+  { m: 'POST',   p: '/sow-schedule/:id/reorder',              f: 'sow_scheduling',   a: W },
   { m: 'PUT',    p: '/sow-schedule/:id',                      f: 'sow_scheduling',   a: W },
   { m: 'DELETE', p: '/sow-schedule/:id',                      f: 'sow_scheduling',   a: W },
 

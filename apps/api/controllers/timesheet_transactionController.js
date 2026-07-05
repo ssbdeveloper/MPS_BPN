@@ -1343,7 +1343,7 @@ exports.postToSap = async (req, res) => {
       //ZCONF_TYPE:   String('M1'),
       ZCONF_TYPE:   isUnprod                                          ? ''
                   : String(row.workcentercode || '').endsWith('OT')   ? 'OV'
-                  : parseInt(row.operation_no, 10) > 5000             ? 'RW'
+                  : String(row.order_no || '').startsWith('32')       ? 'RW'
                   : 'RG',
       ARBPL:        String(row.workcentercode || ''),
       LSTAR:        String(activityType || ''),

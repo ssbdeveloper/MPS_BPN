@@ -405,6 +405,24 @@ async function getNextQueueNo(client, { machineCode, scheduleDate, shiftId }) {
   return result.rows[0]?.next_queue || 1;
 }
 
+// Resolved (deduped) shifts for a date, ordered by start_time — the same set the
+// board/timeline see. Used to cascade overflow from one shift into the next.
+async function resolvedShiftsForDate(client, date) {
+  const r = await client.query(
+    `SELECT id, shift_code, shift_name, start_time::text AS start_time, end_time::text AS end_time,
+            crosses_midnight, default_capacity_hours
+     FROM (${resolvedShiftSql("$1")}) sd
+     ORDER BY start_time`,
+    [date]
+  );
+  return r.rows;
+}
+
+async function slotCapacityHours(client, machineCode, date, shift) {
+  const cap = await getCapacityForSlot(client, { machineCode, scheduleDate: date, shiftId: shift.id });
+  return toNumber(cap.total_capacity_hours, toNumber(shift.default_capacity_hours, shiftDurationHours(shift)));
+}
+
 async function getTotalPlannedForActivity(client, fields) {
   const params = [fields.sow_id, fields.production_order, fields.operation_no];
   const result = await client.query(
@@ -1105,6 +1123,30 @@ exports.getCapacity = async (req, res) => {
          FROM public.workcenter w
          WHERE w.machineid IS NOT NULL AND trim(w.machineid) <> ''
            ${machineWhere}
+       ),
+       sched AS (
+         SELECT machine_code, shift_id,
+           COALESCE(SUM(planned_hours) FILTER (
+             WHERE schedule_status IN ('PLANNED', 'PARTIAL', 'COMPLETED')
+               AND is_overtime = false AND batch_id IS NULL), 0)::numeric AS unbatched_hours,
+           COALESCE(SUM(planned_hours) FILTER (WHERE schedule_status = 'UNPLANNED'), 0)::numeric AS unplanned_hours
+         FROM public.sow_schedule
+         WHERE schedule_date = $1
+         GROUP BY machine_code, shift_id
+       ),
+       bat AS (
+         SELECT machine_code, shift_id, COALESCE(SUM(batch_capacity_hours), 0)::numeric AS batch_hours
+         FROM public.sow_schedule_batch
+         WHERE schedule_date = $1 AND batch_status <> 'CANCELLED'
+         GROUP BY machine_code, shift_id
+       ),
+       ot AS (
+         SELECT machine_code, shift_id,
+           COALESCE(SUM(overtime_hours) FILTER (WHERE request_status = 'PENDING'), 0)::numeric AS pending_hours,
+           COALESCE(SUM(overtime_hours) FILTER (WHERE request_status = 'APPROVED'), 0)::numeric AS approved_hours
+         FROM public.sow_overtime_request
+         WHERE overtime_date = $1 AND request_status <> 'CANCELLED'
+         GROUP BY machine_code, shift_id
        )
        SELECT
          $1::date AS schedule_date,
@@ -1119,15 +1161,15 @@ exports.getCapacity = async (req, res) => {
          COALESCE(cap.manpower_count, 1)::numeric(10,2) AS manpower_count,
          COALESCE(cap.capacity_multiplier, 1)::numeric(10,2) AS capacity_multiplier,
          COALESCE(NULLIF(cap.total_capacity_hours, 0), sd.default_capacity_hours, 0)::numeric(10,2) AS total_capacity_hours,
-         COALESCE(v.used_normal_planned_hours, 0)::numeric(10,2) AS used_normal_planned_hours,
+         (COALESCE(sched.unbatched_hours, 0) + COALESCE(bat.batch_hours, 0))::numeric(10,2) AS used_normal_planned_hours,
          GREATEST(
            COALESCE(NULLIF(cap.total_capacity_hours, 0), sd.default_capacity_hours, 0)
-           - COALESCE(v.used_normal_planned_hours, 0),
+           - (COALESCE(sched.unbatched_hours, 0) + COALESCE(bat.batch_hours, 0)),
            0
          )::numeric(10,2) AS remaining_capacity_hours,
-         COALESCE(v.unplanned_hours, 0)::numeric(10,2) AS unplanned_hours,
-         COALESCE(v.pending_overtime_hours, 0)::numeric(10,2) AS pending_overtime_hours,
-         COALESCE(v.approved_overtime_hours, 0)::numeric(10,2) AS approved_overtime_hours,
+         COALESCE(sched.unplanned_hours, 0)::numeric(10,2) AS unplanned_hours,
+         COALESCE(ot.pending_hours, 0)::numeric(10,2) AS pending_overtime_hours,
+         COALESCE(ot.approved_hours, 0)::numeric(10,2) AS approved_overtime_hours,
          cap.remarks,
          m.groupname,
          m.categoryhours
@@ -1138,50 +1180,9 @@ exports.getCapacity = async (req, res) => {
         AND cap.schedule_date = $1
         AND cap.shift_id = sd.id
         AND cap.is_active = true
-       LEFT JOIN LATERAL (
-         WITH unbatched AS (
-           SELECT COALESCE(SUM(sc.planned_hours), 0)::numeric AS used_hours
-           FROM public.sow_schedule sc
-           WHERE sc.machine_code = m.machine_code
-             AND sc.schedule_date = $1
-             AND sc.shift_id = sd.id
-             AND sc.schedule_status IN ('PLANNED', 'PARTIAL', 'COMPLETED')
-             AND sc.is_overtime = false
-             AND sc.batch_id IS NULL
-         ),
-         batches AS (
-           SELECT COALESCE(SUM(b.batch_capacity_hours), 0)::numeric AS used_hours
-           FROM public.sow_schedule_batch b
-           WHERE b.machine_code = m.machine_code
-             AND b.schedule_date = $1
-             AND b.shift_id = sd.id
-             AND b.batch_status <> 'CANCELLED'
-         ),
-         unplanned AS (
-           SELECT COALESCE(SUM(sc.planned_hours), 0)::numeric AS hours
-           FROM public.sow_schedule sc
-           WHERE sc.machine_code = m.machine_code
-             AND sc.schedule_date = $1
-             AND sc.shift_id = sd.id
-             AND sc.schedule_status = 'UNPLANNED'
-         ),
-         overtime AS (
-           SELECT
-             COALESCE(SUM(ot.overtime_hours) FILTER (WHERE ot.request_status = 'PENDING'), 0)::numeric AS pending_hours,
-             COALESCE(SUM(ot.overtime_hours) FILTER (WHERE ot.request_status = 'APPROVED'), 0)::numeric AS approved_hours
-           FROM public.sow_overtime_request ot
-           WHERE ot.machine_code = m.machine_code
-             AND ot.overtime_date = $1
-             AND ot.shift_id = sd.id
-             AND ot.request_status <> 'CANCELLED'
-         )
-         SELECT
-           (unbatched.used_hours + batches.used_hours)::numeric AS used_normal_planned_hours,
-           unplanned.hours AS unplanned_hours,
-           overtime.pending_hours AS pending_overtime_hours,
-           overtime.approved_hours AS approved_overtime_hours
-         FROM unbatched, batches, unplanned, overtime
-       ) v ON true
+       LEFT JOIN sched ON sched.machine_code = m.machine_code AND sched.shift_id = sd.id
+       LEFT JOIN bat ON bat.machine_code = m.machine_code AND bat.shift_id = sd.id
+       LEFT JOIN ot ON ot.machine_code = m.machine_code AND ot.shift_id = sd.id
        WHERE ${shiftWhere}
        ORDER BY m.position NULLS LAST, m.machine_code, sd.start_time`,
       params
@@ -1426,6 +1427,100 @@ exports.createSchedule = async (req, res) => {
   }
 };
 
+// Reorder priority within a slot (machine, date, shift): swap the target with its
+// neighbour in queue order, then re-sequence the whole slot — reassign
+// planned_queue_no = 1..N and recompute planned_start/end_datetime so the earlier
+// priority starts earlier in the shift. Accounting (I1) is untouched (planned_hours
+// unchanged; capacity is derived separately).
+exports.reorderSchedule = async (req, res) => {
+  const id = toInt(req.params.id, null);
+  const direction = String((req.body || {}).direction || "").toLowerCase();
+  if (!id) return res.status(400).json({ error: "valid schedule id is required" });
+  if (direction !== "up" && direction !== "down") {
+    return res.status(400).json({ error: "direction must be 'up' or 'down'" });
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const cur = await client.query(`SELECT * FROM public.sow_schedule WHERE id = $1 FOR UPDATE`, [id]);
+    if (cur.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "schedule not found" });
+    }
+    const row = cur.rows[0];
+    if (row.is_overtime) {
+      const error = new Error("overtime schedules cannot be reordered");
+      error.status = 400;
+      throw error;
+    }
+    const machineCode = row.machine_code;
+    const scheduleDate = normalizeDate(row.schedule_date, "schedule_date");
+    const shiftId = row.shift_id;
+
+    const slot = await client.query(
+      `SELECT * FROM public.sow_schedule
+       WHERE machine_code = $1 AND schedule_date = $2 AND shift_id = $3
+         AND schedule_status IN ('PLANNED', 'PARTIAL', 'COMPLETED')
+         AND COALESCE(is_overtime, false) = false
+       ORDER BY planned_queue_no NULLS LAST, id
+       FOR UPDATE`,
+      [machineCode, scheduleDate, shiftId]
+    );
+    const rows = slot.rows;
+    const idx = rows.findIndex((r) => Number(r.id) === Number(id));
+    const target = direction === "up" ? idx - 1 : idx + 1;
+    if (idx < 0 || target < 0 || target >= rows.length) {
+      await client.query("ROLLBACK");
+      return res.json({ data: rows, changed: false });
+    }
+    [rows[idx], rows[target]] = [rows[target], rows[idx]];
+
+    // Re-sequence the shift's ops, cascading overflow forward: once a shift is
+    // filled to its capacity, the remaining ops spill into the next shift (and so
+    // on). Spilled ops land after that shift's existing (non-moved) work.
+    const shifts = await resolvedShiftsForDate(client, scheduleDate);
+    let si = Math.max(0, shifts.findIndex((s) => Number(s.id) === Number(shiftId)));
+    let curShift = shifts[si] || (await fetchShift(client, shiftId));
+    let window = buildShiftWindow(scheduleDate, curShift);
+    let cap = await slotCapacityHours(client, machineCode, scheduleDate, curShift);
+    let used = 0;   // edited shift owns all its ops → start fresh
+    let queue = 0;
+    const updated = [];
+    for (const r of rows) {
+      const hrs = toNumber(r.planned_hours, 0);
+      // spill forward while it doesn't fit and a next shift exists
+      while (used > 0 && used + hrs > cap + 1e-6 && si < shifts.length - 1) {
+        si += 1;
+        curShift = shifts[si];
+        window = buildShiftWindow(scheduleDate, curShift);
+        cap = await slotCapacityHours(client, machineCode, scheduleDate, curShift);
+        used = await getUsedNormalHours(client, { machineCode, scheduleDate, shiftId: curShift.id });
+        queue = await getNextQueueNo(client, { machineCode, scheduleDate, shiftId: curShift.id }) - 1;
+      }
+      const start = addHours(window.start, used);
+      const end = addHours(start, hrs);
+      queue += 1;
+      const u = await client.query(
+        `UPDATE public.sow_schedule
+         SET shift_id = $1, planned_queue_no = $2, priority_no = $2, planned_start_datetime = $3, planned_end_datetime = $4
+         WHERE id = $5 RETURNING *`,
+        [curShift.id, queue, start, end, r.id]
+      );
+      updated.push(u.rows[0]);
+      used += hrs;
+    }
+
+    await client.query("COMMIT");
+    res.json({ data: updated, changed: true });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    sendError(res, err);
+  } finally {
+    client.release();
+  }
+};
+
 exports.updateSchedule = async (req, res) => {
   const id = toInt(req.params.id, null);
   if (!id) return res.status(400).json({ error: "valid schedule id is required" });
@@ -1469,6 +1564,116 @@ exports.updateSchedule = async (req, res) => {
     res.json({ data: result.rows[0] });
   } catch (err) {
     sendError(res, err);
+  }
+};
+
+// Move a schedule to another machine / date / shift AND recompute its
+// planned_start/end_datetime from the target shift window (placed after the hours
+// already used in that slot). Plain updateSchedule leaves the datetimes stale —
+// the capacity board never reads them, but the multi-day timeline does, so a move
+// must keep the timestamps authoritative. Detaches from any batch unless a matching
+// batch_id is supplied. Accounting (I1) is untouched: planned_hours is not changed.
+exports.rescheduleSchedule = async (req, res) => {
+  const id = toInt(req.params.id, null);
+  if (!id) return res.status(400).json({ error: "valid schedule id is required" });
+  const payload = req.body || {};
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM public.sow_schedule WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    if (existing.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "schedule not found" });
+    }
+    const row = existing.rows[0];
+    if (String(row.schedule_status).toUpperCase() === "CANCELLED") {
+      const error = new Error("cannot reschedule a cancelled schedule");
+      error.status = 400;
+      throw error;
+    }
+    if (row.is_overtime) {
+      const error = new Error("overtime schedules cannot be rescheduled on the timeline");
+      error.status = 400;
+      throw error;
+    }
+
+    const machineCode = normalizeText(payload.machine_code) || row.machine_code;
+    const scheduleDate = normalizeDate(payload.schedule_date || row.schedule_date, "schedule_date");
+    let shiftId = toInt(payload.shift_id, row.shift_id);
+    const plannedHours = toNumber(row.planned_hours, 0);
+    let shift = await fetchShift(client, shiftId);
+
+    // Batch stays only if an explicit, matching batch_id is passed; otherwise detach.
+    let batchId = null;
+    if (Object.prototype.hasOwnProperty.call(payload, "batch_id") && payload.batch_id) {
+      const batch = await fetchBatch(client, payload.batch_id, false);
+      if (batch) {
+        if (
+          batch.machine_code !== machineCode ||
+          String(batch.schedule_date).slice(0, 10) !== scheduleDate ||
+          Number(batch.shift_id) !== Number(shiftId)
+        ) {
+          const error = new Error("batch must match machine, schedule_date, and shift_id");
+          error.status = 400;
+          throw error;
+        }
+        batchId = batch.id;
+      }
+    }
+
+    // Place after the hours already committed in the target slot. If it doesn't fit
+    // the target shift's capacity, spill it into the next shift (shift 1 → shift 2 →
+    // …) so an over-full shift flows forward instead of piling past its window.
+    let shiftWindow = buildShiftWindow(scheduleDate, shift);
+    let usedHours = await getUsedNormalHours(client, { machineCode, scheduleDate, shiftId, excludeScheduleId: id });
+    if (!batchId) {
+      const shifts = await resolvedShiftsForDate(client, scheduleDate);
+      let si = shifts.findIndex((s) => Number(s.id) === Number(shiftId));
+      let cap = await slotCapacityHours(client, machineCode, scheduleDate, shift);
+      while (usedHours > 0 && usedHours + plannedHours > cap + 1e-6 && si >= 0 && si < shifts.length - 1) {
+        si += 1;
+        shift = shifts[si];
+        shiftId = shift.id;
+        shiftWindow = buildShiftWindow(scheduleDate, shift);
+        cap = await slotCapacityHours(client, machineCode, scheduleDate, shift);
+        usedHours = await getUsedNormalHours(client, { machineCode, scheduleDate, shiftId, excludeScheduleId: id });
+      }
+    }
+    const offset = Math.max(usedHours, 0);
+    const plannedStart = addHours(shiftWindow.start, offset);
+    const plannedEnd = addHours(plannedStart, plannedHours);
+    const queueNo = batchId
+      ? row.planned_queue_no
+      : await getNextQueueNo(client, { machineCode, scheduleDate, shiftId });
+
+    const wc = await client.query(
+      `SELECT workcenternew FROM public.workcenter WHERE machineid = $1 LIMIT 1`,
+      [machineCode]
+    );
+    const workcenter =
+      normalizeText(payload.workcenter) || wc.rows[0]?.workcenternew || row.workcenter || null;
+
+    const updated = await client.query(
+      `UPDATE public.sow_schedule
+       SET machine_code = $1, workcenter = $2, schedule_date = $3, shift_id = $4,
+           planned_start_datetime = $5, planned_end_datetime = $6,
+           planned_queue_no = $7, priority_no = $7, batch_id = $8
+       WHERE id = $9
+       RETURNING *`,
+      [machineCode, workcenter, scheduleDate, shiftId, plannedStart, plannedEnd, queueNo, batchId, id]
+    );
+
+    await client.query("COMMIT");
+    res.json({ data: updated.rows[0] });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    sendError(res, err);
+  } finally {
+    client.release();
   }
 };
 

@@ -160,6 +160,27 @@ export async function deleteSchedule(id) {
   return request(`/sow-schedule/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+// F5 timeline move: reschedule to another machine/date/shift. The backend recomputes
+// planned_start/end_datetime from the target shift window so the timeline stays accurate
+// (plain updateSchedule leaves the datetimes stale). Pass { machine_code, schedule_date,
+// shift_id }; omit batch_id to detach from a batch pocket.
+export async function rescheduleSchedule(id, payload) {
+  const response = await request(`/sow-schedule/${encodeURIComponent(id)}/reschedule`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+// F5 timeline priority: move an op earlier ('up') or later ('down') within its
+// machine/date/shift slot. The backend re-sequences the slot's queue + datetimes.
+export async function reorderSchedule(id, direction) {
+  return request(`/sow-schedule/${encodeURIComponent(id)}/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ direction }),
+  });
+}
+
 export async function fetchCapacity(params = {}) {
   const payload = await request(`/sow-schedule/capacity${queryString(params)}`);
   return payload.data || [];
@@ -243,6 +264,8 @@ export default {
   createSchedule,
   updateSchedule,
   deleteSchedule,
+  rescheduleSchedule,
+  reorderSchedule,
   fetchCapacity,
   saveCapacity,
   fetchOvertime,

@@ -242,7 +242,7 @@ else:
   ZCONF_TYPE = 'RG'
 ```
 
-Catatan: backend saat ini memakai rule lama `operation_no > 5000`, tapi implementasi staging harus mengikuti payload comment: `order_no` diawali `32` berarti `RW`.
+Catatan: backend dan implementasi staging harus mengikuti payload comment: `order_no` diawali `32` berarti `RW`.
 
 ### Unproductive Timesheet
 

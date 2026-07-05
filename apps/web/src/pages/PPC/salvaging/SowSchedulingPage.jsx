@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  DndContext, DragOverlay, PointerSensor, TouchSensor, closestCenter,
+  DndContext, DragOverlay, PointerSensor, TouchSensor, pointerWithin,
   useDraggable, useDroppable, useSensor, useSensors,
 } from '@dnd-kit/core';
 import { restrictToWindowEdges } from '@dnd-kit/modifiers';
 import {
-  AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronUp,
-  Clock, GripVertical, Loader2, Plus, Save, Search, Send, User, X,
+  AlertCircle, ArrowLeft, CalendarRange, CheckCircle2, ChevronDown, ChevronUp,
+  ClipboardList, Clock, GripVertical, LayoutGrid, Loader2, Plus, Save, Search, Send, User, X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -15,10 +15,11 @@ import {
   approveOvertime, createBatch, createOvertime, createSchedule,
   deleteBatch, deleteSchedule, fetchBatches, fetchCapacity,
   fetchManpower, fetchOvertime, fetchSchedules, fetchSchedulingActivities,
-  fetchSchedulingMachines, fetchShifts, rejectOvertime, updateSchedule,
+  fetchSchedulingMachines, fetchShifts, rejectOvertime, rescheduleSchedule,
   assignManpower, deleteOvertime,
 } from '../../../services/sowScheduleService';
 import { goBackOrFallback } from '../../../utils/navigation';
+import SchedulingTimeline from './SchedulingTimeline';
 
 const ACTIVITY_PAGE_SIZE = 100;
 const SCHEDULE_LIMIT = 500;
@@ -76,29 +77,31 @@ function DragHandle({ listeners, attributes, disabled=false, title='Drag item' }
 
 function SowActivityCard({ item, dragging=false, source='activity' }) {
   const identity = activityIdentity(item);
-  const ph = item.planhours??item.original_planhours??item.planned_hours??0;
-  const rm = item.remaining_hours??item.planned_hours??item.planhours??0;
-  const sc = item.scheduled_hours??0;
+  const plan = asNumber(item.planhours??item.original_planhours??item.planned_hours,0);
+  const scheduled = asNumber(item.scheduled_hours,0);
+  const remaining = asNumber(item.remaining_hours ?? (plan-scheduled), plan);
+  const pct = plan>0 ? Math.min(100,Math.max(0,(scheduled/plan)*100)) : 0;
+  const done = plan>0 && remaining<=0.001;
   const isUnplanned = source==='unplanned'||item.schedule_status==='UNPLANNED';
+  const footnote = [identity.ssbr_id,identity.workcenter||item.machine_code].filter(Boolean).join(' · ');
   return (
-    <div className={`rounded-lg border p-2.5 shadow-sm transition ${dragging?'w-80 border-[#0096c7] bg-white shadow-xl shadow-[#0096c7]/20':isUnplanned?'border-rose-200 bg-rose-50/90 hover:border-rose-300':'border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40'}`}>
-      <div className="flex items-start gap-2.5">
+    <div className={`rounded-xl border p-2.5 transition ${dragging?'w-72 border-[#0096c7] bg-white shadow-xl shadow-[#0096c7]/20':isUnplanned?'border-rose-200 bg-rose-50':done?'border-slate-200 bg-slate-50':'border-slate-200 bg-white hover:border-[#90e0ef] hover:bg-[#f2fbfe]'}`}>
+      <div className="flex items-center gap-2">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#caf0f8] text-xs font-extrabold text-[#0077b6]" title={`Operasi ${identity.operation_no||'-'}`}>{identity.operation_no||'-'}</span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${isUnplanned?'bg-rose-500':'bg-[#0096c7]'}`} />
-            <p className="truncate font-mono text-xs font-extrabold text-slate-900">{identity.production_order||'-'}</p>
-          </div>
-          <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-500">{identity.ssbr_id||'-'}</p>
-          <p className="mt-1.5 line-clamp-2 text-[11px] font-semibold leading-snug text-slate-700">{item.operation_text||item.part_name||'-'}</p>
-          <p className="mt-1 truncate text-[10px] font-bold text-slate-400">{identity.workcenter||item.machine_code||'-'}</p>
+          <p className="truncate font-mono text-xs font-extrabold text-slate-800">{identity.production_order||'-'}</p>
+          <p className="truncate text-[11px] font-semibold text-slate-500">{item.operation_text||item.part_name||'-'}</p>
         </div>
-        <div className="flex w-[58px] shrink-0 flex-col gap-1">
-          <span className="rounded-md bg-slate-900 px-2 py-1 text-center text-[11px] font-extrabold text-white">{identity.operation_no||'-'}</span>
-          <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-center text-[9px] font-extrabold text-slate-600">Plan {formatHours(ph)}</span>
-          <span className="rounded-md bg-violet-100 px-1.5 py-0.5 text-center text-[9px] font-extrabold text-violet-700">Sch {formatHours(sc)}</span>
-          <span className={`rounded-md px-1.5 py-0.5 text-center text-[9px] font-extrabold ${asNumber(rm)>0?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-500'}`}>Left {formatHours(rm)}</span>
+        <div className="shrink-0 text-right">
+          <p className={`text-sm font-extrabold leading-none ${done?'text-slate-400':'text-emerald-600'}`}>{formatHours(remaining)}h</p>
+          <p className="mt-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-400">{done?'selesai':'sisa'}</p>
         </div>
       </div>
+      <div className="mt-2 flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${done?'bg-emerald-400':'bg-[#0096c7]'}`} style={{width:`${pct}%`}}/></div>
+        <span className="shrink-0 text-[9px] font-bold text-slate-400">{formatHours(scheduled)}/{formatHours(plan)}h</span>
+      </div>
+      {footnote&&<p className="mt-1.5 truncate text-[9px] font-semibold text-slate-400">{footnote}</p>}
     </div>
   );
 }
@@ -146,13 +149,12 @@ function DraggableActivity({ item, source='activity' }) {
 function DraggableManpower({ person }) {
   const id = `manpower-${person.snssb}`;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id, data:{item:person, source:'manpower'} });
+  const initials = String(person.full_name||'').trim().split(/\s+/).slice(0,2).map(s=>s[0]||'').join('').toUpperCase();
+  // Whole card is the drag handle → larger, touch-friendly hit area.
   return (
-    <div ref={setNodeRef} className={`rounded-lg border bg-white p-2 shadow-sm transition hover:border-[#0096c7] ${isDragging?'opacity-50':''}`}>
-      <div className="flex items-center gap-2">
-        <DragHandle listeners={listeners} attributes={attributes} title="Drag manpower" />
-        <User className="h-4 w-4 text-slate-400 shrink-0"/>
-        <div className="min-w-0"><p className="truncate text-[11px] font-extrabold text-slate-800">{person.full_name||'-'}</p><p className="text-[10px] text-slate-400">{person.snssb||'-'} · {person.employee_category||'-'}</p></div>
-      </div>
+    <div ref={setNodeRef} {...listeners} {...attributes} style={{touchAction:'none'}} className={`flex cursor-grab items-center gap-2.5 rounded-xl border border-slate-200 bg-white p-2 shadow-sm transition hover:border-[#0096c7] active:cursor-grabbing ${isDragging?'opacity-50':''}`}>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold text-white" style={{background:'linear-gradient(135deg,#0096c7,#0077b6)'}}>{initials||<User className="h-4 w-4"/>}</span>
+      <div className="min-w-0 flex-1"><p className="truncate text-xs font-extrabold text-slate-800">{person.full_name||'-'}</p><p className="truncate text-[10px] font-semibold text-slate-400">{person.snssb||'-'}{person.employee_category?` · ${person.employee_category}`:''}</p></div>
     </div>
   );
 }
@@ -385,7 +387,23 @@ function SummaryBar({ schedules, capacityRows, overtimeRows }) {
   const unplanned = schedules.filter(r=>r.schedule_status==='UNPLANNED').reduce((s,r)=>s+asNumber(r.planned_hours),0);
   const capLeft = capacityRows.reduce((s,r)=>s+asNumber(r.remaining_capacity_hours),0);
   const pendOT = overtimeRows.filter(r=>r.request_status==='PENDING').reduce((s,r)=>s+asNumber(r.overtime_hours),0);
-  return <div className="flex flex-wrap items-center justify-end gap-2">{[{l:'Planned',v:`${formatHours(planned)}h`},{l:'Unplanned',v:`${formatHours(unplanned)}h`},{l:'Cap Left',v:`${formatHours(capLeft)}h`},{l:'Pending OT',v:`${formatHours(pendOT)}h`}].map(s=><div key={s.l} className="min-w-24 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5"><p className="text-[10px] font-bold uppercase text-slate-500">{s.l}</p><p className="text-sm font-extrabold text-slate-900">{s.v}</p></div>)}</div>;
+  // Single compact strip so it wraps as one unit (never interleaves with date/OT).
+  const items = [
+    { l:'Planned', v:planned, c:'text-[#0077b6]' },
+    { l:'Unplanned', v:unplanned, c:unplanned>0?'text-rose-600':'text-slate-700' },
+    { l:'Cap Left', v:capLeft, c:'text-emerald-600' },
+    { l:'OT', v:pendOT, c:pendOT>0?'text-amber-600':'text-slate-700' },
+  ];
+  return (
+    <div className="flex items-stretch overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+      {items.map((s,i)=>(
+        <div key={s.l} className={`px-3 py-1 text-center ${i>0?'border-l border-slate-200':''}`}>
+          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{s.l}</p>
+          <p className={`text-sm font-extrabold leading-tight ${s.c}`}>{formatHours(s.v)}h</p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function SowSchedulingPage() {
@@ -396,6 +414,7 @@ function SowSchedulingPage() {
     useSensor(TouchSensor,{activationConstraint:{delay:250,tolerance:5}})
   );
   const [authUser] = useState(readAuthUser);
+  const [viewMode, setViewMode] = useState('board'); // 'board' | 'timeline'
   const [date, setDate] = useState(todayText);
   const [search, setSearch] = useState('');
   const [machineSearch, setMachineSearch] = useState('');
@@ -418,8 +437,7 @@ function SowSchedulingPage() {
   const [scheduleModal, setScheduleModal] = useState(null);
   const [overtimeModal, setOvertimeModal] = useState(null);
   const [showOvertimeApproval, setShowOvertimeApproval] = useState(false);
-  const [sowExpanded, setSowExpanded] = useState(true);
-  const [manpowerExpanded, setManpowerExpanded] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState('activity'); // 'activity' | 'manpower'
   const [sowFilter, setSowFilter] = useState('all'); // 'all' | 'unscheduled'
   const [manpowerSearch, setManpowerSearch] = useState('');
   const [expandedOrders, setExpandedOrders] = useState(new Set());
@@ -469,7 +487,17 @@ function SowSchedulingPage() {
       setSaving(true);try{await assignManpower(over.data.current.overtimeId,d.item.snssb,d.item.full_name);toast.success('Manpower assigned');refreshBoard()}catch(err){toast.error('Gagal assign manpower', { description: err.message||'Failed to assign' })}finally{setSaving(false)}return}
     const drop=parseDropId(over.id);
     if(drop.type==='shift'){const shift=shifts.find(r=>String(r.id)===String(drop.shiftId));
-      if(d.source==='planned'&&d.item.id){setSaving(true);try{const m=machines.find(r=>r.machine_code===drop.machineCode);await updateSchedule(d.item.id,{machine_code:drop.machineCode,workcenter:m?.workcenter||d.item.workcenter||null,schedule_date:date,shift_id:drop.shiftId,batch_id:null});toast.success('Schedule moved');refreshBoard()}catch(err){toast.error('Gagal move schedule', { description: err.message||'Failed' })}finally{setSaving(false)}return}
+      if(d.source==='planned'&&d.item.id){
+        // Optimistic: move the card to the target slot instantly (position is
+        // schedule-based, not capacity-based) then reconcile capacity via a
+        // background refetch. Revert on error. Keeps I1 accounting server-driven.
+        const m=machines.find(r=>r.machine_code===drop.machineCode);
+        const prev=schedules;
+        setSchedules(list=>list.map(r=>r.id===d.item.id?{...r,machine_code:drop.machineCode,shift_id:Number(drop.shiftId),schedule_date:date,batch_id:null,workcenter:m?.workcenter||r.workcenter}:r));
+        setSaving(true);
+        try{await rescheduleSchedule(d.item.id,{machine_code:drop.machineCode,workcenter:m?.workcenter||d.item.workcenter||null,schedule_date:date,shift_id:drop.shiftId});toast.success('Jadwal dipindahkan');refreshBoard()}catch(err){setSchedules(prev);toast.error('Gagal memindahkan jadwal', { description: err.message||'Failed' })}finally{setSaving(false)}
+        return;
+      }
       setScheduleModal({item:d.item,source:d.source||'activity',machineCode:drop.machineCode,shiftId:drop.shiftId,shift,scheduleDate:date})}
     if(drop.type==='overtime'){if(d.source==='manpower')return;setOvertimeModal({item:d.item,machineCode:drop.machineCode,source:d.source})}};
 
@@ -490,43 +518,71 @@ function SowSchedulingPage() {
   const loadMoreActivities = ()=>{if(loadingActivities||activityPagination.page>=activityPagination.totalPages)return;loadActivities({page:activityPagination.page+1,append:true})};
 
   return (<PageContainer className="h-screen gap-4 overflow-hidden bg-slate-50">
-    <header className="shrink-0 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm"><div className="flex items-center justify-between gap-4"><div className="flex items-center gap-3"><button onClick={()=>goBackOrFallback(navigate,'/operations-hub')} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4"/>Back</button><div><p className="text-xs font-bold uppercase text-[#0077b6]">Daily Scheduling</p><h1 className="text-xl font-extrabold text-slate-900">SOW Machine Schedule</h1></div></div><div className="flex min-w-0 flex-1 items-end justify-end gap-3"><SummaryBar schedules={schedules} capacityRows={capacityRows} overtimeRows={overtimeRows}/><label className="w-44 shrink-0"><span className="mb-1 block text-[11px] font-bold uppercase text-slate-500">Date</span><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800"/></label><button onClick={()=>setShowOvertimeApproval(true)} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-bold text-white hover:bg-[#0077b6]"><Clock className="h-4 w-4"/>OT<span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-extrabold text-[#0077b6]">{pendingOvertimeCount}</span></button></div></div></header>
-    <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToWindowEdges]} onDragStart={handleDragStart} onDragCancel={()=>setActiveDrag(null)} onDragEnd={handleDragEnd}>
+    <header className="shrink-0 rounded-lg border border-slate-200 bg-white px-4 py-2.5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button onClick={()=>goBackOrFallback(navigate,'/operations-hub')} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4"/>Back</button>
+          <div className="mr-1">
+            <p className="text-[11px] font-bold uppercase leading-none text-[#0077b6]">{viewMode==='timeline'?'Timeline Multi-Hari':'Daily Scheduling'}</p>
+            <h1 className="text-lg font-extrabold leading-tight text-slate-900">SOW Machine Schedule</h1>
+          </div>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+            <button onClick={()=>setViewMode('board')} className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-extrabold transition ${viewMode==='board'?'bg-[#0096c7] text-white':'text-slate-600 hover:bg-slate-50'}`}><LayoutGrid className="h-3.5 w-3.5"/>Papan</button>
+            <button onClick={()=>setViewMode('timeline')} className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-extrabold transition ${viewMode==='timeline'?'bg-[#0096c7] text-white':'text-slate-600 hover:bg-slate-50'}`}><CalendarRange className="h-3.5 w-3.5"/>Timeline</button>
+          </div>
+        </div>
+        {viewMode==='board'&&
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <SummaryBar schedules={schedules} capacityRows={capacityRows} overtimeRows={overtimeRows}/>
+            <div className="flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5"><CalendarRange className="h-4 w-4 text-slate-400"/><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="bg-transparent text-sm font-semibold text-slate-800 outline-none"/></div>
+            <button onClick={()=>setShowOvertimeApproval(true)} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-bold text-white hover:bg-[#0077b6]"><Clock className="h-4 w-4"/>OT<span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-extrabold text-[#0077b6]">{pendingOvertimeCount}</span></button>
+          </div>}
+      </div>
+    </header>
+    {viewMode==='timeline'
+      ? <main className="min-h-0 flex-1 overflow-hidden">{loadingBoard&&machines.length===0?<div className="flex h-full items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-[#0096c7]"/></div>:<SchedulingTimeline machines={machines} shifts={shifts}/>}</main>
+      : <><DndContext sensors={sensors} collisionDetection={pointerWithin} modifiers={[restrictToWindowEdges]} onDragStart={handleDragStart} onDragCancel={()=>setActiveDrag(null)} onDragEnd={handleDragEnd}>
       <main className="min-h-0 flex-1 overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm">
         <section className="flex h-full min-h-0 w-full flex-row overflow-hidden">
         <aside className="flex min-h-0 w-[340px] shrink-0 flex-col border-r border-slate-300 bg-slate-100">
-          {/* SOW Activity List */}
-          <div className="p-4 pb-0">
-            <button onClick={()=>setSowExpanded(v=>!v)} className="flex w-full items-center justify-between gap-2">
-              <div className="flex items-center gap-2"><p className="text-xs font-bold uppercase text-[#0077b6]">Activity</p><span className="text-[10px] text-slate-400">{activityPagination.total} records</span></div>
-              <div className="flex items-center gap-1.5">
-                <button onClick={e=>{e.stopPropagation();setSowFilter(sowFilter==='all'?'unscheduled':'all')}} className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase border ${sowFilter==='unscheduled'?'bg-amber-100 border-amber-300 text-amber-700':'bg-slate-100 border-slate-200 text-slate-500'}`}>{sowFilter==='unscheduled'?'Unscheduled':'All'}</button>
-                <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition ${sowExpanded?'rotate-180':''}`}/>
-              </div>
+          {/* Tabs: Aktivitas | Manpower — satu daftar penuh-tinggi bergantian */}
+          <div className="flex gap-1.5 p-3 pb-0">
+            <button onClick={()=>setSidebarTab('activity')} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-extrabold transition ${sidebarTab==='activity'?'bg-[#0096c7] text-white shadow-sm':'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+              <ClipboardList className="h-4 w-4"/>Aktivitas
+              <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-extrabold ${sidebarTab==='activity'?'bg-white/25 text-white':'bg-slate-100 text-slate-500'}`}>{activityPagination.total}</span>
+            </button>
+            <button onClick={()=>setSidebarTab('manpower')} className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-xs font-extrabold transition ${sidebarTab==='manpower'?'bg-[#0096c7] text-white shadow-sm':'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+              <User className="h-4 w-4"/>Manpower
+              <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-extrabold ${sidebarTab==='manpower'?'bg-white/25 text-white':'bg-slate-100 text-slate-500'}`}>{manpower.length}</span>
             </button>
           </div>
-          {sowExpanded&&<>
-          <div className="px-4 pt-2"><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3"><Search className="h-4 w-4 text-slate-500"/><input value={search} onChange={e=>setSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Search..."/></div></div>
-          <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-4 pb-2">
-            {groupedActivities.map(g=>{const exp=expandedOrders.has(g.order_no);return (<div key={g.order_no} className={`mb-2 overflow-hidden rounded-xl border shadow-sm transition ${exp?'border-sky-200 bg-sky-50/70':'border-slate-200 bg-white'}`}><button onClick={()=>setExpandedOrders(p=>{const n=new Set(p);n.has(g.order_no)?n.delete(g.order_no):n.add(g.order_no);return n})} className={`flex w-full items-center justify-between px-3 py-2 text-left transition ${exp?'bg-sky-100/80':'hover:bg-slate-50'}`}><div className="min-w-0 flex-1"><p className="truncate font-mono text-[11px] font-extrabold text-slate-800">{g.order_no}</p><p className="truncate text-[9px] font-semibold text-slate-500">{g.part_name||''}</p></div><div className="flex shrink-0 items-center gap-2"><span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold ${exp?'bg-white text-[#0077b6]':'bg-slate-100 text-slate-500'}`}>{formatHours(g.total_plan)}/{formatHours(g.total_scheduled)}h</span><ChevronDown className={`h-3 w-3 text-slate-400 transition ${exp?'rotate-180':''}`}/></div></button>{exp&&<div className="space-y-1.5 border-t border-sky-100 bg-white/75 p-2">{g.items.map(a=><DraggableActivity key={a.idsow} item={a}/>)}</div>}</div>)})}
-            {groupedActivities.length===0&&!loadingActivities&&<div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm font-semibold text-slate-500">No activities.</div>}
-          </div>
-          <button onClick={loadMoreActivities} disabled={loadingActivities||activityPagination.page>=activityPagination.totalPages} className="mx-4 mb-3 mt-1 h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{activityPagination.page>=activityPagination.totalPages?`${activities.length} of ${activityPagination.total}`:`Load more (${activities.length}/${activityPagination.total})`}</button>
-          </>}
 
-          {/* Manpower List */}
-          <div className={`border-t border-slate-200 ${manpowerExpanded?'flex min-h-0 flex-1 flex-col':'shrink-0'}`}>
-            <div className="px-4 py-3"><button onClick={()=>setManpowerExpanded(v=>!v)} className="flex w-full items-center justify-between gap-2"><div className="flex items-center gap-2"><User className="h-4 w-4 text-slate-400"/><span className="text-xs font-bold uppercase text-slate-600">Manpower</span><span className="text-[10px] text-slate-400">{manpower.length} people</span></div><ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition ${manpowerExpanded?'rotate-180':''}`}/></button></div>
-            {manpowerExpanded&&<div className="flex min-h-0 flex-1 flex-col px-4 pb-3">
-              <div className="mb-2 shrink-0"><div className="flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2"><Search className="h-3 w-3 text-slate-400"/><input value={manpowerSearch} onChange={e=>setManpowerSearch(e.target.value)} className="w-full bg-transparent text-[11px] font-semibold text-slate-800 outline-none" placeholder="Search name / SN..."/></div></div>
-              <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">{filteredManpower.map(p=><DraggableManpower key={p.snssb} person={p}/>)}</div>
-              <p className="mt-2 shrink-0 text-[10px] text-slate-400 italic">Seret Orang ke Box Overtime</p>
-            </div>}
+          {sidebarTab==='activity'?(
+          <>
+          <div className="flex items-center gap-2 px-3 pt-3">
+            <div className="flex h-10 flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3"><Search className="h-4 w-4 text-slate-400"/><input value={search} onChange={e=>setSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Cari order / SSBR / part..."/></div>
+            <button onClick={()=>setSowFilter(sowFilter==='all'?'unscheduled':'all')} title="Filter aktivitas" className={`h-10 shrink-0 rounded-lg border px-2.5 text-[10px] font-extrabold uppercase transition ${sowFilter==='unscheduled'?'border-amber-300 bg-amber-100 text-amber-700':'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>{sowFilter==='unscheduled'?'Belum':'Semua'}</button>
           </div>
+          <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-2">
+            {groupedActivities.map(g=>{const exp=expandedOrders.has(g.order_no);return (<div key={g.order_no} className={`mb-2 overflow-hidden rounded-xl border shadow-sm transition ${exp?'border-sky-200 bg-sky-50/70':'border-slate-200 bg-white'}`}><button onClick={()=>setExpandedOrders(p=>{const n=new Set(p);n.has(g.order_no)?n.delete(g.order_no):n.add(g.order_no);return n})} className={`flex w-full items-center justify-between px-3 py-2 text-left transition ${exp?'bg-sky-100/80':'hover:bg-slate-50'}`}><div className="min-w-0 flex-1"><p className="truncate font-mono text-[11px] font-extrabold text-slate-800">{g.order_no}</p><p className="truncate text-[9px] font-semibold text-slate-500">{g.part_name||''}</p></div><div className="flex shrink-0 items-center gap-2"><span className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold ${exp?'bg-white text-[#0077b6]':'bg-slate-100 text-slate-500'}`}>{formatHours(g.total_plan)}/{formatHours(g.total_scheduled)}h</span><ChevronDown className={`h-3 w-3 text-slate-400 transition ${exp?'rotate-180':''}`}/></div></button>{exp&&<div className="space-y-1.5 border-t border-sky-100 bg-white/75 p-2">{g.items.map(a=><DraggableActivity key={a.idsow} item={a}/>)}</div>}</div>)})}
+            {groupedActivities.length===0&&!loadingActivities&&<div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm font-semibold text-slate-500">Tidak ada aktivitas.</div>}
+          </div>
+          <button onClick={loadMoreActivities} disabled={loadingActivities||activityPagination.page>=activityPagination.totalPages} className="mx-3 mb-3 mt-1 h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{activityPagination.page>=activityPagination.totalPages?`${activities.length} dari ${activityPagination.total}`:`Muat lagi (${activities.length}/${activityPagination.total})`}</button>
+          </>
+          ):(
+          <>
+          <div className="px-3 pt-3"><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3"><Search className="h-4 w-4 text-slate-400"/><input value={manpowerSearch} onChange={e=>setManpowerSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Cari nama / SN..."/></div></div>
+          <div className="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3 pb-2">
+            {filteredManpower.map(p=><DraggableManpower key={p.snssb} person={p}/>)}
+            {filteredManpower.length===0&&<div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm font-semibold text-slate-500">Tidak ada manpower.</div>}
+          </div>
+          <p className="mx-3 mb-3 shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-[10px] font-semibold text-slate-500">Seret orang ke kotak Overtime pada kartu mesin untuk menugaskan.</p>
+          </>
+          )}
         </aside>
 
         <section className="min-w-0 flex-1 overflow-auto bg-slate-50 p-4">
-          <div className="mb-4 flex items-end justify-between gap-3"><div><h2 className="text-lg font-extrabold text-slate-900">MACHINE CAPACITY</h2></div><div className="flex items-center gap-3"><label className="w-72"><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 focus-within:border-[#0096c7] focus-within:ring-2 focus-within:ring-[#00b4d8]"><Search className="h-4 w-4 text-slate-500"/><input value={machineSearch} onChange={e=>setMachineSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Search machine..."/></div></label>{loadingBoard&&<Loader2 className="h-5 w-5 animate-spin text-[#0096c7]"/>}</div></div>
+          <div className="mb-4 flex items-end justify-between gap-3"><div><h2 className="text-lg font-extrabold text-slate-900">Kapasitas Mesin</h2></div><div className="flex items-center gap-3"><label className="w-72"><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 focus-within:border-[#0096c7] focus-within:ring-2 focus-within:ring-[#00b4d8]"><Search className="h-4 w-4 text-slate-500"/><input value={machineSearch} onChange={e=>setMachineSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Cari mesin..."/></div></label>{loadingBoard&&<Loader2 className="h-5 w-5 animate-spin text-[#0096c7]"/>}</div></div>
           {truncated&&<div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700"><AlertCircle className="h-4 w-4 shrink-0"/>Data terpotong pada batas {SCHEDULE_LIMIT} baris — sebagian jadwal/overtime mungkin tidak tampil. Persempit tanggal atau filter.</div>}
           {boardError&&<div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700"><span className="inline-flex items-center gap-2"><AlertCircle className="h-4 w-4 shrink-0"/>{boardError}</span><button onClick={()=>loadBoard()} className="rounded-lg border border-red-300 bg-white px-3 py-1 text-xs font-bold text-red-700 hover:bg-red-100">Coba lagi</button></div>}
           {loadingBoard&&filteredMachines.length===0
@@ -540,6 +596,7 @@ function SowSchedulingPage() {
     {scheduleModal&&<ScheduleModal pending={scheduleModal} capacity={capacityBySlot[capacityKey(scheduleModal.machineCode,scheduleModal.shiftId)]} batches={batches.filter(b=>b.machine_code===scheduleModal.machineCode&&String(b.schedule_date).slice(0,10)===String(scheduleModal.scheduleDate||date)&&String(b.shift_id)===String(scheduleModal.shiftId))} saving={saving} onClose={()=>setScheduleModal(null)} onSubmit={submitSchedule} onCreateBatch={handleCreateBatch}/>}
     {overtimeModal&&<OvertimeModal pending={overtimeModal} shifts={visibleShifts} saving={saving} onClose={()=>setOvertimeModal(null)} onSubmit={submitOvertime}/>}
     {showOvertimeApproval&&<OvertimeApprovalPanel rows={overtimeRows} canApprove={supervisorCanApprove} saving={saving} onApprove={handleApprove} onReject={handleReject} onClose={()=>setShowOvertimeApproval(false)}/>}
+    </>}
   </PageContainer>);
 }
 

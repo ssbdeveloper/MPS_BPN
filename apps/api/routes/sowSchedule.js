@@ -47,6 +47,8 @@ router.get("/order-operations", controller.getOrderOperations);
 
 router.get("/", controller.getSchedules);
 router.post("/", controller.createSchedule);
+router.post("/:id/reschedule", controller.rescheduleSchedule);
+router.post("/:id/reorder", controller.reorderSchedule);
 router.put("/:id", controller.updateSchedule);
 router.delete("/:id", controller.deleteSchedule);
 
