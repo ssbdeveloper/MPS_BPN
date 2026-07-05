@@ -1,121 +1,94 @@
--- F3a — v_sow_order_progress: "where is this order now" (frontier + debt model).
+-- F3a/F3b-1.6 — v_sow_order_progress: "where is this order now" (frontier + debt).
 --
--- Read-only, derived, honours I3 (never writes plan/schedule tables). Built ON TOP of
--- vw_sow_operation_actual and uses EFFECTIVE status (manual override wins), collapsed
--- per (order, op) across dates+machines. One summary row per production_order.
+-- Read-only, derived, honours I3 (never writes plan/schedule tables). One summary row
+-- per production_order.
 --
--- Canonical op order = operation_no (planned_queue_no is only 0.1% populated and is a
--- per-machine queue position, not the order's routing sequence — see F3a investigation).
+-- DONE decision (F3b-1.6, master plan §C):
+--   * "sudah" per op = sow.status = 'FINISH' (NOT timesheet hours).
+--   * Order with EXISTS a TECO op (ph3_order.order_description='TECO') = done => excluded.
+--   * Op-set = FULL sow routing (all ops per order), NOT the timesheet-activity base view.
+--     (The activity base is only a subset of the routing; using it made the frontier skip
+--      routing ops without timesheet activity — e.g. order 1000123166 gave frontier 300
+--      instead of the true 30.) vw_sow_operation_actual is used only by the ladder/base
+--      lookups for hours/deviation, never as the frontier op-set.
 --
--- Model (approved):
---   frontier_op          = LOWEST undone op (belum/nyangkut) — the earliest outstanding
---                          routing step. `dilewati` is skipped here (it is debt, shown
---                          separately) so a skipped early op never hides.
---   highest_done_op      = how far the order has raced ahead.
---   debt_ops             = `dilewati` ops not yet paid (no `sudah` on any date).
---   blocked_ops          = `nyangkut` ops.
---   behind_frontier_ops  = undone ops with operation_no < highest_done_op — out-of-order
---                          execution / implicit skips (the order jumped past them).
---   is_deviating / color : red = debt or nyangkut; amber = behind_frontier only; green = clean.
---   Cross-day debt payoff: an op is `sudah` if effective='sudah' on ANY date (ever_sudah
---   wins), so a skipped op automatically clears once it is later done.
+-- Model:
+--   frontier_op         = LOWEST op with eff_status in (belum, nyangkut) — earliest
+--                         outstanding routing step; `dilewati` is skipped into debt.
+--   eff_status          = FINISH -> 'sudah' (wins, so a skipped op auto-clears when it
+--                         later becomes FINISH); else manual nyangkut/dilewati; else belum.
+--   highest_done_op     = max op that is FINISH.
+--   debt_ops            = dilewati ops. blocked_ops = nyangkut ops.
+--   behind_frontier_ops = non-sudah ops with operation_no < highest_done_op (out-of-order).
+--   status_color        = red (debt/nyangkut) / amber (behind belum) / green (clean).
+--   frontier_machine    = sow.workcenter -> machineid (routing machine; also the mark
+--                         target for a ghost op with no activity row).
 --
--- PERF (F3b-1.5, lapis 1): rewritten aggregate-only — debt/blocked/behind/is_deviating/
--- status_color are computed with FILTER aggregates + a window for highest_done_op, instead
--- of per-row correlated subqueries. Same column interface; verified identical to the prior
--- definition for all real orders. Execution dropped from ~66s to ~5s (the residual ~5s is
--- the base view vw_sow_operation_actual itself — addressed separately). Also excludes the
--- NULL-production_order phantom (timesheet rows with null order_no): it is not a real order,
--- the endpoint never returns it (NULL IN (...) is false), and the old definition only kept
--- it via a "= NULL" bug in a correlated subquery (last_activity_date came out NULL).
+-- Canonical op order = operation_no. Perf ~0.5s (no whole-base scan). Does NOT touch
+-- vw_sow_plan_vs_actual_hours.
 
 BEGIN;
 
 CREATE OR REPLACE VIEW public.v_sow_order_progress AS
-WITH op AS (
-  -- collapse per (order, op) across dates + machines, using effective status
-  SELECT
-    production_order,
-    operation_no,
-    bool_or(effective_status = 'sudah')    AS ever_sudah,     -- done any day => debt paid
-    bool_or(effective_status = 'nyangkut') AS any_nyangkut,
-    bool_or(effective_status = 'dilewati') AS any_dilewati,
-    (array_agg(machine_code ORDER BY machine_code))[1] AS a_machine,
-    max(schedule_date) AS last_date
-  FROM public.vw_sow_operation_actual
-  WHERE production_order IS NOT NULL
-  GROUP BY production_order, operation_no
+WITH teco AS (
+  SELECT DISTINCT order_no FROM public.ph3_order WHERE order_description = 'TECO'
+),
+wc_map AS (   -- workcenter code -> physical machineid (for the frontier/mark machine)
+  SELECT DISTINCT ON (code) code, machineid FROM (
+    SELECT machineid::text AS code, machineid FROM public.workcenter
+    UNION ALL SELECT workcenternew, machineid FROM public.workcenter WHERE COALESCE(workcenternew,'')<>''
+    UNION ALL SELECT workcenterold, machineid FROM public.workcenter WHERE COALESCE(workcenterold,'')<>''
+    UNION ALL SELECT workcenterot,  machineid FROM public.workcenter WHERE COALESCE(workcenterot,'')<>''
+  ) x ORDER BY code, machineid
+),
+ov AS (   -- manual overlay collapsed to (order, op)
+  SELECT production_order, operation_no,
+    bool_or(manual_flag='nyangkut') AS any_nyangkut,
+    bool_or(manual_flag='dilewati') AS any_dilewati
+  FROM public.sow_operation_status GROUP BY production_order, operation_no
 ),
 op2 AS (
-  SELECT
-    production_order, operation_no, a_machine, last_date,
-    CASE
-      WHEN ever_sudah   THEN 'sudah'      -- ever done wins (clears skip/block)
-      WHEN any_nyangkut THEN 'nyangkut'
-      WHEN any_dilewati THEN 'dilewati'
-      ELSE 'belum'
-    END AS eff_status,
-    -- highest done op for the order, carried on every row via a window (avoids a
-    -- correlated subquery in the aggregate below)
-    max(operation_no) FILTER (WHERE ever_sudah) OVER (PARTITION BY production_order) AS highest_done_op
-  FROM op
+  SELECT s.order_no AS production_order, s.operation_no,
+    CASE WHEN s.status='FINISH' THEN 'sudah'   -- FINISH wins => clears skip/block
+         WHEN ov.any_nyangkut   THEN 'nyangkut'
+         WHEN ov.any_dilewati   THEN 'dilewati'
+         ELSE 'belum' END AS eff_status,
+    wm.machineid::text AS a_machine,
+    max(s.operation_no) FILTER (WHERE s.status='FINISH') OVER (PARTITION BY s.order_no) AS highest_done_op
+  FROM public.sow s
+  LEFT JOIN teco t   ON t.order_no = s.order_no
+  LEFT JOIN ov       ON ov.production_order = s.order_no AND ov.operation_no = s.operation_no
+  LEFT JOIN wc_map wm ON wm.code = s.workcenter
+  WHERE t.order_no IS NULL          -- TECO order => done => excluded
+    AND s.order_no IS NOT NULL
 ),
 agg AS (
-  SELECT
-    production_order,
-    max(highest_done_op)                                               AS highest_done_op,
-    count(*)                                                           AS total_ops,
-    count(*) FILTER (WHERE eff_status = 'sudah')                       AS done_ops,
-    -- frontier skips `dilewati` (it is debt) => lowest belum/nyangkut op
+  SELECT production_order,
+    max(highest_done_op) AS highest_done_op,
+    count(*) AS total_ops,
+    count(*) FILTER (WHERE eff_status='sudah') AS done_ops,
     min(operation_no) FILTER (WHERE eff_status IN ('belum','nyangkut')) AS frontier_op,
-    array_agg(operation_no ORDER BY operation_no) FILTER (WHERE eff_status = 'dilewati') AS debt_ops_raw,
-    count(*) FILTER (WHERE eff_status = 'dilewati')                    AS debt_count,
-    array_agg(operation_no ORDER BY operation_no) FILTER (WHERE eff_status = 'nyangkut') AS blocked_ops_raw,
-    count(*) FILTER (WHERE eff_status = 'nyangkut')                    AS blocked_count,
-    array_agg(operation_no ORDER BY operation_no) FILTER (
-      WHERE eff_status IN ('belum','nyangkut','dilewati')
-        AND highest_done_op IS NOT NULL AND operation_no < highest_done_op
-    )                                                                  AS behind_raw,
-    count(*) FILTER (WHERE eff_status IN ('dilewati','nyangkut'))      AS n_manual_dev,
-    count(*) FILTER (
-      WHERE eff_status = 'belum'
-        AND highest_done_op IS NOT NULL AND operation_no < highest_done_op
-    )                                                                  AS n_behind_belum,
-    max(last_date)                                                     AS last_activity_date
-  FROM op2
-  GROUP BY production_order
+    array_agg(operation_no ORDER BY operation_no) FILTER (WHERE eff_status='dilewati') AS debt_ops_raw,
+    count(*) FILTER (WHERE eff_status='dilewati') AS debt_count,
+    array_agg(operation_no ORDER BY operation_no) FILTER (WHERE eff_status='nyangkut') AS blocked_ops_raw,
+    count(*) FILTER (WHERE eff_status='nyangkut') AS blocked_count,
+    array_agg(operation_no ORDER BY operation_no) FILTER (WHERE eff_status IN ('belum','nyangkut','dilewati') AND highest_done_op IS NOT NULL AND operation_no < highest_done_op) AS behind_raw,
+    count(*) FILTER (WHERE eff_status IN ('dilewati','nyangkut')) AS n_manual_dev,
+    count(*) FILTER (WHERE eff_status='belum' AND highest_done_op IS NOT NULL AND operation_no < highest_done_op) AS n_behind_belum
+  FROM op2 GROUP BY production_order
 )
-SELECT
-  a.production_order,
-  a.total_ops,
-  a.done_ops,
-  a.total_ops - a.done_ops AS undone_ops,
-  a.highest_done_op,
-  a.frontier_op,
-  fo.eff_status  AS frontier_status,
-  fo.a_machine   AS frontier_machine,
-  COALESCE(a.debt_ops_raw, '{}')    AS debt_ops,
-  a.debt_count,
-  COALESCE(a.blocked_ops_raw, '{}') AS blocked_ops,
-  a.blocked_count,
-  COALESCE(a.behind_raw, '{}')      AS behind_frontier_ops,
+SELECT a.production_order, a.total_ops, a.done_ops, a.total_ops - a.done_ops AS undone_ops,
+  a.highest_done_op, a.frontier_op, fo.eff_status AS frontier_status, fo.a_machine AS frontier_machine,
+  COALESCE(a.debt_ops_raw,'{}')    AS debt_ops, a.debt_count,
+  COALESCE(a.blocked_ops_raw,'{}') AS blocked_ops, a.blocked_count,
+  COALESCE(a.behind_raw,'{}')      AS behind_frontier_ops,
   (a.n_manual_dev > 0 OR a.n_behind_belum > 0) AS is_deviating,
-  CASE
-    WHEN a.n_manual_dev  > 0 THEN 'red'
-    WHEN a.n_behind_belum > 0 THEN 'amber'
-    ELSE 'green'
-  END AS status_color,
-  a.last_activity_date
+  CASE WHEN a.n_manual_dev > 0 THEN 'red' WHEN a.n_behind_belum > 0 THEN 'amber' ELSE 'green' END AS status_color,
+  NULL::date AS last_activity_date   -- unused by FE; the date-picker fallback reads
+                                     -- max(schedule_date) from the base view, not this column
 FROM agg a
-LEFT JOIN op2 fo
-  ON fo.production_order = a.production_order
- AND fo.operation_no    = a.frontier_op;
+LEFT JOIN op2 fo ON fo.production_order = a.production_order AND fo.operation_no = a.frontier_op;
 
 COMMIT;
 
--- ---------------------------------------------------------------------------
--- ROLLBACK:
--- BEGIN;
--- DROP VIEW IF EXISTS public.v_sow_order_progress;
--- COMMIT;
--- ---------------------------------------------------------------------------
+-- ROLLBACK: restore the prior (timesheet-based) definition from git history.

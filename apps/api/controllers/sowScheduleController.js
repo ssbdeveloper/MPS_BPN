@@ -1823,20 +1823,30 @@ exports.upsertOperationStatus = async (req, res) => {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    // Machine consistency guard: store ONLY a machine_code that already exists as a
-    // view row for this op/date, so the join s.machine_code = b.machine_code can never
-    // miss (turns a silent lost-override into a loud 400). machine_code in the view is
-    // the physical machineid (normal/OT collapsed); client must echo the canonical
-    // machine_code from GET /operation-status.
+    // Existence guard, two branches (never reject a real op silently):
+    //  (1) op has a timesheet-activity row in the base view -> mark that (order,op,machine,date).
+    //  (2) op is a GHOST (no activity yet) but belongs to the order's sow routing -> allow a
+    //      pure-manual mark (the frontier can point at such ops now that 'sudah'=FINISH runs
+    //      over the full routing). The client echoes machine_code (sow.workcenter machineid)
+    //      and status_date (verification date = CURRENT_DATE) from GET /order-operations.
     const beforeRow = await fetchEffectiveRow(client, { productionOrder, operationNo, machineCode, statusDate });
-    if (!beforeRow) {
-      const error = new Error(
-        "no matching scheduled/actual operation for that production_order/operation_no/machine_code/date — send the canonical machine_code from GET /operation-status"
+    let before;
+    if (beforeRow) {
+      before = beforeRow.effective_status || null;
+    } else {
+      const inRouting = await client.query(
+        `SELECT 1 FROM public.sow WHERE ltrim(order_no,'0') = ltrim($1,'0') AND operation_no = $2 LIMIT 1`,
+        [productionOrder, operationNo]
       );
-      error.status = 400;
-      throw error;
+      if (inRouting.rowCount === 0) {
+        const error = new Error(
+          "operation is not in the order routing (sow) — cannot mark an unknown operation"
+        );
+        error.status = 400;
+        throw error;
+      }
+      before = "belum"; // ghost op: no activity yet, effective status before the mark
     }
-    const before = beforeRow.effective_status || null;
 
     const upsert = await client.query(
       `INSERT INTO public.sow_operation_status (
@@ -2019,10 +2029,11 @@ exports.getOrderProgress = async (req, res) => {
 };
 
 // GET /sow-schedule/order-operations?production_order=...
-// The order's op ladder for the expand view: one row per (op, physical machine) at its
-// LATEST occurrence — the concrete (machine_code, schedule_date) a manual mark targets
-// (guaranteed to exist => F2 guard passes). Flags is_frontier / is_behind_frontier from
-// v_sow_order_progress. Read-only.
+// Op ladder for the expand view over the FULL sow routing (same op-set as the card),
+// LEFT JOIN the timesheet base for hours/deviation/activity-machine (ltrim match — no
+// leading-zero miss). 'sudah' = sow.status='FINISH'. Ops with no activity row are ghosts:
+// machine comes from sow.workcenter, mark date = CURRENT_DATE. is_behind_frontier uses the
+// SAME formula as the card (eff_status <> 'sudah' AND op < highest_done_op). Read-only.
 exports.getOrderOperations = async (req, res) => {
   const productionOrder = normalizeText(req.query.production_order);
   if (!productionOrder) {
@@ -2035,22 +2046,56 @@ exports.getOrderOperations = async (req, res) => {
     );
     const summary = summaryRes.rows[0] || null;
     const opsRes = await db.query(
-      `WITH ladder AS (
-         SELECT DISTINCT ON (operation_no, machine_code)
-           operation_no, machine_code, machine_name, schedule_date,
-           effective_status, view_status, machine_deviation, sequence_deviation,
-           manual_status_id, manual_flag, blocked_reason
+      `WITH wc_map AS (
+         SELECT DISTINCT ON (code) code, machineid FROM (
+           SELECT machineid::text AS code, machineid FROM public.workcenter
+           UNION ALL SELECT workcenternew, machineid FROM public.workcenter WHERE COALESCE(workcenternew,'')<>''
+           UNION ALL SELECT workcenterold, machineid FROM public.workcenter WHERE COALESCE(workcenterold,'')<>''
+           UNION ALL SELECT workcenterot,  machineid FROM public.workcenter WHERE COALESCE(workcenterot,'')<>''
+         ) x ORDER BY code, machineid
+       ),
+       base_op AS (
+         SELECT operation_no,
+           (array_agg(machine_code ORDER BY schedule_date DESC))[1] AS machine_code,
+           max(schedule_date) AS status_date,
+           bool_or(machine_deviation)  AS machine_deviation,
+           bool_or(sequence_deviation) AS sequence_deviation,
+           sum(actual_hours)::numeric(10,2) AS actual_hours
          FROM public.vw_sow_operation_actual
-         WHERE production_order = $1
-         ORDER BY operation_no, machine_code, schedule_date DESC
+         WHERE ltrim(production_order,'0') = ltrim($1,'0')
+         GROUP BY operation_no
+       ),
+       ov AS (
+         SELECT operation_no, id AS manual_status_id, manual_flag, blocked_reason
+         FROM public.sow_operation_status WHERE production_order = $1
        )
-       SELECT l.*,
-         (l.operation_no = $2::int) AS is_frontier,
-         (l.effective_status <> 'sudah'
-           AND $3::int IS NOT NULL
-           AND l.operation_no < $3::int) AS is_behind_frontier
-       FROM ladder l
-       ORDER BY l.operation_no, l.machine_code`,
+       SELECT s.operation_no,
+         COALESCE(b.machine_code, wm.machineid::text) AS machine_code,
+         COALESCE(b.status_date, CURRENT_DATE)        AS status_date,
+         s.operation_text, s.part_name,
+         CASE WHEN s.status='FINISH' THEN 'sudah' ELSE 'belum' END AS view_status,
+         CASE WHEN s.status='FINISH'       THEN 'sudah'
+              WHEN o.manual_flag='nyangkut' THEN 'nyangkut'
+              WHEN o.manual_flag='dilewati' THEN 'dilewati'
+              ELSE 'belum' END AS effective_status,
+         b.actual_hours,
+         COALESCE(b.machine_deviation,false)  AS machine_deviation,
+         COALESCE(b.sequence_deviation,false) AS sequence_deviation,
+         (b.operation_no IS NULL) AS is_ghost,
+         o.manual_status_id, o.manual_flag, o.blocked_reason,
+         (s.operation_no = $2::int) AS is_frontier,
+         ( (CASE WHEN s.status='FINISH' THEN 'sudah'
+                 WHEN o.manual_flag='nyangkut' THEN 'nyangkut'
+                 WHEN o.manual_flag='dilewati' THEN 'dilewati'
+                 ELSE 'belum' END) <> 'sudah'
+           AND $3::int IS NOT NULL AND s.operation_no < $3::int ) AS is_behind_frontier
+       FROM public.sow s
+       LEFT JOIN base_op b ON b.operation_no = s.operation_no
+       LEFT JOIN ov o      ON o.operation_no = s.operation_no
+       LEFT JOIN wc_map wm ON wm.code = s.workcenter
+       WHERE ltrim(s.order_no,'0') = ltrim($1,'0')
+         AND NOT EXISTS (SELECT 1 FROM public.ph3_order p WHERE p.order_no = s.order_no AND p.order_description = 'TECO')
+       ORDER BY s.operation_no`,
       [productionOrder, summary?.frontier_op ?? null, summary?.highest_done_op ?? null]
     );
     res.json({ production_order: productionOrder, summary, operations: opsRes.rows });
