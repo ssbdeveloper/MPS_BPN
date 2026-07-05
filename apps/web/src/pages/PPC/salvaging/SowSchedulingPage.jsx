@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext, DragOverlay, PointerSensor, TouchSensor, closestCenter,
   useDraggable, useDroppable, useSensor, useSensors,
@@ -22,6 +22,8 @@ import { goBackOrFallback } from '../../../utils/navigation';
 
 const ACTIVITY_PAGE_SIZE = 100;
 const SCHEDULE_LIMIT = 500;
+const MAX_ACT_LIMIT = 500; // server clamps the activity page limit to this
+const EMPTY_ARR = []; // stable empty reference so memoized cards don't re-render needlessly
 
 function todayText() { const d = new Date(); return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-'); }
 function readAuthUser() { try { return JSON.parse(sessionStorage.getItem('authUser')||'null'); } catch { return null; } }
@@ -155,7 +157,7 @@ function DraggableManpower({ person }) {
   );
 }
 
-function DropZone({ id, title, capacity, schedules, onDeleteSchedule, onDeleteBatch }) {
+const DropZone = React.memo(function DropZone({ id, title, capacity, schedules, onDeleteSchedule, onDeleteBatch }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   const [expanded, setExpanded] = useState(true);
   const used = asNumber(capacity?.used_normal_planned_hours);
@@ -175,9 +177,9 @@ function DropZone({ id, title, capacity, schedules, onDeleteSchedule, onDeleteBa
       {expanded&&<div className="mt-2 min-h-12 space-y-1.5">{items.length===0?<div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-center text-[11px] font-medium text-slate-400">Drop SOW here</div>:items.map(item=>item.type==='batch'?<BatchBox key={`batch-${item.batch.id}`} batch={item.batch} schedules={item.schedules} onDelete={onDeleteSchedule} onDeleteBatch={onDeleteBatch}/>:<DropScheduleCard key={item.schedule.id} schedule={item.schedule} onDelete={onDeleteSchedule}/>)}</div>}
     </div>
   );
-}
+});
 
-function OvertimeRow({ row, onDelete }) {
+const OvertimeRow = React.memo(function OvertimeRow({ row, onDelete }) {
   const id = `assign-ot-${row.id}`;
   const { setNodeRef, isOver } = useDroppable({ id, data: { overtimeId: row.id, machine_code: row.machine_code } });
   const status = String(row.request_status||'').toUpperCase();
@@ -204,7 +206,7 @@ function OvertimeRow({ row, onDelete }) {
       }
     </div>
   );
-}
+});
 
 function OvertimeDropZone({ id, rows, onDeleteOvertime }) {
   const { setNodeRef, isOver } = useDroppable({ id });
@@ -220,7 +222,7 @@ function OvertimeDropZone({ id, rows, onDeleteOvertime }) {
   );
 }
 
-function MachineCard({ machine, shifts, capacityBySlot, schedulesBySlot, overtimeRows, onDeleteSchedule, onDeleteBatch, onDeleteOvertime }) {
+const MachineCard = React.memo(function MachineCard({ machine, shifts, capacityBySlot, schedulesBySlot, overtimeRows, onDeleteSchedule, onDeleteBatch, onDeleteOvertime }) {
   const totals = shifts.reduce((a,s)=>{const cap=capacityBySlot[capacityKey(machine.machine_code,s.id)];const t=asNumber(cap?.total_capacity_hours,8);const u=asNumber(cap?.used_normal_planned_hours);a.capacity+=t;a.used+=u;a.remaining+=asNumber(cap?.remaining_capacity_hours,Math.max(t-u,0));return a;},{capacity:0,used:0,remaining:0});
   return (
     <article className="rounded-lg border border-slate-300 bg-white p-3 shadow-sm">
@@ -228,10 +230,10 @@ function MachineCard({ machine, shifts, capacityBySlot, schedulesBySlot, overtim
         <div className="min-w-0"><div className="flex items-start justify-between gap-2"><h2 className="min-w-0 truncate text-base font-extrabold text-slate-900">{machine.machine_code}</h2><span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-extrabold text-emerald-700">{formatHours(totals.remaining)}/{formatHours(totals.capacity)}h</span></div><p className="truncate text-xs font-semibold text-slate-500">{machine.machine_name||machine.workcenter||'-'}</p></div>
         <div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[#0096c7]" style={{width:`${Math.min(100,Math.max(0,(totals.used/Math.max(totals.capacity,1))*100))}%`}}/></div>
       </div>
-      <div className="mt-3 flex flex-col gap-2">{shifts.slice(0,2).map(s=><DropZone key={s.id} id={buildDropId('shift',machine.machine_code,s.id)} title={s.shift_name} capacity={capacityBySlot[capacityKey(machine.machine_code,s.id)]} schedules={schedulesBySlot[capacityKey(machine.machine_code,s.id)]||[]} onDeleteSchedule={onDeleteSchedule} onDeleteBatch={onDeleteBatch}/>)}<OvertimeDropZone id={buildDropId('overtime',machine.machine_code)} rows={overtimeRows} onDeleteOvertime={onDeleteOvertime}/></div>
+      <div className="mt-3 flex flex-col gap-2">{shifts.map(s=><DropZone key={s.id} id={buildDropId('shift',machine.machine_code,s.id)} title={s.shift_name} capacity={capacityBySlot[capacityKey(machine.machine_code,s.id)]} schedules={schedulesBySlot[capacityKey(machine.machine_code,s.id)]||EMPTY_ARR} onDeleteSchedule={onDeleteSchedule} onDeleteBatch={onDeleteBatch}/>)}<OvertimeDropZone id={buildDropId('overtime',machine.machine_code)} rows={overtimeRows} onDeleteOvertime={onDeleteOvertime}/></div>
     </article>
   );
-}
+});
 
 function ScheduleModal({ pending, capacity, batches=[], saving, onClose, onSubmit, onCreateBatch }) {
   const item = pending?.item;
@@ -409,7 +411,9 @@ function SowSchedulingPage() {
   const [loadingActivities, setLoadingActivities] = useState(false);
   const [loadingBoard, setLoadingBoard] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [boardError, setBoardError] = useState(null);
+  const [truncated, setTruncated] = useState(false);
   const [activeDrag, setActiveDrag] = useState(null);
   const [scheduleModal, setScheduleModal] = useState(null);
   const [overtimeModal, setOvertimeModal] = useState(null);
@@ -420,7 +424,7 @@ function SowSchedulingPage() {
   const [manpowerSearch, setManpowerSearch] = useState('');
   const [expandedOrders, setExpandedOrders] = useState(new Set());
 
-  const visibleShifts = useMemo(()=>shifts.slice(0,2),[shifts]);
+  const visibleShifts = useMemo(()=>shifts,[shifts]); // A5: render all shifts (was slice(0,2))
   const capacityBySlot = useMemo(()=>capacityRows.reduce((a,r)=>{a[capacityKey(r.machine_code,r.shift_id)]=r;return a},{}),[capacityRows]);
   const plannedSchedules = useMemo(()=>schedules.filter(r=>r.schedule_status!=='UNPLANNED'&&r.schedule_status!=='CANCELLED'),[schedules]);
   const schedulesBySlot = useMemo(()=>groupByMachineShift(plannedSchedules),[plannedSchedules]);
@@ -438,38 +442,51 @@ function SowSchedulingPage() {
   },[activities,sowFilter]);
 
   const loadReference = useCallback(async()=>{const[sh,mc,mp]=await Promise.all([fetchShifts({date}),fetchSchedulingMachines(),fetchManpower()]);setShifts(sh);setMachines(mc);setManpower(mp)},[date]);
-  const loadActivities = useCallback(async({page=1,append=false}={})=>{setLoadingActivities(true);try{const p=await fetchSchedulingActivities({search,page,limit:ACTIVITY_PAGE_SIZE});setActivities(prev=>append?[...prev,...(p.data||[])]:p.data||[]);setActivityPagination(p.pagination||{page,totalPages:1,total:0})}catch(err){toast.error('Gagal load activity', { description: err.message||'Failed to load' })}finally{setLoadingActivities(false)}},[search]);
-  const loadBoard = useCallback(async()=>{setLoadingBoard(true);try{const[sc,cap,ot,b]=await Promise.all([fetchSchedules({date,limit:SCHEDULE_LIMIT}),fetchCapacity({date}),fetchOvertime({date,limit:SCHEDULE_LIMIT}),fetchBatches({date})]);setSchedules((sc.data||[]).filter(r=>r.schedule_status!=='CANCELLED'));setCapacityRows(cap||[]);setOvertimeRows((ot||[]).filter(r=>r.request_status!=='CANCELLED'));setBatches(b||[])}catch(err){toast.error('Gagal load schedule board', { description: err.message||'Failed to load' })}finally{setLoadingBoard(false)}},[date]);
+  const loadActivities = useCallback(async({page=1,append=false}={})=>{setLoadingActivities(true);try{const p=await fetchSchedulingActivities({search:debouncedSearch,page,limit:ACTIVITY_PAGE_SIZE});setActivities(prev=>append?[...prev,...(p.data||[])]:p.data||[]);setActivityPagination(p.pagination||{page,totalPages:1,total:0})}catch(err){toast.error('Gagal load activity', { description: err.message||'Failed to load' })}finally{setLoadingActivities(false)}},[debouncedSearch]);
+  // A2/U1: after a mutation, reload only the pages already loaded (not page 1) so the
+  // operator keeps scroll position & pagination instead of the list snapping to the top.
+  const reloadLoadedActivities = useCallback(async()=>{const loaded=activities.length;const limit=Math.min(Math.max(loaded,ACTIVITY_PAGE_SIZE),MAX_ACT_LIMIT);setLoadingActivities(true);try{const p=await fetchSchedulingActivities({search:debouncedSearch,page:1,limit});const rows=p.data||[];const total=p.pagination?.total??rows.length;setActivities(rows);setActivityPagination({page:Math.max(1,Math.ceil(rows.length/ACTIVITY_PAGE_SIZE)),totalPages:Math.max(1,Math.ceil(total/ACTIVITY_PAGE_SIZE)),total})}catch(err){toast.error('Gagal refresh activity',{description:err.message||'Failed'})}finally{setLoadingActivities(false)}},[activities.length,debouncedSearch]);
+  const loadBoard = useCallback(async()=>{setLoadingBoard(true);setBoardError(null);try{const[sc,cap,ot,b]=await Promise.all([fetchSchedules({date,limit:SCHEDULE_LIMIT}),fetchCapacity({date}),fetchOvertime({date,limit:SCHEDULE_LIMIT}),fetchBatches({date})]);const scRaw=sc.data||[];const otRaw=ot||[];setSchedules(scRaw.filter(r=>r.schedule_status!=='CANCELLED'));setCapacityRows(cap||[]);setOvertimeRows(otRaw.filter(r=>r.request_status!=='CANCELLED'));setBatches(b||[]);setTruncated(scRaw.length>=SCHEDULE_LIMIT||otRaw.length>=SCHEDULE_LIMIT)}catch(err){setBoardError(err.message||'Gagal memuat papan jadwal');toast.error('Gagal load schedule board', { description: err.message||'Failed to load' })}finally{setLoadingBoard(false)}},[date]);
 
+  // A2: debounce the search box so activities refetch only after typing settles.
+  useEffect(()=>{const t=setTimeout(()=>setDebouncedSearch(search),300);return()=>clearTimeout(t)},[search]);
   useEffect(()=>{loadReference().catch(e=>toast.error('Gagal load reference', { description: e.message||'Failed' }))},[loadReference]);
-  useEffect(()=>{loadActivities({page:1,append:false})},[loadActivities,refreshKey]);
-  useEffect(()=>{loadBoard()},[loadBoard,refreshKey]);
+  useEffect(()=>{loadActivities({page:1,append:false})},[loadActivities]);
+  useEffect(()=>{loadBoard()},[loadBoard]);
 
-  const refresh = ()=>setRefreshKey(v=>v+1);
+  // A1: targeted invalidation. Refs keep refresh callbacks stable so React.memo on the
+  // board cards holds. Capacity-changing mutations do a targeted refetch (never optimistic)
+  // so batch accounting (I1) never diverges from the server.
+  const loadBoardRef = useRef(loadBoard); loadBoardRef.current = loadBoard;
+  const reloadActRef = useRef(reloadLoadedActivities); reloadActRef.current = reloadLoadedActivities;
+  const refreshBoard = useCallback(()=>loadBoardRef.current?.(),[]);
+  const refreshBoardAndActivities = useCallback(()=>Promise.all([loadBoardRef.current?.(),reloadActRef.current?.()]),[]);
 
   const handleDragStart = ({active})=>{setActiveDrag(active.data?.current||null)};
   const handleDragEnd = async({active,over})=>{const d=active.data?.current;setActiveDrag(null);if(!d?.item||!over?.id)return;
     // Manpower drag to existing overtime row (drop id: assign-ot-{id})
     if(d.source==='manpower'&&String(over.id).startsWith('assign-ot-')&&over.data?.current?.overtimeId){
-      setSaving(true);try{await assignManpower(over.data.current.overtimeId,d.item.snssb,d.item.full_name);toast.success('Manpower assigned');refresh()}catch(err){toast.error('Gagal assign manpower', { description: err.message||'Failed to assign' })}finally{setSaving(false)}return}
+      setSaving(true);try{await assignManpower(over.data.current.overtimeId,d.item.snssb,d.item.full_name);toast.success('Manpower assigned');refreshBoard()}catch(err){toast.error('Gagal assign manpower', { description: err.message||'Failed to assign' })}finally{setSaving(false)}return}
     const drop=parseDropId(over.id);
-    if(drop.type==='shift'){const shift=shifts.find(r=>String(r.id)===String(drop.shiftId));const cap=capacityBySlot[capacityKey(drop.machineCode,drop.shiftId)];
-      if(d.source==='planned'&&d.item.id){setSaving(true);try{const m=machines.find(r=>r.machine_code===drop.machineCode);await updateSchedule(d.item.id,{machine_code:drop.machineCode,workcenter:m?.workcenter||d.item.workcenter||null,schedule_date:date,shift_id:drop.shiftId,batch_id:null});toast.success('Schedule moved');refresh()}catch(err){toast.error('Gagal move schedule', { description: err.message||'Failed' })}finally{setSaving(false)}return}
+    if(drop.type==='shift'){const shift=shifts.find(r=>String(r.id)===String(drop.shiftId));
+      if(d.source==='planned'&&d.item.id){setSaving(true);try{const m=machines.find(r=>r.machine_code===drop.machineCode);await updateSchedule(d.item.id,{machine_code:drop.machineCode,workcenter:m?.workcenter||d.item.workcenter||null,schedule_date:date,shift_id:drop.shiftId,batch_id:null});toast.success('Schedule moved');refreshBoard()}catch(err){toast.error('Gagal move schedule', { description: err.message||'Failed' })}finally{setSaving(false)}return}
       setScheduleModal({item:d.item,source:d.source||'activity',machineCode:drop.machineCode,shiftId:drop.shiftId,shift,scheduleDate:date})}
     if(drop.type==='overtime'){if(d.source==='manpower')return;setOvertimeModal({item:d.item,machineCode:drop.machineCode,source:d.source})}};
 
-  const submitSchedule = async({hours,note,scheduleDate,batchId})=>{if(!scheduleModal?.item||!scheduleModal.machineCode||!scheduleModal.shiftId)return;setSaving(true);try{const iden=activityIdentity(scheduleModal.item);const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);await createSchedule({...iden,schedule_date:scheduleDate||date,shift_id:scheduleModal.shiftId,machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||iden.workcenter,planned_hours:hours,batch_id:batchId||null,remarks:note});if(scheduleModal.source==='unplanned'&&scheduleModal.item.id)await deleteSchedule(scheduleModal.item.id);toast.success('Activity scheduled');setScheduleModal(null);refresh()}catch(err){toast.error('Gagal schedule activity', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  const submitSchedule = async({hours,note,scheduleDate,batchId})=>{if(!scheduleModal?.item||!scheduleModal.machineCode||!scheduleModal.shiftId)return;setSaving(true);try{const iden=activityIdentity(scheduleModal.item);const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);await createSchedule({...iden,schedule_date:scheduleDate||date,shift_id:scheduleModal.shiftId,machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||iden.workcenter,planned_hours:hours,batch_id:batchId||null,remarks:note});if(scheduleModal.source==='unplanned'&&scheduleModal.item.id)await deleteSchedule(scheduleModal.item.id);toast.success('Activity scheduled');setScheduleModal(null);refreshBoardAndActivities()}catch(err){toast.error('Gagal schedule activity', { description: err.message||'Failed' })}finally{setSaving(false)}};
 
-  const handleCreateBatch = async({batch_capacity_hours,schedule_date})=>{if(!scheduleModal?.machineCode||!scheduleModal?.shiftId)return null;setSaving(true);try{const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);const c=await createBatch({machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||null,schedule_date:schedule_date||date,shift_id:scheduleModal.shiftId,batch_capacity_hours});const br=await fetchBatches({date:schedule_date||date,machine_code:scheduleModal.machineCode,shift_id:scheduleModal.shiftId});setBatches(p=>[...p.filter(r=>!(r.machine_code===scheduleModal.machineCode&&String(r.schedule_date).slice(0,10)===String(schedule_date||date)&&String(r.shift_id)===String(scheduleModal.shiftId))),...br]);toast.success('Batch created');refresh();return c}catch(err){toast.error('Gagal create batch', { description: err.message||'Failed' });return null}finally{setSaving(false)}};
+  const handleCreateBatch = async({batch_capacity_hours,schedule_date})=>{if(!scheduleModal?.machineCode||!scheduleModal?.shiftId)return null;setSaving(true);try{const m=machines.find(r=>r.machine_code===scheduleModal.machineCode);const c=await createBatch({machine_code:scheduleModal.machineCode,workcenter:m?.workcenter||null,schedule_date:schedule_date||date,shift_id:scheduleModal.shiftId,batch_capacity_hours});const br=await fetchBatches({date:schedule_date||date,machine_code:scheduleModal.machineCode,shift_id:scheduleModal.shiftId});setBatches(p=>[...p.filter(r=>!(r.machine_code===scheduleModal.machineCode&&String(r.schedule_date).slice(0,10)===String(schedule_date||date)&&String(r.shift_id)===String(scheduleModal.shiftId))),...br]);toast.success('Batch created');refreshBoard();return c}catch(err){toast.error('Gagal create batch', { description: err.message||'Failed' });return null}finally{setSaving(false)}};
 
-  const submitOvertime = async({shiftId,startTime,endTime,note,assigned_to,assigned_to_name})=>{if(!overtimeModal?.item||!overtimeModal.machineCode||!shiftId)return;setSaving(true);try{const iden=activityIdentity(overtimeModal.item);const m=machines.find(r=>r.machine_code===overtimeModal.machineCode);await createOvertime({...iden,overtime_date:date,shift_id:shiftId,machine_code:overtimeModal.machineCode,workcenter:m?.workcenter||iden.workcenter,start_time:startTime,end_time:endTime,note,assigned_to,assigned_to_name});toast.success('Overtime requested');setOvertimeModal(null);refresh()}catch(err){toast.error('Gagal request overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  const submitOvertime = async({shiftId,startTime,endTime,note,assigned_to,assigned_to_name})=>{if(!overtimeModal?.item||!overtimeModal.machineCode||!shiftId)return;setSaving(true);try{const iden=activityIdentity(overtimeModal.item);const m=machines.find(r=>r.machine_code===overtimeModal.machineCode);await createOvertime({...iden,overtime_date:date,shift_id:shiftId,machine_code:overtimeModal.machineCode,workcenter:m?.workcenter||iden.workcenter,start_time:startTime,end_time:endTime,note,assigned_to,assigned_to_name});toast.success('Overtime requested');setOvertimeModal(null);refreshBoard()}catch(err){toast.error('Gagal request overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
 
-  const handleApprove = async(id)=>{setSaving(true);try{await approveOvertime(id);toast.success('Overtime approved');refresh()}catch(err){toast.error('Gagal approve overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
-  const handleReject = async(id,rejectionNote='')=>{setSaving(true);try{await rejectOvertime(id,rejectionNote);toast.success('Overtime rejected');refresh()}catch(err){toast.error('Gagal reject overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
-  const handleDeleteSchedule = async(id)=>{setSaving(true);try{await deleteSchedule(id);toast.success('Schedule deleted');refresh()}catch(err){toast.error('Gagal delete schedule', { description: err.message||'Failed' })}finally{setSaving(false)}};
-  const handleDeleteBatch = async(id)=>{if(!confirm('Cancel this batch?'))return;setSaving(true);try{await deleteBatch(id);toast.success('Batch cancelled');refresh()}catch(err){toast.error('Gagal cancel batch', { description: err.message||'Failed' })}finally{setSaving(false)}};
-  const handleAssignManpower = async(overtimeId, snssb, fullName)=>{setSaving(true);try{await assignManpower(overtimeId,snssb,fullName);toast.success('Manpower assigned');refresh()}catch(err){toast.error('Gagal assign manpower', { description: err.message||'Failed to assign' })}finally{setSaving(false)}};
-  const handleDeleteOvertime = async(id)=>{if(!confirm('Delete this overtime?'))return;setSaving(true);try{await deleteOvertime(id);toast.success('Overtime deleted');refresh()}catch(err){toast.error('Gagal delete overtime', { description: err.message||'Failed' })}finally{setSaving(false)}};
+  // Approve/reject/delete change approved-overtime or scheduled hours → refetch board
+  // (+ activities where an operation's remaining budget changes). useCallback + stable
+  // refresh refs give these the constant identity React.memo needs.
+  const handleApprove = useCallback(async(id)=>{setSaving(true);try{await approveOvertime(id);toast.success('Overtime approved');refreshBoardAndActivities()}catch(err){toast.error('Gagal approve overtime', { description: err.message||'Failed' })}finally{setSaving(false)}},[refreshBoardAndActivities]);
+  const handleReject = useCallback(async(id,rejectionNote='')=>{setSaving(true);try{await rejectOvertime(id,rejectionNote);toast.success('Overtime rejected');refreshBoard()}catch(err){toast.error('Gagal reject overtime', { description: err.message||'Failed' })}finally{setSaving(false)}},[refreshBoard]);
+  const handleDeleteSchedule = useCallback(async(id)=>{setSaving(true);try{await deleteSchedule(id);toast.success('Schedule deleted');refreshBoardAndActivities()}catch(err){toast.error('Gagal delete schedule', { description: err.message||'Failed' })}finally{setSaving(false)}},[refreshBoardAndActivities]);
+  const handleDeleteBatch = useCallback(async(id)=>{if(!confirm('Cancel this batch?'))return;setSaving(true);try{await deleteBatch(id);toast.success('Batch cancelled');refreshBoard()}catch(err){toast.error('Gagal cancel batch', { description: err.message||'Failed' })}finally{setSaving(false)}},[refreshBoard]);
+  const handleDeleteOvertime = useCallback(async(id)=>{if(!confirm('Delete this overtime?'))return;setSaving(true);try{await deleteOvertime(id);toast.success('Overtime deleted');refreshBoardAndActivities()}catch(err){toast.error('Gagal delete overtime', { description: err.message||'Failed' })}finally{setSaving(false)}},[refreshBoardAndActivities]);
   const loadMoreActivities = ()=>{if(loadingActivities||activityPagination.page>=activityPagination.totalPages)return;loadActivities({page:activityPagination.page+1,append:true})};
 
   return (<PageContainer className="h-screen gap-4 overflow-hidden bg-slate-50">
@@ -510,7 +527,11 @@ function SowSchedulingPage() {
 
         <section className="min-w-0 flex-1 overflow-auto bg-slate-50 p-4">
           <div className="mb-4 flex items-end justify-between gap-3"><div><h2 className="text-lg font-extrabold text-slate-900">MACHINE CAPACITY</h2></div><div className="flex items-center gap-3"><label className="w-72"><div className="flex h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 focus-within:border-[#0096c7] focus-within:ring-2 focus-within:ring-[#00b4d8]"><Search className="h-4 w-4 text-slate-500"/><input value={machineSearch} onChange={e=>setMachineSearch(e.target.value)} className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none" placeholder="Search machine..."/></div></label>{loadingBoard&&<Loader2 className="h-5 w-5 animate-spin text-[#0096c7]"/>}</div></div>
-          <div className="grid grid-cols-3 gap-3">{filteredMachines.map(m=><MachineCard key={m.machine_code} machine={m} shifts={visibleShifts} capacityBySlot={capacityBySlot} schedulesBySlot={schedulesBySlot} overtimeRows={overtimeByMachine[m.machine_code]||[]} onDeleteSchedule={handleDeleteSchedule} onDeleteBatch={handleDeleteBatch} onDeleteOvertime={handleDeleteOvertime}/>)}{filteredMachines.length===0&&!loadingBoard&&<div className="col-span-3 rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm font-bold text-slate-500">No machines found.</div>}</div>
+          {truncated&&<div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700"><AlertCircle className="h-4 w-4 shrink-0"/>Data terpotong pada batas {SCHEDULE_LIMIT} baris — sebagian jadwal/overtime mungkin tidak tampil. Persempit tanggal atau filter.</div>}
+          {boardError&&<div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700"><span className="inline-flex items-center gap-2"><AlertCircle className="h-4 w-4 shrink-0"/>{boardError}</span><button onClick={()=>loadBoard()} className="rounded-lg border border-red-300 bg-white px-3 py-1 text-xs font-bold text-red-700 hover:bg-red-100">Coba lagi</button></div>}
+          {loadingBoard&&filteredMachines.length===0
+            ? <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{Array.from({length:6}).map((_,i)=><div key={i} className="h-44 animate-pulse rounded-lg border border-slate-200 bg-white"/>)}</div>
+            : <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">{filteredMachines.map(m=><MachineCard key={m.machine_code} machine={m} shifts={visibleShifts} capacityBySlot={capacityBySlot} schedulesBySlot={schedulesBySlot} overtimeRows={overtimeByMachine[m.machine_code]||EMPTY_ARR} onDeleteSchedule={handleDeleteSchedule} onDeleteBatch={handleDeleteBatch} onDeleteOvertime={handleDeleteOvertime}/>)}{filteredMachines.length===0&&!loadingBoard&&!boardError&&<div className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm font-bold text-slate-500">No machines found.</div>}</div>}
         </section>
         </section>
       </main>
