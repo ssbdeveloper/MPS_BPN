@@ -9,4 +9,9 @@ router.post("/users", controller.createUser);
 router.put("/users/:id", controller.updateUser);
 router.delete("/users/:id", controller.deleteUser);
 
+// RBAC — per-user permission overrides
+router.get("/me/permissions", controller.getMyPermissions);
+router.get("/users/:id/permissions", controller.getUserPermissions);
+router.put("/users/:id/permissions", controller.updateUserPermissions);
+
 module.exports = router;

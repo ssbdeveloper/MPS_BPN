@@ -1,5 +1,8 @@
 const crypto = require("crypto");
 const db = global.pool || require("../db");
+const { effectiveMap } = require("../rbac/effective");
+const { FEATURE_IDS, FEATURE_ID_SET } = require("../rbac/features");
+const { LEVELS } = require("../rbac/permissionMatrix");
 
 function sha256Password(password) {
   return `sha256$${crypto.createHash("sha256").update(String(password || "")).digest("hex")}`;
@@ -346,5 +349,116 @@ exports.deleteUser = async (req, res) => {
       success: false,
       error: "Gagal hapus user",
     });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// RBAC — per-user permission overrides (interim x-role).
+// ---------------------------------------------------------------------------
+
+const VALID_LEVELS = new Set([LEVELS.NO_ACCESS, LEVELS.READ_ONLY, LEVELS.FULL_ACCESS]);
+
+async function fetchUserRole(userId) {
+  const r = await db.query(
+    `SELECT id, username, name, COALESCE(NULLIF(roles,''), role) AS role
+     FROM public.users WHERE id = $1 LIMIT 1`,
+    [userId],
+  );
+  return r.rows[0] || null;
+}
+
+// GET /auth/users/:id/permissions — effective map (role default + override) for a user.
+// Admin-only (reuses the existing header guard).
+exports.getUserPermissions = async (req, res) => {
+  if (rejectNonAdministrator(req, res)) return;
+  const userId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ success: false, error: "id user tidak valid" });
+  }
+  try {
+    const user = await fetchUserRole(userId);
+    if (!user) return res.status(404).json({ success: false, error: "User tidak ditemukan" });
+    const map = await effectiveMap(userId, user.role, FEATURE_IDS);
+    return res.json({ success: true, user: { id: user.id, username: user.username, name: user.name, role: user.role }, permissions: map });
+  } catch (err) {
+    console.error("auth getUserPermissions error:", err);
+    return res.status(500).json({ success: false, error: "Gagal ambil permission" });
+  }
+};
+
+// PUT /auth/users/:id/permissions — upsert/clear per-user overrides.
+// Body: { overrides: { feature_id: 'no_access'|'read_only'|'full_access'|null } }
+//   null / 'inherit' => delete the override (fall back to role default).
+// Admin-only.
+exports.updateUserPermissions = async (req, res) => {
+  if (rejectNonAdministrator(req, res)) return;
+  const userId = parseInt(req.params.id, 10);
+  if (!Number.isInteger(userId)) {
+    return res.status(400).json({ success: false, error: "id user tidak valid" });
+  }
+  const overrides = req.body?.overrides;
+  if (!overrides || typeof overrides !== "object") {
+    return res.status(400).json({ success: false, error: "overrides wajib berupa objek { feature_id: level|null }" });
+  }
+  const setBy = parseInt(req.headers["x-user-id"], 10) || null;
+
+  // `db` may be the raw Pool (global.pool) or the { query, pool } wrapper — support both.
+  const pool = db.pool || db;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const user = await client.query(`SELECT id FROM public.users WHERE id = $1 LIMIT 1`, [userId]);
+    if (user.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, error: "User tidak ditemukan" });
+    }
+    for (const [featureId, rawLevel] of Object.entries(overrides)) {
+      if (!FEATURE_ID_SET.has(featureId)) continue; // ignore unknown features
+      const level = rawLevel == null ? null : String(rawLevel);
+      if (level === null || level === "inherit") {
+        await client.query(
+          `DELETE FROM rbac.user_permissions WHERE user_id = $1 AND feature_id = $2`,
+          [userId, featureId],
+        );
+      } else {
+        if (!VALID_LEVELS.has(level)) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({ success: false, error: `level tidak valid: ${level}` });
+        }
+        await client.query(
+          `INSERT INTO rbac.user_permissions (user_id, feature_id, level, updated_by, updated_at)
+           VALUES ($1,$2,$3,$4, now())
+           ON CONFLICT (user_id, feature_id)
+           DO UPDATE SET level = EXCLUDED.level, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+          [userId, featureId, level, setBy],
+        );
+      }
+    }
+    await client.query("COMMIT");
+    const fresh = await fetchUserRole(userId);
+    const map = await effectiveMap(userId, fresh.role, FEATURE_IDS);
+    return res.json({ success: true, permissions: map });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("auth updateUserPermissions error:", err);
+    return res.status(500).json({ success: false, error: "Gagal simpan permission" });
+  } finally {
+    client.release();
+  }
+};
+
+// GET /auth/me/permissions — effective map for the CALLER (from x-user-id/x-user-role).
+// Any logged-in user may read their own; used by the frontend to gate UI.
+exports.getMyPermissions = async (req, res) => {
+  const userId = parseInt(req.headers["x-user-id"], 10);
+  const role = String(req.headers["x-user-role"] || "").trim();
+  try {
+    const map = await effectiveMap(Number.isInteger(userId) ? userId : null, role, FEATURE_IDS);
+    const flat = {};
+    for (const [f, v] of Object.entries(map)) flat[f] = v.effective;
+    return res.json({ success: true, role, permissions: flat });
+  } catch (err) {
+    console.error("auth getMyPermissions error:", err);
+    return res.status(500).json({ success: false, error: "Gagal ambil permission" });
   }
 };

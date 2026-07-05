@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, BookmarkPlus, Info, Loader2, Printer, Save, Search, Shuffle } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useCan } from '../../rbac';
 import {
   ChecklistPanel,
   ComponentMasterPicker,
@@ -106,6 +107,7 @@ export default function SowRevisionEditPage() {
   const navigate = useNavigate();
   const decodedOrderNo = decodeURIComponent(orderNo);
   const requestedRevision = Number(searchParams.get('revision_no') || 0);
+  const canWrite = useCan('sow_management', 'write'); // revision save gated like Create SOW
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -456,9 +458,11 @@ export default function SowRevisionEditPage() {
                 {printing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />} Print
               </button>
             )}
-            <button onClick={createRevision} disabled={saving} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 text-xs font-bold text-white disabled:opacity-40">
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />} Create Revision
-            </button>
+            {canWrite && (
+              <button onClick={createRevision} disabled={saving} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 text-xs font-bold text-white disabled:opacity-40">
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />} Create Revision
+              </button>
+            )}
           </div>
         </div>
       </div>

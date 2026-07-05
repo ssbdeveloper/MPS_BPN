@@ -15,6 +15,16 @@ export function getRole() {
   return normalizeRole(readAuthUser()?.roles);
 }
 
+// Effective permissions for the logged-in user (feature -> level), loaded at login
+// from /auth/me/permissions. null if not loaded (callers fall back to the role matrix).
+export function readAuthPermissions() {
+  try {
+    return JSON.parse(sessionStorage.getItem('authPermissions') || 'null');
+  } catch {
+    return null;
+  }
+}
+
 export function isAuthenticated() {
   return sessionStorage.getItem('isVerified') === 'true';
 }

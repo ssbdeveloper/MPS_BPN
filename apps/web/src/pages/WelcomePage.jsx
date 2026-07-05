@@ -55,6 +55,21 @@ export default function WelcomePage() {
 
       sessionStorage.setItem('isVerified', 'true');
       sessionStorage.setItem('authUser', JSON.stringify(payload.user));
+      // RBAC: load this user's EFFECTIVE permissions (role default + per-user override)
+      // so the UI gates match the backend. Falls back to the role matrix if this fails.
+      try {
+        const permRes = await fetch(apiUrl('/auth/me/permissions'), {
+          headers: { 'x-user-id': String(payload.user?.id || ''), 'x-user-role': payload.user?.roles || '' },
+        });
+        const permData = await permRes.json().catch(() => ({}));
+        if (permData?.success && permData.permissions) {
+          sessionStorage.setItem('authPermissions', JSON.stringify(permData.permissions));
+        } else {
+          sessionStorage.removeItem('authPermissions');
+        }
+      } catch {
+        sessionStorage.removeItem('authPermissions');
+      }
       toast.success(`Selamat datang, ${payload.user?.name || payload.user?.username || username.trim()}`);
       navigate('/operations-hub', { replace: true });
     } catch (err) {

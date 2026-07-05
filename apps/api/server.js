@@ -174,6 +174,12 @@ if (process.env.DRAWINGS_PATH) {
   console.log('📐 Drawings path:', process.env.DRAWINGS_PATH);
 }
 
+// RBAC write guard (interim x-role, DEFAULT-DENY). Runs before all routers.
+// Log-only until env RBAC_ENFORCE=1. See docs/security/RBAC_BACKEND_ENFORCEMENT_PLAN.md.
+const rbacGuard = require('./rbac/rbacGuard');
+app.use(rbacGuard);
+console.log(`🔒 RBAC guard: ${rbacGuard.ENFORCE ? 'ENFORCING' : 'log-only (set RBAC_ENFORCE=1 to enforce)'}`);
+
 // API Routes
 app.use('/sow', require('./routes/sow'));
 app.use('/sow-schedule', require('./routes/sowSchedule'));

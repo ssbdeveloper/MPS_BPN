@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Save, Search, Trash2, X, ChevronDown, Loader2, ArrowRight, Download, ArrowDownUp, Printer } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useCan } from '../../rbac';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -78,6 +79,7 @@ export default function SowHistoryPage() {
   const [exporting, setExporting] = useState(false);
   const [exportRange, setExportRange] = useState({ start: todayDate(), end: todayDate() });
   const [showEditor, setShowEditor] = useState(false);
+  const canWrite = useCan('sow_management', 'write'); // gate revision/edit like Create SOW
   const [detailLoading, setDetailLoading] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState('');
   const [editRows, setEditRows] = useState([]);
@@ -268,7 +270,7 @@ export default function SowHistoryPage() {
             <button onClick={toggleSortDirection} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><ArrowDownUp className="h-4 w-4" /> Updated {sortDirection.toUpperCase()}</button>
             <button onClick={() => setShowExportPanel(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Excel</button>
             <button onClick={() => loadRows(1)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className="h-4 w-4" /> Refresh</button>
-            <button onClick={() => setShowEditor(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white hover:bg-[#0077b6]">Edit SOW</button>
+            {canWrite && <button onClick={() => setShowEditor(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white hover:bg-[#0077b6]">Edit SOW</button>}
           </div>
         </div>
       </div>
@@ -341,7 +343,7 @@ export default function SowHistoryPage() {
                 {!detailLoading && selectedOrder && (
                   <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 flex-shrink-0">
                     <div className="flex items-center justify-between mb-3"><span className="text-xs font-bold uppercase tracking-widest text-slate-500">Detail Info</span>
-                      <button onClick={saveDetailInfo} disabled={savingInfo} className="inline-flex items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0077b6] disabled:opacity-50">{savingInfo ? 'Saving...' : <><Save size={12} /> Save Info</>}</button>
+                      {canWrite && <button onClick={saveDetailInfo} disabled={savingInfo} className="inline-flex items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0077b6] disabled:opacity-50">{savingInfo ? 'Saving...' : <><Save size={12} /> Save Info</>}</button>}
                     </div>
                     <div className="grid grid-cols-2 gap-3 mb-3">
                       <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Customer</label><SelectWrapper><select value={detailInfo.customer} onChange={e => setDetailInfo(p => ({ ...p, customer: e.target.value }))} className={SELECT_CLS}><option value="">— Pilih Customer —</option>{customerOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></SelectWrapper></div>
@@ -370,13 +372,15 @@ export default function SowHistoryPage() {
                         ))}
                       </select>
                     </SelectWrapper>
-                    <button
-                      onClick={() => navigate(`/sow-edit/revision/${encodeURIComponent(selectedOrder)}${selectedRevision ? `?revision_no=${selectedRevision}` : ''}`)}
-                      disabled={!selectedOrder || detailLoading}
-                      className="inline-flex min-h-[38px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white disabled:opacity-40"
-                    >
-                      <ArrowRight className="h-4 w-4" /> Create Revision
-                    </button>
+                    {canWrite && (
+                      <button
+                        onClick={() => navigate(`/sow-edit/revision/${encodeURIComponent(selectedOrder)}${selectedRevision ? `?revision_no=${selectedRevision}` : ''}`)}
+                        disabled={!selectedOrder || detailLoading}
+                        className="inline-flex min-h-[38px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white disabled:opacity-40"
+                      >
+                        <ArrowRight className="h-4 w-4" /> Create Revision
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
