@@ -54,6 +54,32 @@ export async function fetchShifts(params = {}) {
   return payload.data || [];
 }
 
+// F3b — daily verification (order-first). Returns { date, requested_date, fallback, scope, data }.
+// Pass { scope: 'all' } for "Lihat semua" (every active non-TECO order, date ignored).
+export async function fetchOrderProgress(params = {}) {
+  return request(`/sow-schedule/order-progress${queryString(params)}`);
+}
+
+// Order op ladder for the expand view. Returns { production_order, summary, operations }.
+export async function fetchOrderOperations(params = {}) {
+  return request(`/sow-schedule/order-operations${queryString(params)}`);
+}
+
+// F3b-2 — mark a routing op manually (dilewati / nyangkut). The client echoes the
+// canonical machine_code + status_date returned by fetchOrderOperations so a ghost op
+// (no activity row yet) can be marked too. Returns { data, effective_status, deviation_flags }.
+export async function markOperationStatus(payload) {
+  return request('/sow-schedule/operation-status', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+// Clear a manual mark (revert to the view conclusion). id = manual_status_id.
+export async function clearOperationStatus(id) {
+  return request(`/sow-schedule/operation-status/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 export async function fetchShiftRules(params = {}) {
   const payload = await request(`/sow-schedule/shift-rules${queryString(params)}`);
   return payload.data || [];

@@ -48,7 +48,7 @@ ov AS (   -- manual overlay collapsed to (order, op)
   FROM public.sow_operation_status GROUP BY production_order, operation_no
 ),
 op2 AS (
-  SELECT s.order_no AS production_order, s.operation_no,
+  SELECT s.order_no AS production_order, s.operation_no, s.ssbr_id, s.part_name,
     CASE WHEN s.status='FINISH' THEN 'sudah'   -- FINISH wins => clears skip/block
          WHEN ov.any_nyangkut   THEN 'nyangkut'
          WHEN ov.any_dilewati   THEN 'dilewati'
@@ -74,7 +74,14 @@ agg AS (
     count(*) FILTER (WHERE eff_status='nyangkut') AS blocked_count,
     array_agg(operation_no ORDER BY operation_no) FILTER (WHERE eff_status IN ('belum','nyangkut','dilewati') AND highest_done_op IS NOT NULL AND operation_no < highest_done_op) AS behind_raw,
     count(*) FILTER (WHERE eff_status IN ('dilewati','nyangkut')) AS n_manual_dev,
-    count(*) FILTER (WHERE eff_status='belum' AND highest_done_op IS NOT NULL AND operation_no < highest_done_op) AS n_behind_belum
+    count(*) FILTER (WHERE eff_status='belum' AND highest_done_op IS NOT NULL AND operation_no < highest_done_op) AS n_behind_belum,
+    -- ssbr_id = component tag (level ABOVE order); an order can carry several. Distinct
+    -- set per order so the UI can search by any of them. Pure SELECT add — does not touch
+    -- grain/total_ops (sow is unique per order+op) nor the TECO exclude.
+    array_agg(DISTINCT ssbr_id) FILTER (WHERE COALESCE(ssbr_id,'')<>'') AS ssbr_ids,
+    -- part_name = the part the order makes (mostly 1 per order; 46 orders carry 2). Distinct
+    -- set per order for display. Pure SELECT add — no grain/total_ops/TECO change.
+    array_agg(DISTINCT part_name) FILTER (WHERE COALESCE(part_name,'')<>'') AS part_names
   FROM op2 GROUP BY production_order
 )
 SELECT a.production_order, a.total_ops, a.done_ops, a.total_ops - a.done_ops AS undone_ops,
@@ -84,8 +91,10 @@ SELECT a.production_order, a.total_ops, a.done_ops, a.total_ops - a.done_ops AS 
   COALESCE(a.behind_raw,'{}')      AS behind_frontier_ops,
   (a.n_manual_dev > 0 OR a.n_behind_belum > 0) AS is_deviating,
   CASE WHEN a.n_manual_dev > 0 THEN 'red' WHEN a.n_behind_belum > 0 THEN 'amber' ELSE 'green' END AS status_color,
-  NULL::date AS last_activity_date   -- unused by FE; the date-picker fallback reads
+  NULL::date AS last_activity_date,  -- unused by FE; the date-picker fallback reads
                                      -- max(schedule_date) from the base view, not this column
+  COALESCE(a.ssbr_ids,'{}') AS ssbr_ids,       -- appended (CREATE OR REPLACE-safe)
+  COALESCE(a.part_names,'{}') AS part_names    -- appended last (CREATE OR REPLACE-safe)
 FROM agg a
 LEFT JOIN op2 fo ON fo.production_order = a.production_order AND fo.operation_no = a.frontier_op;
 

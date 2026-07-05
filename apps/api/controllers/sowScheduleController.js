@@ -1994,7 +1994,23 @@ exports.getVerificationLog = async (req, res) => {
 // Fallback: if the requested date has no data (tz/empty), use the latest data date.
 exports.getOrderProgress = async (req, res) => {
   const requested = req.query.date ? normalizeDate(req.query.date, "date") : todayDate();
+  const scope = normalizeText(req.query.scope).toLowerCase();
   try {
+    // scope=all — "Lihat semua": every UNFINISHED non-TECO order, ignoring the per-day
+    // activity membership. "Unfinished" = done_ops < total_ops (NOT frontier IS NOT NULL —
+    // a frontier==null order with debt (all-remaining dilewati) still has undone ops and
+    // must stay visible). Only truly-complete orders (all FINISH) are hidden. The view
+    // already excludes TECO; this only drops the date filter (read-only, no view change).
+    if (scope === "all") {
+      const all = await db.query(
+        `SELECT p.*
+         FROM public.v_sow_order_progress p
+         WHERE p.done_ops < p.total_ops
+         ORDER BY CASE p.status_color WHEN 'red' THEN 0 WHEN 'amber' THEN 1 ELSE 2 END,
+                  p.production_order`
+      );
+      return res.json({ date: null, requested_date: requested, fallback: false, scope: "all", data: all.rows });
+    }
     const activeCheck = await db.query(
       `SELECT EXISTS(SELECT 1 FROM public.vw_sow_operation_actual WHERE schedule_date = $1) AS has_data`,
       [requested]
@@ -2022,7 +2038,7 @@ exports.getOrderProgress = async (req, res) => {
                 p.production_order`,
       [effectiveDate]
     );
-    res.json({ date: effectiveDate, requested_date: requested, fallback, data: result.rows });
+    res.json({ date: effectiveDate, requested_date: requested, fallback, scope: "date", data: result.rows });
   } catch (err) {
     sendError(res, err);
   }
