@@ -1,17 +1,23 @@
 const db = global.pool || require("../db");
 
 const KPI_DEFS = {
-  uptime: { label: "Uptime", target: 99, owner: "IT (Wira)" },
-  accuracy: { label: "Accuracy", target: 98, owner: "Foreman/Spv" },
-  adoption: { label: "Adoption", target: 95, owner: "Foreman/Spv" },
-  oee: { label: "OEE", target: 80, owner: "Foreman/Spv/PPIC" },
-  ole: { label: "OLE", target: 85, owner: "Foreman/Spv/PPIC" },
+  uptime_tablet: { label: "Uptime Tablet", target: 99, owner: "IT (Wira)", group: "labour", dimension: "health" },
+  accuracy_labour: { label: "Accuracy Labour", target: 98, owner: "Foreman/Spv", group: "labour", dimension: "health" },
+  adoption_labour: { label: "Adoption Labour", target: 95, owner: "Foreman/Spv", group: "labour", dimension: "health" },
+  ole: { label: "OLE", target: 85, owner: "Foreman/Spv/PPIC", group: "labour", dimension: "performance" },
+  uptime_hmi: { label: "Uptime HMI", target: 99, owner: "IT (Wira)", group: "machine", dimension: "health" },
+  accuracy_machine: { label: "Accuracy Machine", target: 98, owner: "Foreman/Spv", group: "machine", dimension: "health" },
+  adoption_machine: { label: "Adoption Machine", target: 95, owner: "Foreman/Spv/PPIC", group: "machine", dimension: "health" },
+  oee: { label: "OEE", target: 80, owner: "Foreman/Spv/PPIC", group: "machine", dimension: "performance" },
 };
 
 const DEFAULT_THRESHOLDS = {
-  uptime: { normal_min: 99, warning_min: 98, critical_below: 98 },
-  accuracy: { normal_min: 98, warning_min: 95, critical_below: 95 },
-  adoption: { normal_min: 95, warning_min: 90, critical_below: 90 },
+  uptime_tablet: { normal_min: 99, warning_min: 98, critical_below: 98 },
+  uptime_hmi: { normal_min: 99, warning_min: 98, critical_below: 98 },
+  accuracy_labour: { normal_min: 98, warning_min: 95, critical_below: 95 },
+  accuracy_machine: { normal_min: 98, warning_min: 95, critical_below: 95 },
+  adoption_labour: { normal_min: 95, warning_min: 90, critical_below: 90 },
+  adoption_machine: { normal_min: 95, warning_min: 90, critical_below: 90 },
   oee: { normal_min: 80, warning_min: 65, critical_below: 65 },
   ole: { normal_min: 85, warning_min: 70, critical_below: 70 },
 };
@@ -659,16 +665,71 @@ async function calculateOle(bounds) {
 
 function buildKpi(key, calculation, thresholds) {
   const def = KPI_DEFS[key];
-  const value = round1(calculation.value);
+  const raw = calculation.value;
+  const value = raw === null || raw === undefined ? null : round1(raw);
   return {
     key,
     label: def.label,
     value,
     target: def.target,
     owner: thresholds[key]?.owner || def.owner,
+    group: def.group,
+    dimension: def.dimension,
     status: statusForValue(key, value, thresholds),
     helper: calculation.helper,
     detail: calculation.detail,
+  };
+}
+
+// Registered-but-not-yet-computed KPI (uptime_*, and adoption_labour until Phase 2).
+function placeholderCalculation(note) {
+  return { value: null, helper: note, detail: { source: "placeholder", computed: false } };
+}
+
+// Derive the labour/machine accuracy cards from the single combined calculateAccuracy()
+// result so no extra query runs. Each side keeps its own minimum_sample_met flag.
+function accuracyLabourFromCombined(accuracy) {
+  const d = accuracy.detail || {};
+  const total = num(d.timesheet_records, 0);
+  const ready = num(d.timesheet_ready_records, 0);
+  const value = pct(ready, total);
+  return {
+    value,
+    helper: value === null ? "No timesheet record in window" : `${ready}/${total} SAP-ready timesheet records`,
+    detail: {
+      total_records: total,
+      ready_records: ready,
+      not_ready_records: Math.max(0, total - ready),
+      not_staged_records: num(d.timesheet_not_staged_records, 0),
+      error_breakdown: {
+        missing_order: num(d.error_breakdown?.missing_order, 0),
+        missing_operation: num(d.error_breakdown?.missing_operation, 0),
+        sow_no_match: num(d.error_breakdown?.sow_no_match, 0),
+      },
+      minimum_sample_met: total >= 50,
+      denominator: "timesheet_transaction rows in window (exclude state_flag=5)",
+      numerator: "timesheet rows present in sap_timesheet_staging",
+    },
+  };
+}
+
+function accuracyMachineFromCombined(accuracy) {
+  const d = accuracy.detail || {};
+  const total = num(d.machine_records, 0);
+  const ready = num(d.machine_ready_records, 0);
+  const value = pct(ready, total);
+  return {
+    value,
+    helper: value === null ? "No machine record in window" : `${ready}/${total} matched machine records`,
+    detail: {
+      total_records: total,
+      ready_records: ready,
+      not_ready_records: Math.max(0, total - ready),
+      missing_mch_transaction: num(d.machine_missing_mch_transaction, 0),
+      minimum_sample_met: total >= 50,
+      denominator: "mch_productiondata rows in window",
+      numerator: "mch_productiondata rows present in mch_transaction",
+    },
   };
 }
 
@@ -690,23 +751,37 @@ function buildIssues(kpis) {
 
 function suggestedAction(key) {
   const actions = {
-    uptime: "Check repeated DOWN ping and HMI network path",
-    accuracy: "Review error breakdown and SAP FAILED rows",
-    adoption: "Check missing operator input vs machine event time",
+    uptime_tablet: "Uptime tablet belum dihitung",
+    uptime_hmi: "Uptime HMI belum dihitung",
+    accuracy_labour: "Review timesheet error breakdown and SAP FAILED rows",
+    accuracy_machine: "Check mch_productiondata rows without mch_transaction",
+    adoption_labour: "Check operator recorded hours vs shift standard",
+    adoption_machine: "Check missing operator input vs machine event time",
     oee: "Review Productive, M2, Downtime, and Idle mix",
     ole: "Review productive labor rows vs total recorded time",
   };
   return actions[key] || "Review KPI detail";
 }
 
-function overall(kpis) {
-  const withValues = kpis.filter((kpi) => kpi.value !== null && kpi.value !== undefined);
-  if (!withValues.length) return { overall_score: null, overall_status: "NO_DATA" };
-
+// D1: status-only headline. overall_score is retired (null); Performance and Health are
+// scored separately so a flat 8-KPI average never masks a critical dimension.
+function dimensionScore(kpis, dimension) {
+  const withValues = kpis.filter(
+    (kpi) => kpi.dimension === dimension && kpi.value !== null && kpi.value !== undefined,
+  );
+  if (!withValues.length) return null;
   const score = withValues.reduce((sum, kpi) => {
     const target = num(kpi.target, 100);
     return sum + Math.min(num(kpi.value, 0) / target, 1);
   }, 0) / withValues.length;
+  return Math.round(score * 100) / 100;
+}
+
+function overall(kpis) {
+  const withValues = kpis.filter((kpi) => kpi.value !== null && kpi.value !== undefined);
+  if (!withValues.length) {
+    return { overall_score: null, overall_status: "NO_DATA", performance_score: null, health_score: null };
+  }
 
   const statuses = withValues.map((kpi) => kpi.status);
   const overall_status = statuses.includes("critical")
@@ -715,13 +790,25 @@ function overall(kpis) {
       ? "WATCH"
       : "NORMAL";
 
-  return { overall_score: Math.round(score * 100) / 100, overall_status };
+  return {
+    overall_score: null,
+    overall_status,
+    performance_score: dimensionScore(kpis, "performance"),
+    health_score: dimensionScore(kpis, "health"),
+  };
 }
 
 async function saveSnapshot({ windowStart, windowEnd, grain, payload }) {
   if (!(await tableExists("ews", "kpi_snapshot"))) return;
 
   const byKey = Object.fromEntries(payload.kpis.map((kpi) => [kpi.key, kpi]));
+  // D3: keep the legacy accuracy_pct/adoption_pct columns filled for backward-compat readers.
+  const labourTotal = num(byKey.accuracy_labour?.detail?.total_records, 0);
+  const machineTotal = num(byKey.accuracy_machine?.detail?.total_records, 0);
+  const combinedReady = num(byKey.accuracy_labour?.detail?.ready_records, 0)
+    + num(byKey.accuracy_machine?.detail?.ready_records, 0);
+  const combinedTotal = labourTotal + machineTotal;
+  const legacyAccuracy = combinedTotal > 0 ? round1((combinedReady / combinedTotal) * 100) : null;
   await db.query(
     `
     INSERT INTO ews.kpi_snapshot (
@@ -746,9 +833,9 @@ async function saveSnapshot({ windowStart, windowEnd, grain, payload }) {
       windowStart,
       windowEnd,
       grain,
-      byKey.uptime?.value,
-      byKey.accuracy?.value,
-      byKey.adoption?.value,
+      byKey.uptime_hmi?.value ?? null,
+      legacyAccuracy,
+      byKey.adoption_machine?.value ?? null,
       byKey.oee?.value,
       byKey.ole?.value,
       payload.overall_score,
@@ -757,6 +844,8 @@ async function saveSnapshot({ windowStart, windowEnd, grain, payload }) {
         kpis: payload.kpis,
         issues: payload.issues,
         correction_queue: payload.correction_queue,
+        performance_score: payload.performance_score,
+        health_score: payload.health_score,
         previous_window_start: payload.previous_window_start,
         previous_window_end: payload.previous_window_end,
         meta: payload.meta,
@@ -790,18 +879,22 @@ async function calculateAdoptionForMainSnapshot(bounds, grain) {
 }
 
 async function calculateKpisForBounds(bounds, thresholds, options = {}) {
-  const uptime = await safeCalculation("uptime", async () => calculateUptime(bounds, options));
   const accuracy = await safeCalculation("accuracy", async () => calculateAccuracy(bounds));
-  const adoption = await calculateAdoptionForMainSnapshot(bounds, options.grain);
+  const adoptionMachine = await calculateAdoptionForMainSnapshot(bounds, options.grain);
   const oee = await safeCalculation("oee", async () => calculateOee(bounds));
   const ole = await safeCalculation("ole", async () => calculateOle(bounds));
 
+  // Row LABOUR
   return [
-    buildKpi("uptime", uptime, thresholds),
-    buildKpi("accuracy", accuracy, thresholds),
-    buildKpi("adoption", adoption, thresholds),
-    buildKpi("oee", oee, thresholds),
+    buildKpi("uptime_tablet", placeholderCalculation("Uptime tablet not computed yet"), thresholds),
+    buildKpi("accuracy_labour", accuracyLabourFromCombined(accuracy), thresholds),
+    buildKpi("adoption_labour", placeholderCalculation("Adoption labour computed in Phase 2"), thresholds),
     buildKpi("ole", ole, thresholds),
+    // Row MACHINE
+    buildKpi("uptime_hmi", placeholderCalculation("Uptime HMI not computed yet"), thresholds),
+    buildKpi("accuracy_machine", accuracyMachineFromCombined(accuracy), thresholds),
+    buildKpi("adoption_machine", adoptionMachine, thresholds),
+    buildKpi("oee", oee, thresholds),
   ];
 }
 
@@ -857,7 +950,7 @@ async function applyYesterdayAdoptionComparison(kpis) {
     return kpis;
   }
   return kpis.map((kpi) => {
-    if (kpi.key !== "adoption") return kpi;
+    if (kpi.key !== "adoption_machine") return kpi;
     const current = num(kpi.value);
     const delta = current === null || previousAdoption === null
       ? null
