@@ -72,17 +72,23 @@ Each accuracy side keeps its own minimum_sample_met (total >= 50) flag independe
 Purpose: among operators active in the window, measure whether they logged their standard shift hours.
 Source: public.timesheet_transaction, exclude state_flag=5, duration>0, window by longdate_checkin.
 
-Shift + business-date derivation, per row, from check-in local time (Asia/Jakarta — use project TZ, NOT
-hardcoded Asia/Makassar):
+Shift + business-date derivation, per row, from check-in local time (use project TZ from env =
+Asia/Makassar on this server, NOT hardcoded). CONFIRMED shift definition (owner, supersedes any
+earlier ranges):
+  Shift 1 (Day)   : work 08:00-17:00 (8h work + 1h break), standard = 8h, shift starts 08:00
+  Shift 2 (Night) : work 20:00-04:00 (7h work + 1h break), standard = 7h, shift starts 20:00
+  Long shift (~12h span, e.g. 08:00-20:00 or the reverse): KEEPS the day/night standard
+    (8h / 7h) — "what matters is the standard is met" — so it collapses into Day/Night, no
+    separate standard. Break time is never logged as a task, so recorded already excludes it.
   shift = CASE
-    WHEN checkin_time >= '08:00' AND checkin_time < '17:00' THEN 1
-    WHEN checkin_time >= '17:00' OR  checkin_time < '06:00' THEN 2
-    ELSE NULL  -- 06:00–08:00 unassigned, exclude from adoption
+    WHEN checkin_time >= '07:00' AND checkin_time < '18:00' THEN 1   -- Day
+    ELSE 2                                                           -- Night (everything else)
   END
   business_date = CASE
-    WHEN shift = 2 AND checkin_time < '06:00' THEN (checkin_date - 1)  -- cross-midnight: belongs to prev day's shift 2
+    WHEN checkin_time < '07:00' THEN (checkin_date - 1)  -- before 07:00 = prev day's night shift
     ELSE checkin_date
   END
+  -- No excluded window: every check-in classifies as Day or Night.
 
 # DECIDE (shift anchor for operators spanning both ranges, e.g. overtime 15:00–23:00):
 # DEFAULT = assign the whole (operator, business_date) group to the shift of the operator's FIRST check-in row that day.

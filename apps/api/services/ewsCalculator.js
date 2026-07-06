@@ -467,18 +467,17 @@ async function calculateAdoptionLabour(bounds) {
         AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
     ),
     classified AS (
+      -- Day (shift 1): first check-in 07:00-18:00 -> starts 08:00, standard 8h.
+      -- Night (shift 2): everything else -> starts 20:00, standard 7h; check-in before
+      -- 07:00 belongs to the previous day's night shift. Long shifts keep the day/night
+      -- standard (what matters is the standard is met), so they collapse into these two.
       SELECT
         s.operator_key,
         s.operator_name,
         s.lct,
         s.dur,
-        CASE
-          WHEN s.lct::time >= TIME '08:00' AND s.lct::time < TIME '17:00' THEN 1
-          WHEN s.lct::time >= TIME '17:00' THEN 2
-          WHEN s.lct::time < TIME '06:00' THEN 2
-          ELSE NULL
-        END AS row_shift,
-        CASE WHEN s.lct::time < TIME '06:00' THEN (s.lct::date - 1) ELSE s.lct::date END AS business_date
+        CASE WHEN s.lct::time >= TIME '07:00' AND s.lct::time < TIME '18:00' THEN 1 ELSE 2 END AS row_shift,
+        CASE WHEN s.lct::time < TIME '07:00' THEN (s.lct::date - 1) ELSE s.lct::date END AS business_date
       FROM scoped s
     ),
     grouped AS (
@@ -489,7 +488,6 @@ async function calculateAdoptionLabour(bounds) {
         (array_agg(c.row_shift ORDER BY c.lct))[1] AS shift,
         SUM(c.dur) AS recorded
       FROM classified c
-      WHERE c.row_shift IS NOT NULL
       GROUP BY c.operator_key, c.business_date
     ),
     prorated AS (
@@ -502,7 +500,7 @@ async function calculateAdoptionLabour(bounds) {
         CASE WHEN g.shift = 1 THEN 8.0 ELSE 7.0 END AS full_standard,
         GREATEST(
           EXTRACT(EPOCH FROM (
-            now() - ((g.business_date + CASE WHEN g.shift = 1 THEN TIME '08:00' ELSE TIME '17:00' END) AT TIME ZONE $3)
+            now() - ((g.business_date + CASE WHEN g.shift = 1 THEN TIME '08:00' ELSE TIME '20:00' END) AT TIME ZONE $3)
           )) / 3600.0,
           0
         ) AS elapsed_hours
