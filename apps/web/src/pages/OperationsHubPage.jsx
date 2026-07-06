@@ -53,6 +53,7 @@ const sidebarItems = [
   { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list' },
   { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling' },
   { title: 'Shift Rules', icon: TimerReset, path: '/shift-definition' },
+  { title: 'Roster Operator', icon: Users, path: '/ews/roster' },
   { title: 'MS Project Admin', icon: ShieldCheck, path: '/ms-project-admin' },
   { title: 'Component Tracking', icon: Boxes, path: '/component-tracking' },
   { title: 'Kanban Board', icon: Factory, path: '/kanban-board' },
