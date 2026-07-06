@@ -14,7 +14,8 @@ export const FEATURES = {
 
   sow_management:       { id: 'sow_management',        label: 'SOW Management',      module: 'PE',        routes: ['/sow-management', '/sow-orders', '/sow-edit'] },
   sow_scheduling:      { id: 'sow_scheduling',        label: 'SOW Scheduling',      module: 'PPC',       routes: ['/sow-scheduling'] },
-  shift_rules:          { id: 'shift_rules',           label: 'Shift Rules',         module: 'PPC',       routes: ['/shift-definition'] },
+  shift_rules:          { id: 'shift_rules',           label: 'Shift Capacity',      module: 'PPC',       routes: ['/shift-definition'] },
+  roster_operator:      { id: 'roster_operator',       label: 'Roster Operator',     module: 'Timesheet', routes: ['/ews/roster'] },
   ms_project_admin:     { id: 'ms_project_admin',      label: 'MS Project Admin',    module: 'PPC',       routes: ['/ms-project-admin'] },
   component_tracking:   { id: 'component_tracking',    label: 'Component Tracking',  module: 'PPC',       routes: ['/component-tracking'] },
   kanban_board:         { id: 'kanban_board',          label: 'Kanban Board',        module: 'PPC',       routes: ['/kanban-board'] },

@@ -159,6 +159,12 @@ const MANIFEST = [
   { m: 'POST',   p: '/ews/actions/sync',                      f: 'ews', a: W },
   { m: 'PUT',    p: '/ews/actions/:id/resolve',               f: 'ews', a: W },
 
+  // ---- EWS roster / attendance (/ews/roster) ----
+  { m: 'PUT',    p: '/ews/roster/status',                     f: 'roster_operator', a: W },
+  { m: 'PUT',    p: '/ews/roster/config/workday',             f: 'roster_operator', a: W },
+  { m: 'PUT',    p: '/ews/roster/group',                      f: 'roster_operator', a: W },
+  { m: 'POST',   p: '/ews/roster/generate',                   f: 'roster_operator', a: W },
+
   // ---- Manage users (/auth) ----
   { m: 'POST',   p: '/auth/users',                            f: 'manage_users', a: W },
   { m: 'PUT',    p: '/auth/users/:id',                        f: 'manage_users', a: W },
