@@ -24,6 +24,10 @@ const DEFAULT_THRESHOLDS = {
   ole: { normal_min: 85, warning_min: 70, critical_below: 70 },
 };
 
+// Provisional pending HR policy. Single source of truth — do not scatter.
+const ADOPTION_LABOUR_GRACE_MINUTES = 15;
+const SHIFT_STANDARD_HOURS = { 1: 8, 2: 7 };
+
 const WINDOW_MAP = {
   "5m": "5 minutes",
   "15m": "15 minutes",
@@ -441,6 +445,130 @@ async function calculateAccuracyMachine(bounds) {
   };
 }
 
+// adoption_labour: of operators who logged something in the window, the share meeting their
+// PRO-RATED standard shift hours. Source: timesheet_transaction ONLY (no roster source exists,
+// so operators with zero rows are invisible — surfaced in detail.limitation). No correlated
+// subqueries here, but aliases are qualified regardless.
+async function calculateAdoptionLabour(bounds) {
+  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const result = await db.query(
+    `
+    WITH scoped AS (
+      SELECT
+        NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
+        NULLIF(BTRIM(t.full_name), '') AS operator_name,
+        (t.longdate_checkin AT TIME ZONE $3) AS lct,
+        t.duration::float AS dur
+      FROM public.timesheet_transaction t
+      WHERE t.longdate_checkin >= $1
+        AND t.longdate_checkin < $2
+        AND COALESCE(t.state_flag, 0) <> 5
+        AND COALESCE(t.duration, 0) > 0
+        AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+    ),
+    classified AS (
+      SELECT
+        s.operator_key,
+        s.operator_name,
+        s.lct,
+        s.dur,
+        CASE
+          WHEN s.lct::time >= TIME '08:00' AND s.lct::time < TIME '17:00' THEN 1
+          WHEN s.lct::time >= TIME '17:00' THEN 2
+          WHEN s.lct::time < TIME '06:00' THEN 2
+          ELSE NULL
+        END AS row_shift,
+        CASE WHEN s.lct::time < TIME '06:00' THEN (s.lct::date - 1) ELSE s.lct::date END AS business_date
+      FROM scoped s
+    ),
+    grouped AS (
+      SELECT
+        c.operator_key,
+        c.business_date,
+        MAX(c.operator_name) AS operator_name,
+        (array_agg(c.row_shift ORDER BY c.lct))[1] AS shift,
+        SUM(c.dur) AS recorded
+      FROM classified c
+      WHERE c.row_shift IS NOT NULL
+      GROUP BY c.operator_key, c.business_date
+    ),
+    prorated AS (
+      SELECT
+        g.operator_key,
+        g.operator_name,
+        g.business_date,
+        g.shift,
+        g.recorded,
+        CASE WHEN g.shift = 1 THEN 8.0 ELSE 7.0 END AS full_standard,
+        GREATEST(
+          EXTRACT(EPOCH FROM (
+            now() - ((g.business_date + CASE WHEN g.shift = 1 THEN TIME '08:00' ELSE TIME '17:00' END) AT TIME ZONE $3)
+          )) / 3600.0,
+          0
+        ) AS elapsed_hours
+      FROM grouped g
+    ),
+    final AS (
+      SELECT
+        p.operator_key,
+        p.operator_name,
+        p.business_date,
+        p.shift,
+        p.recorded,
+        p.full_standard,
+        LEAST(GREATEST(p.elapsed_hours - ($4::numeric / 60.0), 0), p.full_standard) AS prorated_standard
+      FROM prorated p
+    )
+    SELECT
+      ROUND((SUM(LEAST(f.recorded, f.prorated_standard)) / NULLIF(SUM(f.prorated_standard), 0) * 100)::numeric, 4)::float AS adoption_pct,
+      COUNT(*)::int AS operator_shift_count,
+      COUNT(*) FILTER (WHERE f.prorated_standard < f.full_standard)::int AS in_progress_count,
+      ROUND(SUM(f.recorded)::numeric, 2)::float AS total_recorded_hours,
+      ROUND(SUM(f.prorated_standard)::numeric, 2)::float AS total_prorated_standard_hours,
+      ROUND(SUM(f.full_standard)::numeric, 2)::float AS total_full_standard_hours,
+      COALESCE(jsonb_agg(jsonb_build_object(
+        'operator_key', f.operator_key,
+        'operator_name', f.operator_name,
+        'shift', f.shift,
+        'business_date', f.business_date,
+        'recorded_hours', ROUND(f.recorded::numeric, 2),
+        'prorated_standard_hours', ROUND(f.prorated_standard::numeric, 2),
+        'full_standard_hours', f.full_standard,
+        'gap_hours', ROUND(GREATEST(f.prorated_standard - f.recorded, 0)::numeric, 2),
+        'is_in_progress', (f.prorated_standard < f.full_standard)
+      ) ORDER BY GREATEST(f.prorated_standard - f.recorded, 0) DESC), '[]'::jsonb) AS breakdown
+    FROM final f
+    `,
+    [bounds.window_start, bounds.window_end, timezone, ADOPTION_LABOUR_GRACE_MINUTES],
+  );
+
+  const row = result.rows[0] || {};
+  const count = num(row.operator_shift_count, 0);
+  const rawPct = row.adoption_pct;
+  const value = count > 0 && rawPct !== null && rawPct !== undefined ? num(rawPct) : null;
+  return {
+    value,
+    helper: count > 0
+      ? `${count} operator-shift, ${num(row.in_progress_count, 0)} berjalan`
+      : "No operator timesheet in window",
+    detail: {
+      operator_shift_count: count,
+      in_progress_count: num(row.in_progress_count, 0),
+      total_recorded_hours: num(row.total_recorded_hours, 0),
+      total_prorated_standard_hours: num(row.total_prorated_standard_hours, 0),
+      total_full_standard_hours: num(row.total_full_standard_hours, 0),
+      grace_minutes: ADOPTION_LABOUR_GRACE_MINUTES,
+      shift_standard_hours: SHIFT_STANDARD_HOURS,
+      breakdown: row.breakdown || [],
+      denominator: "SUM of pro-rated standard hours per (operator, business_date) — pro-rated to elapsed-minus-grace for in-progress shifts",
+      numerator: "SUM of LEAST(recorded, pro-rated standard) — overtime never inflates",
+      limitation: "Only operators who logged rows are visible (no roster source). This is 'of operators who logged, % meeting pro-rated standard hours', NOT attendance-based adoption.",
+      staging_read: false,
+      roster_read: false,
+    },
+  };
+}
+
 async function calculateAdoption(bounds) {
   const result = await db.query(
     `
@@ -838,6 +966,7 @@ async function calculateAdoptionForMainSnapshot(bounds, grain) {
 async function calculateKpisForBounds(bounds, thresholds, options = {}) {
   const accuracyLabour = await safeCalculation("accuracy_labour", async () => calculateAccuracyLabour(bounds));
   const accuracyMachine = await safeCalculation("accuracy_machine", async () => calculateAccuracyMachine(bounds));
+  const adoptionLabour = await safeCalculation("adoption_labour", async () => calculateAdoptionLabour(bounds));
   const adoptionMachine = await calculateAdoptionForMainSnapshot(bounds, options.grain);
   const oee = await safeCalculation("oee", async () => calculateOee(bounds));
   const ole = await safeCalculation("ole", async () => calculateOle(bounds));
@@ -846,7 +975,7 @@ async function calculateKpisForBounds(bounds, thresholds, options = {}) {
   return [
     buildKpi("uptime_tablet", placeholderCalculation("Uptime tablet not computed yet"), thresholds),
     buildKpi("accuracy_labour", accuracyLabour, thresholds),
-    buildKpi("adoption_labour", placeholderCalculation("Adoption labour computed in Phase 2"), thresholds),
+    buildKpi("adoption_labour", adoptionLabour, thresholds),
     buildKpi("ole", ole, thresholds),
     // Row MACHINE
     buildKpi("uptime_hmi", placeholderCalculation("Uptime HMI not computed yet"), thresholds),
