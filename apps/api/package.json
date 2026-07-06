@@ -9,6 +9,7 @@
     "dev": "nodemon server.js",
     "ews:snapshot": "node jobs/ewsSnapshotJob.js",
     "ews:adoption": "node jobs/ewsAdoptionBucketJob.js",
+    "ews:roster": "node jobs/ewsRosterGenerateJob.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
