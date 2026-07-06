@@ -112,15 +112,20 @@ function parseEnvFile(filePath) {
   return values;
 }
 
-function loadDbConfig() {
+function loadDbConfig(overrides = {}) {
   const env = parseEnvFile(ENV_PATH);
-  return {
+  const base = {
     host: env.DB_HOST || env.TGT_HOST || "localhost",
     port: Number.parseInt(env.DB_PORT || env.TGT_PORT || "5432", 10),
     database: env.DB_NAME || env.TGT_DATABASE || "ptssb",
     user: env.DB_USER || env.TGT_USER || "postgres",
     password: env.DB_PASSWORD || env.TGT_PASSWORD || "",
   };
+  // Defaults come from .env (DB_* = the app database via pgbouncer). --host/--port/--user
+  // let you point at the SAME database through a faster path (e.g. the Postgres port
+  // published directly, bypassing pgbouncer). WARNING: only override to a host/port that
+  // is the app's database — the machine's native localhost:5432 is a DIFFERENT instance.
+  return { ...base, ...overrides };
 }
 
 function parseArgs(argv) {
@@ -128,6 +133,9 @@ function parseArgs(argv) {
     filePath: DEFAULT_FILE,
     dryRun: false,
     onConflict: "ask",
+    host: null,
+    port: null,
+    user: null,
   };
 
   for (const arg of argv) {
@@ -137,6 +145,18 @@ function parseArgs(argv) {
     }
     if (arg.startsWith("--on-conflict=")) {
       args.onConflict = clean(arg.split("=")[1]).toLowerCase();
+      continue;
+    }
+    if (arg.startsWith("--host=")) {
+      args.host = clean(arg.split("=")[1]);
+      continue;
+    }
+    if (arg.startsWith("--port=")) {
+      args.port = Number.parseInt(clean(arg.split("=")[1]), 10);
+      continue;
+    }
+    if (arg.startsWith("--user=")) {
+      args.user = clean(arg.split("=")[1]);
       continue;
     }
     if (!arg.startsWith("--")) args.filePath = path.resolve(arg);
@@ -597,12 +617,17 @@ function buildExistingStandardIdMap(operationMap) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const rows = readStandardCsv(args.filePath);
-  const dbConfig = loadDbConfig();
+
+  const overrides = {};
+  if (args.host) overrides.host = args.host;
+  if (args.port) overrides.port = args.port;
+  if (args.user) overrides.user = args.user;
+  const dbConfig = loadDbConfig(overrides);
 
   console.log(`File        : ${args.filePath}`);
   console.log(`Dry run     : ${args.dryRun}`);
   console.log(`Conflict    : ${args.onConflict}`);
-  console.log(`PostgreSQL  : ${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
+  console.log(`PostgreSQL  : ${dbConfig.user}@${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
   summarizeRows(rows);
 
   const pool = new Pool(dbConfig);

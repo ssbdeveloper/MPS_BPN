@@ -69,6 +69,7 @@ router.put("/nnva/standard/:standardId",          controller.saveNnvaToStandard)
 router.get("/customers",                          controller.getCustomers);
 router.get("/components",                         controller.getComponents);
 router.get("/documentnos",                        controller.getSowDocumentNos);
+router.post("/documentnos",                       controller.createSowDocumentNo);
 
 // ── Operation Card persistence ─────────────────────────────────────────────────
 router.get("/operationcard/:standardId",          controller.getOperationCard);

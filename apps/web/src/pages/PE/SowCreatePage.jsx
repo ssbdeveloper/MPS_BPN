@@ -114,6 +114,19 @@ export function formatTravelCardIssuedAt(date = new Date()) {
   ].join(':');
 }
 
+// Format a 'YYYY-MM-DD' revision date to the same id-ID long style used on the card.
+export function formatRevisionDate(value) {
+  if (!value) return '—';
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  if (!match) return String(value);
+  const [, y, m, d] = match;
+  const date = new Date(Number(y), Number(m) - 1, Number(d));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
+const NOTE_MAX_LENGTH = 180;
+
 const OP_MAIN_BOX_W = 700;
 const OP_MAIN_BOX_H = 560;
 const AUTO_ATTACH_MARGIN = 40;
@@ -1745,11 +1758,14 @@ export function TravelCardPreview({
   cardInfo,
   printRef,
   revisionLabel = '—',
+  revisionDate = '—',
+  note = '',
   issuedByName = getAuthUserDisplayName(),
   issuedAt = formatTravelCardIssuedAt(),
 }) {
   const [srcDoc, setSrcDoc] = useState('');
   const qrRef = useRef(null);
+  const sigQrRef = useRef(null);
   const [nnvaMap, setNnvaMap] = useState({});
 
   // Fetch NNVA for all operations
@@ -1772,9 +1788,8 @@ export function TravelCardPreview({
     return () => { cancelled = true; };
   }, [editOps]);
 
-  const today    = new Date();
-  const dateStr  = today.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' });
   const qrValue  = cardInfo.productionOrder || selectedPart?.part_number || 'TRAVEL-CARD';
+  const signatureQrValue = issuedByName || 'SIGNATURE';
 
   const getNnvaTotalForOp = useCallback((op) => {
     const stdId = op._srcId || op.id;
@@ -1799,6 +1814,11 @@ export function TravelCardPreview({
       const buildTravelCard = async () => {
       const canvas    = qrRef.current?.querySelector('canvas');
       const qrDataUrl = canvas ? canvas.toDataURL('image/png') : '';
+      const sigCanvas = sigQrRef.current?.querySelector('canvas');
+      const sigDataUrl = sigCanvas ? sigCanvas.toDataURL('image/png') : '';
+      const signatureQrHtml = sigDataUrl
+        ? `<img src="${sigDataUrl}" alt="Signature" style="width:12mm; height:12mm; object-fit:contain; display:block;">`
+        : '';
 
       // Generate rows including NNVA children — store as structured objects for height-aware pagination
       const opsRows = [];
@@ -1840,7 +1860,9 @@ export function TravelCardPreview({
         .replace('../assets/ssb.png',   ssbLogo)
         .replace('{{documentNo}}',      esc(cardInfo.documentNo || '—'))
         .replace('{{revisionLabel}}',   esc(revisionLabel || '—'))
-        .replace('{{dateStr}}',         dateStr)
+        .replace('{{revisionDate}}',    esc(revisionDate || '—'))
+        .replace('{{signatureQr}}',     signatureQrHtml)
+        .replace('{{note}}',            esc(note || ''))
         .replace('{{productionOrder}}', esc(cardInfo.productionOrder || '—'))
         .replace('{{partName}}',        esc(selectedPart?.part_name   || '—'))
         .replace('{{customer}}',        esc(cardInfo.customer         || '—'))
@@ -1868,8 +1890,8 @@ export function TravelCardPreview({
 
       const pages = rowChunks.map((rows, index) => {
         const pageLabel = `${index + 1} of ${rowChunks.length}`;
+        // Page field stays static "1"; the "1 of N" sheet info lives in the id-table "No." row.
         const pageCard1 = card1
-          .replace('<td class="meta-label">Page</td><td class="meta-value">1 of 1</td>', `<td class="meta-label">Page</td><td class="meta-value">${pageLabel}</td>`)
           .replace('<td class="id-val"><span class="colon"></span> 1 of 1</td>', `<td class="id-val"><span class="colon"></span> ${pageLabel}</td>`);
         const workCard = card2.replace(operationBlockPattern, rows.map(r => r.html).join(''));
 
@@ -1895,7 +1917,7 @@ export function TravelCardPreview({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [qrValue, selectedPart, editOps, cardInfo, dateStr, totalHoursDisplay, revisionLabel, issuedByName, issuedAt, nnvaMap, getTravelCardOperationHours]);
+  }, [qrValue, signatureQrValue, selectedPart, editOps, cardInfo, totalHoursDisplay, revisionLabel, revisionDate, note, issuedByName, issuedAt, nnvaMap, getTravelCardOperationHours]);
 
   return (
     <div style={{ background: '#e8e6e0', padding: '20px 16px', minHeight: '100%' }}>
@@ -1906,6 +1928,15 @@ export function TravelCardPreview({
         aria-hidden="true"
       >
         <QRCodeCanvas value={qrValue} size={232} level="M" bgColor="#ffffff" fgColor="#0a0a0a" />
+      </div>
+
+      {/* Offscreen signature QR — encodes the logged-in user's name */}
+      <div
+        ref={sigQrRef}
+        style={{ position: 'absolute', left: '-9999px', top: 0, pointerEvents: 'none' }}
+        aria-hidden="true"
+      >
+        <QRCodeCanvas value={signatureQrValue} size={160} level="M" bgColor="#ffffff" fgColor="#0a0a0a" />
       </div>
 
       {/* Template rendered in iframe — print-safe, pixel-identical to the HTML file */}
@@ -2642,33 +2673,80 @@ const SowCreatePage = () => {
   const [editOps, setEditOps]           = useState([]);
   const [saving, setSaving]             = useState(false);
   const [activeStep, setActiveStep]     = useState('edit');
-  const [cardInfo, setCardInfo]         = useState({ customer: '', productionOrder: '', location: '', ident: '', documentNo: '' });
+  const [cardInfo, setCardInfo]         = useState({ customer: '', productionOrder: '', location: '', ident: '', documentNo: '', note: '' });
   const [documentNos, setDocumentNos]   = useState([]);
   const [operationCardKeys, setOperationCardKeys] = useState([]);
   const [activeOperationKey, setActiveOperationKey] = useState(null);
   const [operationCardImages, setOperationCardImages] = useState({});
   const [showInfoPanel, setShowInfoPanel] = useState(false);
+  const [showCreateDoc, setShowCreateDoc] = useState(false);
+  const [savingDoc, setSavingDoc]         = useState(false);
+  const [newDoc, setNewDoc]               = useState({ documentno: '', revision_no: '', revision_date: '', default: false });
   const [printing, setPrinting]           = useState(false);
   const printRef = useRef(null);
   const issuedByName = getAuthUserDisplayName();
   const issuedAt = useMemo(() => formatTravelCardIssuedAt(), []);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`${API_BASE}/sow/documentnos`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (cancelled) return;
-        const rows = Array.isArray(json.data) ? json.data : [];
-        setDocumentNos(rows);
-        const defaultDoc = rows.find((row) => row.default)?.documentno || rows[0]?.documentno || '';
-        if (defaultDoc) {
-          setCardInfo((prev) => ({ ...prev, documentNo: prev.documentNo || defaultDoc }));
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+  const loadDocumentNos = useCallback(async ({ selectDocumentNo } = {}) => {
+    try {
+      const res = await fetch(`${API_BASE}/sow/documentnos`);
+      const json = await res.json();
+      const rows = Array.isArray(json.data) ? json.data : [];
+      setDocumentNos(rows);
+      const defaultDoc = rows.find((row) => row.default)?.documentno || rows[0]?.documentno || '';
+      setCardInfo((prev) => ({
+        ...prev,
+        documentNo: selectDocumentNo || prev.documentNo || defaultDoc,
+      }));
+      return rows;
+    } catch {
+      return [];
+    }
   }, []);
+
+  useEffect(() => {
+    loadDocumentNos();
+  }, [loadDocumentNos]);
+
+  const selectedDoc = useMemo(
+    () => documentNos.find((row) => row.documentno === cardInfo.documentNo) || null,
+    [documentNos, cardInfo.documentNo]
+  );
+  const revisionLabel = selectedDoc?.revision_no != null && String(selectedDoc.revision_no).trim() !== ''
+    ? String(selectedDoc.revision_no)
+    : '—';
+  const revisionDate = formatRevisionDate(selectedDoc?.revision_date);
+
+  const handleCreateDocumentNo = useCallback(async () => {
+    const documentno = newDoc.documentno.trim();
+    if (!documentno) {
+      toast.error('Document No. wajib diisi');
+      return;
+    }
+    setSavingDoc(true);
+    try {
+      const res = await fetch(`${API_BASE}/sow/documentnos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentno,
+          revision_no: newDoc.revision_no.trim(),
+          revision_date: newDoc.revision_date || null,
+          default: newDoc.default,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Gagal menyimpan Document No.');
+      await loadDocumentNos({ selectDocumentNo: json.data?.documentno || documentno });
+      toast.success('Document No. tersimpan');
+      setNewDoc({ documentno: '', revision_no: '', revision_date: '', default: false });
+      setShowCreateDoc(false);
+    } catch (err) {
+      toast.error(err.message || 'Gagal menyimpan Document No.');
+    } finally {
+      setSavingDoc(false);
+    }
+  }, [newDoc, loadDocumentNos]);
 
   const handlePrint = useCallback(() => {
     const iframe = printRef.current;
@@ -2710,6 +2788,7 @@ const SowCreatePage = () => {
       location: part?.customer_site_name || part?.customer_site_location || '',
       ident: part?.ssbr_ident || '',
       documentNo: prev.documentNo || '',
+      note: prev.note || '',
     }));
   }, []);
 
@@ -3025,7 +3104,9 @@ const SowCreatePage = () => {
             editOps={editOps}
             cardInfo={cardInfo}
             printRef={printRef}
-            revisionLabel="—"
+            revisionLabel={revisionLabel}
+            revisionDate={revisionDate}
+            note={cardInfo.note}
             issuedByName={issuedByName}
             issuedAt={issuedAt}
           />
@@ -3307,9 +3388,19 @@ const SowCreatePage = () => {
             </div>
             <div className="flex flex-col gap-3">
               <div>
-                <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-1">
-                  Document No.
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                    Document No.
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateDoc((v) => !v)}
+                    className="flex items-center gap-1 text-[10px] font-bold text-[#0096c7] hover:text-[#0077b6] transition-colors"
+                  >
+                    <Plus size={11} />
+                    {showCreateDoc ? 'Tutup' : 'Buat Baru'}
+                  </button>
+                </div>
                 <select
                   value={cardInfo.documentNo || ''}
                   onChange={(e) => setCardInfo((p) => ({ ...p, documentNo: e.target.value }))}
@@ -3320,10 +3411,75 @@ const SowCreatePage = () => {
                   <option value="">—</option>
                   {documentNos.map((item) => (
                     <option key={item.id || item.documentno} value={item.documentno}>
-                      {item.documentno}{item.default ? ' (Default)' : ''}
+                      {item.documentno}
+                      {item.revision_no ? ` · Rev ${item.revision_no}` : ''}
+                      {item.default ? ' (Default)' : ''}
                     </option>
                   ))}
                 </select>
+                {selectedDoc && (
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    Rev: {revisionLabel} · Date Rev: {revisionDate}
+                  </p>
+                )}
+
+                {showCreateDoc && (
+                  <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 flex flex-col gap-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
+                      Document No. Baru
+                    </p>
+                    <input
+                      type="text"
+                      value={newDoc.documentno}
+                      onChange={(e) => setNewDoc((p) => ({ ...p, documentno: e.target.value }))}
+                      placeholder="Document No. (mis. F-PE-001)"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
+                                 placeholder-slate-400 rounded-lg text-sm focus:outline-none
+                                 focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+                    />
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newDoc.revision_no}
+                        onChange={(e) => setNewDoc((p) => ({ ...p, revision_no: e.target.value }))}
+                        placeholder="Revision (mis. 0)"
+                        className="flex-1 min-w-0 px-3 py-2 bg-white border border-slate-200 text-slate-800
+                                   placeholder-slate-400 rounded-lg text-sm focus:outline-none
+                                   focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+                      />
+                      <input
+                        type="date"
+                        value={newDoc.revision_date}
+                        onChange={(e) => setNewDoc((p) => ({ ...p, revision_date: e.target.value }))}
+                        className="flex-1 min-w-0 px-3 py-2 bg-white border border-slate-200 text-slate-800
+                                   rounded-lg text-sm focus:outline-none
+                                   focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={newDoc.default}
+                        onChange={(e) => setNewDoc((p) => ({ ...p, default: e.target.checked }))}
+                        className="rounded border-slate-300 text-[#0096c7] focus:ring-[#00b4d8]"
+                      />
+                      Jadikan default
+                    </label>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleCreateDocumentNo}
+                        disabled={savingDoc}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white
+                                   bg-[#0096c7] hover:bg-[#0077b6] rounded-lg transition-all active:scale-95
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {savingDoc ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+                        Simpan Document No.
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               {[
                 { key: 'productionOrder', label: 'Production Order', placeholder: '1000XXXXXX' },
@@ -3346,6 +3502,28 @@ const SowCreatePage = () => {
                   />
                 </div>
               ))}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                    Note (footer travel card)
+                  </label>
+                  <span className={`text-[10px] font-semibold tabular-nums ${
+                    (cardInfo.note || '').length >= NOTE_MAX_LENGTH ? 'text-red-500' : 'text-slate-400'
+                  }`}>
+                    {NOTE_MAX_LENGTH - (cardInfo.note || '').length} tersisa
+                  </span>
+                </div>
+                <textarea
+                  rows={3}
+                  maxLength={NOTE_MAX_LENGTH}
+                  value={cardInfo.note || ''}
+                  onChange={(e) => setCardInfo((p) => ({ ...p, note: e.target.value.slice(0, NOTE_MAX_LENGTH) }))}
+                  placeholder="Catatan yang tampil di kolom NOTE footer…"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
+                             placeholder-slate-400 rounded-lg text-sm focus:outline-none resize-none
+                             focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+                />
+              </div>
             </div>
             <div className="flex gap-2 justify-end mt-5">
               <button

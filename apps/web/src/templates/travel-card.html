@@ -263,9 +263,9 @@
           <table class="meta-table"><tbody>
             <tr><td class="meta-label">Document No.</td><td class="meta-value">{{documentNo}}</td></tr>
             <tr><td class="meta-label">Revision</td><td class="meta-value">{{revisionLabel}}</td></tr>
-            <tr><td class="meta-label">Date</td><td class="meta-value">{{dateStr}}</td></tr>
+            <tr><td class="meta-label">Date Rev</td><td class="meta-value">{{revisionDate}}</td></tr>
             <tr><td class="meta-label">Responsibility</td><td class="meta-value">Prod. Engineering</td></tr>
-            <tr><td class="meta-label">Page</td><td class="meta-value">1 of 1</td></tr>
+            <tr><td class="meta-label">Page</td><td class="meta-value">1</td></tr>
             <tr><td class="meta-label"></td><td class="meta-value"></td></tr>
           </tbody></table>
         </td>
@@ -303,8 +303,8 @@
         </tr>
         <tr>
           <td style="vertical-align:top; border-right:1px solid #bbb;"><div class="ftr-hdr">Issued by (Prod. Eng.)</div><div class="ftr-body" style="min-height:13mm;"><div class="ftr-field"><span class="ftr-lbl" style="min-width:14mm;">Name</span><span class="ftr-sep">:</span><span class="write-line">{{issuedByName}}</span></div><div class="ftr-field"><span class="ftr-lbl" style="min-width:14mm;">Date</span><span class="ftr-sep">:</span><span class="write-line">{{issuedAt}}</span></div></div></td>
-          <td style="vertical-align:top; border-right:1px solid #bbb;"><div class="ftr-hdr" style="text-align:center;">Signature</div><div style="min-height:13mm;"></div></td>
-          <td colspan="2" style="vertical-align:top;"><div class="ftr-hdr">NOTE :</div><div style="min-height:13mm; padding:1.5mm 2.5mm;"></div></td>
+          <td style="vertical-align:top; border-right:1px solid #bbb;"><div class="ftr-hdr" style="text-align:center;">Signature</div><div style="min-height:13mm; display:flex; align-items:center; justify-content:center; padding:0.5mm;">{{signatureQr}}</div></td>
+          <td colspan="2" style="vertical-align:top;"><div class="ftr-hdr">NOTE :</div><div style="min-height:13mm; padding:1.5mm 2.5mm; font-size:7pt; color:#1a1a1a; white-space:pre-wrap; word-break:break-word;">{{note}}</div></td>
         </tr>
       </tbody>
     </table>

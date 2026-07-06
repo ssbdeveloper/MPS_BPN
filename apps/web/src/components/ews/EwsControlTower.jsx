@@ -37,10 +37,10 @@ const kpis = [
 // Status colours come from the shared token module (see theme/ewsStatus.js).
 // Only the CRITICAL card tint/border is kept as a Tailwind class set here.
 const cardStatusClass = {
-  normal: 'border-slate-200 bg-white',
-  watch: 'border-amber-200 bg-amber-50/30',
-  critical: 'border-red-300 bg-red-50/40 ews-critical-card',
-  no_data: 'border-slate-200 bg-white',
+  normal: 'border-slate-300 bg-white',
+  watch: 'border-amber-300 bg-amber-50/30',
+  critical: 'border-red-400 bg-red-50/40 ews-critical-card',
+  no_data: 'border-slate-300 bg-white',
 };
 
 function normalizeStatus(value) {
@@ -203,8 +203,8 @@ function KpiTile({ item, index = 0, onOpenDetail }) {
         <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-red-600 to-red-400 ews-critical-bar" aria-hidden="true" />
       )}
       <div className="flex items-start justify-between gap-3">
-        {/* Neutral icon chip — icon accent must not read as a status colour. */}
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-500">
+        {/* Icon chip follows the KPI status colour for quicker scanning. */}
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg border" style={badgeStyle(status)}>
           <Icon size={18} />
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-extrabold" style={badgeStyle(status)}>
@@ -516,12 +516,6 @@ function EwsControlTower() {
       </div>
 
       <div className="p-4">
-        {freshnessState === 'STALE' && (
-          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-            Snapshot is stale. The dashboard is showing the latest available EWS snapshot.
-          </div>
-        )}
-
         {error && (
           <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
             {error}
@@ -533,10 +527,6 @@ function EwsControlTower() {
           { group: 'machine', label: 'Machine' },
         ].map((row) => (
           <div key={row.group} className="mb-3 last:mb-0">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">{row.label}</span>
-              <span className="h-px flex-1 bg-slate-200" />
-            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               {liveKpis.filter((item) => item.group === row.group).map((item, index) => (
                 <KpiTile

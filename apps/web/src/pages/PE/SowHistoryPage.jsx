@@ -159,7 +159,8 @@ export default function SowHistoryPage() {
     try {
       const params = new URLSearchParams();
       if (revisionNo) params.set('revision_no', String(revisionNo));
-      const data = await request(`/sow/history-order/${encodeURIComponent(orderNo)}${params.toString() ? `?${params.toString()}` : ''}`);
+      params.set('light', '1'); // skip expensive standard-match/NNVA joins — editor doesn't use them
+      const data = await request(`/sow/history-order/${encodeURIComponent(orderNo)}?${params.toString()}`);
       if (detailRequestRef.current !== requestId) return;
       setSelectedOrder(orderNo);
       setEditRows((data.rows || []).map(r => ({ ...r, operation_name: r.workcenterdescription || '' })));
@@ -197,13 +198,29 @@ export default function SowHistoryPage() {
   const addOperation = () => setEditRows(prev => [...prev, emptyOperation(selectedOrder, detailInfo)]);
   const removeOperation = (index) => setEditRows(prev => prev.filter((_, i) => i !== index));
 
+  const isLatestRevision = !selectedRevision || Number(selectedRevision) === Number(currentRevision);
+
   const saveDetailInfo = async () => {
     if (!selectedOrder) { toast.error('Pilih order_no dulu'); return; }
     setSavingInfo(true);
     try {
-      await request(`/sow/history-order/${encodeURIComponent(selectedOrder)}/info`, { method: 'PUT', body: JSON.stringify(detailInfo) });
+      const payload = { ...detailInfo };
+      // Persist per-operation wct_group/workcenter in place — only when editing the live/latest
+      // revision (historical snapshots must not overwrite current sow rows).
+      if (isLatestRevision) {
+        payload.operations = editRows
+          .filter(r => r.idsow != null)
+          .map(r => ({
+            idsow: r.idsow,
+            wct_group: r.wct_group || null,
+            workcenter: r.workcenter || null,
+            workcenterdescription: r.workcenterdescription || r.operation_name || null,
+            operation_text: r.operation_text || '',
+          }));
+      }
+      await request(`/sow/history-order/${encodeURIComponent(selectedOrder)}/info`, { method: 'PUT', body: JSON.stringify(payload) });
       setEditRows(prev => prev.map(r => ({ ...r, customer: detailInfo.customer, ssbr_id: detailInfo.ssbr_id, part_number: detailInfo.part_number, part_name: detailInfo.part_name, model: detailInfo.model })));
-      toast.success('Detail info updated'); loadRows(1);
+      toast.success(isLatestRevision ? 'Perubahan tersimpan' : 'Detail info tersimpan'); loadRows(1);
     } catch (err) { toast.error(err.message); } finally { setSavingInfo(false); }
   };
 
@@ -262,15 +279,26 @@ export default function SowHistoryPage() {
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
-      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><h2 className="text-lg font-bold text-slate-900">SOW History</h2><p className="text-sm text-slate-500">{search.trim() ? `Filter: ${search.trim()}` : ''}</p></div>
+      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-slate-900">SOW History</h2>
+            <p className="text-xs text-slate-500">
+              {loading ? 'Memuat…' : `${pagination.total} baris${search.trim() ? ` · filter "${search.trim()}"` : ''}`}
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3"><Search className="h-4 w-4 text-slate-400" /><input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadRows(1); }} className="w-60 bg-transparent text-sm outline-none" placeholder="Search order_no / ssbr_id" /></label>
-            <button onClick={toggleSortDirection} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><ArrowDownUp className="h-4 w-4" /> Updated {sortDirection.toUpperCase()}</button>
-            <button onClick={() => setShowExportPanel(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> Excel</button>
-            <button onClick={() => loadRows(1)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className="h-4 w-4" /> Refresh</button>
-            {canWrite && <button onClick={() => setShowEditor(true)} className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-[#0096c7] px-3 text-sm font-semibold text-white hover:bg-[#0077b6]">Edit SOW</button>}
+            <label className="flex h-10 min-w-[240px] flex-1 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 focus-within:border-[#0096c7] focus-within:ring-2 focus-within:ring-[#00b4d8] lg:flex-none">
+              <Search className="h-4 w-4 flex-shrink-0 text-slate-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') loadRows(1); }} className="w-full bg-transparent text-sm outline-none lg:w-56" placeholder="Cari order_no / ssbr_id" />
+              {search && <button onClick={() => { setSearch(''); loadRows(1); }} className="text-slate-400 hover:text-slate-600"><X className="h-3.5 w-3.5" /></button>}
+            </label>
+            <div className="flex items-center gap-2">
+              <button onClick={toggleSortDirection} title={`Urutkan updated ${sortDirection === 'desc' ? 'terbaru' : 'terlama'}`} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><ArrowDownUp className="h-4 w-4" /> <span className="hidden sm:inline">Updated {sortDirection.toUpperCase()}</span></button>
+              <button onClick={() => setShowExportPanel(true)} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4" /> <span className="hidden sm:inline">Excel</span></button>
+              <button onClick={() => loadRows(pagination.page)} className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> <span className="hidden sm:inline">Refresh</span></button>
+              {canWrite && <button onClick={() => setShowEditor(true)} className="inline-flex h-10 items-center gap-1.5 rounded-lg bg-[#0096c7] px-4 text-sm font-semibold text-white hover:bg-[#0077b6]">Edit SOW</button>}
+            </div>
           </div>
         </div>
       </div>
@@ -329,11 +357,23 @@ export default function SowHistoryPage() {
         <div className="fixed inset-0 z-50 flex bg-slate-950/40 backdrop-blur-sm" onMouseDown={closeEditor}>
           <div className="ml-auto flex h-full w-full max-w-7xl flex-col bg-white shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3 flex-shrink-0">
-              <div><h3 className="text-lg font-bold text-slate-900">Edit SOW Revision</h3><p className="text-sm text-slate-500">{selectedOrder ? `${selectedOrder} - ${detailLoading ? 'loading...' : `rev ${currentRevision}`}` : 'Pilih order_no untuk mulai edit'}</p></div>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-bold text-slate-900">Edit SOW Revision</h3>
+                  <p className="truncate text-sm text-slate-500">
+                    {selectedOrder ? <span className="font-mono font-semibold text-slate-700">{selectedOrder}</span> : 'Pilih order_no untuk mulai edit'}
+                  </p>
+                </div>
+                {selectedOrder && !detailLoading && (
+                  <span className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${isLatestRevision ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                    {isLatestRevision ? `Rev ${currentRevision} · Latest` : `Rev ${selectedRevision} · History`}
+                  </span>
+                )}
+              </div>
               <button onClick={closeEditor} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"><X className="h-4 w-4" /></button>
             </div>
             <div className="min-h-0 flex-1 flex flex-col">
-              <section className="flex min-w-0 min-h-0 flex-col">
+              <section className="flex min-w-0 min-h-0 flex-1 flex-col">
                 {detailLoading && (
                   <div className="flex min-h-[180px] items-center justify-center gap-3 border-b border-slate-200 text-sm font-semibold text-slate-500">
                     <Loader2 className="h-5 w-5 animate-spin text-[#0096c7]" />
@@ -342,9 +382,7 @@ export default function SowHistoryPage() {
                 )}
                 {!detailLoading && selectedOrder && (
                   <div className="border-b border-slate-200 bg-slate-50 px-5 py-4 flex-shrink-0">
-                    <div className="flex items-center justify-between mb-3"><span className="text-xs font-bold uppercase tracking-widest text-slate-500">Detail Info</span>
-                      {canWrite && <button onClick={saveDetailInfo} disabled={savingInfo} className="inline-flex items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0077b6] disabled:opacity-50">{savingInfo ? 'Saving...' : <><Save size={12} /> Save Info</>}</button>}
-                    </div>
+                    <div className="flex items-center justify-between mb-3"><span className="text-xs font-bold uppercase tracking-widest text-slate-500">Detail Info</span></div>
                     <div className="grid grid-cols-2 gap-3 mb-3">
                       <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">Customer</label><SelectWrapper><select value={detailInfo.customer} onChange={e => setDetailInfo(p => ({ ...p, customer: e.target.value }))} className={SELECT_CLS}><option value="">— Pilih Customer —</option>{customerOptions.map(c => <option key={c} value={c}>{c}</option>)}</select></SelectWrapper></div>
                       <div><label className="block text-[10px] font-semibold text-slate-500 mb-1">SSBR ID</label><input value={detailInfo.ssbr_id} onChange={e => setDetailInfo(p => ({ ...p, ssbr_id: e.target.value }))} className={INPUT_CLS} /></div>
@@ -401,7 +439,7 @@ export default function SowHistoryPage() {
                             <td className="border-b border-slate-100 px-2 py-1"><input type="text" value={row.operation_text ?? ''} onChange={e => updateEditRow(index, 'operation_text', e.target.value)} className={`${INPUT_CLS} min-w-[300px]`} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><SelectWrapper><select value={row.wct_group || ''} onChange={e => updateEditRow(index, 'wct_group', e.target.value)} className={`${SELECT_CLS} w-[120px]`}><option value="">—</option>{groupnames.map(g => <option key={g} value={g}>{g}</option>)}</select></SelectWrapper></td>
                             <td className="border-b border-slate-100 px-2 py-1"><SelectWrapper><select value={row.workcenter || ''} onChange={e => updateEditRow(index, 'workcenter', e.target.value)} disabled={wcOpts.length === 0} className={`${SELECT_CLS} w-[120px] ${wcOpts.length === 0 ? 'opacity-40' : ''}`}><option value="">—</option>{wcOpts.map(wc => <option key={wc.workcenternew} value={wc.workcenternew}>{wc.workcenternew}</option>)}</select></SelectWrapper></td>
-                            <td className="border-b border-slate-100 px-2 py-1"><input type="text" inputMode="decimal" value={row.planhours ?? ''} onChange={e => updateEditRow(index, 'planhours', e.target.value.replace(/[^0-9.]/g, ''))} className={`${INPUT_CLS} w-[62px] text-right`} /></td>
+                            <td className="border-b border-slate-100 px-2 py-1"><input type="text" inputMode="decimal" value={row.planhours ?? ''} readOnly disabled title="Plan hours dikelola lewat revisi" className={`${INPUT_CLS} w-[62px] text-right bg-slate-100 text-slate-500 cursor-not-allowed`} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><input type="text" value={row.workcenterdescription ?? ''} readOnly className={`${INPUT_CLS} w-[160px] bg-slate-50 text-slate-500`} title={row.workcenterdescription || ''} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><input type="text" value={row.status ?? ''} readOnly className={`${INPUT_CLS} w-[70px] bg-slate-50 text-slate-500 text-center`} /></td>
                             <td className="border-b border-slate-100 px-2 py-1"><button onClick={() => removeOperation(index)} className="rounded border border-red-200 p-1.5 text-red-600 hover:bg-red-50"><Trash2 className="h-4 w-4" /></button></td>
@@ -413,6 +451,22 @@ export default function SowHistoryPage() {
                 </div>
               </section>
             </div>
+            {canWrite && selectedOrder && !detailLoading && (
+              <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-3">
+                <p className="text-xs text-slate-500">
+                  {isLatestRevision
+                    ? 'Menyimpan detail info + WCT group & workcenter (tanpa membuat revisi baru).'
+                    : 'Melihat revisi lama — hanya detail info yang tersimpan. Gunakan Create Revision untuk mengubah operasi.'}
+                </p>
+                <button
+                  onClick={saveDetailInfo}
+                  disabled={savingInfo}
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-[#0096c7] px-5 text-sm font-semibold text-white hover:bg-[#0077b6] disabled:opacity-50"
+                >
+                  {savingInfo ? <><Loader2 className="h-4 w-4 animate-spin" /> Menyimpan…</> : <><Save className="h-4 w-4" /> Simpan Perubahan</>}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

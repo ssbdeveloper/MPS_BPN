@@ -271,6 +271,8 @@ async function ensureSowDocumentNoTable() {
   await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS "default" BOOLEAN NOT NULL DEFAULT false`);
   await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
   await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS revision_no TEXT`);
+  await db.query(`ALTER TABLE public.sow_documentno ADD COLUMN IF NOT EXISTS revision_date DATE`);
   await db.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS uq_sow_documentno_default
       ON public.sow_documentno ("default")
@@ -282,13 +284,57 @@ exports.getSowDocumentNos = async (req, res) => {
   try {
     await ensureSowDocumentNoTable();
     const result = await db.query(
-      `SELECT id, documentno, "default"
+      `SELECT id, documentno, "default",
+              revision_no,
+              to_char(revision_date, 'YYYY-MM-DD') AS revision_date
        FROM public.sow_documentno
        ORDER BY "default" DESC, documentno ASC`
     );
     res.json({ data: result.rows });
   } catch (err) {
     console.error("getSowDocumentNos error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.createSowDocumentNo = async (req, res) => {
+  try {
+    await ensureSowDocumentNoTable();
+    const documentno = String(req.body?.documentno ?? "").trim();
+    if (!documentno) {
+      return res.status(400).json({ error: "documentno is required" });
+    }
+
+    const revisionRaw = req.body?.revision_no;
+    const revision_no =
+      revisionRaw == null || String(revisionRaw).trim() === "" ? null : String(revisionRaw).trim();
+
+    const dateRaw = req.body?.revision_date;
+    const revision_date =
+      dateRaw == null || String(dateRaw).trim() === "" ? null : String(dateRaw).trim();
+
+    const makeDefault = req.body?.default === true || req.body?.default === "true";
+
+    if (makeDefault) {
+      await db.query(`UPDATE public.sow_documentno SET "default" = false WHERE "default" = true`);
+    }
+
+    const result = await db.query(
+      `INSERT INTO public.sow_documentno (documentno, "default", revision_no, revision_date)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (documentno) DO UPDATE SET
+         "default"     = EXCLUDED."default",
+         revision_no   = EXCLUDED.revision_no,
+         revision_date = EXCLUDED.revision_date,
+         updated_at    = NOW()
+       RETURNING id, documentno, "default", revision_no,
+                 to_char(revision_date, 'YYYY-MM-DD') AS revision_date`,
+      [documentno, makeDefault, revision_no, revision_date]
+    );
+
+    res.status(201).json({ data: result.rows[0] });
+  } catch (err) {
+    console.error("createSowDocumentNo error:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -669,6 +715,9 @@ exports.getSowOrderForRevision = async (req, res) => {
     );
     const currentRevision = rev.rows[0]?.current_revision || 0;
     const requestedRevision = Number.parseInt(req.query.revision_no, 10);
+    // Light mode: skip the expensive standard-match LATERAL join + NNVA enrichment.
+    // The edit panel only needs the editable columns, so this makes the panel load fast.
+    const light = req.query.light === "1" || req.query.light === "true";
     let rows = null;
     let selectedRevision = currentRevision;
 
@@ -685,6 +734,15 @@ exports.getSowOrderForRevision = async (req, res) => {
       }
       rows = Array.isArray(history.rows[0]?.after_data) ? history.rows[0].after_data : [];
       selectedRevision = requestedRevision;
+    } else if (light) {
+      const result = await db.query(
+        `SELECT s.*
+         FROM sow s
+         WHERE s.order_no = $1
+         ORDER BY s.operation_no ASC NULLS LAST, s.idsow ASC`,
+        [orderNo],
+      );
+      rows = result.rows;
     } else {
       const result = await db.query(
         `SELECT s.*,
@@ -722,7 +780,9 @@ exports.getSowOrderForRevision = async (req, res) => {
        ORDER BY revision_no DESC`,
       [orderNo],
     );
-    rows = await enrichSowRowsWithNnva(db.query.bind(db), rows);
+    if (!light) {
+      rows = await enrichSowRowsWithNnva(db.query.bind(db), rows);
+    }
 
     res.json({
       order_no: orderNo,
@@ -863,15 +923,23 @@ exports.saveOperationCard = async (req, res) => {
   }
 };
 
-// PUT /sow/history-order/:orderNo/info — update shared detail info across all rows
+// PUT /sow/history-order/:orderNo/info — update shared detail info across all rows,
+// and (optionally) update per-operation wct_group/workcenter in place by idsow.
+// The in-place operation update does NOT create a new revision — it is meant for
+// quick corrections; structural changes still go through "Create Revision".
 exports.saveSowOrderInfo = async (req, res) => {
   const { orderNo } = req.params;
   const { customer, ssbr_id, part_number, part_name, model } = req.body || {};
+  const operations = Array.isArray(req.body?.operations) ? req.body.operations : [];
 
   if (!orderNo) return res.status(400).json({ error: "orderNo wajib diisi" });
 
+  let client;
   try {
-    const result = await db.query(
+    client = await pgPool.connect();
+    await client.query("BEGIN");
+
+    const result = await client.query(
       `UPDATE sow
        SET customer    = COALESCE($2, customer),
            ssbr_id     = COALESCE($3, ssbr_id),
@@ -882,10 +950,38 @@ exports.saveSowOrderInfo = async (req, res) => {
        RETURNING *`,
       [orderNo, customer, ssbr_id, part_number, part_name, model]
     );
-    res.json({ updated: result.rowCount, rows: result.rows });
+
+    let operationsUpdated = 0;
+    for (const op of operations) {
+      const idsow = op?.idsow;
+      if (idsow == null || idsow === "") continue;
+      const workcenter = op.workcenter ? String(op.workcenter).trim() : null;
+      const wctGroup = await resolveWctGroup(
+        client.query.bind(client),
+        workcenter,
+        op.wct_group ? String(op.wct_group).trim() : null,
+        op.operation_text
+      );
+      const description = op.workcenterdescription != null ? String(op.workcenterdescription) : null;
+      const opResult = await client.query(
+        `UPDATE sow
+         SET wct_group             = $2,
+             workcenter            = $3,
+             workcenterdescription = $4
+         WHERE order_no = $1 AND idsow = $5`,
+        [orderNo, wctGroup, workcenter, description, idsow]
+      );
+      operationsUpdated += opResult.rowCount;
+    }
+
+    await client.query("COMMIT");
+    res.json({ updated: result.rowCount, operations_updated: operationsUpdated, rows: result.rows });
   } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
     console.error("saveSowOrderInfo error:", err);
     res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 };
 

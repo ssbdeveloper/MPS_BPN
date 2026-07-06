@@ -86,8 +86,8 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       t.longdate_checkout AT TIME ZONE %s AS source_max_end
     FROM timesheet_transaction t
     LEFT JOIN {ph3_table} po
-      ON LTRIM(po.order_no, '0') = t.order_no
-     AND LTRIM(po.operation_no, '0') = t.operation_no::text
+      ON LTRIM(COALESCE(po.order_no, ''), '0') = t.order_no
+     AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
     LEFT JOIN LATERAL (
       SELECT employee_category
       FROM usernfc u
@@ -98,18 +98,36 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     WHERE t.longdate_checkin IS NOT NULL
       AND t.longdate_checkout IS NOT NULL
       AND t.longdate_checkout > t.longdate_checkin
-      AND (t.longdate_checkout AT TIME ZONE %s) >= %s
-      AND (t.longdate_checkout AT TIME ZONE %s) < %s
+      AND t.longdate_checkout >= (%s::timestamp AT TIME ZONE %s)
+      AND t.longdate_checkout <  (%s::timestamp AT TIME ZONE %s)
       AND COALESCE(t.state_flag, 0) <> 5
     ORDER BY t.longdate_checkout, t.tsnumber
     LIMIT %s
     """
 
-    params = [timezone, timezone, timezone, timezone, timezone, timezone, timezone, from_ts, timezone, to_ts, limit]
+    params = [timezone, timezone, timezone, timezone, timezone, timezone, from_ts, timezone, to_ts, timezone, limit]
     with connect_source() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
             return [dict(row) for row in cur.fetchall()]
+
+
+def dedupe_audit_rows(rows: list[dict]) -> list[dict]:
+    """Drop duplicate (source_system, source_key) pairs, keeping the first.
+
+    execute_values runs a single INSERT ... ON CONFLICT DO UPDATE; two rows with
+    the same conflict key in one batch raise CardinalityViolation. Callers pass
+    STAGED rows before BLOCKED rows so STAGED wins on overlap.
+    """
+    seen: set[tuple] = set()
+    result = []
+    for row in rows:
+        key = (row.get("source_system"), row.get("source_key"))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
 
 
 def audit_rows_for_staged(rows: list[dict]) -> list[dict]:
@@ -149,7 +167,8 @@ def fetch_blocked_today_rows() -> list[dict]:
         ) AS has_sow_match
       FROM timesheet_transaction t
       WHERE t.longdate_checkin IS NOT NULL
-        AND (t.longdate_checkin AT TIME ZONE %s)::date = (now() AT TIME ZONE %s)::date
+        AND t.longdate_checkin >= (date_trunc('day', now() AT TIME ZONE %s) AT TIME ZONE %s)
+        AND t.longdate_checkin <  (date_trunc('day', now() AT TIME ZONE %s) AT TIME ZONE %s) + interval '1 day'
         AND COALESCE(t.state_flag, 0) <> 5
     ),
     flags AS (
@@ -173,7 +192,7 @@ def fetch_blocked_today_rows() -> list[dict]:
 
     with connect_source() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, (timezone, timezone, timezone))
+            cur.execute(sql, (timezone, timezone, timezone, timezone, timezone))
             rows = [dict(row) for row in cur.fetchall()]
 
     audit_rows = []
@@ -231,10 +250,10 @@ def run_once(args: argparse.Namespace) -> bool:
     with connect_staging() as conn:
         ensure_staging_schema(conn)
         inserted = insert_staging_rows(conn, rows)
-        audited = upsert_eligibility_audit(conn, [
+        audited = upsert_eligibility_audit(conn, dedupe_audit_rows([
             *audit_rows_for_staged(rows),
             *fetch_blocked_today_rows(),
-        ])
+        ]))
         if cursor_mode:
             cursor_to = max((row["source_max_end"] for row in rows), default=to_ts)
             update_stage_cursor(conn, "TIMESHEET", plant_code(), cursor_to)

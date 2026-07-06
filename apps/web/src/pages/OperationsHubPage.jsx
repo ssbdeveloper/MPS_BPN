@@ -178,6 +178,7 @@ function StatCard({ title, value, helper, icon, tone, accent = '#0096c7', delta,
 }
 
 function InsightStrip({ items }) {
+  if (!items.length) return null;
   const toneMap = {
     red: 'border-red-200 bg-red-50 text-red-700',
     amber: 'border-amber-200 bg-amber-50 text-amber-700',
@@ -837,20 +838,11 @@ function OperationsHubPage() {
 
   const insights = useMemo(() => {
     const list = [];
-    if (toNum(kpi.overdue_orders) > 0) {
-      list.push({ tone: 'red', text: `${formatNumber(kpi.overdue_orders)} order overdue — perlu percepatan atau reschedule.` });
-    }
     if (productiveDelta != null && productiveDelta <= -2) {
       list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% di bawah rata-rata 7 hari (${machineAvgPct.toFixed(1)}%).` });
     }
-    if (productiveDelta != null && productiveDelta >= 2) {
-      list.push({ tone: 'emerald', text: `Machine productive naik ${productiveDelta.toFixed(1)} pt vs rata-rata 7 hari.` });
-    }
     if (toNum(kpi.validation_pending) > 0) {
       list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} proses menunggu validasi foreman/supervisor.` });
-    }
-    if (!list.length) {
-      list.push({ tone: 'emerald', text: 'Semua indikator operasional dalam kondisi baik.' });
     }
     return list.slice(0, 3);
   }, [kpi, machineAvgPct, productiveDelta]);
