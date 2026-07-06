@@ -20,47 +20,18 @@ import { badgeStyle, dotStyle, solidColor } from '../../theme/ewsStatus';
 //  Adoption → UserCheck      (operator benar-benar mengisi timesheet)
 //  OEE      → Gauge          (utilisasi / efisiensi mesin)
 //  OLE      → HardHat        (efektivitas tenaga kerja / operator)
+// 8 KPIs in two rows: LABOUR (people) and MACHINE. Keys match the backend restructure.
 const kpis = [
-  {
-    key: 'uptime',
-    label: 'Uptime',
-    target: 99,
-    owner: 'IT',
-    icon: Wifi,
-    tone: 'emerald',
-  },
-  {
-    key: 'accuracy',
-    label: 'Accuracy',
-    target: 97,
-    owner: 'Foreman',
-    icon: ClipboardCheck,
-    tone: 'cyan',
-  },
-  {
-    key: 'adoption',
-    label: 'Adoption',
-    target: 95,
-    owner: 'Spv',
-    icon: UserCheck,
-    tone: 'sky',
-  },
-  {
-    key: 'oee',
-    label: 'OEE',
-    target: 80,
-    owner: 'PPIC',
-    icon: Gauge,
-    tone: 'amber',
-  },
-  {
-    key: 'ole',
-    label: 'OLE',
-    target: 85,
-    owner: 'Spv',
-    icon: HardHat,
-    tone: 'indigo',
-  },
+  // Row LABOUR
+  { key: 'uptime_tablet', label: 'Uptime Tablet', target: 99, owner: 'IT', icon: Wifi, tone: 'emerald', group: 'labour' },
+  { key: 'accuracy_labour', label: 'Accuracy Labour', target: 98, owner: 'Foreman', icon: ClipboardCheck, tone: 'cyan', group: 'labour' },
+  { key: 'adoption_labour', label: 'Adoption Labour', target: 95, owner: 'Spv', icon: UserCheck, tone: 'sky', group: 'labour' },
+  { key: 'ole', label: 'OLE', target: 85, owner: 'Spv', icon: HardHat, tone: 'indigo', group: 'labour' },
+  // Row MACHINE
+  { key: 'uptime_hmi', label: 'Uptime HMI', target: 99, owner: 'IT', icon: Wifi, tone: 'emerald', group: 'machine' },
+  { key: 'accuracy_machine', label: 'Accuracy Machine', target: 98, owner: 'Foreman', icon: ClipboardCheck, tone: 'cyan', group: 'machine' },
+  { key: 'adoption_machine', label: 'Adoption Machine', target: 95, owner: 'PPIC', icon: UserCheck, tone: 'sky', group: 'machine' },
+  { key: 'oee', label: 'OEE', target: 80, owner: 'PPIC', icon: Gauge, tone: 'amber', group: 'machine' },
 ];
 
 // Status colours come from the shared token module (see theme/ewsStatus.js).
@@ -557,16 +528,27 @@ function EwsControlTower() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          {liveKpis.map((item, index) => (
-            <KpiTile
-              key={item.key}
-              item={item}
-              index={index}
-              onOpenDetail={(key) => navigate(`/ews/${key}/detail`)}
-            />
-          ))}
-        </div>
+        {[
+          { group: 'labour', label: 'Labour (Operator)' },
+          { group: 'machine', label: 'Machine' },
+        ].map((row) => (
+          <div key={row.group} className="mb-3 last:mb-0">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">{row.label}</span>
+              <span className="h-px flex-1 bg-slate-200" />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {liveKpis.filter((item) => item.group === row.group).map((item, index) => (
+                <KpiTile
+                  key={item.key}
+                  item={item}
+                  index={index}
+                  onOpenDetail={(key) => navigate(`/ews/${key}/detail`)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
 
         <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_320px]">
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">

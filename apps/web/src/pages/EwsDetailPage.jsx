@@ -97,6 +97,31 @@ const KPI_CONFIG = {
     action: 'Cek workflow, kesiapan material, dan coaching operator.',
     unit: 'operator',
   },
+  // 8-KPI restructure (labour vs machine). Uptime placeholders + split accuracy/adoption.
+  uptime_tablet: {
+    label: 'Uptime Tablet', title: 'Uptime Tablet Detail', target: 99, icon: Wifi,
+    pic: 'IT (Wira)', errorType: 'Tablet Offline', action: 'Cek konektivitas tablet operator.', unit: 'device',
+  },
+  uptime_hmi: {
+    label: 'Uptime HMI', title: 'Uptime HMI Detail', target: 99, icon: Wifi,
+    pic: 'IT (Wira)', errorType: 'HMI Offline', action: 'Cek jalur jaringan HMI dan ping DOWN berulang.', unit: 'machine',
+  },
+  accuracy_labour: {
+    label: 'Accuracy Labour', title: 'Accuracy Labour Detail', target: 98, icon: ClipboardCheck,
+    pic: 'Foreman/Spv', errorType: 'Invalid Timesheet Data', action: 'Koreksi order/operasi timesheet, cek SOW/SAP.', unit: 'record',
+  },
+  accuracy_machine: {
+    label: 'Accuracy Machine', title: 'Accuracy Machine Detail', target: 98, icon: ClipboardCheck,
+    pic: 'Foreman/Spv', errorType: 'Missing Machine Transaction', action: 'Cek mch_productiondata tanpa mch_transaction.', unit: 'record',
+  },
+  adoption_labour: {
+    label: 'Adoption Labour', title: 'Adoption Labour Detail', target: 95, icon: UserCheck,
+    pic: 'Foreman/Spv', errorType: 'Missing Attendance', action: 'Tandai cuti/sakit/izin operator; konfirmasi absen nyata.', unit: 'operator',
+  },
+  adoption_machine: {
+    label: 'Adoption Machine', title: 'Adoption Machine Detail', target: 95, icon: UserCheck,
+    pic: 'PPIC / Spv', errorType: 'Missing Time', action: 'Cek waktu mesin unidentified/idle vs input operator.', unit: 'machine',
+  },
 };
 
 // Status/severity colours are derived from the shared token module so they are
