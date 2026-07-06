@@ -327,70 +327,87 @@ async function calculateUptime(bounds, options = {}) {
   };
 }
 
-async function calculateAccuracy(bounds) {
-  const hasSapStaging = await tableExists("public", "sap_timesheet_staging");
-  const sapReadyExpression = hasSapStaging
-    ? `
-        EXISTS (
-          SELECT 1
-          FROM public.sap_timesheet_staging s
-          WHERE s.source_system = 'TIMESHEET'
-            AND s.source_key = t.tsnumber::text
-        )
-      `
-    : "false";
+// SAP order/operation master the stager matches against (env TGT_TABLE, default ph3_order).
+// Mirrors jobs/sap_staging/stage_timesheet_transaction.py so accuracy_labour uses the SAME
+// eligibility truth as the stager. Validated as a bare identifier to stay injection-safe.
+function ph3OrderTable() {
+  const raw = String(process.env.TGT_TABLE || "ph3_order").trim();
+  return /^[a-z_][a-z0-9_]*$/i.test(raw) ? raw : "ph3_order";
+}
 
-  const tsResult = await db.query(
+// accuracy_labour: input eligibility straight from timesheet_transaction, realtime.
+// ZERO reads to sap_timesheet_staging (decoupled from the stager backlog).
+// eligible = row NOT failing any stager block rule (missing_order/missing_operation/sow_no_match
+// against ph3_order). Rows with activitytype set are always eligible. In-progress rows
+// (no checkout) are included by decision — window is by longdate_checkin.
+async function calculateAccuracyLabour(bounds) {
+  const ph3 = ph3OrderTable();
+  const result = await db.query(
     `
     WITH base AS (
       SELECT
-        t.*,
-        ${sapReadyExpression} AS is_sap_staged,
+        (NULLIF(BTRIM(COALESCE(t.activitytype, '')), '') IS NULL) AS is_productive,
+        (NULLIF(BTRIM(COALESCE(t.order_no, '')), '') IS NULL) AS order_empty,
+        (t.operation_no IS NULL) AS operation_null,
         EXISTS (
           SELECT 1
-          FROM public.sow s
-          WHERE LTRIM(COALESCE(s.order_no, ''), '0') = LTRIM(COALESCE(t.order_no, ''), '0')
-            AND s.operation_no::text = t.operation_no::text
-        ) AS has_sow_match,
-        ABS(
-          COALESCE(t.duration, 0)
-          - COALESCE(EXTRACT(EPOCH FROM (t.longdate_checkout - t.longdate_checkin)) / 3600.0, COALESCE(t.duration, 0))
-        ) AS duration_delta_hours
+          FROM public.${ph3} po
+          WHERE LTRIM(COALESCE(po.order_no, ''), '0') = LTRIM(COALESCE(t.order_no, ''), '0')
+            AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
+        ) AS has_ph3_match
       FROM public.timesheet_transaction t
       WHERE t.longdate_checkin >= $1
         AND t.longdate_checkin < $2
-        AND COALESCE(t.state_flag, 1) <> 5
+        AND COALESCE(t.state_flag, 0) <> 5
     ),
     flags AS (
       SELECT
-        *,
-        (NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NULL) AS missing_order,
-        (NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL AND operation_no IS NULL) AS missing_operation,
-        (
-          NULLIF(BTRIM(COALESCE(activitytype, '')), '') IS NULL
-          AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
-          AND operation_no IS NOT NULL
-          AND NOT has_sow_match
-        ) AS sow_no_match
+        (is_productive AND order_empty) AS missing_order,
+        (is_productive AND operation_null) AS missing_operation,
+        (is_productive AND NOT order_empty AND NOT operation_null AND NOT has_ph3_match) AS sow_no_match
       FROM base
     )
     SELECT
       COUNT(*)::int AS total_records,
-      COUNT(*) FILTER (WHERE is_sap_staged)::int AS ready_records,
-      COUNT(*) FILTER (
-        WHERE missing_order OR missing_operation OR sow_no_match
-      )::int AS error_records,
+      COUNT(*) FILTER (WHERE NOT (missing_order OR missing_operation OR sow_no_match))::int AS eligible_records,
+      COUNT(*) FILTER (WHERE missing_order OR missing_operation OR sow_no_match)::int AS error_records,
       COUNT(*) FILTER (WHERE missing_order)::int AS missing_order,
       COUNT(*) FILTER (WHERE missing_operation)::int AS missing_operation,
-      COUNT(*) FILTER (WHERE sow_no_match)::int AS sow_no_match,
-      COUNT(*) FILTER (WHERE NOT is_sap_staged)::int AS not_staged_records
+      COUNT(*) FILTER (WHERE sow_no_match)::int AS sow_no_match
     FROM flags
     `,
     [bounds.window_start, bounds.window_end],
   );
 
-  const row = tsResult.rows[0] || {};
-  const mchResult = await db.query(
+  const row = result.rows[0] || {};
+  const total = num(row.total_records, 0);
+  const eligible = num(row.eligible_records, 0);
+  const value = pct(eligible, total);
+  return {
+    value,
+    helper: value === null ? "No timesheet record in window" : `${eligible}/${total} eligible for SAP`,
+    detail: {
+      total_records: total,
+      ready_records: eligible,
+      not_ready_records: num(row.error_records, 0),
+      error_records: num(row.error_records, 0),
+      minimum_sample_met: total >= 50,
+      error_breakdown: {
+        missing_order: num(row.missing_order, 0),
+        missing_operation: num(row.missing_operation, 0),
+        sow_no_match: num(row.sow_no_match, 0),
+      },
+      denominator: "timesheet_transaction rows in window (exclude state_flag=5)",
+      numerator: `rows passing all stager eligibility rules (order/operation match against public.${ph3})`,
+      match_table: `public.${ph3}`,
+      staging_read: false,
+    },
+  };
+}
+
+// accuracy_machine: unchanged math — mch_productiondata rows matched to mch_transaction.
+async function calculateAccuracyMachine(bounds) {
+  const result = await db.query(
     `
     SELECT
       COUNT(*)::int AS total_records,
@@ -405,39 +422,21 @@ async function calculateAccuracy(bounds) {
     [bounds.window_start, bounds.window_end],
   );
 
-  const mchRow = mchResult.rows[0] || {};
-  const timesheetTotal = num(row.total_records, 0);
-  const timesheetReady = num(row.ready_records, 0);
-  const machineTotal = num(mchRow.total_records, 0);
-  const machineReady = num(mchRow.ready_records, 0);
-  const total = timesheetTotal + machineTotal;
-  const ready = timesheetReady + machineReady;
-  const errors = Math.max(0, total - ready);
-  const value = total > 0 ? Math.max(0, Math.min(100, (ready / total) * 100)) : null;
-
+  const row = result.rows[0] || {};
+  const total = num(row.total_records, 0);
+  const ready = num(row.ready_records, 0);
+  const value = pct(ready, total);
   return {
     value,
-    helper: value === null ? "No source record in window" : `${ready}/${total} SAP-ready source records`,
+    helper: value === null ? "No machine record in window" : `${ready}/${total} matched machine records`,
     detail: {
       total_records: total,
       ready_records: ready,
-      not_ready_records: errors,
-      timesheet_records: timesheetTotal,
-      timesheet_ready_records: timesheetReady,
-      machine_records: machineTotal,
-      machine_ready_records: machineReady,
-      error_records: errors,
-      timesheet_not_staged_records: num(row.not_staged_records, 0),
-      machine_missing_mch_transaction: num(mchRow.missing_mch_transaction, 0),
-      error_breakdown: {
-        missing_order: num(row.missing_order, 0),
-        missing_operation: num(row.missing_operation, 0),
-        sow_no_match: num(row.sow_no_match, 0),
-        machine_missing_mch_transaction: num(mchRow.missing_mch_transaction, 0),
-      },
-      denominator: "timesheet_transaction rows today + mch_productiondata rows today",
-      numerator: "timesheet rows present in sap_timesheet_staging + mch_productiondata rows present in mch_transaction",
+      not_ready_records: Math.max(0, total - ready),
+      missing_mch_transaction: num(row.missing_mch_transaction, 0),
       minimum_sample_met: total >= 50,
+      denominator: "mch_productiondata rows in window",
+      numerator: "mch_productiondata rows present in mch_transaction",
     },
   };
 }
@@ -691,53 +690,6 @@ function placeholderCalculation(note) {
   return { value: null, helper: note, detail: { source: "placeholder", computed: false } };
 }
 
-// Derive the labour/machine accuracy cards from the single combined calculateAccuracy()
-// result so no extra query runs. Each side keeps its own minimum_sample_met flag.
-function accuracyLabourFromCombined(accuracy) {
-  const d = accuracy.detail || {};
-  const total = num(d.timesheet_records, 0);
-  const ready = num(d.timesheet_ready_records, 0);
-  const value = pct(ready, total);
-  return {
-    value,
-    helper: value === null ? "No timesheet record in window" : `${ready}/${total} SAP-ready timesheet records`,
-    detail: {
-      total_records: total,
-      ready_records: ready,
-      not_ready_records: Math.max(0, total - ready),
-      not_staged_records: num(d.timesheet_not_staged_records, 0),
-      error_breakdown: {
-        missing_order: num(d.error_breakdown?.missing_order, 0),
-        missing_operation: num(d.error_breakdown?.missing_operation, 0),
-        sow_no_match: num(d.error_breakdown?.sow_no_match, 0),
-      },
-      minimum_sample_met: total >= 50,
-      denominator: "timesheet_transaction rows in window (exclude state_flag=5)",
-      numerator: "timesheet rows present in sap_timesheet_staging",
-    },
-  };
-}
-
-function accuracyMachineFromCombined(accuracy) {
-  const d = accuracy.detail || {};
-  const total = num(d.machine_records, 0);
-  const ready = num(d.machine_ready_records, 0);
-  const value = pct(ready, total);
-  return {
-    value,
-    helper: value === null ? "No machine record in window" : `${ready}/${total} matched machine records`,
-    detail: {
-      total_records: total,
-      ready_records: ready,
-      not_ready_records: Math.max(0, total - ready),
-      missing_mch_transaction: num(d.machine_missing_mch_transaction, 0),
-      minimum_sample_met: total >= 50,
-      denominator: "mch_productiondata rows in window",
-      numerator: "mch_productiondata rows present in mch_transaction",
-    },
-  };
-}
-
 function buildIssues(kpis) {
   return kpis
     .filter((kpi) => kpi.status === "critical" || kpi.status === "watch")
@@ -884,7 +836,8 @@ async function calculateAdoptionForMainSnapshot(bounds, grain) {
 }
 
 async function calculateKpisForBounds(bounds, thresholds, options = {}) {
-  const accuracy = await safeCalculation("accuracy", async () => calculateAccuracy(bounds));
+  const accuracyLabour = await safeCalculation("accuracy_labour", async () => calculateAccuracyLabour(bounds));
+  const accuracyMachine = await safeCalculation("accuracy_machine", async () => calculateAccuracyMachine(bounds));
   const adoptionMachine = await calculateAdoptionForMainSnapshot(bounds, options.grain);
   const oee = await safeCalculation("oee", async () => calculateOee(bounds));
   const ole = await safeCalculation("ole", async () => calculateOle(bounds));
@@ -892,12 +845,12 @@ async function calculateKpisForBounds(bounds, thresholds, options = {}) {
   // Row LABOUR
   return [
     buildKpi("uptime_tablet", placeholderCalculation("Uptime tablet not computed yet"), thresholds),
-    buildKpi("accuracy_labour", accuracyLabourFromCombined(accuracy), thresholds),
+    buildKpi("accuracy_labour", accuracyLabour, thresholds),
     buildKpi("adoption_labour", placeholderCalculation("Adoption labour computed in Phase 2"), thresholds),
     buildKpi("ole", ole, thresholds),
     // Row MACHINE
     buildKpi("uptime_hmi", placeholderCalculation("Uptime HMI not computed yet"), thresholds),
-    buildKpi("accuracy_machine", accuracyMachineFromCombined(accuracy), thresholds),
+    buildKpi("accuracy_machine", accuracyMachine, thresholds),
     buildKpi("adoption_machine", adoptionMachine, thresholds),
     buildKpi("oee", oee, thresholds),
   ];
