@@ -503,6 +503,14 @@ function EwsControlTower() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate('/ews/roster')}
+              className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 transition hover:border-[#90e0ef] hover:text-[#0077b6] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] active:scale-95"
+            >
+              <UserCheck size={14} className="text-[#0077b6]" />
+              Roster
+            </button>
             <span className="inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-xs font-extrabold" style={badgeStyle(overallStatusKey)}>
               <CheckCircle2 size={14} />
               SYSTEM {overallStatus}

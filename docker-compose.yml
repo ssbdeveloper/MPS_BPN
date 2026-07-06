@@ -163,6 +163,31 @@ services:
     networks:
       - timesheet-network
 
+  ews-roster-job:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ews-roster-job
+    command: ["npm", "run", "ews:roster"]
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - NODE_ENV=${NODE_ENV}
+      - TIMEZONE=${TIMEZONE}
+      - TZ=${TIMEZONE}
+      - EWS_ROSTER_FORWARD_DAYS=${EWS_ROSTER_FORWARD_DAYS:-14}
+      - EWS_ROSTER_JOB_INTERVAL_MS=${EWS_ROSTER_JOB_INTERVAL_MS:-86400000}
+      - EWS_ROSTER_JOB_DB_POOL_MAX=${EWS_ROSTER_JOB_DB_POOL_MAX:-2}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
   frontend:
     build:
       context: ./apps/web

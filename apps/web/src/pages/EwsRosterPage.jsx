@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, CalendarDays, RefreshCw, Users } from 'lucide-react';
+import { ArrowLeft, CalendarDays, RefreshCw, Settings, Users } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -151,6 +151,14 @@ function EwsRosterPage() {
             >
               <RefreshCw size={15} />
               Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/ews/roster/config')}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 hover:border-[#90e0ef] hover:text-[#0077b6] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] active:scale-95"
+            >
+              <Settings size={15} />
+              Config
             </button>
           </div>
         </div>
