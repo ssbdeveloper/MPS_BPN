@@ -11,6 +11,8 @@ const KPI_DEFS = {
   oee: { label: "OEE", target: 80, owner: "Foreman/Spv/PPIC", group: "machine", dimension: "performance" },
 };
 
+// PROVISIONAL bands: accuracy target 98 (both sides) and adoption_labour band reuse
+// existing adoption; revisit once labour/machine baselines are observed.
 const DEFAULT_THRESHOLDS = {
   uptime_tablet: { normal_min: 99, warning_min: 98, critical_below: 98 },
   uptime_hmi: { normal_min: 99, warning_min: 98, critical_below: 98 },
@@ -267,6 +269,9 @@ function statusForValue(key, value, thresholds) {
   return "normal";
 }
 
+// Intentionally not wired into calculateKpisForBounds during the 8-KPI restructure:
+// uptime_tablet/uptime_hmi ship as no_data placeholders and get their own (separate)
+// tablet-vs-HMI uptime calc in a later phase. Kept here as the reference ping-based calc.
 async function calculateUptime(bounds, options = {}) {
   if (!(await tableExists("public", "mch_machine_ping_log"))) {
     return { value: null, helper: "Ping log table not available", detail: { sample_count: 0 } };

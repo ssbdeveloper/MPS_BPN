@@ -129,6 +129,9 @@ Phase 2  Implement adoption_labour (calc + detail builder) per spec above. Backe
 Phase 3  Snapshot + SSE + trend: extend storage/broadcast/getTrend to carry 8 KPIs without breaking readers.
 Phase 4  Frontend: EwsControlTower 2-row × 4-card layout, sparklines per new KPI, detail pages/status bands
          for the new cards. Wire adoption_labour "in progress" + limitation note into the UI.
+         UI LABELS (locked): label health_score as "Kesehatan Sistem/Data" (data/system integrity),
+         NOT production health — it must not be read as OEE/OLE. Mark accuracy target 98 (both sides)
+         and the adoption_labour band as "provisional" in the UI. performance_score = oee/ole only.
 
 ## Phase 5 — Issue Log & Action: plain-language rewrite (backend + UI text only)
 GOAL: make issue log readable by foremen/supervisors (non-engineers), in plain Bahasa Indonesia.
