@@ -455,7 +455,10 @@ async function calculateAccuracyMachine(bounds) {
 //  - COMPLETED shifts only: in-progress shifts are counted but NOT scored (no elapsed-based
 //    pro-rate — proven to false-critical). The card surfaces in_progress_count separately.
 // No correlated subqueries; aliases qualified.
-async function calculateAdoptionLabour(bounds) {
+//
+// FALLBACK path: used only for business_dates with no roster rows (e.g. before the roster
+// backfill start). Population = operators who LOGGED a completed shift (not attendance-based).
+async function calculateAdoptionLabourFromLogs(bounds) {
   const timezone = process.env.TIMEZONE || "Asia/Makassar";
   const result = await db.query(
     `
@@ -567,6 +570,134 @@ async function calculateAdoptionLabour(bounds) {
       roster_read: false,
     },
   };
+}
+
+// R2 — attendance-based adoption_labour from the roster. Population = SCHEDULED operators on
+// the target business_date (not "operators who logged"). A scheduled operator with zero logged
+// hours counts as ABSENT (0), dragging the number down — that is the point. Excused statuses
+// (LEAVE/SICK/PERMIT/OFF) are excluded from the denominator. Completed-only; whole shift by
+// business_date. Operators not in the rotation roster remain invisible (roster completeness).
+async function calculateAdoptionLabourFromRoster(bounds) {
+  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const result = await db.query(
+    `
+    WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
+    logged_rows AS (
+      SELECT NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
+             (t.longdate_checkin AT TIME ZONE $2) AS lci,
+             t.duration::float AS dur
+      FROM public.timesheet_transaction t, params
+      WHERE t.longdate_checkin >= (params.target_bd::timestamp AT TIME ZONE $2)
+        AND t.longdate_checkin <  ((params.target_bd + 2)::timestamp AT TIME ZONE $2)
+        AND COALESCE(t.state_flag, 0) <> 5
+        AND COALESCE(t.duration, 0) > 0
+        AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+    ),
+    logged AS (
+      SELECT lr.operator_key, SUM(lr.dur) AS recorded
+      FROM logged_rows lr, params p
+      WHERE (CASE WHEN lr.lci::time < TIME '07:00' THEN (lr.lci::date - 1) ELSE lr.lci::date END) = p.target_bd
+      GROUP BY lr.operator_key
+    ),
+    roster AS (
+      SELECT r.serialnumber, r.scheduled_shift AS shift, r.scheduled_standard_hours AS std,
+             r.status, r.business_date,
+             ((r.business_date + os.end_time
+               + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) AS shift_end_ts,
+             MAX(NULLIF(BTRIM(u.full_name), '')) AS operator_name
+      FROM ews.shift_roster r
+      JOIN params p ON r.business_date = p.target_bd
+      JOIN ews.operator_shift os ON os.shift_code = r.scheduled_shift
+      LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
+      GROUP BY r.serialnumber, r.scheduled_shift, r.scheduled_standard_hours, r.status,
+               r.business_date, os.end_time, os.crosses_midnight
+    ),
+    j AS (
+      SELECT ro.serialnumber, ro.operator_name, ro.shift, ro.std, ro.status, ro.business_date,
+             COALESCE(lg.recorded, 0) AS recorded,
+             (ro.shift_end_ts <= now()) AS completed
+      FROM roster ro LEFT JOIN logged lg ON lg.operator_key = ro.serialnumber
+    )
+    SELECT
+      ROUND((SUM(LEAST(j.recorded, j.std)) FILTER (WHERE j.status='SCHEDULED' AND j.completed)
+             / NULLIF(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed), 0) * 100)::numeric, 4)::float AS adoption_pct,
+      ROUND((SUM(LEAST(j.recorded, j.std)) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='DAY')
+             / NULLIF(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='DAY'), 0) * 100)::numeric, 4)::float AS day_adoption_pct,
+      ROUND((SUM(LEAST(j.recorded, j.std)) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='NIGHT')
+             / NULLIF(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='NIGHT'), 0) * 100)::numeric, 4)::float AS night_adoption_pct,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.completed)::int AS scheduled_completed,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.recorded > 0)::int AS present,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.recorded = 0)::int AS absent,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND NOT j.completed)::int AS in_progress,
+      COUNT(*) FILTER (WHERE j.status IN ('LEAVE','SICK','PERMIT','OFF'))::int AS excused,
+      ROUND(SUM(j.recorded) FILTER (WHERE j.status='SCHEDULED' AND j.completed)::numeric, 2)::float AS total_recorded_hours,
+      ROUND(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed)::numeric, 2)::float AS total_standard_hours,
+      COALESCE(jsonb_agg(jsonb_build_object(
+        'operator_key', j.serialnumber, 'operator_name', j.operator_name,
+        'shift', j.shift, 'business_date', j.business_date,
+        'recorded_hours', ROUND(j.recorded::numeric, 2), 'standard_hours', j.std,
+        'status', j.status, 'completed', j.completed,
+        'attendance', CASE WHEN j.status <> 'SCHEDULED' THEN j.status
+                           WHEN NOT j.completed THEN 'IN_PROGRESS'
+                           WHEN j.recorded > 0 THEN 'PRESENT' ELSE 'ABSENT' END
+      ) ORDER BY (CASE WHEN j.status='SCHEDULED' AND j.completed AND j.recorded=0 THEN 0 ELSE 1 END),
+                 GREATEST(j.std - j.recorded, 0) DESC), '[]'::jsonb) AS breakdown
+    FROM j
+    `,
+    [bounds.window_start, timezone],
+  );
+
+  const row = result.rows[0] || {};
+  const nn = (v) => (v === null || v === undefined ? null : num(v));
+  const completed = num(row.scheduled_completed, 0);
+  const present = num(row.present, 0);
+  const absent = num(row.absent, 0);
+  const inProgress = num(row.in_progress, 0);
+  const value = completed > 0 && row.adoption_pct !== null && row.adoption_pct !== undefined ? num(row.adoption_pct) : null;
+  return {
+    value,
+    helper: completed > 0
+      ? `${present}/${completed} hadir, ${absent} absen${inProgress ? `, ${inProgress} berjalan` : ""}`
+      : inProgress > 0
+        ? `${inProgress} shift berjalan, belum ada yang selesai`
+        : "No scheduled operator on this business date",
+    detail: {
+      basis: "roster_attendance",
+      scheduled_completed: completed,
+      present,
+      absent,
+      in_progress: inProgress,
+      excused: num(row.excused, 0),
+      day_adoption_pct: nn(row.day_adoption_pct),
+      night_adoption_pct: nn(row.night_adoption_pct),
+      total_recorded_hours: num(row.total_recorded_hours, 0),
+      total_standard_hours: num(row.total_standard_hours, 0),
+      shift_standard_hours: SHIFT_STANDARD_HOURS,
+      breakdown: row.breakdown || [],
+      denominator: "SUM of standard hours over SCHEDULED completed roster shifts (excused leave/sick/permit/off excluded)",
+      numerator: "SUM of LEAST(recorded, standard); a scheduled operator with zero logs counts as 0 (absent)",
+      window_rule: "windowed by business_date (whole shift incl. cross-midnight night tail)",
+      limitation: "Attendance-based: scheduled operators with no logs count as absent (0); excused (leave/sick/permit/off) excluded. Operators not in the rotation roster (unassigned/new hires) are still invisible.",
+      staging_read: false,
+      roster_read: true,
+    },
+  };
+}
+
+// Dispatcher: use the roster (attendance-based) when the target business_date has roster rows;
+// otherwise fall back to the log-based computation (pre-roster dates).
+async function calculateAdoptionLabour(bounds) {
+  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  if (!(await tableExists("ews", "shift_roster"))) {
+    return calculateAdoptionLabourFromLogs(bounds);
+  }
+  const has = await db.query(
+    `SELECT EXISTS (
+       SELECT 1 FROM ews.shift_roster WHERE business_date = ($1::timestamptz AT TIME ZONE $2)::date
+     ) AS e`,
+    [bounds.window_start, timezone],
+  );
+  return has.rows[0]?.e ? calculateAdoptionLabourFromRoster(bounds) : calculateAdoptionLabourFromLogs(bounds);
 }
 
 async function calculateAdoption(bounds) {
