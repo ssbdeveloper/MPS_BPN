@@ -24,8 +24,7 @@ const DEFAULT_THRESHOLDS = {
   ole: { normal_min: 85, warning_min: 70, critical_below: 70 },
 };
 
-// Provisional pending HR policy. Single source of truth — do not scatter.
-const ADOPTION_LABOUR_GRACE_MINUTES = 15;
+// Standard work hours per shift. Single source of truth — do not scatter.
 const SHIFT_STANDARD_HOURS = { 1: 8, 2: 7 };
 
 const WINDOW_MAP = {
@@ -445,122 +444,125 @@ async function calculateAccuracyMachine(bounds) {
   };
 }
 
-// adoption_labour: of operators who logged something in the window, the share meeting their
-// PRO-RATED standard shift hours. Source: timesheet_transaction ONLY (no roster source exists,
-// so operators with zero rows are invisible — surfaced in detail.limitation). No correlated
-// subqueries here, but aliases are qualified regardless.
+// adoption_labour: of operators who logged a COMPLETED shift on the target business_date,
+// the share meeting their full standard hours (Day 8h / Night 7h). Source: timesheet_transaction
+// ONLY (no roster yet — operators with zero rows are invisible; surfaced in detail.limitation).
+//
+// Two accepted design decisions baked in here:
+//  - Windowed by BUSINESS_DATE, not raw check-in day: a night shift (20:00-04:00) is kept whole
+//    on its start date instead of being split at midnight (ISSUE 1 fix; also removes the
+//    cross-run double-count because a shift belongs to exactly one business_date).
+//  - COMPLETED shifts only: in-progress shifts are counted but NOT scored (no elapsed-based
+//    pro-rate — proven to false-critical). The card surfaces in_progress_count separately.
+// No correlated subqueries; aliases qualified.
 async function calculateAdoptionLabour(bounds) {
   const timezone = process.env.TIMEZONE || "Asia/Makassar";
   const result = await db.query(
     `
-    WITH scoped AS (
+    WITH params AS (
+      SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd
+    ),
+    scoped AS (
+      -- Scan the target day plus the following early morning so a night shift's post-midnight
+      -- tail (check-in before 07:00, business_date = previous day) is captured whole.
       SELECT
         NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
         NULLIF(BTRIM(t.full_name), '') AS operator_name,
-        (t.longdate_checkin AT TIME ZONE $3) AS lct,
+        (t.longdate_checkin AT TIME ZONE $2) AS lct,
         t.duration::float AS dur
-      FROM public.timesheet_transaction t
-      WHERE t.longdate_checkin >= $1
-        AND t.longdate_checkin < $2
+      FROM public.timesheet_transaction t, params
+      WHERE t.longdate_checkin >= (params.target_bd::timestamp AT TIME ZONE $2)
+        AND t.longdate_checkin <  ((params.target_bd + 2)::timestamp AT TIME ZONE $2)
         AND COALESCE(t.state_flag, 0) <> 5
         AND COALESCE(t.duration, 0) > 0
         AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
     ),
     classified AS (
-      -- Day (shift 1): first check-in 07:00-18:00 -> starts 08:00, standard 8h.
-      -- Night (shift 2): everything else -> starts 20:00, standard 7h; check-in before
-      -- 07:00 belongs to the previous day's night shift. Long shifts keep the day/night
-      -- standard (what matters is the standard is met), so they collapse into these two.
+      -- Day (shift 1): first check-in 07:00-18:00 -> standard 8h, ends 17:00.
+      -- Night (shift 2): everything else -> standard 7h, ends 04:00 next day; check-in before
+      -- 07:00 belongs to the previous day's night shift. Long shifts collapse into these two.
       SELECT
-        s.operator_key,
-        s.operator_name,
-        s.lct,
-        s.dur,
+        s.operator_key, s.operator_name, s.lct, s.dur,
         CASE WHEN s.lct::time >= TIME '07:00' AND s.lct::time < TIME '18:00' THEN 1 ELSE 2 END AS row_shift,
         CASE WHEN s.lct::time < TIME '07:00' THEN (s.lct::date - 1) ELSE s.lct::date END AS business_date
       FROM scoped s
     ),
     grouped AS (
       SELECT
-        c.operator_key,
-        c.business_date,
+        c.operator_key, c.business_date,
         MAX(c.operator_name) AS operator_name,
         (array_agg(c.row_shift ORDER BY c.lct))[1] AS shift,
         SUM(c.dur) AS recorded
-      FROM classified c
+      FROM classified c, params
+      WHERE c.business_date = params.target_bd
       GROUP BY c.operator_key, c.business_date
     ),
-    prorated AS (
+    flagged AS (
       SELECT
-        g.operator_key,
-        g.operator_name,
-        g.business_date,
-        g.shift,
-        g.recorded,
+        g.operator_key, g.operator_name, g.business_date, g.shift, g.recorded,
         CASE WHEN g.shift = 1 THEN 8.0 ELSE 7.0 END AS full_standard,
-        GREATEST(
-          EXTRACT(EPOCH FROM (
-            now() - ((g.business_date + CASE WHEN g.shift = 1 THEN TIME '08:00' ELSE TIME '20:00' END) AT TIME ZONE $3)
-          )) / 3600.0,
-          0
-        ) AS elapsed_hours
+        (
+          (CASE WHEN g.shift = 1 THEN (g.business_date + TIME '17:00')
+                ELSE ((g.business_date + 1) + TIME '04:00') END) AT TIME ZONE $2
+        ) <= now() AS completed
       FROM grouped g
-    ),
-    final AS (
-      SELECT
-        p.operator_key,
-        p.operator_name,
-        p.business_date,
-        p.shift,
-        p.recorded,
-        p.full_standard,
-        LEAST(GREATEST(p.elapsed_hours - ($4::numeric / 60.0), 0), p.full_standard) AS prorated_standard
-      FROM prorated p
     )
     SELECT
-      ROUND((SUM(LEAST(f.recorded, f.prorated_standard)) / NULLIF(SUM(f.prorated_standard), 0) * 100)::numeric, 4)::float AS adoption_pct,
-      COUNT(*)::int AS operator_shift_count,
-      COUNT(*) FILTER (WHERE f.prorated_standard < f.full_standard)::int AS in_progress_count,
-      ROUND(SUM(f.recorded)::numeric, 2)::float AS total_recorded_hours,
-      ROUND(SUM(f.prorated_standard)::numeric, 2)::float AS total_prorated_standard_hours,
-      ROUND(SUM(f.full_standard)::numeric, 2)::float AS total_full_standard_hours,
+      ROUND((SUM(LEAST(f.recorded, f.full_standard)) FILTER (WHERE f.completed)
+             / NULLIF(SUM(f.full_standard) FILTER (WHERE f.completed), 0) * 100)::numeric, 4)::float AS adoption_pct,
+      ROUND((SUM(LEAST(f.recorded, f.full_standard)) FILTER (WHERE f.completed AND f.shift = 1)
+             / NULLIF(SUM(f.full_standard) FILTER (WHERE f.completed AND f.shift = 1), 0) * 100)::numeric, 4)::float AS day_adoption_pct,
+      ROUND((SUM(LEAST(f.recorded, f.full_standard)) FILTER (WHERE f.completed AND f.shift = 2)
+             / NULLIF(SUM(f.full_standard) FILTER (WHERE f.completed AND f.shift = 2), 0) * 100)::numeric, 4)::float AS night_adoption_pct,
+      COUNT(*) FILTER (WHERE f.completed)::int AS completed_shift_count,
+      COUNT(*) FILTER (WHERE NOT f.completed)::int AS in_progress_count,
+      COUNT(*) FILTER (WHERE f.completed AND f.shift = 1)::int AS completed_day_count,
+      COUNT(*) FILTER (WHERE f.completed AND f.shift = 2)::int AS completed_night_count,
+      ROUND(SUM(f.recorded) FILTER (WHERE f.completed)::numeric, 2)::float AS total_recorded_hours,
+      ROUND(SUM(f.full_standard) FILTER (WHERE f.completed)::numeric, 2)::float AS total_standard_hours,
       COALESCE(jsonb_agg(jsonb_build_object(
         'operator_key', f.operator_key,
         'operator_name', f.operator_name,
         'shift', f.shift,
         'business_date', f.business_date,
         'recorded_hours', ROUND(f.recorded::numeric, 2),
-        'prorated_standard_hours', ROUND(f.prorated_standard::numeric, 2),
-        'full_standard_hours', f.full_standard,
-        'gap_hours', ROUND(GREATEST(f.prorated_standard - f.recorded, 0)::numeric, 2),
-        'is_in_progress', (f.prorated_standard < f.full_standard)
-      ) ORDER BY GREATEST(f.prorated_standard - f.recorded, 0) DESC), '[]'::jsonb) AS breakdown
-    FROM final f
+        'standard_hours', f.full_standard,
+        'gap_hours', ROUND(GREATEST(f.full_standard - f.recorded, 0)::numeric, 2),
+        'completed', f.completed
+      ) ORDER BY f.completed DESC, GREATEST(f.full_standard - f.recorded, 0) DESC), '[]'::jsonb) AS breakdown
+    FROM flagged f
     `,
-    [bounds.window_start, bounds.window_end, timezone, ADOPTION_LABOUR_GRACE_MINUTES],
+    [bounds.window_start, timezone],
   );
 
   const row = result.rows[0] || {};
-  const count = num(row.operator_shift_count, 0);
+  const nn = (v) => (v === null || v === undefined ? null : num(v));
+  const completed = num(row.completed_shift_count, 0);
+  const inProgress = num(row.in_progress_count, 0);
   const rawPct = row.adoption_pct;
-  const value = count > 0 && rawPct !== null && rawPct !== undefined ? num(rawPct) : null;
+  const value = completed > 0 && rawPct !== null && rawPct !== undefined ? num(rawPct) : null;
   return {
     value,
-    helper: count > 0
-      ? `${count} operator-shift, ${num(row.in_progress_count, 0)} berjalan`
-      : "No operator timesheet in window",
+    helper: completed > 0
+      ? `${completed} shift selesai${inProgress ? `, ${inProgress} berjalan` : ""}`
+      : inProgress > 0
+        ? `${inProgress} shift berjalan, belum ada yang selesai`
+        : "No completed operator shift on this business date",
     detail: {
-      operator_shift_count: count,
-      in_progress_count: num(row.in_progress_count, 0),
+      completed_shift_count: completed,
+      in_progress_count: inProgress,
+      completed_day_count: num(row.completed_day_count, 0),
+      completed_night_count: num(row.completed_night_count, 0),
+      day_adoption_pct: nn(row.day_adoption_pct),
+      night_adoption_pct: nn(row.night_adoption_pct),
       total_recorded_hours: num(row.total_recorded_hours, 0),
-      total_prorated_standard_hours: num(row.total_prorated_standard_hours, 0),
-      total_full_standard_hours: num(row.total_full_standard_hours, 0),
-      grace_minutes: ADOPTION_LABOUR_GRACE_MINUTES,
+      total_standard_hours: num(row.total_standard_hours, 0),
       shift_standard_hours: SHIFT_STANDARD_HOURS,
       breakdown: row.breakdown || [],
-      denominator: "SUM of pro-rated standard hours per (operator, business_date) — pro-rated to elapsed-minus-grace for in-progress shifts",
-      numerator: "SUM of LEAST(recorded, pro-rated standard) — overtime never inflates",
-      limitation: "Only operators who logged rows are visible (no roster source). This is 'of operators who logged, % meeting pro-rated standard hours', NOT attendance-based adoption.",
+      denominator: "SUM of full standard hours over COMPLETED (operator, business_date) shifts; in-progress shifts excluded from the ratio (not pro-rated)",
+      numerator: "SUM of LEAST(recorded, full standard) — overtime never inflates",
+      window_rule: "windowed by business_date (whole shift incl. cross-midnight night tail), not raw check-in calendar day",
+      limitation: "Completed shifts only; in-progress shifts are counted but not scored. No roster yet — operators with zero logged rows are invisible, so this is 'of operators who logged a completed shift, % meeting standard hours', NOT attendance-based adoption.",
       staging_read: false,
       roster_read: false,
     },

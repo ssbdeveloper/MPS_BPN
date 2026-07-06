@@ -27,13 +27,17 @@ D1. overall() — RETIRE overall_score as the headline. Keep overall_status only
       health_score      = mean(min(value/target,1)) over {uptime_*, accuracy_*, adoption_*}
     Default output: status-only; overall_score column written as NULL, sub-scores in detail_json.
 
-D2. adoption_labour — NO "completed-shift only". Use PRO-RATE:
-    for a shift still running, scale the standard down to elapsed time in-shift, with a
-    30–60 min grace at shift start. A running shift is STILL scored (not no_data), flagged
-    "berjalan/in-progress". Only fully-elapsed shifts use the full SHIFT_STANDARD_HOURS.
-      elapsed_standard = LEAST(standard_hours, GREATEST(0, elapsed_in_shift_hours - grace_hours))
-      (completed shift => elapsed_in_shift >= shift length => elapsed_standard = standard_hours)
-    This supersedes the "# DECIDE (in-progress shift handling)" block below.
+D2. adoption_labour — REVERSED after diagnostics (pro-rate is DEAD). The elapsed-based
+    pro-rate false-flagged 68% (11:00) / 94% (14:00) of operators who DID meet standard by
+    shift end; no denominator (fixed / elapsed-grace / break-corrected) rescued it. ACCEPTED:
+      - In-progress shifts are NOT banded: counted (in_progress_count) but excluded from the
+        ratio. No pro-rate, no grace.
+      - COMPLETED shifts only: adoption = SUM(LEAST(recorded, full_standard)) / SUM(full_standard),
+        Day 8h / Night 7h. shift completed when shift_end <= now() (Day end 17:00, Night end 04:00 next day).
+      - Windowed by BUSINESS_DATE, not raw check-in day, so a night shift (20:00-04:00) stays
+        whole on its start date (ISSUE 1 fix; also removes the cross-run double-count).
+    IMPLEMENTED in Phase 0 (calculateAdoptionLabour). Verified code == independent SQL, exact,
+    for business_dates 2026-07-01..04. Roster/attendance (absentees) is a later phase (R1/R2).
 
 D3. getTrend — read KPI series from detail_json.kpis, NOT the fixed *_pct columns, so all
     8 KPIs trend without new columns. STILL fill legacy accuracy_pct/adoption_pct columns on
