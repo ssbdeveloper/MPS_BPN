@@ -902,8 +902,9 @@ async function saveSnapshot({ windowStart, windowEnd, grain, payload }) {
       overall_score, overall_status, detail_json
     )
     VALUES ($1, $2, $3, 'system', 'ALL', $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
-    ON CONFLICT (window_start, window_end, grain, scope_type, scope_key, shift_id)
+    ON CONFLICT (window_start, grain, scope_type, scope_key, shift_id)
     DO UPDATE SET
+      window_end = EXCLUDED.window_end,
       uptime_pct = EXCLUDED.uptime_pct,
       accuracy_pct = EXCLUDED.accuracy_pct,
       adoption_pct = EXCLUDED.adoption_pct,
