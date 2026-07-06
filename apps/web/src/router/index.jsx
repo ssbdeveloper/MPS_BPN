@@ -64,6 +64,10 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/EwsDetailPage')),
   },
   {
+    path: '/ews/roster',
+    lazy: page(() => import('../pages/EwsRosterPage')),
+  },
+  {
     path: '/sap-log',
     lazy: page(() => import('../pages/SapLogPage')),
   },
