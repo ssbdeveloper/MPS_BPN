@@ -1238,12 +1238,49 @@ async function resolveSummaryBounds(options = {}) {
   };
 }
 
+// Resilience: a transient calc failure (DB connection/timeout) makes safeCalculation
+// return a null value tagged source="calculation_error". Writing that null over a good
+// snapshot value makes the KPI card flip to 0/no_data and back — the "kadang muncul
+// kadang 0" symptom. Instead, carry forward the last non-null value for the errored KPI.
+async function carryForwardErroredKpis(kpis, grain) {
+  if (!kpis.some((k) => k?.detail?.source === "calculation_error")) return kpis;
+  if (!(await tableExists("ews", "kpi_snapshot"))) return kpis;
+  let prevByKey = {};
+  try {
+    const res = await db.query(
+      `SELECT detail_json->'kpis' AS kpis
+         FROM ews.kpi_snapshot
+        WHERE grain = $1 AND scope_type = 'system' AND scope_key = 'ALL'
+        ORDER BY window_end DESC, calculated_at DESC
+        LIMIT 1`,
+      [grain],
+    );
+    const prev = res.rows[0]?.kpis;
+    if (Array.isArray(prev)) prevByKey = Object.fromEntries(prev.map((k) => [k.key, k]));
+  } catch (_err) {
+    return kpis; // no previous snapshot to fall back on — leave as-is
+  }
+  return kpis.map((k) => {
+    if (k?.detail?.source !== "calculation_error") return k;
+    const prev = prevByKey[k.key];
+    if (!prev || prev.value === null || prev.value === undefined) return k;
+    return {
+      ...k,
+      value: prev.value,
+      status: prev.status || k.status,
+      helper: `${prev.helper || "nilai terakhir"} · (nilai terakhir — hitung ulang gagal)`,
+      detail: { ...(prev.detail || {}), carried_forward: true, last_error: k.detail?.error || null },
+    };
+  });
+}
+
 async function calculateSystemSummary(input = {}) {
   const options = typeof input === "string" ? { window: input } : input;
   const resolved = await resolveSummaryBounds(options);
   const thresholds = await getThresholds();
 
   let kpis = await calculateKpisForBounds(resolved.current, thresholds, { grain: resolved.grain, role: "current" });
+  if (!resolved.read_only) kpis = await carryForwardErroredKpis(kpis, resolved.grain);
   let previousSummary = null;
 
   if (resolved.previous) {
