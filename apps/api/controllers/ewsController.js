@@ -1,5 +1,6 @@
 const ewsCalculator = require("../services/ewsCalculator");
 const ewsRealtimeHub = require("../services/ewsRealtimeHub");
+const ewsTtsNotifier = require("../services/ewsTtsNotifier");
 const db = global.pool || require("../db");
 
 const summaryCache = new Map();
@@ -1083,7 +1084,7 @@ async function syncActions(req, res) {
             ELSE now()
           END,
           updated_by = EXCLUDED.updated_by
-        RETURNING *
+        RETURNING *, (xmax = 0) AS was_inserted
         `,
         [
           issue.issue_key,
@@ -1102,7 +1103,17 @@ async function syncActions(req, res) {
           JSON.stringify(issue.detail_json),
         ],
       );
-      rows.push(result.rows[0]);
+      const savedRow = result.rows[0];
+      rows.push(savedRow);
+      // Enqueue TTS hanya untuk issue yang BARU dibuat (bukan update berulang),
+      // supaya membuka halaman detail berkali-kali tidak menghasilkan audio ganda.
+      if (savedRow && savedRow.was_inserted) {
+        try {
+          await ewsTtsNotifier.enqueueIssueTts(client, savedRow);
+        } catch (ttsErr) {
+          console.error("EWS TTS enqueue error:", ttsErr.message);
+        }
+      }
     }
 
     await client.query("COMMIT");
@@ -1267,6 +1278,48 @@ async function getKpiDetailWithSource(req, res) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// EWS TTS notifications (audio pengumuman issue log)
+// ---------------------------------------------------------------------------
+async function getTtsNotifications(req, res) {
+  try {
+    const includePlayed = req.query.include_played === "1";
+    const limit = clampLimit(req.query.limit, 20);
+    const result = await db.query(
+      `
+      SELECT id, issue_key, kpi_type, severity, title, message, path_mp3,
+             generation_status, played, created_at, generated_at
+      FROM ews.tts_notification
+      WHERE generation_status = 'ready'
+        AND path_mp3 IS NOT NULL
+        ${includePlayed ? "" : "AND played = false"}
+      ORDER BY generated_at DESC
+      LIMIT $1
+      `,
+      [limit],
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error("ews tts list error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function markTtsNotificationPlayed(req, res) {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id" });
+    await db.query(
+      `UPDATE ews.tts_notification SET played = true, updated_at = now() WHERE id = $1`,
+      [id],
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("ews tts mark played error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 module.exports = {
   getSummary,
   getTrend,
@@ -1277,4 +1330,6 @@ module.exports = {
   getKpiDetail: getKpiDetailWithSource,
   stream,
   getHealth,
+  getTtsNotifications,
+  markTtsNotificationPlayed,
 };

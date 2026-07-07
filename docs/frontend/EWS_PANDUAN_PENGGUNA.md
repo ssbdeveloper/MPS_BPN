@@ -50,13 +50,13 @@ Tiap KPI berupa **persentase (%)**. Semakin tinggi semakin baik. Tiap KPI punya 
 Setiap kartu di Operations Hub menampilkan:
 
 ```
-┌─────────────────────────────┐
+┌──────────────────────────────┐
 │ [ikon]  Adoption Labour      │  ← nama KPI
 │                              │
 │   66.0%          ▼ Prev 70   │  ← angka besar + panah tren vs kemarin/sebelumnya
-│   ▁▂▃▅▆  (garis kecil)       │  ← sparkline: tren 7 hari terakhir
+│   ▁▂▃▅▆  (garis kecil)     │  ← sparkline: tren 7 hari terakhir
 │   Target 95%   CRITICAL      │  ← target + status
-└─────────────────────────────┘
+└──────────────────────────────┘
 ```
 
 ### Arti WARNA (paling penting)

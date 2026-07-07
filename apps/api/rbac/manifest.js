@@ -158,6 +158,7 @@ const MANIFEST = [
   // ---- EWS (/ews) ----
   { m: 'POST',   p: '/ews/actions/sync',                      f: 'ews', a: W },
   { m: 'PUT',    p: '/ews/actions/:id/resolve',               f: 'ews', a: W },
+  { m: 'POST',   p: '/ews/notifications/:id/played',          f: 'ews', a: W },
 
   // ---- EWS roster / attendance (/ews/roster) ----
   { m: 'PUT',    p: '/ews/roster/status',                     f: 'roster_operator', a: W },

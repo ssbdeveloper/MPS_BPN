@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   BarChart2,
+  Bell,
   BookOpen,
   Boxes,
   CalendarClock,
@@ -54,6 +55,7 @@ const sidebarItems = [
   { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling' },
   { title: 'Shift Capacity', icon: TimerReset, path: '/shift-definition' },
   { title: 'Roster Operator', icon: Users, path: '/ews/roster' },
+  { title: 'Notifikasi EWS', icon: Bell, path: '/ews/notifications' },
   { title: 'MS Project Admin', icon: ShieldCheck, path: '/ms-project-admin' },
   { title: 'Component Tracking', icon: Boxes, path: '/component-tracking' },
   { title: 'Kanban Board', icon: Factory, path: '/kanban-board' },

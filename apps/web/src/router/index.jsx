@@ -64,6 +64,10 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/EwsDetailPage')),
   },
   {
+    path: '/ews/notifications',
+    lazy: page(() => import('../pages/EwsNotificationsPage')),
+  },
+  {
     path: '/ews/roster',
     lazy: guardedPage(() => import('../pages/EwsRosterPage'), 'roster_operator'),
   },

@@ -1,0 +1,12 @@
+services:
+  machine_heartbeat_sync:
+    build:
+      context: .
+      dockerfile: Dockerfile.heartbeat
+    container_name: machine-heartbeat-sync
+    restart: unless-stopped
+    # Credentials are hardcoded in sync_machine_heartbeat.py, so no env_file is needed.
+    # SQL Server (10.169.2.76) and Postgres (10.169.1.12) are on the LAN and reachable
+    # via the host's default bridge network — no extra network config required.
+    # If the host can only reach them on its own network namespace, uncomment:
+    # network_mode: host

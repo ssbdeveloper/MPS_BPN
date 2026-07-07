@@ -13,6 +13,10 @@ router.post("/actions/sync", controller.syncActions);
 router.put("/actions/:id/resolve", controller.resolveAction);
 router.get("/kpi/:type/detail", controller.getKpiDetail);
 
+// TTS notifications (audio pengumuman issue log)
+router.get("/notifications", controller.getTtsNotifications);
+router.post("/notifications/:id/played", controller.markTtsNotificationPlayed);
+
 // Roster (R3): foreman roster view + status editing, config, group, generate.
 router.get("/roster", roster.getRoster);
 router.put("/roster/status", roster.updateStatus);
