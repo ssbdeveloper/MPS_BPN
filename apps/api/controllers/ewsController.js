@@ -927,6 +927,70 @@ async function buildOleSourceDetail(windowStart, windowEnd) {
   };
 }
 
+// Adoption Machine breakdown — per-machine gap contribution from mch_productiondata.
+// Mirrors the KPI definition in jobs/ewsAdoptionBucketJob.js:
+//   Unidentified = statusid = 5
+//   IDLE (long M2) = statusid = 2 AND duration > 300s (5 minutes)
+//   duration_seconds = enddatetime - startdatetime
+async function buildAdoptionMachineSourceDetail(windowStart, windowEnd) {
+  const result = await db.query(
+    `
+    WITH base AS (
+      SELECT
+        pd.machineno AS machine_no,
+        pd.statusid,
+        GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0)::numeric AS dur
+      FROM public.mch_productiondata pd
+      WHERE pd.startdatetime >= $1::timestamptz
+        AND pd.startdatetime < $2::timestamptz
+        AND pd.enddatetime IS NOT NULL
+        AND pd.enddatetime > pd.startdatetime
+    ),
+    per_machine AS (
+      SELECT
+        b.machine_no::text AS machine,
+        COALESCE(NULLIF(BTRIM(mm.machinename), ''), NULLIF(BTRIM(mm.description), ''),
+                 'Mesin ' || COALESCE(b.machine_no::text, '?')) AS machine_name,
+        ROUND(COALESCE(SUM(dur) FILTER (WHERE statusid = 5), 0) / 60.0, 2)::float AS unidentified_minutes,
+        ROUND(COALESCE(SUM(dur) FILTER (WHERE statusid = 2 AND dur > 300), 0) / 60.0, 2)::float AS idle_minutes,
+        ROUND((COALESCE(SUM(dur) FILTER (WHERE statusid = 5), 0)
+               + COALESCE(SUM(dur) FILTER (WHERE statusid = 2 AND dur > 300), 0)) / 60.0, 2)::float AS gap_minutes,
+        ROUND(COALESCE(SUM(dur), 0) / 60.0, 2)::float AS total_minutes,
+        CASE WHEN COALESCE(SUM(dur), 0) > 0
+          THEN ROUND(((COALESCE(SUM(dur), 0)
+                       - (COALESCE(SUM(dur) FILTER (WHERE statusid = 5), 0)
+                          + COALESCE(SUM(dur) FILTER (WHERE statusid = 2 AND dur > 300), 0)))
+                      / COALESCE(SUM(dur), 0)) * 100, 2)::float
+          ELSE NULL END AS adoption_pct
+      FROM base b
+      LEFT JOIN public.mch_machines mm ON mm.machineno = b.machine_no
+      GROUP BY b.machine_no, mm.machinename, mm.description
+    )
+    SELECT
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY gap_minutes DESC, unidentified_minutes DESC), '[]'::jsonb)
+       FROM (SELECT * FROM per_machine WHERE gap_minutes > 0 ORDER BY gap_minutes DESC LIMIT 30) x) AS by_machine,
+      (SELECT COUNT(*)::int FROM per_machine) AS machine_count,
+      (SELECT COUNT(*)::int FROM per_machine WHERE gap_minutes > 0) AS machine_with_gap,
+      (SELECT ROUND(COALESCE(SUM(unidentified_minutes), 0)::numeric, 2)::float FROM per_machine) AS total_unidentified_minutes,
+      (SELECT ROUND(COALESCE(SUM(idle_minutes), 0)::numeric, 2)::float FROM per_machine) AS total_idle_minutes
+    `,
+    [windowStart, windowEnd],
+  );
+  const row = result.rows[0] || {};
+  return {
+    source_tables: ["public.mch_productiondata"],
+    by_machine: row.by_machine || [],
+    machine_count: num(row.machine_count),
+    machine_with_gap: num(row.machine_with_gap),
+    total_unidentified_minutes: num(row.total_unidentified_minutes),
+    total_idle_minutes: num(row.total_idle_minutes),
+    definitions: {
+      unidentified: "statusid = 5 (mesin jalan tanpa job/operator teridentifikasi)",
+      idle: "statusid = 2 dengan durasi > 5 menit (M2 panjang)",
+    },
+  };
+}
+
 async function buildKpiSourceDetail(type, summary) {
   const windowStart = summary.window_start;
   const windowEnd = summary.window_end;
@@ -935,6 +999,28 @@ async function buildKpiSourceDetail(type, summary) {
   if (type === "uptime") return buildUptimeSourceDetail(windowStart, windowEnd);
   if (type === "accuracy") return buildAccuracySourceDetail(windowStart, windowEnd);
   if (type === "adoption") return buildAdoptionSourceDetail(windowStart, windowEnd);
+  if (type === "adoption_labour") {
+    // Reuse the per-operator breakdown already computed by the KPI calculation
+    // (no extra query) — it carries every scheduled operator with recorded vs expected hours.
+    const k = (summary.kpis || []).find((x) => x.key === "adoption_labour");
+    const d = k?.detail || {};
+    return {
+      source_tables: ["ews.shift_roster", "public.timesheet_transaction"],
+      basis: d.basis || "roster_progressive",
+      by_operator: Array.isArray(d.breakdown) ? d.breakdown : [],
+      started: num(d.started),
+      present: num(d.present),
+      absent: num(d.absent),
+      not_started: num(d.not_started),
+      excused: num(d.excused),
+      day_adoption_pct: d.day_adoption_pct ?? null,
+      night_adoption_pct: d.night_adoption_pct ?? null,
+      total_recorded_hours: num(d.total_recorded_hours),
+      total_expected_hours: num(d.total_expected_hours),
+      total_standard_hours: num(d.total_standard_hours),
+    };
+  }
+  if (type === "adoption_machine") return buildAdoptionMachineSourceDetail(windowStart, windowEnd);
   if (type === "oee") return buildOeeSourceDetail(windowStart, windowEnd);
   if (type === "ole") return buildOleSourceDetail(windowStart, windowEnd);
   return null;

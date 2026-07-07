@@ -31,6 +31,7 @@ import {
   Line,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -1360,10 +1361,19 @@ function MetricTiles({ kpiType, kpi }) {
     ];
   } else if (kpiType === 'oee') {
     tiles = [
-      { label: 'Running', value: formatHours(d.running_hours), sub: `dari ${formatHours(d.denominator_hours)} counted`, tone: 'good' },
-      { label: 'Downtime', value: formatHours(d.downtime_hours), tone: numeric(d.downtime_hours) > 0 ? 'bad' : 'good' },
-      { label: 'Setup (M2)', value: formatHours(d.setup_hours), tone: 'warn' },
+      { label: 'Productive', value: formatHours(d.running_hours), sub: `dari ${formatHours(d.denominator_hours)} counted`, tone: 'good' },
+      { label: 'Downtime', value: formatHours(d.downtime_hours), tone: 'bad' },
+      { label: 'NNVA', value: formatHours(d.setup_hours), tone: 'warn' },
       { label: 'NoJob / Missing', value: `${formatHours(d.nojob_hours)} / ${formatHours(d.missing_hours)}`, tone: 'neutral' },
+    ];
+  } else if (kpiType === 'adoption_machine') {
+    const unidMin = numeric(d.unidentified_duration_seconds) / 60;
+    const idleMin = numeric(d.long_status_2_duration_seconds) / 60;
+    tiles = [
+      { label: 'Mesin', value: formatNumber(d.machine_count), tone: 'info' },
+      { label: 'Total Gap', value: `${formatNumber(d.gap_pct)}%`, tone: numeric(d.gap_pct) > 0 ? 'bad' : 'good' },
+      { label: 'Unidentified', value: `${formatNumber(unidMin)} m`, sub: `${formatNumber(d.unidentified_pct)}%`, tone: unidMin > 0 ? 'warn' : 'good' },
+      { label: 'IDLE (M2 >5m)', value: `${formatNumber(idleMin)} m`, sub: `${formatNumber(d.long_status_2_pct)}% · ${formatNumber(d.long_status_2_count)} event`, tone: idleMin > 0 ? 'warn' : 'good' },
     ];
   } else if (kpiType === 'ole') {
     const gap = Math.max(0, numeric(d.available_recorded_hours) - numeric(d.working_hours));
@@ -1382,6 +1392,307 @@ function MetricTiles({ kpiType, kpi }) {
   );
 }
 
+// Adoption Machine — per-machine gap contribution (Unidentified vs IDLE/long-M2).
+const ADOPTION_GAP_COLORS = { unidentified: '#ef4444', idle: '#f59e0b' };
+const ADOPTION_MACHINE_TARGET = 95;
+
+function adoptionMachineStatusHex(pct) {
+  if (pct == null || !Number.isFinite(pct)) return STATUS_HEX.no_data;
+  if (pct < 90) return STATUS_HEX.critical;
+  if (pct < ADOPTION_MACHINE_TARGET) return STATUS_HEX.watch;
+  return STATUS_HEX.normal;
+}
+
+function AdoptionMachineBreakdown({ kpi }) {
+  const sd = kpi?.source_detail || {};
+  const rows = (sd.by_machine || []).map((m) => ({
+    machine: m.machine_name || `Mesin ${m.machine}`,
+    unidentified: numeric(m.unidentified_minutes),
+    idle: numeric(m.idle_minutes),
+    gap: numeric(m.gap_minutes),
+    total: numeric(m.total_minutes),
+    adoption: m.adoption_pct == null ? null : numeric(m.adoption_pct),
+  }));
+  // Chart 1: gap minutes, sorted descending (biggest offender first).
+  const gapData = [...rows].sort((a, b) => b.gap - a.gap);
+  // Chart 2 (insight): adoption % per machine, worst first — normalises for runtime,
+  // so a machine that only ran briefly but idled a lot isn't hidden by small absolute minutes.
+  const adoptData = rows
+    .filter((r) => r.adoption != null)
+    .sort((a, b) => a.adoption - b.adoption)
+    .slice(0, 12);
+
+  const totalUnid = numeric(sd.total_unidentified_minutes);
+  const totalIdle = numeric(sd.total_idle_minutes);
+  const totalGap = totalUnid + totalIdle;
+  const idleShare = totalGap > 0 ? (totalIdle / totalGap) * 100 : 0;
+  const worstMin = gapData[0];
+  const worstPct = adoptData[0];
+  const belowTarget = rows.filter((r) => r.adoption != null && r.adoption < ADOPTION_MACHINE_TARGET).length;
+  const many = gapData.length > 8;
+
+  const insights = [];
+  if (worstMin) {
+    insights.push({
+      tone: 'red',
+      text: `Penyumbang gap terbesar: ${worstMin.machine} — ${formatNumber(worstMin.gap)} menit (${formatNumber(worstMin.idle)}m IDLE + ${formatNumber(worstMin.unidentified)}m unidentified).`,
+    });
+  }
+  insights.push({
+    tone: idleShare >= 50 ? 'amber' : 'slate',
+    text: `IDLE (M2 >5 menit) = ${formatNumber(idleShare)}% dari total gap → akar masalah utama ${idleShare >= 50 ? 'MESIN nganggur, bukan salah input operator' : 'lebih ke record tak teridentifikasi'}.`,
+  });
+  if (worstPct) {
+    insights.push({
+      tone: worstPct.adoption < 90 ? 'red' : 'amber',
+      text: `Adoption terendah (relatif runtime): ${worstPct.machine} = ${formatNumber(worstPct.adoption)}%. ${belowTarget} mesin di bawah target ${ADOPTION_MACHINE_TARGET}%.`,
+    });
+  }
+  const insightTone = {
+    red: 'border-red-200 bg-red-50 text-red-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    slate: 'border-slate-200 bg-slate-50 text-slate-600',
+  };
+
+  return (
+    <div className="space-y-4">
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        {insights.map((it, i) => (
+          <div key={i} className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold leading-snug ${insightTone[it.tone]}`}>
+            {it.text}
+          </div>
+        ))}
+      </section>
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <PageCard>
+          <CardHead icon={BarChart3} title="Gap Adoption per Mesin (menit)" tag={`${gapData.length} mesin`} />
+          <div className="p-4">
+            {gapData.length ? (
+              <ResponsiveContainer width="100%" height={340}>
+                <BarChart data={gapData} margin={{ top: 8, right: 16, left: 4, bottom: many ? 60 : 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="machine"
+                    tick={{ fontSize: 10 }}
+                    interval={0}
+                    angle={many ? -35 : 0}
+                    textAnchor={many ? 'end' : 'middle'}
+                    height={many ? 66 : 30}
+                  />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}m`} />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(148,163,184,0.12)' }}
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row = payload[0]?.payload || {};
+                      return (
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+                          <div className="font-extrabold text-slate-800">{label}</div>
+                          <div className="mt-1 font-semibold" style={{ color: ADOPTION_GAP_COLORS.unidentified }}>Unidentified: {formatNumber(row.unidentified)} m</div>
+                          <div className="font-semibold" style={{ color: ADOPTION_GAP_COLORS.idle }}>IDLE: {formatNumber(row.idle)} m</div>
+                          <div className="mt-1 border-t border-slate-100 pt-1 font-bold text-slate-600">Total gap {formatNumber(row.gap)} m · durasi {formatNumber(row.total)} m</div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
+                  <Bar dataKey="unidentified" stackId="gap" name="Unidentified" fill={ADOPTION_GAP_COLORS.unidentified} />
+                  <Bar dataKey="idle" stackId="gap" name="IDLE" fill={ADOPTION_GAP_COLORS.idle} radius={[6, 6, 0, 0]} maxBarSize={54} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChart text="Tidak ada gap adoption mesin (unidentified / IDLE) pada window ini." />
+            )}
+            <p className="mt-2 text-[10px] font-semibold text-slate-400">
+              Unidentified = statusid 5 · IDLE = M2 (statusid 2) durasi &gt; 5 menit · sumber public.mch_productiondata
+            </p>
+          </div>
+        </PageCard>
+
+        <PageCard>
+          <CardHead icon={GaugeIcon} title="Adoption % per Mesin (terendah)" tag={`target ${ADOPTION_MACHINE_TARGET}%`} />
+          <div className="p-4">
+            {adoptData.length ? (
+              <ResponsiveContainer width="100%" height={340}>
+                <BarChart data={adoptData} layout="vertical" margin={{ top: 4, right: 40, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
+                  <XAxis type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                  <YAxis dataKey="machine" type="category" tick={{ fontSize: 10 }} width={96} interval={0} />
+                  <Tooltip
+                    cursor={{ fill: 'rgba(148,163,184,0.12)' }}
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const row = payload[0]?.payload || {};
+                      return (
+                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+                          <div className="font-extrabold text-slate-800">{label}</div>
+                          <div className="mt-1 font-bold text-slate-700">Adoption: {formatNumber(row.adoption)}%</div>
+                          <div className="font-semibold text-slate-500">Gap {formatNumber(row.gap)} m dari {formatNumber(row.total)} m runtime</div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <ReferenceLine x={ADOPTION_MACHINE_TARGET} stroke="#0077b6" strokeDasharray="4 3" strokeWidth={1.5} />
+                  <Bar dataKey="adoption" radius={[0, 6, 6, 0]} maxBarSize={22}>
+                    {adoptData.map((r) => <Cell key={r.machine} fill={adoptionMachineStatusHex(r.adoption)} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyChart text="Belum ada mesin dengan runtime untuk dihitung adoption-nya." />
+            )}
+            <p className="mt-2 text-[10px] font-semibold text-slate-400">
+              adoption% = (runtime − gap) / runtime · garis putus = target {ADOPTION_MACHINE_TARGET}% · merah &lt;90%, amber &lt;{ADOPTION_MACHINE_TARGET}%
+            </p>
+          </div>
+        </PageCard>
+      </section>
+    </div>
+  );
+}
+
+// Adoption Labour — per-operator progressive coverage (who has / hasn't logged yet).
+const ATTEND_META = {
+  PRESENT: { label: 'Sudah Input', cls: 'border-emerald-200 bg-emerald-100 text-emerald-700' },
+  ABSENT: { label: 'Belum Log', cls: 'border-red-200 bg-red-100 text-red-700' },
+  NOT_STARTED: { label: 'Belum Mulai', cls: 'border-slate-200 bg-slate-100 text-slate-500' },
+  LEAVE: { label: 'Cuti', cls: 'border-sky-200 bg-sky-100 text-sky-700' },
+  SICK: { label: 'Sakit', cls: 'border-amber-200 bg-amber-100 text-amber-700' },
+  PERMIT: { label: 'Izin', cls: 'border-amber-200 bg-amber-100 text-amber-700' },
+  OFF: { label: 'Off', cls: 'border-slate-200 bg-slate-100 text-slate-400' },
+};
+
+function AttendanceBadge({ value }) {
+  const m = ATTEND_META[value] || { label: value || '-', cls: 'border-slate-200 bg-slate-100 text-slate-600' };
+  return <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold ${m.cls}`}>{m.label}</span>;
+}
+
+function AdoptionLabourBreakdown({ kpi }) {
+  const sd = kpi?.source_detail || {};
+  const ops = useMemo(() => (Array.isArray(sd.by_operator) ? sd.by_operator : []), [sd.by_operator]);
+  const [page, setPage] = useState(0);
+  const [onlyProblem, setOnlyProblem] = useState(false);
+
+  const rows = useMemo(() => {
+    if (!onlyProblem) return ops;
+    return ops.filter((o) => o.attendance === 'ABSENT'
+      || (o.status === 'SCHEDULED' && numeric(o.expected_hours) - numeric(o.recorded_hours) > 0.01));
+  }, [ops, onlyProblem]);
+  const totalPages = pageCount(rows);
+  const safePage = Math.min(page, Math.max(totalPages - 1, 0));
+  const paged = pageSlice(rows, safePage);
+
+  const belumLog = numeric(sd.absent);
+  const present = numeric(sd.present);
+  const notStarted = numeric(sd.not_started);
+  const excused = numeric(sd.excused);
+  const day = sd.day_adoption_pct;
+  const night = sd.night_adoption_pct;
+  const worst = ops
+    .filter((o) => o.status === 'SCHEDULED')
+    .map((o) => ({ ...o, gap: Math.max(0, numeric(o.expected_hours) - numeric(o.recorded_hours)) }))
+    .sort((a, b) => b.gap - a.gap)[0];
+
+  const insights = [];
+  insights.push({
+    tone: belumLog > 0 ? 'red' : 'emerald',
+    text: belumLog > 0
+      ? `${belumLog} operator sudah lewat sebagian shift tapi BELUM input sama sekali (dihitung 0 → menekan angka).`
+      : 'Semua operator yang shift-nya berjalan sudah mulai input.',
+  });
+  insights.push({
+    tone: 'slate',
+    text: `Adoption DAY ${day == null ? '—' : `${formatNumber(day)}%`} · NIGHT ${night == null ? 'belum mulai' : `${formatNumber(night)}%`}. Angka tumbuh sepanjang shift, pas di akhir shift = nilai final.`,
+  });
+  if (worst && worst.gap > 0.01) {
+    insights.push({
+      tone: 'amber',
+      text: `Gap terbesar: ${worst.operator_name || worst.operator_key} — input ${formatHours(worst.recorded_hours)} dari ${formatHours(worst.expected_hours)} yang diharapkan.`,
+    });
+  }
+  const insightTone = {
+    red: 'border-red-200 bg-red-50 text-red-700',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700',
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    slate: 'border-slate-200 bg-slate-50 text-slate-600',
+  };
+
+  return (
+    <div className="space-y-4">
+      <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        {insights.map((it, i) => (
+          <div key={i} className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold leading-snug ${insightTone[it.tone]}`}>
+            {it.text}
+          </div>
+        ))}
+      </section>
+
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <MetricTile label="Sudah Input" value={formatNumber(present)} tone="good" />
+        <MetricTile label="Belum Log" value={formatNumber(belumLog)} tone={belumLog > 0 ? 'bad' : 'good'} />
+        <MetricTile label="Belum Mulai" value={formatNumber(notStarted)} tone="neutral" />
+        <MetricTile label="Cuti/Izin/Off" value={formatNumber(excused)} tone="info" />
+      </section>
+
+      <PageCard>
+        <CardHead
+          icon={Users}
+          title="Operator (yang belum input di atas)"
+          tag={`${rows.length}`}
+          right={(
+            <button
+              type="button"
+              onClick={() => { setOnlyProblem((v) => !v); setPage(0); }}
+              className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${onlyProblem ? 'border-[#0096c7] bg-[#0096c7] text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+            >
+              {onlyProblem ? 'Tampilkan semua' : 'Hanya yang bermasalah'}
+            </button>
+          )}
+        />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>
+              <tr className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-slate-700">
+                <th className="px-3 py-2">Operator</th>
+                <th className="px-3 py-2 text-center">Shift</th>
+                <th className="px-3 py-2 text-right">Input</th>
+                <th className="px-3 py-2 text-right">Diharapkan</th>
+                <th className="px-3 py-2 text-right">Gap</th>
+                <th className="px-3 py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {paged.length === 0 && (
+                <tr><td colSpan={6} className="px-3 py-6 text-center text-xs font-bold text-emerald-600">✓ Tidak ada operator pada filter ini.</td></tr>
+              )}
+              {paged.map((o) => {
+                const gap = Math.max(0, numeric(o.expected_hours) - numeric(o.recorded_hours));
+                return (
+                  <tr key={o.operator_key} className="align-top transition hover:bg-[#caf0f8]/25">
+                    <td className="px-3 py-2">
+                      <div className="font-bold text-slate-800">{o.operator_name || '—'}</div>
+                      <div className="font-mono text-[11px] text-slate-500">{o.operator_key}</div>
+                    </td>
+                    <td className="px-3 py-2 text-center font-mono text-[11px] font-bold text-slate-600">{o.shift}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-800">{formatHours(o.recorded_hours)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-500">{formatHours(o.expected_hours)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-bold ${gap > 0.01 ? 'text-red-600' : 'text-slate-400'}`}>{gap > 0.01 ? formatHours(gap) : '—'}</td>
+                    <td className="px-3 py-2"><AttendanceBadge value={o.attendance} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <TablePager page={safePage} totalPages={totalPages} totalRows={rows.length} onPageChange={setPage} />
+        <p className="px-4 pb-3 text-[10px] font-semibold text-slate-400">
+          Diharapkan = jam standar yang seharusnya sudah berlalu sampai sekarang · Belum Log = shift berjalan tapi 0 input · sumber ews.shift_roster + timesheet_transaction
+        </p>
+      </PageCard>
+    </div>
+  );
+}
+
 function KpiBreakdown({ kpiType, kpi }) {
   if (!kpi?.source_detail) {
     return <PageCard className="p-6 text-center text-sm font-bold text-slate-500">Detail sumber tidak tersedia untuk window ini. Jalankan kalkulasi live atau cek snapshot.</PageCard>;
@@ -1389,6 +1700,8 @@ function KpiBreakdown({ kpiType, kpi }) {
   if (kpiType === 'uptime') return <UptimeBreakdown kpi={kpi} />;
   if (kpiType === 'accuracy') return <AccuracyBreakdown kpi={kpi} />;
   if (kpiType === 'adoption') return <AdoptionBreakdown kpi={kpi} />;
+  if (kpiType === 'adoption_labour') return <AdoptionLabourBreakdown kpi={kpi} />;
+  if (kpiType === 'adoption_machine') return <AdoptionMachineBreakdown kpi={kpi} />;
   if (kpiType === 'oee') return <OeeBreakdown kpi={kpi} />;
   if (kpiType === 'ole') return <OleBreakdown kpi={kpi} />;
   return null;

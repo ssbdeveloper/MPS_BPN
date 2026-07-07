@@ -602,46 +602,53 @@ async function calculateAdoptionLabourFromRoster(bounds) {
     roster AS (
       SELECT r.serialnumber, r.scheduled_shift AS shift, r.scheduled_standard_hours AS std,
              r.status, r.business_date,
-             ((r.business_date + os.end_time
-               + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) AS shift_end_ts,
+             ((r.business_date + os.start_time) AT TIME ZONE $2) AS shift_start_ts,
+             (EXTRACT(EPOCH FROM (os.end_time - os.start_time
+                + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END)) / 3600.0) AS clock_hours,
              MAX(NULLIF(BTRIM(u.full_name), '')) AS operator_name
       FROM ews.shift_roster r
       JOIN params p ON r.business_date = p.target_bd
       JOIN ews.operator_shift os ON os.shift_code = r.scheduled_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
       GROUP BY r.serialnumber, r.scheduled_shift, r.scheduled_standard_hours, r.status,
-               r.business_date, os.end_time, os.crosses_midnight
+               r.business_date, os.start_time, os.end_time, os.crosses_midnight
     ),
     j AS (
+      -- Progressive: expected_so_far = elapsed clock time (capped at shift length) scaled
+      -- by std/clock so the break is spread proportionally. Reaches full std at shift end,
+      -- so the number converges to the completed-only value exactly when the shift closes.
       SELECT ro.serialnumber, ro.operator_name, ro.shift, ro.std, ro.status, ro.business_date,
              COALESCE(lg.recorded, 0) AS recorded,
-             (ro.shift_end_ts <= now()) AS completed
+             GREATEST(LEAST(EXTRACT(EPOCH FROM (now() - ro.shift_start_ts)) / 3600.0, ro.clock_hours), 0)
+               * (ro.std / NULLIF(ro.clock_hours, 0)) AS expected_so_far
       FROM roster ro LEFT JOIN logged lg ON lg.operator_key = ro.serialnumber
     )
     SELECT
-      ROUND((SUM(LEAST(j.recorded, j.std)) FILTER (WHERE j.status='SCHEDULED' AND j.completed)
-             / NULLIF(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed), 0) * 100)::numeric, 4)::float AS adoption_pct,
-      ROUND((SUM(LEAST(j.recorded, j.std)) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='DAY')
-             / NULLIF(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='DAY'), 0) * 100)::numeric, 4)::float AS day_adoption_pct,
-      ROUND((SUM(LEAST(j.recorded, j.std)) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='NIGHT')
-             / NULLIF(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.shift='NIGHT'), 0) * 100)::numeric, 4)::float AS night_adoption_pct,
-      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.completed)::int AS scheduled_completed,
-      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.recorded > 0)::int AS present,
-      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.completed AND j.recorded = 0)::int AS absent,
-      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND NOT j.completed)::int AS in_progress,
+      ROUND((SUM(LEAST(j.recorded, j.expected_so_far)) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0)
+             / NULLIF(SUM(j.expected_so_far) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0), 0) * 100)::numeric, 4)::float AS adoption_pct,
+      ROUND((SUM(LEAST(j.recorded, j.expected_so_far)) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.shift='DAY')
+             / NULLIF(SUM(j.expected_so_far) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.shift='DAY'), 0) * 100)::numeric, 4)::float AS day_adoption_pct,
+      ROUND((SUM(LEAST(j.recorded, j.expected_so_far)) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.shift='NIGHT')
+             / NULLIF(SUM(j.expected_so_far) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.shift='NIGHT'), 0) * 100)::numeric, 4)::float AS night_adoption_pct,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0)::int AS started,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.recorded > 0)::int AS present,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.recorded = 0)::int AS absent,
+      COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far <= 0)::int AS not_started,
       COUNT(*) FILTER (WHERE j.status IN ('LEAVE','SICK','PERMIT','OFF'))::int AS excused,
-      ROUND(SUM(j.recorded) FILTER (WHERE j.status='SCHEDULED' AND j.completed)::numeric, 2)::float AS total_recorded_hours,
-      ROUND(SUM(j.std) FILTER (WHERE j.status='SCHEDULED' AND j.completed)::numeric, 2)::float AS total_standard_hours,
+      ROUND(SUM(j.recorded) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0)::numeric, 2)::float AS total_recorded_hours,
+      ROUND(SUM(j.expected_so_far) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0)::numeric, 2)::float AS total_expected_hours,
+      ROUND(SUM(j.std) FILTER (WHERE j.status='SCHEDULED')::numeric, 2)::float AS total_standard_hours,
       COALESCE(jsonb_agg(jsonb_build_object(
         'operator_key', j.serialnumber, 'operator_name', j.operator_name,
         'shift', j.shift, 'business_date', j.business_date,
         'recorded_hours', ROUND(j.recorded::numeric, 2), 'standard_hours', j.std,
-        'status', j.status, 'completed', j.completed,
+        'expected_hours', ROUND(j.expected_so_far::numeric, 2),
+        'status', j.status,
         'attendance', CASE WHEN j.status <> 'SCHEDULED' THEN j.status
-                           WHEN NOT j.completed THEN 'IN_PROGRESS'
+                           WHEN j.expected_so_far <= 0 THEN 'NOT_STARTED'
                            WHEN j.recorded > 0 THEN 'PRESENT' ELSE 'ABSENT' END
-      ) ORDER BY (CASE WHEN j.status='SCHEDULED' AND j.completed AND j.recorded=0 THEN 0 ELSE 1 END),
-                 GREATEST(j.std - j.recorded, 0) DESC), '[]'::jsonb) AS breakdown
+      ) ORDER BY (CASE WHEN j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.recorded=0 THEN 0 ELSE 1 END),
+                 GREATEST(j.expected_so_far - j.recorded, 0) DESC), '[]'::jsonb) AS breakdown
     FROM j
     `,
     [bounds.window_start, timezone],
@@ -649,35 +656,36 @@ async function calculateAdoptionLabourFromRoster(bounds) {
 
   const row = result.rows[0] || {};
   const nn = (v) => (v === null || v === undefined ? null : num(v));
-  const completed = num(row.scheduled_completed, 0);
+  const started = num(row.started, 0);
   const present = num(row.present, 0);
   const absent = num(row.absent, 0);
-  const inProgress = num(row.in_progress, 0);
-  const value = completed > 0 && row.adoption_pct !== null && row.adoption_pct !== undefined ? num(row.adoption_pct) : null;
+  const notStarted = num(row.not_started, 0);
+  const value = started > 0 && row.adoption_pct !== null && row.adoption_pct !== undefined ? num(row.adoption_pct) : null;
   return {
     value,
-    helper: completed > 0
-      ? `${present}/${completed} hadir, ${absent} absen${inProgress ? `, ${inProgress} berjalan` : ""}`
-      : inProgress > 0
-        ? `${inProgress} shift berjalan, belum ada yang selesai`
+    helper: started > 0
+      ? `${present}/${started} sudah input, ${absent} belum${notStarted ? `, ${notStarted} belum mulai` : ""}`
+      : notStarted > 0
+        ? `${notStarted} shift terjadwal, belum ada yang mulai`
         : "No scheduled operator on this business date",
     detail: {
-      basis: "roster_attendance",
-      scheduled_completed: completed,
+      basis: "roster_progressive",
+      started,
       present,
       absent,
-      in_progress: inProgress,
+      not_started: notStarted,
       excused: num(row.excused, 0),
       day_adoption_pct: nn(row.day_adoption_pct),
       night_adoption_pct: nn(row.night_adoption_pct),
       total_recorded_hours: num(row.total_recorded_hours, 0),
+      total_expected_hours: num(row.total_expected_hours, 0),
       total_standard_hours: num(row.total_standard_hours, 0),
       shift_standard_hours: SHIFT_STANDARD_HOURS,
       breakdown: row.breakdown || [],
-      denominator: "SUM of standard hours over SCHEDULED completed roster shifts (excused leave/sick/permit/off excluded)",
-      numerator: "SUM of LEAST(recorded, standard); a scheduled operator with zero logs counts as 0 (absent)",
-      window_rule: "windowed by business_date (whole shift incl. cross-midnight night tail)",
-      limitation: "Attendance-based: scheduled operators with no logs count as absent (0); excused (leave/sick/permit/off) excluded. Operators not in the rotation roster (unassigned/new hires) are still invisible.",
+      denominator: "SUM of expected-so-far hours (elapsed clock time capped at shift length, scaled by std/clock) over SCHEDULED started shifts; excused leave/sick/permit/off excluded",
+      numerator: "SUM of LEAST(recorded, expected_so_far); a started operator with zero logs counts as 0",
+      window_rule: "progressive by business_date: expected accrues as the shift elapses and reaches full standard at shift end (then equals the completed-only value)",
+      limitation: "Progressive & no grace: early in a shift few hours are expected, so a not-yet-logged operator swings the number hard; a 'not-yet-logged' operator is indistinguishable from a truly absent one until the shift ends. Operators not in the rotation roster are still invisible.",
       staging_read: false,
       roster_read: true,
     },
