@@ -19,17 +19,18 @@ import time
 
 import psycopg2
 import psycopg2.extras
-import pyodbc
+import pymssql
 
 # ---------------------------------------------------------------------------
 # Hardcoded credentials
 # ---------------------------------------------------------------------------
+# NOTE: driver via pymssql (bundled FreeTDS) — no system ODBC driver needed.
+# "server" keeps the SQL Server "host,port" form; it is split for pymssql below.
 SQLSERVER_CONFIG = {
     "server":   "10.169.2.76,61878",
     "database": "SSB_OEE",
     "username": "tag",
     "password": "@dminta9",
-    "driver":   "ODBC Driver 17 for SQL Server",
 }
 
 POSTGRES_CONFIG = {
@@ -89,15 +90,17 @@ log = logging.getLogger("sync_machine_heartbeat")
 # Connections
 # ---------------------------------------------------------------------------
 def connect_sqlserver():
-    conn_str = (
-        f"DRIVER={{{SQLSERVER_CONFIG['driver']}}};"
-        f"SERVER={SQLSERVER_CONFIG['server']};"
-        f"DATABASE={SQLSERVER_CONFIG['database']};"
-        f"UID={SQLSERVER_CONFIG['username']};"
-        f"PWD={SQLSERVER_CONFIG['password']};"
-        "TrustServerCertificate=yes;"
+    host, _, port = SQLSERVER_CONFIG["server"].partition(",")
+    return pymssql.connect(
+        server=host.strip(),
+        port=int(port.strip()) if port.strip() else 1433,
+        user=SQLSERVER_CONFIG["username"],
+        password=SQLSERVER_CONFIG["password"],
+        database=SQLSERVER_CONFIG["database"],
+        timeout=30,
+        login_timeout=30,
+        autocommit=True,
     )
-    return pyodbc.connect(conn_str, timeout=30)
 
 
 def connect_postgres():
@@ -115,10 +118,9 @@ def fetch_source_column_types(mssql_cursor) -> dict:
         """
         SELECT COLUMN_NAME, DATA_TYPE
         FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
         """,
-        SOURCE_SCHEMA,
-        SOURCE_NAME,
+        (SOURCE_SCHEMA, SOURCE_NAME),
     )
     return {row[0].lower(): str(row[1]).lower() for row in mssql_cursor.fetchall()}
 
@@ -179,10 +181,10 @@ def fetch_new_rows(mssql_cursor, last_id: int) -> list:
         f"""
         SELECT TOP ({BATCH_SIZE}) [CreatedDate], [MachineNo], [Heartbeat], [ID]
         FROM {SOURCE_TABLE}
-        WHERE [ID] > ?
+        WHERE [ID] > %s
         ORDER BY [ID]
         """,
-        last_id,
+        (last_id,),
     )
     return mssql_cursor.fetchall()
 
@@ -251,7 +253,7 @@ def main() -> None:
         except KeyboardInterrupt:
             log.info("Stopped by user.")
             break
-        except (pyodbc.Error, psycopg2.Error) as exc:
+        except (pymssql.Error, psycopg2.Error) as exc:
             log.error("Sync error, will reconnect next cycle: %s", exc)
             for conn in (mssql_conn, pg_conn):
                 try:

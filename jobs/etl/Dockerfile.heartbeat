@@ -1,22 +1,13 @@
 FROM python:3.11-slim
 
-# Microsoft ODBC Driver 17 for SQL Server (+ build deps for pyodbc).
-# Base image is Debian 12 (bookworm).
-#docker compose -f docker-compose.heartbeat.yml up -d --build
-#docker logs -f machine-heartbeat-sync     # lihat progress
-#Stop: docker compose -f docker-compose.heartbeat.yml down
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        curl gnupg ca-certificates apt-transport-https unixodbc-dev gcc g++ \
-    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
-    && curl -fsSL https://packages.microsoft.com/config/debian/12/prod.list \
-        | sed 's|https://packages.microsoft.com|[signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com|' \
-        > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql17 \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+# Driver: pymssql (bundled FreeTDS via its PyPI wheel) — no system ODBC driver,
+# no Microsoft apt repo needed. Only pip is used, so this builds even where
+# packages.microsoft.com / Debian mirrors are blocked.
+#
+# Run:
+#   docker compose -f docker-compose.heartbeat.yml up -d --build
+#   docker logs -f machine-heartbeat-sync
+#   docker compose -f docker-compose.heartbeat.yml down
 
 WORKDIR /app
 
