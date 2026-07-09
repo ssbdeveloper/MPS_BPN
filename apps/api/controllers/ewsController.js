@@ -1003,8 +1003,8 @@ async function buildKpiSourceDetail(type, summary) {
     const k = (summary.kpis || []).find((x) => x.key === "uptime_hmi");
     const d = k?.detail || {};
     return {
-      source_tables: ["public.machine_heartbeat", "public.mch_machines"],
-      basis: "per-machine uptime% (heartbeat <> 0) averaged across distinct machines for the day",
+      source_tables: ["ews.machine_heartbeat_daily", "public.mch_machines"],
+      basis: "per-machine uptime% (up_pings/pings, heartbeat <> 0) averaged across distinct machines for the day",
       target_date: d.target_date || null,
       machine_count: num(d.machine_count),
       total_pings: num(d.total_pings),

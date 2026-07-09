@@ -1,21 +1,36 @@
 """
 sync_machine_heartbeat.py
 
-Copy [SSB_OEE].[dbo].[MachineHeartbeat] rows from SQL Server to PostgreSQL,
-mirroring the columns, every 10 seconds. Runs forever (meant for Docker).
+Aggregate [SSB_OEE].[dbo].[MachineHeartbeat] into a DAILY summary per machine and
+store it in PostgreSQL as ews.machine_heartbeat_daily — one row per (work_date,
+machineno) instead of one row per ~10s heartbeat. This replaces the old raw mirror,
+whose row count was unmanageable.
 
-Strategy:
-  - Columns copied: CreatedDate, MachineNo, Heartbeat, ID  (same as source)
-  - Target table public.machine_heartbeat is auto-created; its column TYPES are
-    introspected from the source so they stay "samain" with SQL Server.
-  - Incremental by ID (identity ascending) -> only new rows are copied each cycle,
-    so it is cheap to run every 10s even when the source table is huge.
-  - Idempotent upsert (ON CONFLICT (id) DO UPDATE) so re-runs never duplicate.
+Why daily aggregate:
+  - MachineHeartbeat emits a row every ~10s per machine -> millions of rows.
+  - Everything downstream (EWS uptime_hmi) only needs, per machine per day:
+    pings (total), up_pings (heartbeat <> 0), uptime% and the average heartbeat.
+  - Those are computed ON SQL Server (only the small aggregate crosses the wire).
+
+Target ews.machine_heartbeat_daily:
+    work_date date, machineno <int>, pings bigint, up_pings bigint,
+    uptime_pct numeric, avg_heartbeat numeric, updated_at timestamptz
+    PRIMARY KEY (work_date, machineno)
+  -> UPDATE when the date already exists (today keeps refreshing as it fills up),
+     INSERT when it is a new date. (heartbeat = 0 means DOWN, non-zero means UP.)
+
+Modes:
+    python sync_machine_heartbeat.py                 # daemon: refresh trailing window every --interval
+    python sync_machine_heartbeat.py --once          # one refresh of the trailing window, then exit
+    python sync_machine_heartbeat.py --from 2026-01-01 --to 2026-07-09   # backfill a date range, then exit
+    python sync_machine_heartbeat.py --days 3        # trailing window = last 3 days (default 2 = today+yesterday)
 
 Credentials are hardcoded per request.
 """
+import argparse
 import logging
 import time
+from datetime import date, datetime, timedelta
 
 import psycopg2
 import psycopg2.extras
@@ -24,8 +39,6 @@ import pymssql
 # ---------------------------------------------------------------------------
 # Hardcoded credentials
 # ---------------------------------------------------------------------------
-# NOTE: driver via pymssql (bundled FreeTDS) — no system ODBC driver needed.
-# "server" keeps the SQL Server "host,port" form; it is split for pymssql below.
 SQLSERVER_CONFIG = {
     "server":   "10.169.2.76,61878",
     "database": "SSB_OEE",
@@ -44,38 +57,15 @@ POSTGRES_CONFIG = {
 SOURCE_TABLE = "dbo.MachineHeartbeat"
 SOURCE_SCHEMA = "dbo"
 SOURCE_NAME = "MachineHeartbeat"
-TARGET_TABLE = "public.machine_heartbeat"
-BATCH_SIZE = 1000
-INTERVAL_SECONDS = 10
+TARGET_TABLE = "ews.machine_heartbeat_daily"
 
-# SQL Server -> PostgreSQL type map (whitelist; unknown types fall back to text).
+# The daily aggregate does not need 10s freshness; refresh the trailing window
+# every few minutes instead.
+INTERVAL_SECONDS = 300
+TRAILING_DAYS = 2  # today + yesterday: yesterday catches rows that landed after midnight
+
 SQLSERVER_TO_PG = {
-    "bigint": "bigint",
-    "int": "integer",
-    "smallint": "smallint",
-    "tinyint": "smallint",
-    "bit": "boolean",
-    "decimal": "numeric",
-    "numeric": "numeric",
-    "money": "numeric",
-    "smallmoney": "numeric",
-    "float": "double precision",
-    "real": "real",
-    "datetime": "timestamp",
-    "datetime2": "timestamp",
-    "smalldatetime": "timestamp",
-    "datetimeoffset": "timestamptz",
-    "date": "date",
-    "time": "time",
-    "char": "text",
-    "nchar": "text",
-    "varchar": "text",
-    "nvarchar": "text",
-    "text": "text",
-    "ntext": "text",
-    "uniqueidentifier": "uuid",
-    "binary": "bytea",
-    "varbinary": "bytea",
+    "bigint": "bigint", "int": "integer", "smallint": "smallint", "tinyint": "smallint",
 }
 
 logging.basicConfig(
@@ -97,7 +87,7 @@ def connect_sqlserver():
         user=SQLSERVER_CONFIG["username"],
         password=SQLSERVER_CONFIG["password"],
         database=SQLSERVER_CONFIG["database"],
-        timeout=30,
+        timeout=120,
         login_timeout=30,
         autocommit=True,
     )
@@ -112,122 +102,163 @@ def connect_postgres():
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
-def fetch_source_column_types(mssql_cursor) -> dict:
-    """Return {lower_column_name: sqlserver_data_type} for the source table."""
+def fetch_machineno_pg_type(mssql_cursor) -> str:
     mssql_cursor.execute(
         """
-        SELECT COLUMN_NAME, DATA_TYPE
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+        SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND LOWER(COLUMN_NAME) = 'machineno'
         """,
         (SOURCE_SCHEMA, SOURCE_NAME),
     )
-    return {row[0].lower(): str(row[1]).lower() for row in mssql_cursor.fetchall()}
+    row = mssql_cursor.fetchone()
+    sql_type = str(row[0]).lower() if row else "int"
+    return SQLSERVER_TO_PG.get(sql_type, "integer")
 
 
-def pg_type_for(col_types: dict, column: str, fallback_sql_type: str) -> str:
-    sql_type = col_types.get(column, fallback_sql_type)
-    return SQLSERVER_TO_PG.get(sql_type, "text")
-
-
-def ensure_target_table(pg_conn, col_types: dict) -> None:
-    id_type = pg_type_for(col_types, "id", "bigint")
-    created_type = pg_type_for(col_types, "createddate", "datetime")
-    machineno_type = pg_type_for(col_types, "machineno", "int")
-    heartbeat_type = pg_type_for(col_types, "heartbeat", "int")
-
+def ensure_target_table(pg_conn, machineno_type: str) -> None:
     ddl = f"""
+    CREATE SCHEMA IF NOT EXISTS ews;
     CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
-        id          {id_type} PRIMARY KEY,
-        createddate {created_type},
-        machineno   {machineno_type},
-        heartbeat   {heartbeat_type}
+        work_date     date NOT NULL,
+        machineno     {machineno_type} NOT NULL,
+        pings         bigint NOT NULL DEFAULT 0,
+        up_pings      bigint NOT NULL DEFAULT 0,
+        uptime_pct    numeric(6,2),
+        avg_heartbeat numeric,
+        updated_at    timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (work_date, machineno)
     );
-    CREATE INDEX IF NOT EXISTS idx_machine_heartbeat_createddate
-        ON {TARGET_TABLE} (createddate);
-    CREATE INDEX IF NOT EXISTS idx_machine_heartbeat_machineno
+    CREATE INDEX IF NOT EXISTS idx_machine_heartbeat_daily_machineno
         ON {TARGET_TABLE} (machineno);
     """
     with pg_conn.cursor() as cur:
         cur.execute(ddl)
     pg_conn.commit()
-    log.info(
-        "Target table ready: id=%s createddate=%s machineno=%s heartbeat=%s",
-        id_type, created_type, machineno_type, heartbeat_type,
-    )
+    log.info("Target table ready: %s (machineno=%s)", TARGET_TABLE, machineno_type)
 
 
 # ---------------------------------------------------------------------------
-# Copy
+# Aggregate + upsert
 # ---------------------------------------------------------------------------
 UPSERT_SQL = f"""
-INSERT INTO {TARGET_TABLE} (id, createddate, machineno, heartbeat)
+INSERT INTO {TARGET_TABLE}
+    (work_date, machineno, pings, up_pings, uptime_pct, avg_heartbeat, updated_at)
 VALUES %s
-ON CONFLICT (id) DO UPDATE SET
-    createddate = EXCLUDED.createddate,
-    machineno   = EXCLUDED.machineno,
-    heartbeat   = EXCLUDED.heartbeat
+ON CONFLICT (work_date, machineno) DO UPDATE SET
+    pings         = EXCLUDED.pings,
+    up_pings      = EXCLUDED.up_pings,
+    uptime_pct    = EXCLUDED.uptime_pct,
+    avg_heartbeat = EXCLUDED.avg_heartbeat,
+    updated_at    = now()
+"""
+
+# Range filter on CreatedDate (sargable -> uses the index) then group by calendar date.
+AGGREGATE_SQL = f"""
+SELECT
+    CAST([CreatedDate] AS date)                             AS work_date,
+    [MachineNo]                                             AS machineno,
+    COUNT_BIG(*)                                            AS pings,
+    SUM(CASE WHEN [Heartbeat] <> 0 THEN 1 ELSE 0 END)       AS up_pings,
+    AVG(CAST([Heartbeat] AS float))                         AS avg_heartbeat
+FROM {SOURCE_TABLE}
+WHERE [CreatedDate] >= %s AND [CreatedDate] < %s
+GROUP BY CAST([CreatedDate] AS date), [MachineNo]
 """
 
 
-def get_last_id(pg_conn) -> int:
-    with pg_conn.cursor() as cur:
-        cur.execute(f"SELECT COALESCE(MAX(id), 0) FROM {TARGET_TABLE}")
-        return cur.fetchone()[0] or 0
-
-
-def fetch_new_rows(mssql_cursor, last_id: int) -> list:
-    mssql_cursor.execute(
-        f"""
-        SELECT TOP ({BATCH_SIZE}) [CreatedDate], [MachineNo], [Heartbeat], [ID]
-        FROM {SOURCE_TABLE}
-        WHERE [ID] > %s
-        ORDER BY [ID]
-        """,
-        (last_id,),
-    )
+def aggregate_source(mssql_cursor, from_ts: datetime, to_ts: datetime) -> list:
+    mssql_cursor.execute(AGGREGATE_SQL, (from_ts, to_ts))
     return mssql_cursor.fetchall()
 
 
-def upsert_rows(pg_conn, rows: list) -> None:
-    # SELECT order is CreatedDate(0), MachineNo(1), Heartbeat(2), ID(3);
-    # target column order is (id, createddate, machineno, heartbeat).
-    values = [(r[3], r[0], r[1], r[2]) for r in rows]
+def upsert_daily(pg_conn, rows: list) -> int:
+    if not rows:
+        return 0
+    values = []
+    for work_date, machineno, pings, up_pings, avg_heartbeat in rows:
+        pings = int(pings or 0)
+        up_pings = int(up_pings or 0)
+        uptime_pct = round(up_pings * 100.0 / pings, 2) if pings else None
+        values.append((work_date, machineno, pings, up_pings, uptime_pct, avg_heartbeat))
     with pg_conn.cursor() as cur:
-        psycopg2.extras.execute_values(cur, UPSERT_SQL, values, page_size=BATCH_SIZE)
+        psycopg2.extras.execute_values(cur, UPSERT_SQL, values, page_size=1000)
+        affected = cur.rowcount
     pg_conn.commit()
+    return affected if affected and affected > 0 else len(values)
 
 
-def sync_cycle(mssql_conn, pg_conn) -> int:
-    mssql_cursor = mssql_conn.cursor()
-    total = 0
+def refresh_window(mssql_conn, pg_conn, from_ts: datetime, to_ts: datetime) -> int:
+    cur = mssql_conn.cursor()
     try:
-        last_id = get_last_id(pg_conn)
-        while True:
-            rows = fetch_new_rows(mssql_cursor, last_id)
-            if not rows:
-                break
-            upsert_rows(pg_conn, rows)
-            last_id = rows[-1][3]
-            total += len(rows)
-            if len(rows) < BATCH_SIZE:
-                break
+        rows = aggregate_source(cur, from_ts, to_ts)
     finally:
-        mssql_cursor.close()
-    return total
-
-
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-def main() -> None:
+        cur.close()
+    written = upsert_daily(pg_conn, rows)
     log.info(
-        "MachineHeartbeat sync: %s/%s -> %s:%s/%s every %ds",
+        "Aggregated %s..%s -> %d (machine,day) row(s) upserted",
+        from_ts.date(), (to_ts - timedelta(seconds=1)).date(), written,
+    )
+    return written
+
+
+def trailing_window(days: int) -> tuple[datetime, datetime]:
+    today = date.today()
+    from_ts = datetime.combine(today - timedelta(days=max(days - 1, 0)), datetime.min.time())
+    to_ts = datetime.combine(today + timedelta(days=1), datetime.min.time())
+    return from_ts, to_ts
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Sync daily MachineHeartbeat aggregate (per date, per machine) to PostgreSQL.")
+    p.add_argument("--from", dest="from_date", help="Backfill start date YYYY-MM-DD (with --to). One-shot, then exit.")
+    p.add_argument("--to", dest="to_date", help="Backfill end date YYYY-MM-DD inclusive (with --from).")
+    p.add_argument("--once", action="store_true", help="Refresh the trailing window once, then exit.")
+    p.add_argument("--days", type=int, default=TRAILING_DAYS, help=f"Trailing window size in days (default {TRAILING_DAYS} = today+yesterday).")
+    p.add_argument("--interval", type=int, default=INTERVAL_SECONDS, help=f"Daemon refresh interval seconds (default {INTERVAL_SECONDS}).")
+    return p
+
+
+def parse_day(value: str, label: str) -> date:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise SystemExit(f"{label} harus format YYYY-MM-DD") from exc
+
+
+def run_backfill(args) -> None:
+    if not (args.from_date and args.to_date):
+        raise SystemExit("--from and --to must be used together")
+    from_d = parse_day(args.from_date, "--from")
+    to_d = parse_day(args.to_date, "--to")
+    if from_d > to_d:
+        raise SystemExit("--from tidak boleh lebih besar dari --to")
+    from_ts = datetime.combine(from_d, datetime.min.time())
+    to_ts = datetime.combine(to_d + timedelta(days=1), datetime.min.time())
+
+    mssql_conn = connect_sqlserver()
+    pg_conn = connect_postgres()
+    try:
+        ensure_target_table(pg_conn, fetch_machineno_pg_type(mssql_conn.cursor()))
+        refresh_window(mssql_conn, pg_conn, from_ts, to_ts)
+    finally:
+        for c in (mssql_conn, pg_conn):
+            try:
+                c.close()
+            except Exception:
+                pass
+    log.info("Backfill complete: %s..%s", from_d, to_d)
+
+
+def run_daemon(args) -> None:
+    log.info(
+        "MachineHeartbeat DAILY sync: %s/%s -> %s:%s/%s (trailing %dd, every %ds)",
         SQLSERVER_CONFIG["server"], SQLSERVER_CONFIG["database"],
         POSTGRES_CONFIG["host"], POSTGRES_CONFIG["port"], POSTGRES_CONFIG["dbname"],
-        INTERVAL_SECONDS,
+        args.days, args.interval,
     )
-
     mssql_conn = None
     pg_conn = None
     table_ready = False
@@ -241,15 +272,14 @@ def main() -> None:
             if not table_ready:
                 probe = mssql_conn.cursor()
                 try:
-                    col_types = fetch_source_column_types(probe)
+                    machineno_type = fetch_machineno_pg_type(probe)
                 finally:
                     probe.close()
-                ensure_target_table(pg_conn, col_types)
+                ensure_target_table(pg_conn, machineno_type)
                 table_ready = True
 
-            copied = sync_cycle(mssql_conn, pg_conn)
-            if copied:
-                log.info("Copied %d new row(s)", copied)
+            from_ts, to_ts = trailing_window(args.days)
+            refresh_window(mssql_conn, pg_conn, from_ts, to_ts)
         except KeyboardInterrupt:
             log.info("Stopped by user.")
             break
@@ -267,7 +297,17 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001 - keep the daemon alive
             log.exception("Unexpected error: %s", exc)
 
-        time.sleep(INTERVAL_SECONDS)
+        if args.once:
+            break
+        time.sleep(args.interval)
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.from_date or args.to_date:
+        run_backfill(args)
+    else:
+        run_daemon(args)
 
 
 if __name__ == "__main__":

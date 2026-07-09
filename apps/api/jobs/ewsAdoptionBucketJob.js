@@ -49,11 +49,20 @@ function scheduleRun(reason = "interval") {
 }
 
 async function getTodayBounds(client) {
+  // Shift-aware business day (matches ewsCalculator): rolls over at EWS_DAY_START_HOUR
+  // (shift 1, default 07:00), not calendar midnight. So from midnight to shift-1 the
+  // adoption buckets still reflect last night's operational day instead of resetting.
+  const tz = process.env.TIMEZONE || "Asia/Makassar";
+  const dayStartHour = Number(process.env.EWS_DAY_START_HOUR || 7);
   const result = await client.query(`
+    WITH biz AS (
+      SELECT date_trunc('day', (now() AT TIME ZONE $1) - make_interval(hours => $2::int)) AT TIME ZONE $1 AS day_start
+    )
     SELECT
-      date_trunc('day', now() AT TIME ZONE $1) AT TIME ZONE $1 AS window_start,
-      now() AS window_end
-  `, [process.env.TIMEZONE || "Asia/Makassar"]);
+      day_start AS window_start,
+      LEAST(now(), day_start + interval '1 day') AS window_end
+    FROM biz
+  `, [tz, dayStartHour]);
   return result.rows[0];
 }
 

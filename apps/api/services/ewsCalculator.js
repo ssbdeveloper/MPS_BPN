@@ -27,6 +27,12 @@ const DEFAULT_THRESHOLDS = {
 // Standard work hours per shift. Single source of truth — do not scatter.
 const SHIFT_STANDARD_HOURS = { 1: 8, 2: 7 };
 
+// Shift-aware business day: the "today" window rolls over at shift-1 start (default
+// 07:00) instead of calendar midnight. Between midnight and shift-1 the EWS keeps
+// showing the previous operational day (last night's shift 2) so the warning stays
+// visible until the new shift actually produces data, instead of reading 0.
+const EWS_DAY_START_HOUR = Number(process.env.EWS_DAY_START_HOUR || 7);
+
 const WINDOW_MAP = {
   "5m": "5 minutes",
   "15m": "15 minutes",
@@ -216,13 +222,23 @@ async function getWindowBounds(intervalText) {
 }
 
 async function getTodayBounds() {
-  const result = await db.query(`
+  // Business day starts at EWS_DAY_START_HOUR (shift 1), not calendar midnight:
+  //  - 07:00..23:59  -> window = [today 00:00, now)          (live current day)
+  //  - 00:00..06:59  -> window = [yesterday 00:00, today 00:00)  (last night's full day)
+  const result = await db.query(
+    `
+    WITH biz AS (
+      SELECT date_trunc('day', now() - make_interval(hours => $1::int)) AS day_start
+    )
     SELECT
-      date_trunc('day', now()) AS window_start,
-      now() AS window_end,
-      date_trunc('day', now()) - interval '1 day' AS previous_start,
-      now() - interval '1 day' AS previous_end
-  `);
+      day_start AS window_start,
+      LEAST(now(), day_start + interval '1 day') AS window_end,
+      day_start - interval '1 day' AS previous_start,
+      day_start AS previous_end
+    FROM biz
+    `,
+    [EWS_DAY_START_HOUR],
+  );
   return result.rows[0];
 }
 
@@ -330,15 +346,15 @@ async function calculateUptime(bounds, options = {}) {
   };
 }
 
-// uptime_hmi — machine availability from public.machine_heartbeat.
-// Source pattern: each machine emits a heartbeat row (~every 10s); heartbeat = 0 means
-// down, non-zero means up. Metric per request: for TODAY's calendar date (local tz),
-// compute each distinct machine's uptime% = up-pings / total-pings, then AVERAGE those
+// uptime_hmi — machine availability from ews.machine_heartbeat_daily.
+// The raw ~10s heartbeat is pre-aggregated per (work_date, machineno) by the sync job
+// (pings, up_pings where heartbeat<>0, uptime_pct). Metric per request: for TODAY's
+// calendar date (local tz), read each machine's stored uptime% then AVERAGE those
 // per-machine percentages across all machines. machinename comes from mch_machines.
 // role = "previous" compares against yesterday so the EWS delta is a day-over-day change.
 async function calculateUptimeHmi(options = {}) {
-  if (!(await tableExists("public", "machine_heartbeat"))) {
-    return { value: null, helper: "Table machine_heartbeat tidak tersedia", detail: { source: "no_table", machine_count: 0 } };
+  if (!(await tableExists("ews", "machine_heartbeat_daily"))) {
+    return { value: null, helper: "Table ews.machine_heartbeat_daily tidak tersedia", detail: { source: "no_table", machine_count: 0 } };
   }
 
   const timezone = process.env.TIMEZONE || "Asia/Makassar";
@@ -347,18 +363,17 @@ async function calculateUptimeHmi(options = {}) {
   const result = await db.query(
     `
     WITH target AS (
-      SELECT ((now() AT TIME ZONE $2)::date - CASE WHEN $1::boolean THEN 1 ELSE 0 END) AS d
+      SELECT ((now() AT TIME ZONE $2 - make_interval(hours => $3::int))::date - CASE WHEN $1::boolean THEN 1 ELSE 0 END) AS d
     ),
     per_machine AS (
       SELECT
         h.machineno,
-        COUNT(*) AS pings,
-        COUNT(*) FILTER (WHERE h.heartbeat <> 0) AS up_pings,
-        100.0 * COUNT(*) FILTER (WHERE h.heartbeat <> 0)::numeric / NULLIF(COUNT(*), 0) AS uptime_pct
-      FROM public.machine_heartbeat h
+        h.pings,
+        h.up_pings,
+        h.uptime_pct
+      FROM ews.machine_heartbeat_daily h
       CROSS JOIN target t
-      WHERE h.createddate::date = t.d
-      GROUP BY h.machineno
+      WHERE h.work_date = t.d
     )
     SELECT
       COUNT(*)::int AS machine_count,
@@ -381,7 +396,7 @@ async function calculateUptimeHmi(options = {}) {
     FROM per_machine pm
     LEFT JOIN public.mch_machines m ON m.machineno = pm.machineno
     `,
-    [isPrevious, timezone],
+    [isPrevious, timezone, EWS_DAY_START_HOUR],
   );
 
   const row = result.rows[0] || {};
