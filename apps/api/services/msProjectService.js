@@ -1078,6 +1078,9 @@ async function listProjects(query) {
       checked_out_at,
       calendar_id,
       calendar_name,
+      file_name,
+      file_size,
+      file_uploaded_at,
       created_by,
       updated_by,
       created_at,
@@ -2846,6 +2849,101 @@ async function uploadProjectFile(projectIdParam, file) {
   }
 }
 
+async function getProjectFileForDownload(projectIdParam) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const result = await pool().query(
+    `select project_id, project_name, revision_no, file_path, file_name, file_uploaded_at
+     from ms_project
+     where project_id = $1`,
+    [projectId]
+  );
+  const project = result.rows[0];
+  if (!project) {
+    throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+  }
+  if (!project.file_path) {
+    throw new ApiError(404, "PROJECT_FILE_NOT_FOUND", "Project has no uploaded .mpp file yet");
+  }
+
+  const uploadsRoot = path.resolve(__dirname, "../uploads/ms-project-mpp");
+  const absolutePath = path.resolve(__dirname, "..", `.${project.file_path}`);
+  if (!absolutePath.startsWith(uploadsRoot + path.sep)) {
+    throw new ApiError(400, "INVALID_PROJECT_FILE_PATH", "Stored file path is outside the upload directory");
+  }
+  try {
+    await fs.access(absolutePath);
+  } catch {
+    throw new ApiError(404, "PROJECT_FILE_MISSING", "Stored .mpp file is missing on disk");
+  }
+
+  await writeAuditLog(pool(), {
+    projectId,
+    action: "FILE_DOWNLOAD",
+    revisionNo: project.revision_no,
+    details: { file_path: project.file_path },
+  });
+
+  const downloadName = mppFileName(
+    `${stripMppExtension(project.file_name || project.project_name)}-rev${project.revision_no}`,
+    projectId
+  );
+  return { absolutePath, downloadName };
+}
+
+async function listProjectRevisions(projectIdParam, query = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const limit = clampLimit(query.limit, 20);
+  const result = await pool().query(
+    `select revision_id, project_id, revision_no, revision_type, created_by, created_at
+     from ms_project_revision
+     where project_id = $1
+     order by revision_no desc, created_at desc
+     limit $2`,
+    [projectId, limit]
+  );
+  return { rows: result.rows, limit };
+}
+
+const PROJECT_STATUSES = new Set(["DRAFT", "ACTIVE", "ARCHIVED"]);
+
+async function updateProjectStatus(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const status = normalizeText(body.status).toUpperCase();
+  if (!PROJECT_STATUSES.has(status)) {
+    throw new ApiError(400, "INVALID_PROJECT_STATUS", "status must be one of DRAFT, ACTIVE, ARCHIVED");
+  }
+  const actor = nullableText(body.actor) || "web-hub";
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const result = await client.query(
+      `update ms_project
+       set status = $2, updated_by = $3, updated_at = now()
+       where project_id = $1
+       returning project_id, project_name, status, revision_no, updated_by, updated_at`,
+      [projectId, status, actor]
+    );
+    if (!result.rows[0]) {
+      await client.query("rollback");
+      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+    await writeAuditLog(client, {
+      projectId,
+      action: "STATUS_CHANGE",
+      actor,
+      revisionNo: result.rows[0].revision_no,
+      details: { status },
+    });
+    await client.query("commit");
+    return result.rows[0];
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function syncProject(projectIdParam, payload) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const normalized = normalizeProjectPayload(payload, true);
@@ -3151,6 +3249,7 @@ module.exports = {
   forceCheckinProject,
   getConflicts,
   getCalendar,
+  getProjectFileForDownload,
   getProjectPackage,
   getProjectResources,
   heartbeatProject,
@@ -3159,6 +3258,7 @@ module.exports = {
   listBayScheduleTasks,
   listBaySchedules,
   listCalendars,
+  listProjectRevisions,
   listProjectTasks,
   listProjects,
   listSowOrders,
@@ -3169,5 +3269,6 @@ module.exports = {
   refreshResources,
   searchResources,
   syncProject,
+  updateProjectStatus,
   uploadProjectFile,
 };

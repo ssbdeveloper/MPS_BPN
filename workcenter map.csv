@@ -1,0 +1,70 @@
+﻿old workcenter;new workcenter;description;machine
+M5051BB1;M5051CL1;Large CNC Lathe-BB 1000;BB 1000
+M5051BB3;M5051CL2;Large CNC Lathe-BB 3000-1;BB 3000-1
+M5051BB4;M5051CL3;Large CNC Lathe-BB 3000-2;BB 3000-2
+M5051FT3;M5051CL4;Large CNC Lathe-FAT3;FAT3
+M5051FT4;M5051CL5;Large CNC Lathe-FAT4;FAT4
+M5051CLS;M5051CL6;Large CNC Lathe-Colchester;Colchester
+M5051GD1;M5051CS1;Small CNC Lathe-Goodway1;Goodway1
+M5051GD2;M5051CS2;Small CNC Lathe-Goodway2;Goodway2
+M5051WB1;M5051CV1;Vertical CNC Lathe-Webster Bennet;Webster Bennet
+M5051TKG;M5051CV2;Vertical CNC Lathe-Takang;Takang
+M5051BRC;M5051ML1;Large Manual Lathe-Beco;Beco
+M5051RYZ;M5051ML2;Large Manual Lathe-Ryazan;Ryazan
+M5051ST1;M5051MS1;Small Manual Lathe-STL1;STL1
+M5051ST2;M5051MS2;Small Manual Lathe-STL2;STL2
+M5051DCK;M5051MS3;Small Manual Lathe-Deckel;Deckel
+M5051SB1;M5051BL1;Large CNC Bore-Shibaura1;Shibaura1
+M5051SB2;M5051BL2;Large CNC Bore-Shibaura2;Shibaura2
+M5051SB3;M5051BL3;Large CNC Bore-Shibaura3;Shibaura3
+M5051CLT;M5051BM1;Manual Bore-Collet;Collet
+M5051COR;M5051BM2;Manual Bore-Joysung;Joysung
+M5051FFR;M5051BM3;Manual Bore-Flange Facer;Flange Facer
+M5051LBP;M5051BM4;Manual Bore-Hoffman;Hoffman
+M5051MIT;M5051CM1;CNC Milling-Mitseiki;Mitseiki
+M5051HAS;M5051CM2;CNC Milling-Haas;Haas
+M5051F88;M5051CM3;CNC Milling-Rotler F88;Rotler F88
+M5051EM1;M5051CM4;CNC Milling-Rotler EM105;Rotler EM105
+M5051GML;M5051MM1;Manual Milling-Gomel;Gomel
+M5051PRO;M5051CG1;CNC Grinding-Proth;Proth
+M5051HMI;M5051CH1;CNC Honing-Honing1;Honing1
+M5051HM2;M5051CH2;CNC Honing-Honing2;Honing2
+M5051PL1;M5051PS1;Small Polish -Polish1;Polish1
+M5051PL2;M5051PS2;Small Polish -Polish2;Polish2
+M5051PL3;M5051PS3;Small Polish -Polish3;Polish3
+M5051PL4;M5051PS4;Small Polish -Polish4;Polish4
+M5051CHU;M5051PL1;Large polish-Churcill;Churcill
+M5051RD1;M5051DR1;Large Radial Drill-Okuma;Okuma
+M5051RD2;M5051DS1;Small Radial Drill-Shanghai;Shanghai
+M5051SW1;M5051SW1;SAW Mach-SAW1;SAW1
+M5051SW2;M5051SW2;SAW Mach-SAW2;SAW2
+M5051SW3;M5051SW3;SAW Mach-SAW3;SAW3
+M5051WM2;M5051IW1;ID Weld-ID Weld1;ID Weld1
+M5051WM3;M5051IW2;ID Weld-ID Weld2;ID Weld2
+M5051WM6;M5051IW3;ID Weld-ID Weld3;ID Weld3
+M5051WM7;M5051IW4;ID Weld-ID Weld4;ID Weld4
+M5051WM4;M5051TG1;Tig Weld-Tig Weld1;Tig Weld1
+M5051WM5;M5051TG2;Tig Weld-Tig Weld2;Tig Weld2
+M5051WLS;M5051GW1;Gen Weld-FCAW/GMAW;FCAW/GMAW
+M5051CP1;M5051CR1;Chrome-Chrome tank1;Chrome tank1
+M5051CP2;M5051CR2;Chrome-Chrome tank2;Chrome tank2
+M5051CP3;M5051CR3;Chrome-Chrome tank3;Chrome tank3
+M5051CP4;M5051CR4;Chrome-Chrome tank4;Chrome tank4
+M5051CP5;M5051CR5;Chrome-Chrome tank5;Chrome tank5
+M5051MS1;M5051SP1;Metal Spray-Arc spray1;Arc spray1
+M5051MS2;M5051SP2;Metal Spray-Arc spray2;Arc spray2
+M5051CSP;M5051SP3;Metal Spray-Coldspray;Coldspray
+M5051BRP;M5051SP4;Metal Spray-Brush Platting;Brush Platting
+M5051BLS;M5051BT1;Blasting-Blasting;Blasting
+M5051BPP;M5051PT1;Painting-Painting;Painting
+M5051WM1;M5051HT1;Heat Treatment-PWHT;PWHT
+M5051BS2;M5051BW1;Band saw-Bandsaw2;Bandsaw2
+M5051ASY;M5051AS1;Assembly-Assembly;Assembly
+M5051DIS;M5051CN1;Cleaning-Cleaning;Cleaning
+M5051DIS;M5051DY1;Disassy-Disassy;Disassy
+M5051BPP;M5051FN1;Finishing-Packing;Packing
+M5051HDR;M5051HR1;Handressing-Handressing;Handressing
+M5051HD2;M5051HR1;Handressing-Handressing;Handressing
+M5051ETL;M5051IN1;Inspection-Eitel;Eitel
+M5051QC1;M5051IN2;Inspection-QC Pre-Inspection;QC Pre-Inspection
+M5051QC2;M5051IN3;Inspection-QC Post-Inspection;QC Post-Inspection

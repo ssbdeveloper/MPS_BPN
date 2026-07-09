@@ -1,0 +1,189 @@
+{
+  "main": {
+    "id": "a4b0de95ee0ac264",
+    "type": "split",
+    "children": [
+      {
+        "id": "c9ba8a6a64eed713",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "79735f3e0f34b399",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "frontend/EWS_PANDUAN_PENGGUNA.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "EWS_PANDUAN_PENGGUNA"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "3e7c2ef58474d8e2",
+    "type": "split",
+    "children": [
+      {
+        "id": "0efed67bbe2e4912",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "dde90c71f291b16a",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "1e2bdca6b4930c8c",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "0dec0c65d9ff8f66",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "right": {
+    "id": "6336bf5a8920a9d2",
+    "type": "split",
+    "children": [
+      {
+        "id": "29e045cf5ca05f89",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "2e34cf4281c07ce2",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "frontend/EWS_PANDUAN_PENGGUNA.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for EWS_PANDUAN_PENGGUNA"
+            }
+          },
+          {
+            "id": "29cb9a2080befd87",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "frontend/EWS_PANDUAN_PENGGUNA.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from EWS_PANDUAN_PENGGUNA"
+            }
+          },
+          {
+            "id": "91c207f3212bd1bd",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "b8985cd583010668",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "03dbeabbbe75d82c",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "frontend/EWS_PANDUAN_PENGGUNA.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of EWS_PANDUAN_PENGGUNA"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "79735f3e0f34b399",
+  "lastOpenFiles": []
+}

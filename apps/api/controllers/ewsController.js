@@ -998,6 +998,20 @@ async function buildKpiSourceDetail(type, summary) {
   if (!windowStart || !windowEnd) return null;
 
   if (type === "uptime") return buildUptimeSourceDetail(windowStart, windowEnd);
+  if (type === "uptime_hmi") {
+    // Reuse the per-machine breakdown already computed by the KPI (no extra query).
+    const k = (summary.kpis || []).find((x) => x.key === "uptime_hmi");
+    const d = k?.detail || {};
+    return {
+      source_tables: ["public.machine_heartbeat", "public.mch_machines"],
+      basis: "per-machine uptime% (heartbeat <> 0) averaged across distinct machines for the day",
+      target_date: d.target_date || null,
+      machine_count: num(d.machine_count),
+      total_pings: num(d.total_pings),
+      total_up_pings: num(d.total_up_pings),
+      by_machine: Array.isArray(d.machines) ? d.machines : [],
+    };
+  }
   if (type === "accuracy") return buildAccuracySourceDetail(windowStart, windowEnd);
   if (type === "adoption") return buildAdoptionSourceDetail(windowStart, windowEnd);
   if (type === "adoption_labour") {

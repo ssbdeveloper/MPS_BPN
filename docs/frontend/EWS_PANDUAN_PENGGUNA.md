@@ -132,7 +132,8 @@ Warna kartu ditentukan otomatis dari angka vs ambang berikut:
 - **Arti:** Dari total jam yang tercatat operator, berapa persen yang **benar-benar produktif** (mengerjakan order), bukan menunggu/nganggur.
 - **Cara hitung:** `(jam produktif / jam tercatat) × 100`.
 - **Cara baca:** "42.9h productive / 62.8h recorded" = 42,9 jam produktif dari 62,8 jam tercatat → ±68%.
-- **Sumber data:** **input timesheet operator** (jenis aktivitas: produktif vs menunggu/idle).
+- **Sumber data:** **input timesheet operator** (jenis aktivitas: produktif vs menunggu/idle ).
+-  -"Waiting Job" Dikeluarkan
 - **Kalau merah:** banyak waktu operator habis untuk menunggu material/setup, bukan produksi. Cek alur kerja & kesiapan material.
 - **Owner:** Foreman / Supervisor / PPIC.
 

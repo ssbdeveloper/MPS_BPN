@@ -1,0 +1,15 @@
+# Salin file ini ke: %APPDATA%\mps-msproject\config.ini
+# Tanpa file config, modul VBA memakai nilai default di ms_config.bas.
+
+# Base URL API MS Project (lewat nginx). Ganti saat server pindah IP lokal.
+base_url=https://100.80.101.53/api/ms-project
+
+# Timeout HTTP dalam milidetik.
+timeout_ms=30000
+
+# true  = WinHttp memverifikasi sertifikat server (butuh sertifikat valid/terpasang).
+# false = abaikan error sertifikat (perilaku lama; hanya untuk jaringan internal/Tailscale).
+verify_tls=false
+
+# Timezone tanggal yang dikirim ke server. Server MPS2 = Asia/Makassar (+08 WITA).
+tz_suffix=+08:00

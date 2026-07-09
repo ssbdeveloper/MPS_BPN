@@ -330,6 +330,82 @@ async function calculateUptime(bounds, options = {}) {
   };
 }
 
+// uptime_hmi — machine availability from public.machine_heartbeat.
+// Source pattern: each machine emits a heartbeat row (~every 10s); heartbeat = 0 means
+// down, non-zero means up. Metric per request: for TODAY's calendar date (local tz),
+// compute each distinct machine's uptime% = up-pings / total-pings, then AVERAGE those
+// per-machine percentages across all machines. machinename comes from mch_machines.
+// role = "previous" compares against yesterday so the EWS delta is a day-over-day change.
+async function calculateUptimeHmi(options = {}) {
+  if (!(await tableExists("public", "machine_heartbeat"))) {
+    return { value: null, helper: "Table machine_heartbeat tidak tersedia", detail: { source: "no_table", machine_count: 0 } };
+  }
+
+  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const isPrevious = options.role === "previous";
+
+  const result = await db.query(
+    `
+    WITH target AS (
+      SELECT ((now() AT TIME ZONE $2)::date - CASE WHEN $1::boolean THEN 1 ELSE 0 END) AS d
+    ),
+    per_machine AS (
+      SELECT
+        h.machineno,
+        COUNT(*) AS pings,
+        COUNT(*) FILTER (WHERE h.heartbeat <> 0) AS up_pings,
+        100.0 * COUNT(*) FILTER (WHERE h.heartbeat <> 0)::numeric / NULLIF(COUNT(*), 0) AS uptime_pct
+      FROM public.machine_heartbeat h
+      CROSS JOIN target t
+      WHERE h.createddate::date = t.d
+      GROUP BY h.machineno
+    )
+    SELECT
+      COUNT(*)::int AS machine_count,
+      ROUND(AVG(pm.uptime_pct)::numeric, 2)::float AS avg_uptime_pct,
+      COALESCE(SUM(pm.pings), 0)::bigint AS total_pings,
+      COALESCE(SUM(pm.up_pings), 0)::bigint AS total_up_pings,
+      (SELECT d FROM target)::text AS target_date,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'machineno', pm.machineno,
+            'machineid', m.machineid,
+            'machinename', m.machinename,
+            'uptime_pct', ROUND(pm.uptime_pct::numeric, 1),
+            'pings', pm.pings
+          ) ORDER BY pm.uptime_pct ASC, pm.machineno ASC
+        ) FILTER (WHERE pm.machineno IS NOT NULL),
+        '[]'::json
+      ) AS machines
+    FROM per_machine pm
+    LEFT JOIN public.mch_machines m ON m.machineno = pm.machineno
+    `,
+    [isPrevious, timezone],
+  );
+
+  const row = result.rows[0] || {};
+  const machineCount = num(row.machine_count, 0);
+  const value = machineCount > 0 ? num(row.avg_uptime_pct) : null;
+
+  return {
+    value,
+    helper: value === null
+      ? "Tidak ada heartbeat pada tanggal ini"
+      : `${machineCount} mesin · rata-rata uptime ${isPrevious ? "kemarin" : "hari ini"}`,
+    detail: {
+      target_date: row.target_date || null,
+      machine_count: machineCount,
+      total_pings: num(row.total_pings, 0),
+      total_up_pings: num(row.total_up_pings, 0),
+      machines: Array.isArray(row.machines) ? row.machines : [],
+      method: "AVG per-machine uptime% (up-pings/total-pings) across distinct machines for the day",
+      numerator: "COUNT(*) FILTER (heartbeat <> 0) per machine",
+      denominator: "COUNT(*) per machine",
+    },
+  };
+}
+
 // SAP order/operation master the stager matches against (env TGT_TABLE, default ph3_order).
 // Mirrors jobs/sap_staging/stage_timesheet_transaction.py so accuracy_labour uses the SAME
 // eligibility truth as the stager. Validated as a bare identifier to stay injection-safe.
@@ -1118,7 +1194,7 @@ async function calculateKpisForBounds(bounds, thresholds, options = {}) {
     buildKpi("adoption_labour", adoptionLabour, thresholds),
     buildKpi("ole", ole, thresholds),
     // Row MACHINE
-    buildKpi("uptime_hmi", placeholderCalculation("Uptime HMI not computed yet"), thresholds),
+    buildKpi("uptime_hmi", await safeCalculation("uptime_hmi", async () => calculateUptimeHmi({ role: options.role })), thresholds),
     buildKpi("accuracy_machine", accuracyMachine, thresholds),
     buildKpi("adoption_machine", adoptionMachine, thresholds),
     buildKpi("oee", oee, thresholds),

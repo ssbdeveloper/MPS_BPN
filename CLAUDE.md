@@ -11,10 +11,10 @@ untuk koneksi dengan postgres gunakan
  
 **MPS Timesheet** adalah aplikasi Timesheet Manufacturing berbasis React + Vite + Tailwind CSS dengan dukungan PWA (Progressive Web App) untuk mode offline.
  
-- **Framework:** React 18 + Vite
+- **Framework:** React 19 + Vite 7
 - **Styling:** Tailwind CSS v3 + inline style untuk nilai warna dinamis
-- **Router:** React Router v6
-- **State/Cache:** TanStack React Query (server state), useState/useCallback (local state)
+- **Router:** React Router v7 (`createBrowserRouter`, semua route lazy)
+- **State/Cache:** useState/useCallback + fetch native (TIDAK ada React Query / state library eksternal)
 - **Notifications:** sonner (toast)
 - **PWA:** vite-plugin-pwa + Workbox
  
@@ -23,7 +23,8 @@ untuk koneksi dengan postgres gunakan
 ## Corporate Color System
  
 > Status: **APPROVED & ACTIVE** (ditetapkan 2026-03-19)
-> Referensi implementasi: `src/pages/TimesheetValidationPageV2.jsx`
+> Referensi implementasi: `src/pages/TIMESHEET/TimesheetValidationPage.jsx`
+> (catatan: file `TimesheetValidationPageV2.jsx` sudah tidak ada; jangan mencarinya)
  
 Palette ini adalah **standard corporate color** untuk seluruh UI aplikasi MPS Timesheet.
 Setiap komponen baru atau halaman baru HARUS mengikuti aturan ini.
@@ -767,10 +768,10 @@ const isLandscape = useOrientation();
 | Icons | lucide-react v1 | |
 | Animations | framer-motion v12 | |
 | Backend API | Express.js 4 (Node 20, CommonJS) | In `apps/api/server.js` |
-| Backend Python | FastAPI (Python 3.11, uvicorn) | In `apps/fastapi-msproject/main.py` — MS Project sync |
+| Backend Python | FastAPI (Python 3.11, uvicorn) | In `apps/fastapi-msproject/main.py` — SOW plan-sync + antrian TTS (MS Project .mpp sync sebenarnya di Express `/ms-project`) |
 | Database | PostgreSQL 15 | + Microsoft SQL Server (SSB_OEE for machine hours) |
-| Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, routes `/api/`, `/fastapi/`, `/uploads/` |
-| Containerization | Docker Compose | 6 services: db, api, frontend, nginx, sow_exporter, fastapi |
+| Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, HTTP→HTTPS redirect, routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/`, SPA fallback |
+| Containerization | Docker Compose | 12 services — lihat tabel "Docker Compose Services" di bawah |
 | API Client | fetch (native) | No Axios |
 | Dev port (frontend) | 5173 | Proxied `/api` → `http://localhost:3001` |
 | API port | 3001 | |
@@ -812,32 +813,37 @@ scripts/deploy.sh logs api     # View API logs
 ```text
 MPS2/
 +- apps/
-�  +- web/                         # React + Vite frontend
-�  +- api/                         # Express API, controllers, routes, uploads
-�  +- fastapi-msproject/            # FastAPI MS Project sync service
-�  +- tts-worker/                   # Piper TTS worker/service
+�  +- web/                         # React + Vite frontend
+�  +- api/                         # Express API, controllers, routes, rbac, jobs, uploads
+�  +- fastapi-msproject/            # FastAPI SOW/TTS helper service (MS Project sync sebenarnya di Express /ms-project)
+�  +- tts-worker/                   # Piper/Edge TTS worker (EWS audio announcements)
 +- jobs/
-�  +- sap_staging/                  # Stage/post/seed SAP payload rows
-�  +- etl/                          # Local DB / SQL Server ETL jobs
-�  +- export/                       # CSV/TXT export helpers
-�  +- sow/                          # SOW seed/export Docker helper files
+�  +- sap_staging/                  # Stage/post/seed SAP payload rows
+�  +- etl/                          # SQL Server -> Postgres ETL (machine hours, heartbeat, order sync)
+�  +- export/                       # CSV/TXT export helpers
+�  +- sow/                          # SOW seed/export Docker helper files
+�  +- machine_ping/                 # Dockerfile untuk machine-ping-worker (script di scripts/ping_m5051_machines.js)
 +- database/
-�  +- migrations/                   # SQL migrations grouped by source app
-�  +- seeds/                        # Seed data and seed helpers
-�  +- schema/                       # Full schema/reference SQL dumps
+�  +- migrations/                   # api/ (timestamped) + legacy/ (tidak berurut)
+�  +- seeds/                        # Seed data and seed helpers
+�  +- schema/                       # Schema dumps (schema.sql, local_schema.sql, dll — saling drift, hati-hati)
+�  +- machinehours/                 # CSV data + import scripts machine hours
+�  +- toolsmanagement/              # SQL domain tools management
+�  +- paket_kumplit/, query_use/    # SQL/data pendukung
 +- docs/
-�  +- operations/                   # Operator/dev runbooks
-�  +- sap/                          # SAP staging and payload docs
-�  +- frontend/                     # Frontend UI notes
-�  +- deployment/                   # Docker/deploy docs
-�  +- archive/                      # Historical docs only
+�  +- operations/, sap/, frontend/, deployment/, archive/
+�  +- Work Instruction/, security/, timesheet/
 +- samples/
-�  +- sap_payloads/                 # JSON payload examples and manual test payload
-�  +- excel/                        # Excel/CSV sample artifacts
-�  +- media/                        # Audio/media samples
+�  +- sap_payloads/, excel/, media/
 +- infra/
-�  +- docker/                       # Shared docker infra notes/assets
-�  +- nginx/                        # Nginx config and SSL material
+�  +- docker/                       # Shared docker infra notes/assets
+�  +- nginx/                        # Nginx config and SSL material
++- aws/
+�  +- sap-ph3-order-lambda/         # AWS Lambda inbound order feed dari SAP -> ph3_order
++- backups/                         # pg_dump output (gitignored)
++- export/                          # Mount target sow_exporter (/data/export)
++- tools/
+�  +- msproject-v2/                 # VBA MS Project v2 AKTIF (config.ini, checkout/checkin) — versi lama di docs/archive
 +- scripts/                         # Root-level operational helper scripts
 ```
 
@@ -857,75 +863,103 @@ MPS2/
 
 ## Frontend Routes (Current)
 
-| Path | Component | Protected | Module |
-|------|-----------|-----------|--------|
-| `/` | `WelcomePage` | No | Core |
-| `/welcome` | `WelcomePage` | No | Core |
-| `/LandingPage` | `OperationsHubPage` | No | Core |
-| `/operations-hub` | `OperationsHubPage` | No | Core |
-| `/login-timesheet` | `LoginTimesheetPage` | No | TIMESHEET |
-| `/timesheet` | `TimesheetPage` | No | TIMESHEET |
-| `/timesheet-mainmenu` | `TimesheetMainMenuPage` | No | TIMESHEET |
-| `/view-timesheet` | `TimesheetListPage` | No | TIMESHEET |
-| `/timesheet-validation` | `TimesheetValidationPage` | **Yes** | TIMESHEET |
-| `/timesheet-edit/:tsnumber` | `TimesheetEditPage` | No | TIMESHEET |
-| `/log-timesheet` | `LogTimesheetPage` | No | TIMESHEET |
-| `/select-job` | `SelectJobPage` | No | TIMESHEET |
-| `/select-machine` | `SelectMachinePage` | No | TIMESHEET |
-| `/nfc-users` | `NfcUserListPage` | No | TIMESHEET |
-| `/create-edit-nfc` | `CreateEditNfcPage` | No | TIMESHEET |
-| `/unproductive` | `UnproductiveMenuPage` | No | TIMESHEET |
-| `/dashboard` | `DashboardPage` | No | Core |
-| `/setting` | `SettingPage` | No | Core |
-| `/download` | `DownloadPage` | No | Core |
-| `/editor-image` | `EditorImage` | No | Core |
-| `/process-control` | `ProcessControlPage` | No | MACHINE_H |
-| `/edit-parameter` | `EditParameterPage` | No | MACHINE_H |
-| `/machine-hours-sqlserver` | `MachineHoursSqlServerPage` | No | MACHINE_H |
-| `/machine-hours-validation` | `MachineHoursValidationPage` | **Yes** | MACHINE_H |
-| `/component-tracking` | `ComponentTrackingPage` | No | PPC |
-| `/buffer-transaction` | `BufferTransactionPage` | No | PPC |
-| `/receiving-shipment` | `ReceivingShipmentPage` | No | PPC |
-| `/manage-user` | `ManageUserPage` | **Yes** | PPC |
-| `/manage-users` | `ManageUsersPage` | **Yes** | PPC |
-| `/sow-orders` | `OrderListPage` | No | PE |
-| `/sow-edit/:id` | `SowEditPage` | No | PE |
-| `/sow-management` (parent) | `SowManagementPage` | No | PE |
-| `/sow-management/list` | `SowStandardListPage` | No | PE |
-| `/sow-management/create` | `SowCreatePage` | No | PE |
-| `/sow-management/history` | `SowHistoryPage` | No | PE |
-| `/consumable-request` | `ConsumableRequestPage` | No | WAREHOUSE |
-| `/consumable-control` | `ConsumableControlPage` | **Yes** | WAREHOUSE |
-| `*` | 404 Page | No | — |
+> Guard types: **PIN** = `ProtectedRoute` (sessionStorage `isVerified`); **RBAC:x** = `RequireFeature(x)` (permission dari sessionStorage `authPermissions`). Keduanya client-side only.
 
-> `ProtectedRoute` checks `sessionStorage.getItem("isVerified") === "true"`; redirects to `/` if not verified.
+| Path | Component | Guard | Module |
+|------|-----------|-------|--------|
+| `/` , `/welcome` | `WelcomePage` | — | Core |
+| `/LandingPage` , `/operations-hub` | `OperationsHubPage` | — | Core |
+| `/ews/:type/detail` | `EwsDetailPage` | — | EWS |
+| `/ews/notifications` | `EwsNotificationsPage` | — | EWS |
+| `/ews/roster` | `EwsRosterPage` | RBAC:roster_operator | EWS |
+| `/ews/roster/config` | `EwsRosterConfigPage` | RBAC:roster_operator | EWS |
+| `/sap-log` | `SapLogPage` | — | Core |
+| `/order-progress-dashboard` | `OrderProgressDashboardPage` | — | Core |
+| `/login-timesheet` | `LoginTimesheetPage` | — | TIMESHEET |
+| `/timesheet` | `TimesheetPage` | — | TIMESHEET |
+| `/timesheet-mainmenu` | `TimesheetMainMenuPage` (dispatcher varian) | — | TIMESHEET |
+| `/view-timesheet` | `TimesheetListPage` | — | TIMESHEET |
+| `/timesheet-validation` | `TimesheetValidationPage` | PIN | TIMESHEET |
+| `/operator-performance` | `OperatorPerformancePage` | PIN | TIMESHEET |
+| `/timesheet-edit/:tsnumber` | `TimesheetEditPage` | — | TIMESHEET |
+| `/log-timesheet` | `LogTimesheetPage` | — | TIMESHEET |
+| `/select-job` | `SelectJobPage` (dispatcher varian) | — | TIMESHEET |
+| `/select-machine` | `SelectMachinePage` | — | TIMESHEET |
+| `/tts-audio-test` | `TtsAudioTestPage` | — | TIMESHEET |
+| `/nfc-users` | `NfcUserListPage` | — | TIMESHEET |
+| `/create-edit-nfc` | `CreateEditNfcPage` | — | TIMESHEET |
+| `/unproductive` | `UnproductiveMenuPage` | — | TIMESHEET |
+| `/dashboard` | `DashboardPage` | — | Core |
+| `/setting` | `SettingPage` | — | Core |
+| `/download` | `DownloadPage` | — | Core |
+| `/editor-image` | `EditorImage` | — | Core |
+| `/process-control` | `ProcessControlPage` | — | MACHINE_H |
+| `/edit-parameter` | `EditParameterPage` | — | MACHINE_H |
+| `/machine-hours-sqlserver` | `MachineHoursSqlServerPage` | — | MACHINE_H |
+| `/machine-hours-validation` | `MachineHoursValidationPage` | PIN | MACHINE_H |
+| `/component-tracking` | `ComponentTrackingPage` | — | PPC |
+| `/kanban-board` | `KanbanLevelOnePage` | — | PPC |
+| `/buffer-transaction` | `BufferTransactionPage` | — | PPC |
+| `/sow-scheduling` | `SowSchedulingPage` (dispatcher varian) | — | PPC |
+| `/sow-verification` | `SowVerificationPage` | — | PPC |
+| `/shift-definition` | `ShiftDefinitionPage` | PIN | PPC |
+| `/ms-project-hub` | `MsProjectHubPage` | PIN | PPC |
+| `/ms-project-admin` | `MsProjectHubPage` (alias lama) | PIN | PPC |
+| `/receiving-shipment` | `ReceivingShipmentPage` | — | PPC |
+| `/manage-user` | `ManageUserPage` (menu hub) | RBAC:manage_users | PPC |
+| `/manage-users` | `ManageUsersPage` (user CRUD) | RBAC:manage_users | PPC |
+| `/sow-orders` | `OrderListPage` | RBAC:sow_management | PE |
+| `/sow-edit/revision/:orderNo` | `SowRevisionEditPage` | RBAC:sow_management | PE |
+| `/sow-edit/:id` | `SowEditPage` | RBAC:sow_management | PE |
+| `/sow-management` (parent) | `SowManagementPage` | RBAC:sow_management | PE |
+| `/sow-management/list` | `SowStandardListPage` | — (di bawah parent) | PE |
+| `/sow-management/create` | `SowCreatePage` | — (di bawah parent) | PE |
+| `/sow-management/history` | `SowHistoryPage` | — (di bawah parent) | PE |
+| `/consumable-request` | `ConsumableRequestPage` | — | WAREHOUSE |
+| `/tools-consumable-request` | `ToolsRequestHubPage` | — | WAREHOUSE |
+| `/tools-request` | `ToolsRequestPage` | — | WAREHOUSE |
+| `/consumable-control` | `ConsumableControlPage` | PIN | WAREHOUSE |
+| `/tools-management` | `ToolsManagementPage` | PIN | WAREHOUSE |
+| `*` | `NotFoundPage` (link ke /operations-hub) | — | — |
+
+> Semua route lazy-loaded. Halaman TIMESHEET/PPC tertentu punya varian `salvaging/` vs `manufacturing/` yang dipilih dispatcher berdasarkan `VITE_APP_VARIANT` (default `salvaging`).
 
 ---
 
 ## Backend API Routes
 
-| Base Path | # Endpoints | Description |
-|-----------|-------------|-------------|
-| `/timesheet` | 18 | CRUD, search, validation stats, bulk validation, SAP posting, CSV/Excel export, checkout |
-| `/sow` | 45+ | Standard CRUD, grouped orders, parts/operations, history, reports, planhours |
-| `/process-control` | 20 | Categories, parameters, choices, items, controls CRUD + validation |
-| `/dashboard` | 11 | KPI, order status, workload, daily hours, operator efficiency, on-time, progress, validation rate, heatmap |
-| `/component-tracking` | 8 | Machines, SOW operations, buffer transactions (CRUD + priorities + notes) |
-| `/machine-hours-sqlserver` | 4 | Machine hours from SQL Server, validation stats, health + WebSocket |
-| `/machine-hours-validation` | 2 | Validation stats, group records |
-| `/receiving-shipment` | 8 | Lookups, components, CRUD |
-| `/consumable` | 10 | History, stock search, control tickets, approve/close/adjust/reject |
-| `/auth` | 6 | Login, change password, user CRUD |
-| `/usernfc` | 10 | NFC user CRUD, search by NFC ID/SN/name |
-| `/workcenter` | 1 | List all workcenters |
-| `/production-operations` | 3 | List all, lookup, get by ID |
+> 18 router di-mount di `server.js`. Jumlah endpoint per router tidak dihitung ulang — lihat file route masing-masing.
+
+| Base Path | Description |
+|-----------|-------------|
+| `/timesheet` | CRUD, search, validation stats, bulk validation, SAP posting, CSV/Excel export, checkout |
+| `/sow` | Standard CRUD, grouped orders, parts/operations, history, reports, planhours |
+| `/sow-schedule` | SOW scheduling, shift rules, overtime, capacity |
+| `/process-control` | Categories, parameters, choices, items, controls CRUD + validation |
+| `/dashboard` | KPI, order status, workload, daily hours, operator efficiency, on-time, progress, heatmap |
+| `/component-tracking` | Machines, SOW operations, buffer transactions |
+| `/kanban` | Kanban order board (materialized view + refresh job) |
+| `/machine-hours-sqlserver` | Machine hours dari SQL Server, validation stats, health + WebSocket |
+| `/machine-hours-validation` | Validation stats, group records |
+| `/receiving-shipment` | Lookups, components, CRUD |
+| `/consumable` | History, stock search, control tickets, approve/close/adjust/reject |
+| `/tools` | Tool reservations/handovers |
+| `/auth` | Login, change password, user CRUD, permissions |
+| `/usernfc` | NFC user CRUD, search by NFC ID/SN/name |
+| `/workcenter` | List all workcenters |
+| `/production-operations` | List all, lookup, get by ID |
+| `/ms-project` | MS Project sync (.mpp upload/import; dipakai VBA client) |
+| `/ews` | EWS KPI summary/detail/trend/actions/roster/notifications + SSE `/ews/stream` |
 
 ### Important Backend Details
-- **PostgreSQL pool:** `.env` loaded from root `D:\website\MPS2\.env`, pool max 20 connections, `timezone=Asia/Jakarta`
-- **Timestamp handling:** OID 1114/1184 forced to string (no JS Date conversion)
-- **WebSocket:** At `/machine-hours-sqlserver/ws` for real-time machine data streaming
-- **File uploads:** multer middleware, stored in `apps/api/uploads/` (sow-pdf/, consumable/)
-- **SAP Integration:** POST to SAP CPI inbound URL (from env `SAP_INBOUND_URL`)
+- **PostgreSQL pool:** `.env` dari root `D:\website\MPS2\.env`. Di Docker, api konek via **pgbouncer:6432** (transaction pooling) dengan `DB_POOL_MAX` default 5; default pool di kode 10. Pool disimpan di `global.pool`; ada pool kedua di `db.js` (fallback `require("../db")`) — dua instance berbeda, hati-hati.
+- **Timezone:** env `TIMEZONE` saat ini `Asia/Makassar` (WITA), bukan Asia/Jakarta.
+- **RBAC guard:** `rbacGuard` global untuk semua write (POST/PUT/PATCH/DELETE), identitas dari header `x-user-id`/`x-user-role`; **log-only kecuali `RBAC_ENFORCE=1`**.
+- **Timestamp handling:** OID 1082/1114/1184 forced to string (no JS Date conversion)
+- **WebSocket:** `/machine-hours-sqlserver/ws` (streaming machine data); `mpsDashboardSocket` opsional via `ENABLE_MPS_DASHBOARD_WS=1`. SSE di `/ews/stream`.
+- **EWS jobs:** `apps/api/jobs/` (ewsSnapshotJob, ewsAdoptionBucketJob, ewsRosterGenerateJob) — dijalankan sebagai service compose `ews-*-job` (`npm run ews:*`).
+- **File uploads:** multer, disimpan di `apps/api/uploads/` (sow-pdf/, ms-project-mpp/, consumable/)
+- **SAP Integration:** POST ke SAP CPI inbound URL (env `SAP_INBOUND_URL`)
 - **CORS:** `*` origin (all origins allowed)
 
 ---
@@ -952,22 +986,43 @@ MPS2/
 | `production_operations` | Production operations from SAP/ETL |
 | `log_timesheet_sap` | SAP posting audit log |
 | `progress_update_history` | Progress update tracking |
+| `ph3_order` / `qh3_order` | Order/operation master dari SAP (via AWS Lambda + ETL) — acuan eligibility SAP |
+| `sap_timesheet_staging` | Antrian posting SAP (unique `(source_system, source_key)`, status PENDING/POSTED/FAILED) |
+| `mch_productiondata`, `mch_transaction`, `mch_machines`, `mch_statustypes` | Machine hours dari SQL Server SSB_OEE (via ETL) |
+| `machine_heartbeat` | Mirror heartbeat mesin dari SQL Server (sync tiap 10 detik) |
+| `mch_machine_ping_log` | Log ping jaringan mesin (machine-ping-worker) |
+| `ews.*` (schema) | kpi_snapshot, kpi_threshold, adoption_bucket/summary_snapshot, shift_roster, operator_shift, rotation_config, action_table/history, alert_log, tts_notification, activity_type_ref |
+| `ms_project_*` | MS Project sync (task, assignment, resource, calendar, revision, lock, audit_log, dll) |
+| `sow_schedule*`, `sow_verification_log`, `sow_revision_history`, `sow_templates`, `sow_template_lines` | SOW extended (scheduling, verifikasi, revisi, template) |
+| `consumable_item/stock/ticket`, tools tables | Warehouse consumable & tools management |
+| `users`, `rbac.user_permissions` | Login users + RBAC per-user overrides |
+| `shift_definition`, `tablet_status`, `tts_notification_order` | Shift, monitoring tablet, antrian TTS |
 
-- **Trigam indexes** on `full_name`, `order_no`, `serialnumber`, `part_name` (pg_trgm extension)
-- **Foreign keys:** process control → timesheet, SOW ↔ parts/operations
+- **Trigram indexes** on `full_name`, `order_no`, `serialnumber`, `part_name` (pg_trgm extension)
+- **Foreign keys:** process control → timesheet, SOW ↔ parts/operations; FK `timesheet_transaction.serialnumber → usernfc.snssb` berstatus `NOT VALID`
+- **PERINGATAN:** `database/schema/schema.sql` (20 tabel) dan `local_schema.sql` (38 tabel) saling drift; tidak ada migration runner/ledger — migrasi di `database/migrations/api/` diterapkan manual.
 
 ---
 
 ## Docker Compose Services
 
-| Service | Image | Port | Notes |
-|---------|-------|------|-------|
-| `db` | `postgres:15-alpine` | 5433→5432 | Healthcheck enabled, volume: `postgres_data` |
-| `api` | Node 20 Alpine | 3001 (internal) | Express.js, depends on db healthy |
-| `frontend` | nginx:alpine (serving built React) | 80 (internal) | SPA fallback config |
-| `nginx` | nginx:alpine | 80, 443 | Reverse proxy, SSL, routes: `/api/`, `/fastapi/`, `/uploads/` |
-| `sow_exporter` | Python | — | SOW export |
-| `fastapi` | Python 3.11 slim | 8000 (internal) | FastAPI for MS Project sync |
+| Service | Image/Build | Port | Notes |
+|---------|-------------|------|-------|
+| `db` | `postgres:15-alpine` | 5433→5432 | Healthcheck, volume `postgres_data`, mount `./backups`, `shm_size: 1gb` |
+| `pgbouncer` | bitnamilegacy/pgbouncer | 6432 (internal) | Transaction pooling; api konek ke sini, bukan langsung ke db |
+| `api` | Node 20 Alpine (`./apps/api`) | 3001 (internal) | Express.js; `DB_HOST=pgbouncer`, `DB_PORT=6432`, `DB_POOL_MAX=5` |
+| `ews-snapshot-job` | (image api) | — | `npm run ews:snapshot` |
+| `ews-adoption-job` | (image api) | — | `npm run ews:adoption` |
+| `ews-roster-job` | (image api) | — | `npm run ews:roster` |
+| `frontend` | nginx:alpine (built React) | 80 (internal) | Build args `VITE_API_URL=/api`, `VITE_APP_VARIANT` |
+| `nginx` | nginx:alpine | 80, 443 | Reverse proxy + SSL; routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/` |
+| `sow_exporter` | Python (`./jobs` + `sow/Dockerfile`) | — | SOW export ke `./export`; cron `*/10` via `docker compose run` |
+| `machine-ping-worker` | `jobs/machine_ping/Dockerfile` | — | Ping mesin M5051, `cap_add: NET_RAW` |
+| `fastapi` | Python 3.11 slim | 8000 (internal) | FastAPI SOW/TTS helper |
+| `tts-worker` | `./apps/tts-worker` | — | Piper TTS worker |
+| `ews-tts-worker` | (tts-worker) | — | `generate_ews_audio.py`, Edge TTS `id-ID-GadisNeural` |
+
+> Compose terpisah: `jobs/etl/docker-compose.etl.yml` (`timesheet_sap_etl` = etl_sync_v2) dan `jobs/etl/docker-compose.heartbeat.yml` (`machine-heartbeat-sync`).
 
 ---
 
@@ -991,6 +1046,6 @@ MPS2/
 
 9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
 
-10. **Environment variables key names:** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER` (postgres), `DB_PASSWORD`, `DB_PORT` (5432), `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (Asia/Jakarta)
+10. **Environment variables (kunci utama):** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER`, `DB_PASSWORD`, `DB_PORT`, `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (**Asia/Makassar**). Selain itu `.env` root juga berisi kelompok: `SAP_INBOUND_*`, `SAP_STAGING_DB_*`, `SAP_STAGE_*`, `SQLSERVER_*`, `SRC_*`/`TGT_*` (+ varian per-plant `_BALIKPAPAN/_CIKUPA/_KUALA_KENCANA/_SEBAMBAN`), `EWS_*`, `AWS_PG*`, `VITE_API_URL`, `VITE_API_PROXY_TARGET`, `VITE_APP_VARIANT`, `VITE_TTS_PROXY_TARGET`, `CORS_ORIGIN`, `DRAWINGS_PATH`, `clientid_ph3/qh3`, `clientsecret_ph3/qh3`, `tokenurl`, `url_ph3/qh3`.
  
  

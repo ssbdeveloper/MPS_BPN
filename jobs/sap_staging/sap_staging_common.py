@@ -306,7 +306,17 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
 
     values = [[row.get(column) for column in STAGING_COLUMNS] for row in rows]
     columns_sql = ", ".join(STAGING_COLUMNS)
-    conflict_sql = "ON CONFLICT (source_system, source_key) DO NOTHING"
+    # Refresh rows that are still PENDING so corrected source data (e.g. fixed machine-hour
+    # durations) flows through on a re-stage. Rows already handed to SAP
+    # (POSTING/POSTED/FAILED/SKIPPED) are left frozen. payload is reset to '{}' so the
+    # PAYLOAD_UPDATE_SQL pass below rebuilds it from the refreshed columns.
+    data_columns = [c for c in STAGING_COLUMNS if c not in ("source_system", "source_key")]
+    set_sql = ", ".join(f"{c} = EXCLUDED.{c}" for c in data_columns)
+    conflict_sql = (
+        "ON CONFLICT (source_system, source_key) DO UPDATE SET "
+        f"{set_sql}, payload = '{{}}'::jsonb, updated_at = now() "
+        "WHERE sap_timesheet_staging.status = 'PENDING'"
+    )
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_values(

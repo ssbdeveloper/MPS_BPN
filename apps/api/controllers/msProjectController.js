@@ -161,6 +161,21 @@ exports.uploadProjectFile = route(async (req) => {
   return (res) => success(res, data);
 });
 
+exports.downloadProjectFile = route(async (req) => {
+  const file = await service.getProjectFileForDownload(req.params.project_id);
+  return (res) => res.download(file.absolutePath, file.downloadName);
+});
+
+exports.listProjectRevisions = route(async (req) => {
+  const result = await service.listProjectRevisions(req.params.project_id, req.query);
+  return (res) => success(res, result.rows, 200, { limit: result.limit });
+});
+
+exports.updateProjectStatus = route(async (req) => {
+  const data = await service.updateProjectStatus(req.params.project_id, req.body || {});
+  return (res) => success(res, data);
+});
+
 exports.checkoutProject = route(async (req) => {
   const data = await service.checkoutProject(req.params.project_id, req.body || {});
   return (res) => success(res, data);

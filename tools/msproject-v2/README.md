@@ -1,0 +1,93 @@
+# MS Project VBA v2 — Integrasi MPS2 ("PWA Lite")
+
+Modul VBA untuk MS Project desktop sebagai **editor**, dengan server MPS2 sebagai
+**source of truth** (metadata + file `.mpp`), plus Hub web di `/ms-project-hub`.
+
+Versi lama ada di `docs/archive/additional/ms project/` — **jangan dipakai lagi**;
+folder ini (`tools/msproject-v2/`) adalah versi aktif.
+
+## Perubahan v2 dibanding v1
+
+| Area | v1 | v2 |
+|---|---|---|
+| Base URL, timeout, TLS, timezone | Hard-coded `Const` di `ms_config.bas` | File `%APPDATA%\mps-msproject\config.ini` (lihat `config.ini.example`), fallback ke default |
+| Verifikasi TLS | Selalu dimatikan (`Option(4)=13056`) | Opsi `verify_tls` (default `false` — samakan dulu dengan perilaku lama; aktifkan saat sertifikat sudah dipasang) |
+| Timezone tanggal | `+07:00` (WIB — **salah**, server = WITA) | `tz_suffix` config, default `+08:00` |
+| Macro pengguna | ±16 macro campur debug | 8 macro alur kerja (di `ms_sync.bas`) + debug terpisah (`ms_debug.bas`) |
+| Pilih project | Ketik UUID manual (`Ms_ImportProjectById`) | `Ms_OpenFromServer` — daftar bernomor, pilih nomor |
+| Status `TRIAL` | Konvensi VBA, tidak dikenal server | Dihapus; lifecycle resmi server: `DRAFT / ACTIVE / ARCHIVED` |
+
+## Cara pasang
+
+1. Buka MS Project → Alt+F11 (VBE) → import semua `.bas` di folder ini
+   (`JsonConverter.bas` wajib; hapus dulu modul v1 kalau ada).
+2. Salin `config.ini.example` ke `%APPDATA%\mps-msproject\config.ini`, sesuaikan `base_url`.
+3. Jalankan `Ms_CheckConnection` untuk tes.
+
+## Alur harian planner
+
+```text
+Buka project lama : Ms_OpenFromServer  (pilih nomor dari daftar)
+Mulai edit        : Ms_CheckOut        (ambil lock)
+Simpan            : Ms_SaveToServer    (sync metadata + upload .mpp, revisi naik)
+Selesai           : Ms_CheckIn         (lepas lock)
+
+Project baru      : Ms_PublishNewProject
+File copy         : Ms_CloneAsNewProject lalu Ms_PublishNewProject
+Tandai published  : Ms_PublishCurrentRevision (setelah SaveToServer)
+```
+
+Lock tidak kedaluwarsa (keputusan 2026-07-07). Lock nyangkut dilepas admin
+lewat Hub web (`/ms-project-hub` → Force Check-In).
+
+## Macro
+
+### `ms_sync.bas` (alur utama)
+| Macro | Fungsi |
+|---|---|
+| `Ms_CheckConnection` | Tes koneksi API + tampilkan base URL aktif |
+| `Ms_OpenFromServer` | Daftar 30 project terbaru → pilih nomor → import ke file aktif |
+| `Ms_CheckOut` | Ambil lock edit; deteksi lock lama yang masih valid |
+| `Ms_SaveToServer` | Sync metadata (409 bila revisi stale, 423 bila lock hilang) + upload `.mpp` |
+| `Ms_CheckIn` | Konfirmasi "sudah save?", lalu lepas lock |
+| `Ms_PublishNewProject` | Simpan file aktif sebagai project baru + upload `.mpp` |
+| `Ms_PublishCurrentRevision` | Tandai revisi DB sekarang sebagai published |
+| `Ms_CloneAsNewProject` | Hapus UUID agar file bisa dipublish sebagai project baru |
+| `Ms_LoadProjectTeam` | Muat resource project ke Resource Sheet |
+
+### `ms_config.bas`
+`Ms_ReloadConfig` — muat ulang config.ini tanpa restart MS Project.
+
+### `ms_debug.bas` (diagnostik / recovery)
+`Ms_UploadCurrentProjectFile` (retry upload), `Ms_HeartbeatCurrentProject`,
+`Ms_CheckResourceConflicts`, `Ms_DebugCurrentMppPath`,
+`Ms_DebugSaveCurrentProjectForUpload`, `Ms_DebugUploadCurrentProjectFileOnly`,
+`Ms_DebugBuildPayload`.
+
+## Field mapping MS Project (tidak berubah dari v1)
+
+| Data | Field |
+|---|---|
+| `project_id` | `ProjectSummaryTask.Text30` |
+| `revision_no` | `ProjectSummaryTask.Text29` |
+| `mode` | `ProjectSummaryTask.Text28` |
+| `lock_token` | `ProjectSummaryTask.Text27` |
+| `project calendar_id` | `ProjectSummaryTask.Text26` |
+| `task_id` / `task project_id` / `parent_task_id` / `task calendar_id` | `Task.Text10/11/12/13` |
+| `order_no` / `operation_no` / `ssbr_id` | `Task.Text1/2/3` |
+| `resource_id` / `resource calendar_id` | `Resource.Text9/8` |
+| `assignment_id` | `Assignment.Text10` |
+
+## Endpoint yang dipakai (base: `<base_url>` dari config)
+
+Sama dengan v1 (`/health`, `/projects`, `/projects/:id/package|checkout|heartbeat|sync|publish|checkin|file`,
+`/resources*`, `/calendars*`) — ditambah dukungan server baru untuk Hub:
+`GET /projects/:id/file` (download), `GET /projects/:id/revisions`, `PUT /projects/:id/status`.
+
+## Catatan
+
+- Sync existing wajib `project_id` + `revision_no` + `lock_token` (checkout dulu).
+- Task baru wajib `local_task_uid` dari `Task.UniqueID`.
+- File `.mpp` server selalu **overwrite** satu file per project (keputusan 2026-07-07);
+  riwayat metadata tetap tersimpan per revisi di `ms_project_revision`.
+- Untuk upload `.mpp`, file aktif harus sudah pernah Save As `.mpp` lokal.

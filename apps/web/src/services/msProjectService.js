@@ -106,14 +106,34 @@ export async function forceCheckinProject(projectId, payload = {}) {
   return response.data;
 }
 
+export function msProjectFileUrl(projectId) {
+  return apiUrl(`/ms-project/projects/${encodeURIComponent(projectId)}/file`);
+}
+
+export async function fetchMsProjectRevisions(projectId, params = {}) {
+  const payload = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/revisions${queryString(params)}`);
+  return payload.data || [];
+}
+
+export async function updateMsProjectStatus(projectId, status, actor) {
+  const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/status`, {
+    method: 'PUT',
+    body: JSON.stringify({ status, actor }),
+  });
+  return response.data;
+}
+
 export default {
   cancelBaySchedule,
   createBaySchedule,
   fetchBaySchedules,
+  fetchMsProjectRevisions,
   fetchMsProjects,
   fetchMsProjectTasks,
   fetchSowOrders,
   fetchSowOrderOperations,
   forceCheckinProject,
   mapSowOrderToProjectTasks,
+  msProjectFileUrl,
+  updateMsProjectStatus,
 };

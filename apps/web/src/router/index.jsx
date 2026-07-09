@@ -196,8 +196,13 @@ const router = createBrowserRouter([
     lazy: protectedPage(() => import('../pages/PPC/ShiftDefinitionPage')),
   },
   {
+    path: '/ms-project-hub',
+    lazy: protectedPage(() => import('../pages/PPC/MsProjectHubPage')),
+  },
+  {
+    // Alias lama — halaman admin force-checkin sudah dilebur ke Hub.
     path: '/ms-project-admin',
-    lazy: protectedPage(() => import('../pages/PPC/MsProjectAdminPage')),
+    lazy: protectedPage(() => import('../pages/PPC/MsProjectHubPage')),
   },
   {
     path: '/edit-parameter',

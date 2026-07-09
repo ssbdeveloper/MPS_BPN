@@ -2,8 +2,13 @@
 etl_mch_transaction_v3.py
 Incremental PostgreSQL ETL that fills public.mch_transaction from public.mch_productiondata.
 
-V2 avoids nearest-time lookup to public.timesheet_transaction. Operator fields are resolved
-from public.mch_user using public.mch_productiondata.operatorid.
+V2 avoids nearest-time lookup to public.timesheet_transaction.
+
+Operator fields (full_name, sn_employee) are resolved from public.usernfc via the NFC card:
+public.mch_productiondata.operatorid -> public.usernfc.nfcid. operatorid holds the raw NFC
+UID hex (e.g. C27FC969) while usernfc.nfcid stores it as the byte-reversed decimal
+(e.g. 1774125506). The lookup matches nfcid = operatorid exactly OR, for 8-hex operatorids,
+nfcid = decimal(byte_reverse(operatorid)). sn_employee <- usernfc.snssb, full_name <- usernfc.full_name.
 
 V3 resolves job data by splitting public.mch_productiondata.jobid in the format
 order_no-operation_no, for example 100001235-10. PH3 and SOW fields are resolved
@@ -21,17 +26,27 @@ import argparse
 import logging
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
 
+try:
+    import fcntl  # POSIX only (server prod = Linux)
+except ImportError:  # Windows (dev) — locking di-skip dengan aman
+    fcntl = None
+
+# Lock antar-proses: cegah dua run ETL berjalan bersamaan (mis. cron */5 yang
+# menembak run baru sebelum run sebelumnya selesai).
+LOCK_PATH = os.path.join(tempfile.gettempdir(), "etl_mch_transaction_v3.lock")
+
 BATCH_SIZE = 5000
 DEFAULT_FROM_DATE = "2026-01-01"
 TARGET_TABLE = "public.mch_transaction"
 SOURCE_TABLE = "public.mch_productiondata"
-USER_TABLE = "public.mch_user"
+NFC_TABLE = "public.usernfc"
 SOW_TABLE = "public.sow"
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = next(
@@ -163,6 +178,20 @@ def load_postgres_config() -> dict:
         "dbname": env_values.get("DB_NAME", "ptssb"),
         "user": env_values.get("DB_USER", "postgres"),
         "password": env_values.get("DB_PASSWORD", ""),
+        # Traceability: label sesi ini di pg_stat_activity.application_name
+        "application_name": "mps2-etl-mch-transaction",
+        # Batasi waktu tunggu koneksi awal
+        "connect_timeout": 10,
+        # TCP keepalives: kalau proses ini mati tidak bersih (crash/OOM/kill),
+        # Postgres mendeteksi TCP mati dalam ~60 detik dan menutup backend-nya
+        # sendiri — mencegah koneksi yatim "idle selamanya".
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 3,
+        # Server-side guard: bunuh statement yang menggantung > 10 menit dan
+        # sesi yang idle-in-transaction > 1 menit.
+        "options": "-c statement_timeout=600000 -c idle_in_transaction_session_timeout=60000",
     }
 
 
@@ -199,7 +228,6 @@ def build_source_query(full_rebuild: bool, from_dt: datetime, to_dt: datetime | 
                 p.proddataid,
                 p.startdatetime,
                 p.enddatetime,
-                p.duration,
                 p.machineno,
                 p.statusid,
                 p.previoustatusid,
@@ -217,7 +245,6 @@ def build_source_query(full_rebuild: bool, from_dt: datetime, to_dt: datetime | 
             p.proddataid,
             p.startdatetime,
             p.enddatetime,
-            p.duration,
             p.machineno,
             p.statusid,
             p.previoustatusid,
@@ -331,14 +358,32 @@ def normalize_operatorid(value) -> str | None:
     return text or None
 
 
-def fetch_mch_user_maps(cursor, operator_ids: list[str]) -> dict[str, dict]:
+def fetch_nfc_user_maps(cursor, operator_ids: list[str]) -> dict[str, dict]:
+    """Resolve operatorid -> usernfc (full_name, snssb) via the NFC card id.
+
+    operatorid is the raw NFC UID hex; usernfc.nfcid stores the byte-reversed decimal.
+    Match nfcid = operatorid exactly OR, for 8-hex operatorids, nfcid = decimal of the
+    byte-reversed UID. Exact matches win over the transformed one.
+    """
     if not operator_ids:
         return {}
     cursor.execute(
-        f"""
-        SELECT operatorid, full_name, sn_employee
-        FROM {USER_TABLE}
-        WHERE operatorid = ANY(%s)
+        rf"""
+        WITH ops(operatorid) AS (
+            SELECT DISTINCT unnest(%s::text[])
+        )
+        SELECT DISTINCT ON (o.operatorid)
+            o.operatorid, u.full_name, u.snssb
+        FROM ops o
+        JOIN {NFC_TABLE} u
+          ON u.nfcid = o.operatorid
+          OR (
+               o.operatorid ~ '^[0-9A-Fa-f]{{8}}$'
+               AND u.nfcid = (
+                 ('x' || regexp_replace(o.operatorid, '(..)(..)(..)(..)', '\4\3\2\1'))::bit(32)::bigint
+               )::text
+             )
+        ORDER BY o.operatorid, (u.nfcid = o.operatorid) DESC, u.idrow
         """,
         (operator_ids,),
     )
@@ -530,6 +575,10 @@ def build_target_tuple(
     user = user_map.get(normalize_operatorid(row.get("operatorid")), {})
     sow = sow_map.get(job_key, {})
 
+    # Duration is ALWAYS derived from enddatetime - startdatetime. The source
+    # mch_productiondata.duration column is unreliable (~95% of rows disagree with the
+    # real span, some off by days) so it is never read; source_duration mirrors the
+    # computed seconds to keep the column consistent.
     duration_seconds = compute_duration_seconds(row["startdatetime"], row["enddatetime"])
     duration_hours = round(duration_seconds / 3600.0, 4)
 
@@ -540,7 +589,7 @@ def build_target_tuple(
         row["startdatetime"].date() if row["startdatetime"] else None,
         row["startdatetime"].strftime("%H:%M:%S") if row["startdatetime"] else None,
         row["enddatetime"].strftime("%H:%M:%S") if row["enddatetime"] else None,
-        row["duration"],
+        duration_seconds,
         duration_seconds,
         duration_hours,
         row["machineno"],
@@ -577,6 +626,32 @@ def build_target_tuple(
     )
 
 
+def delete_target_range(cursor, from_dt: datetime, to_dt: datetime | None) -> int:
+    """Delete target rows in the rebuild window so --full-rebuild truly RECREATES it.
+
+    Aligns with the source filter (startdatetime >= from [AND < to]). Any target row
+    that would no longer be produced (e.g. a jobid that no longer matches a V3 job, or
+    stale operator names) is removed instead of being left behind.
+    """
+    params: list = [from_dt]
+    where = "startdatetime >= %s"
+    if to_dt:
+        where += " AND startdatetime < %s"
+        params.append(to_dt)
+    cursor.execute(f"DELETE FROM {TARGET_TABLE} WHERE {where}", params)
+    return cursor.rowcount
+
+
+def count_target_range(cursor, from_dt: datetime, to_dt: datetime | None) -> int:
+    params: list = [from_dt]
+    where = "startdatetime >= %s"
+    if to_dt:
+        where += " AND startdatetime < %s"
+        params.append(to_dt)
+    cursor.execute(f"SELECT COUNT(*) FROM {TARGET_TABLE} WHERE {where}", params)
+    return cursor.fetchone()[0]
+
+
 def upsert_batch(cursor, values: list[tuple]) -> None:
     psycopg2.extras.execute_values(
         cursor,
@@ -595,6 +670,17 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             candidate_count = prepare_incremental_candidates(cursor, from_dt, to_dt)
         pg_conn.commit()
         log.info("Prepared incremental candidate rows: %d", candidate_count)
+    else:
+        # RECREATE: wipe the target window first so rows that no longer match a V3 job
+        # (or carry stale operator names) are removed, not just skipped.
+        with pg_conn.cursor() as cursor:
+            if dry_run:
+                would_delete = count_target_range(cursor, from_dt, to_dt)
+                log.info("Full rebuild (DRY RUN): would delete %d existing target rows in range before recreate", would_delete)
+            else:
+                deleted = delete_target_range(cursor, from_dt, to_dt)
+                pg_conn.commit()
+                log.info("Full rebuild: deleted %d existing target rows in range (recreate)", deleted)
 
     while True:
         with pg_conn.cursor() as cursor:
@@ -640,7 +726,7 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             machine_map = fetch_machine_maps(cursor, machine_nos)
             status_map = fetch_status_maps(cursor, status_ids)
             ph3_map = fetch_latest_ph3_by_job_key(cursor, job_ids)
-            user_map = fetch_mch_user_maps(cursor, operator_ids)
+            user_map = fetch_nfc_user_maps(cursor, operator_ids)
             sow_map = fetch_sow_maps(cursor, job_keys)
 
         matched_source_rows = [
@@ -716,7 +802,33 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
     return total_upserted
 
 
+def acquire_single_instance_lock():
+    """Ambil lock eksklusif non-blocking. Kembalikan handle file lock kalau
+    berhasil (harus tetap terbuka selama proses hidup), atau None kalau run lain
+    sedang berjalan. Pada platform tanpa fcntl (Windows dev), locking di-skip."""
+    if fcntl is None:
+        return "no-lock"
+
+    lock_file = open(LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock_file.close()
+        return None
+
+    lock_file.write(f"{os.getpid()}\n")
+    lock_file.flush()
+    return lock_file
+
+
 def main() -> None:
+    lock = acquire_single_instance_lock()
+    if lock is None:
+        log.warning(
+            "Run lain masih berjalan (lock %s). Lewati run ini.", LOCK_PATH
+        )
+        return
+
     parser = argparse.ArgumentParser(
         description="Incremental ETL from public.mch_productiondata into public.mch_transaction using mch_user operator lookup"
     )
@@ -734,7 +846,7 @@ def main() -> None:
     parser.add_argument(
         "--full-rebuild",
         action="store_true",
-        help="Ignore watermark mch_transaction dan proses ulang semua source row pada rentang tanggal.",
+        help="RECREATE rentang tanggal: hapus dulu baris mch_transaction pada rentang (startdatetime), lalu bangun ulang dari source. Baris yang tak lagi match job V3 ikut terhapus (bukan disisakan basi).",
     )
     parser.add_argument(
         "--dry-run",
@@ -761,12 +873,12 @@ def main() -> None:
         log.info("PostgreSQL: %s:%s/%s", pg_config["host"], pg_config["port"], pg_config["dbname"])
         log.info(
             "Mode: %s",
-            "full rebuild"
+            "full rebuild (recreate: delete range then rebuild)"
             if args.full_rebuild
             else "incremental by proddataid + reprocess target rows with enddatetime IS NULL",
         )
         log.info("Source status filter: all statusid values")
-        log.info("Operator lookup: mch_productiondata.operatorid -> mch_user.operatorid")
+        log.info("Operator lookup: mch_productiondata.operatorid -> usernfc.nfcid (exact or byte-reversed hex->decimal)")
         log.info("Job lookup: split mch_productiondata.jobid order_no-operation_no -> ph3_order")
         log.info("SOW lookup: split mch_productiondata.jobid order_no-operation_no -> sow")
 

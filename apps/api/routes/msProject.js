@@ -43,6 +43,9 @@ router.put("/projects/:project_id/tasks/map-sow-order", controller.mapSowOrderTo
 router.get("/projects/:project_id/package", controller.getProjectPackage);
 router.post("/projects", controller.publishProject);
 router.post("/projects/:project_id/file", upload.single("file"), controller.uploadProjectFile);
+router.get("/projects/:project_id/file", controller.downloadProjectFile);
+router.get("/projects/:project_id/revisions", controller.listProjectRevisions);
+router.put("/projects/:project_id/status", controller.updateProjectStatus);
 router.post("/projects/:project_id/checkout", controller.checkoutProject);
 router.post("/projects/:project_id/heartbeat", controller.heartbeatProject);
 router.put("/projects/:project_id/sync", controller.syncProject);
