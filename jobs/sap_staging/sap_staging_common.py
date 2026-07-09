@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS sap_timesheet_staging (
 
   werks text NOT NULL DEFAULT '',
   pernr text NOT NULL DEFAULT '',
+  pernr_origin text NOT NULL DEFAULT '',
   rueck text NOT NULL DEFAULT '',
   aufnr text NOT NULL DEFAULT '',
   vornr text NOT NULL DEFAULT '',
@@ -144,6 +145,11 @@ CREATE TABLE IF NOT EXISTS sap_timesheet_staging (
     source_system IN ('TIMESHEET', 'MCH_HOURS')
   )
 );
+
+-- Idempotent upgrade for pre-existing tables (CREATE TABLE IF NOT EXISTS above
+-- won't add new columns to a table that already exists).
+ALTER TABLE sap_timesheet_staging
+  ADD COLUMN IF NOT EXISTS pernr_origin text NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS sap_timesheet_staging_status_idx
   ON sap_timesheet_staging (status, created_at);
@@ -190,6 +196,7 @@ STAGING_COLUMNS = [
     "source_ref_id",
     "werks",
     "pernr",
+    "pernr_origin",
     "rueck",
     "aufnr",
     "vornr",

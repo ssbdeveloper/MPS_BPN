@@ -56,6 +56,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         WHEN COALESCE(un.employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
         ELSE LPAD(COALESCE(t.serialnumber, ''), 8, '0')
       END AS pernr,
+      LPAD(COALESCE(t.serialnumber, ''), 8, '0') AS pernr_origin,
       CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.confirmation_number, '') END AS rueck,
       CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(t.order_no, ''), 12, '0') END AS aufnr,
       CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(t.operation_no::text, ''), 4, '0') END AS vornr,

@@ -65,6 +65,7 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
         WHEN COALESCE(un.employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
         ELSE LPAD(COALESCE(t.serialnumber, ''), 8, '0')
       END AS pernr,
+      LPAD(COALESCE(t.serialnumber, ''), 8, '0') AS pernr_origin,
       CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.confirmation_number, '') END AS rueck,
       CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(t.order_no, ''), 12, '0') END AS aufnr,
       CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(t.operation_no::text, ''), 4, '0') END AS vornr,
@@ -261,6 +262,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
       NULL::text AS source_ref_id,
       %s AS werks,
       pernr,
+      employee_key AS pernr_origin,
       CASE WHEN zconf_type IN ('M1', 'M2') THEN LPAD(rueck_raw, 10, '0') ELSE '' END AS rueck,
       LPAD(aufnr_raw, 12, '0') AS aufnr,
       LPAD(vornr_raw, 4, '0') AS vornr,
