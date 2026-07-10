@@ -8,6 +8,10 @@ router.get("/trend", controller.getTrend);
 router.get("/stream", controller.stream);
 router.get("/health", controller.getHealth);
 router.get("/issues", controller.getIssues);
+// ews.issue_log — backend-generated issue log, filter by KPI category
+router.get("/issue-log", controller.getIssueLog);
+router.put("/issue-log/:id/resolve", controller.resolveIssueLog);
+router.post("/issue-log/generate", controller.generateIssueLog);
 router.get("/actions", controller.getActions);
 router.post("/actions/sync", controller.syncActions);
 router.put("/actions/:id/resolve", controller.resolveAction);

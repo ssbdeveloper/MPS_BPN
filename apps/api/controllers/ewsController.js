@@ -1,6 +1,7 @@
 const ewsCalculator = require("../services/ewsCalculator");
 const ewsRealtimeHub = require("../services/ewsRealtimeHub");
 const ewsTtsNotifier = require("../services/ewsTtsNotifier");
+const ewsIssueGenerator = require("../services/ewsIssueGenerator");
 const db = global.pool || require("../db");
 
 const summaryCache = new Map();
@@ -1334,10 +1335,83 @@ async function markTtsNotificationPlayed(req, res) {
   }
 }
 
+// ── ews.issue_log (backend-generated issue log, filtered by KPI category) ────
+async function getIssueLog(req, res) {
+  const category = String(req.query.category || "").toLowerCase();
+  const status = String(req.query.status || "open").toLowerCase();
+  try {
+    const params = [];
+    const filters = ["1=1"];
+    if (category) { params.push(category); filters.push(`category = $${params.length}`); }
+    if (status && status !== "all") { params.push(status); filters.push(`status = $${params.length}`); }
+    const result = await db.query(
+      `
+      SELECT id, issue_key, category, business_date, scope_type, entity_id, entity_name,
+             severity, title, description, metric_value, detail, status,
+             created_at, updated_at, resolved_at
+      FROM ews.issue_log
+      WHERE ${filters.join(" AND ")}
+      ORDER BY (status = 'open') DESC, (severity = 'critical') DESC, business_date DESC, created_at DESC
+      LIMIT 300
+      `,
+      params,
+    );
+    res.json({ data: result.rows, meta: { generated_at: new Date().toISOString() } });
+  } catch (err) {
+    if (err.code === "42P01") {
+      res.json({ data: [], meta: { warning: "ews.issue_log not created" } });
+      return;
+    }
+    console.error("ews issue-log error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+async function resolveIssueLog(req, res) {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid issue id" }); return; }
+  try {
+    const result = await db.query(
+      `
+      UPDATE ews.issue_log
+      SET status = 'resolved', resolved_at = COALESCE(resolved_at, now()), updated_at = now()
+      WHERE id = $1
+      RETURNING *
+      `,
+      [id],
+    );
+    if (!result.rows.length) { res.status(404).json({ error: "Issue not found" }); return; }
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    console.error("ews issue-log resolve error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// Manual/on-demand generation (the snapshot job also runs this autonomously).
+async function generateIssueLog(_req, res) {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await ewsIssueGenerator.generateAll(client);
+    await client.query("COMMIT");
+    res.json({ data: result, meta: { generated_at: new Date().toISOString() } });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("ews issue-log generate error:", err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   getSummary,
   getTrend,
   getIssues,
+  getIssueLog,
+  resolveIssueLog,
+  generateIssueLog,
   getActions,
   syncActions,
   resolveAction,

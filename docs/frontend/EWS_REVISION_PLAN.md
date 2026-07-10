@@ -18,6 +18,88 @@ CONSTRAINTS:
 - No new comments beyond what's needed. Production-ready, tight scope.
 - Commit after each phase and STOP for my review. Do not proceed to the next phase automatically.
 
+---
+
+## STATUS UPDATE (2026-07-10) — READ FIRST, SUPERSEDES Phase 5/6 BELOW
+
+**Phase 1–4 = DONE.** The 5→8 KPI split is live in backend *and* frontend:
+- `KPI_DEFS` (ewsCalculator.js) = 8 KPIs; `calculateSystemSummary` computes all 8.
+- `EwsControlTower.jsx` renders 8 cards (2 rows × 4); `EwsDetailPage.jsx` `KPI_CONFIG` has
+  `accuracy_labour/accuracy_machine/adoption_labour/adoption_machine/uptime_tablet/uptime_hmi`.
+- Route `/ews/:type/detail` already serves each 8-KPI key.
+- NOTE: `VALID_KPIS` (5) in ewsController is a **stale** list used only by the old
+  `syncActions` endpoint — it is NOT the source of truth. Clean it up when action_table retires.
+- `uptime_hmi` is now REAL (reads `ews.machine_heartbeat_daily`). `uptime_tablet` still no_data.
+
+**Direction change for Issue Log (supersedes Phase 5 "presentation-only on action_table"):**
+The issue log moves to a **backend-generated central table `ews.issue_log`**, so issues are
+recorded autonomously (independent of anyone opening the UI — fixes the old "only when viewed"
+flaw). Migration `database/migrations/api/20260710_ews_issue_log.sql`. The old FE-generated
+`ews.action_table` flow (`syncActions`/`getActions`) is DEPRECATED and retired once the FE reads
+`issue_log`.
+
+### ews.issue_log — architecture
+- **Table:** `id, issue_key (unik/dedup), category, business_date, scope_type, entity_id,
+  entity_name, severity(warning|critical), title, description, metric_value, detail(jsonb),
+  status(open|resolved), created_at, updated_at, resolved_at`.
+- **category = the 8-KPI key** (`accuracy_machine`, `accuracy_labour`, `oee`, …). A detail page
+  reads only its own category: `GET /ews/issue-log?category=<type>&status=open`.
+- **Generation:** `apps/api/services/ewsIssueGenerator.js` → one `generate<Kpi>()` per category;
+  `generateAll()` runs them for the current **business day (shift-aware, EWS_DAY_START_HOUR)**.
+  Hooked into `ewsSnapshotJob` (~1 min) so it is autonomous.
+- **Dedup / grain:** `issue_key = "<category>:<business_date>:<scope>:<entity_id>"` → one row per
+  (KPI, business day, entity). Re-generation **UPSERTs while `status='open'`** (never duplicates,
+  never overwrites a `resolved` row). Same shift-aware business-date rule as the KPIs.
+- **Reuse the KPI predicate:** each generator MUST use the SAME predicate/join as its KPI calc
+  (or the KPI's `source_detail` breakdown) so the issue set reconciles with the card value.
+- **Endpoints:** `GET /ews/issue-log`, `PUT /ews/issue-log/:id/resolve`, `POST /ews/issue-log/generate`.
+
+### Per-KPI generation spec (implement one generator at a time, commit + STOP each)
+
+| category | scope | issue = (predikat, reuse calc) | gate default (tunable) | severity | source_detail |
+|----------|-------|--------------------------------|------------------------|----------|---------------|
+| **accuracy_machine** ✅DONE | machine | `mch_transaction` rows with `status_record = false`, per machine. (ETL now mirrors ALL `mch_productiondata` rows; `status_record` GENERATED col flags completeness: TRUE if statusid∈(0,3,4) OR order_no+operation_no+sn_employee+confirmation_number all present.) | `bad ≥ 5` (`EWS_ACC_MACHINE_MIN_MISSING`) | `bad% ≥ 50 → critical` (`EWS_ACC_MACHINE_CRITICAL_PCT`) | `by_machine` |
+| **accuracy_labour** ✅DONE | operator | productive `timesheet_transaction` rows (no `activitytype`) that are invalid: missing order/operation/workcenter/serialnumber OR order+operation has no `ph3_order` match — per operator. Referential, so NO generated column (lives in generator). | `bad ≥ 3` (`EWS_ACC_LABOUR_MIN_BAD`) | `bad% ≥ 30 → critical` (`EWS_ACC_LABOUR_CRITICAL_PCT`) | `by_operator` |
+| **adoption_labour** ✅DONE | operator | COMPLETED shift where recorded < standard, per (operator, shift) — **reuses snapshot** `adoption_labour.detail.breakdown` (computed in-main). Excused roster statuses (LEAVE/SICK/PERMIT/OFF) skipped; in-progress shifts skipped. Roster breakdown extended with `completed`+`gap_hours` to match the logs variant. | `gap ≥ 1h` (`EWS_ADOPTION_LABOUR_MIN_GAP_H`) | `recorded% ≤ 50 → critical` (`EWS_ADOPTION_LABOUR_CRITICAL_PCT`) | `by_operator` |
+| **adoption_machine** ✅DONE | machine | machine gap segments (statusid 5 unidentified / statusid 2 idle >5min), per machine — **reuses snapshot** (no re-query): the adoption bucket job persists a `per_machine` breakdown into `adoption_summary_snapshot.detail_json`, surfaced via `getCachedAdoptionCalculation`, read back by the generator. Works for both `EWS_ADOPTION_SOURCE=machine` (duration) & `all` (bucket-coverage). | `gap ≥ 15 min` (`EWS_ADOPTION_MACHINE_MIN_GAP_MIN`) | `cover% ≤ 50 → critical` (`EWS_ADOPTION_MACHINE_CRITICAL_COVER_PCT`) | `by_machine` |
+| **oee** ✅DONE | machine | machine in OEE CRITICAL band, per machine — **reuses snapshot** `oee.detail.per_machine`. **Critical-only** (warning band shows on gauge, not as issue) to keep the log actionable. | `denom ≥ 2h` & `oee < 65` (`EWS_OEE_MACHINE_*`) | always `critical` | `by_machine` (oee_pct, loss_hours) |
+| **ole** ✅DONE | operator | operator in OLE CRITICAL band, per operator — **reuses snapshot** `ole.detail.per_operator`. **Critical-only** (decided vs warn<85 flooding 56/85). Still 38/85 on a systemically-low day (real signal). | `avail ≥ 2h` & `ole < 70` (`EWS_OLE_OPERATOR_*`) | always `critical` | `by_operator` (ole_pct, nva_hours) |
+| **uptime_hmi** ✅DONE | machine | machine network uptime% below band, per machine — **reuses snapshot** `uptime_hmi.detail.machines` (from `ews.machine_heartbeat_daily`). 0% = down all day = critical. Ping floor skips low-data machines (early day). | `pings ≥ 100` & `uptime < 99` (`EWS_UPTIME_HMI_*`) | `uptime < 98 → critical`, else warning | `by_machine` (uptime_pct, pings) |
+| uptime_tablet | — | **skip** (no_data until tablet uptime calc lands) | — | — | — |
+
+> `title`/`description` = plain Bahasa Indonesia, SPECIFIC (WHO/WHAT/HOW MANY/WHAT TO DO) — carry
+> over the Phase-5 message rules below. Keep a machine-readable `category` + (optional) `error_code`
+> in `detail` for filtering; humans read `title`/`description`.
+
+**Revised phase order (issue log):**
+- **IL-1** ✅ table + `accuracy_machine` generator + endpoints + snapshot hook (DONE, uncommitted).
+- **IL-1b** ✅ `accuracy_machine` redesign: `status_record` GENERATED col + ETL no-filter recreate,
+  calc + generator switched to `status_record` (DONE, uncommitted).
+- **IL-1c** ✅ `accuracy_labour` generator (`generateAccuracyLabour`, referential ph3 check, per
+  operator) wired into `generateAll` (DONE, uncommitted).
+- **IL-1d** ✅ `adoption_machine` generator (`generateAdoptionMachine`, reuses snapshot per-machine
+  breakdown from `adoption_summary_snapshot`, no heavy re-query) wired into `generateAll`
+  (DONE, uncommitted). NOTE: full live chain needs the shift-aware bounds deployed to prod — the
+  live prod job still runs old bounds so its snapshot `window_start` date won't match until deploy.
+- **IL-2** ✅ `EwsDetailPage` → new `AutoIssueLogCard` reads `GET /ews/issue-log?category=<type>`
+  (all categories, open+resolved) + `PUT /ews/issue-log/:id/resolve` with optimistic update.
+  Self-contained, placed above the legacy action_table section (which IL-last retires).
+  Also fixed a dedup bug: `getBizBounds` now returns `business_date` as **text** (`::date::text`)
+  so the `issue_key` stays `2026-07-09` regardless of the caller's pg date parser (the API path
+  was emitting a full `Date.toString()` → duplicate rows vs the snapshot job's clean key).
+- **IL-1e** ✅ `adoption_labour` generator (`generateAdoptionLabour`, reuses snapshot breakdown,
+  completed shifts only, excused statuses skipped) wired into `generateAll` (DONE, uncommitted).
+- **IL-1f** ✅ `oee` + `ole` generators (`generateOee`/`generateOle`, reuse snapshot per-machine/
+  per-operator breakdown, CRITICAL-only) wired into `generateAll` (DONE, uncommitted).
+- **IL-1g** ✅ `uptime_hmi` generator (`generateUptimeHmi`, reuses snapshot per-machine list,
+  ping floor, <98 critical / 98–99 warning) wired into `generateAll` (DONE, uncommitted).
+- **All KPIs with a calc now have a generator.** Only `uptime_tablet` remains (no calc yet).
+- **IL-last** retire `action_table`/`syncActions`/`getActions`, clean `VALID_KPIS`.
+- Phase 6 (drill-through) below still applies — just source the issue from `ews.issue_log` and reuse
+  the same per-KPI predicate for the culprit records.
+
+---
+
 ## LOCKED DECISIONS (agreed before Phase 1 — override anything below that conflicts)
 
 D1. overall() — RETIRE overall_score as the headline. Keep overall_status only
@@ -143,9 +225,15 @@ Phase 4  Frontend: EwsControlTower 2-row × 4-card layout, sparklines per new KP
          NOT production health — it must not be read as OEE/OLE. Mark accuracy target 98 (both sides)
          and the adoption_labour band as "provisional" in the UI. performance_score = oee/ole only.
 
-## Phase 5 — Issue Log & Action: plain-language rewrite (backend + UI text only)
+## Phase 5 — Issue Log & Action: plain-language rewrite
+> ⚠️ SUPERSEDED by "STATUS UPDATE / ews.issue_log" above. The issue log is now
+> **backend-generated into `ews.issue_log`** (not FE-generated on `action_table`). The
+> **plain-language message rules below STILL APPLY** — they become the `title`/`description`
+> templates for each generator (IL-2/IL-3). Read "presentation" as: write the human text
+> right in the generator; store it on `ews.issue_log`, not `action_table`.
+
 GOAL: make issue log readable by foremen/supervisors (non-engineers), in plain Bahasa Indonesia.
-This is a PRESENTATION change. Do NOT change how issues are detected, keyed, or deduped.
+Do NOT change how issues are detected, keyed, or deduped (dedup rule = `issue_key` in §STATUS).
 
 Rules:
 - Keep a stable machine-readable `error_code` on every issue (e.g. MISSING_ORDER, SOW_NO_MATCH,
@@ -162,10 +250,13 @@ Rules:
 - Do NOT touch issue_key format, sync idempotency, or the aggregation level.
 
 ## Phase 6 — Drill-through to culprit records (NEW read-only page)
+> Source of the issue = **`ews.issue_log`** (each row already carries `category`, `entity_id`,
+> `business_date`, and `detail`). Use the issue's business_date window for the culprit query.
+
 GOAL: from an issue in the log, click through to see the SPECIFIC source records causing it.
 
 Constraints (read carefully):
-- READ-ONLY. This drill creates NO new issue rows and does NOT alter action_table. It is a lookup.
+- READ-ONLY. This drill creates NO new issue rows and does NOT alter ews.issue_log. It is a lookup.
 - The culprit query MUST reuse the EXACT predicates/joins of the corresponding KPI calc in
   ewsCalculator.js. Do not redefine "error"/"gap". The row count here must reconcile with the card value.
 - Store window_start/window_end on the issue (if not already) and run the culprit query against THAT

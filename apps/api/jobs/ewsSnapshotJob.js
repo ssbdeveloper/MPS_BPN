@@ -38,6 +38,7 @@ const pool = new Pool({
 global.pool = pool;
 
 const ewsCalculator = require("../services/ewsCalculator");
+const ewsIssueGenerator = require("../services/ewsIssueGenerator");
 
 let listenClient = null;
 let debounceTimer = null;
@@ -125,6 +126,25 @@ async function runSnapshots(reason = "manual", source = null) {
         duration_ms: Date.now() - targetStartedAt,
       });
     }
+
+    // Generate the issue log autonomously (independent of anyone opening the UI).
+    try {
+      const genClient = await pool.connect();
+      try {
+        await genClient.query("BEGIN");
+        const gen = await ewsIssueGenerator.generateAll(genClient);
+        await genClient.query("COMMIT");
+        console.log("[EWS job] issue log generated", gen);
+      } catch (genErr) {
+        await genClient.query("ROLLBACK").catch(() => {});
+        throw genErr;
+      } finally {
+        genClient.release();
+      }
+    } catch (genErr) {
+      console.error("[EWS job] issue log generation failed:", genErr.message);
+    }
+
     succeeded = true;
   } finally {
     clearInterval(progressTimer);

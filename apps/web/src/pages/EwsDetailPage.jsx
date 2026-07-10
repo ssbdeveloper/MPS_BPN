@@ -12,8 +12,10 @@ import {
   HardHat,
   Lightbulb,
   Minus,
+  Moon,
   RefreshCw,
   ShieldCheck,
+  Sun,
   TrendingDown,
   TrendingUp,
   UserCheck,
@@ -258,12 +260,6 @@ function formatDateTime(value) {
   });
 }
 
-function businessDateOf(meta) {
-  const raw = meta?.window_end || meta?.generated_at;
-  const iso = raw ? String(raw) : new Date().toISOString();
-  return iso.slice(0, 10);
-}
-
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -323,6 +319,30 @@ function buildDiagnosis(kpiType, kpi, kpisByKey) {
     headline = low ? 'Coverage input rendah (trust ↓)' : 'Adopsi input operator baik';
     points.push('Adoption adalah indikator TRUST. Coverage rendah membuat OEE & OLE understated karena aktivitas mesin tidak terwakili timesheet.');
     if (low && isLow(ole, 85)) points.push('Adoption + OLE sama-sama rendah → kemungkinan besar input issue, bukan inefisiensi nyata (Insight #6).');
+  } else if (kpiType === 'adoption_labour') {
+    headline = low ? 'Input jam operator di bawah target' : 'Input jam operator sehat';
+    const sd = kpi?.source_detail || {};
+    const n = (x) => Number(x) || 0;
+    const started = n(sd.started);
+    const present = n(sd.present);
+    const absent = n(sd.absent);
+    const notStarted = n(sd.not_started);
+    const excused = n(sd.excused);
+    const recorded = n(sd.total_recorded_hours);
+    const expected = n(sd.total_expected_hours);
+    const shortfall = Math.max(expected - recorded, 0);
+    const pctText = (v) => (v === null || v === undefined ? '—' : `${formatNumber(v)}%`);
+
+    if (started > 0) {
+      points.push(`${present} dari ${started} operator yang shiftnya sudah berjalan tercatat input timesheet — ${absent} belum input sama sekali.`);
+    }
+    if (expected > 0) {
+      points.push(`Tercatat ${formatNumber(recorded)} jam dari ${formatNumber(expected)} jam yang seharusnya sudah masuk sampai saat ini — kurang ${formatNumber(shortfall)} jam.`);
+    }
+    points.push(`Per shift: Day ${pctText(sd.day_adoption_pct)} · Night ${pctText(sd.night_adoption_pct)}. Lihat grafik di bawah untuk operator dengan kekurangan terbesar.`);
+    if (notStarted > 0) points.push(`${notStarted} operator terjadwal belum mulai shift — belum ikut dihitung.`);
+    if (excused > 0) points.push(`${excused} operator cuti/sakit/izin/off dikecualikan dari denominator.`);
+    points.push('Operator absen (terjadwal tapi nol timesheet) adalah penekan terbesar KPI ini — bukan operator yang jamnya sedikit kurang.');
   } else if (kpiType === 'oee') {
     headline = low ? 'Utilisasi mesin di bawah target' : 'Utilisasi mesin sehat';
     if (low && ole !== null && ole >= 85) points.push('OEE rendah + OLE tinggi → masalah ada di MESIN (downtime/setup). Operator sudah efektif (Insight #4).');
@@ -489,73 +509,6 @@ function buildActionRows(kpi, config) {
   if (key === 'oee') return buildOeeRows(kpi, config);
   if (key === 'ole') return buildOleRows(kpi, config);
   return [];
-}
-
-/* Stable, deduplicated issue payloads — the key does NOT include a
- * per-minute timestamp, so re-syncs UPDATE the same row instead of
- * creating a new one every refresh (root cause of the old log noise). */
-function buildIssuePayloads({ actionRows, kpi, config, meta }) {
-  const bizDate = businessDateOf(meta);
-  return actionRows
-    .filter((row) => row.isIssue)
-    .slice(0, 15)
-    .map((row) => {
-      const entity = String(row.entityId || row.area || 'ALL').replace(/\s+/g, '_');
-      return {
-        issue_key: `${kpi.key}:${bizDate}:${row.scope}:${entity}`,
-        scope_type: row.scope,
-        scope_key: `${config.label}:${bizDate}`,
-        machine_id: row.scope === 'machine' ? row.entityId : null,
-        issue_description: `${row.area}: ${row.detail}`,
-        error_type: row.errorType || config.errorType,
-        pic: row.pic || config.pic,
-        action_taken: row.action || config.action,
-        severity: row.severity === 'No Data' ? 'Watch' : row.severity,
-        status: 'Open',
-        created_date: meta?.window_end || meta?.generated_at || new Date().toISOString(),
-        detail_json: {
-          area: row.area,
-          metric: `${row.metric} ${row.metricLabel || ''}`.trim(),
-          scope: row.scope,
-          entity_id: row.entityId,
-          kpi_value: kpi?.value ?? null,
-          kpi_status: kpi?.status || 'no_data',
-        },
-      };
-    });
-}
-
-function escalationLevel(issue, now = new Date()) {
-  if (issue.status === 'Closed') return 'Closed';
-  if (issue.severity !== 'Critical') return 'PIC Monitor';
-  const createdMs = new Date(issue.createdDate).getTime();
-  if (!Number.isFinite(createdMs)) return 'PIC Monitor';
-  const ageHours = (now.getTime() - createdMs) / 36e5;
-  if (ageHours > 3) return 'Plant Manager';
-  if (ageHours > 1) return 'Supervisor/Foreman';
-  return 'PIC Monitor';
-}
-
-function buildIssueRows({ actions, config, kpi, meta }) {
-  const createdDate = meta?.window_end || meta?.generated_at || new Date().toISOString();
-  return actions.map((action) => {
-    const status = action.action_status === 'Closed' ? 'Closed' : 'Open';
-    const solvedDate = action.solved_date || (status === 'Closed' ? action.last_updated : null);
-    const nextIssue = {
-      id: `action_${action.action_id}`,
-      actionId: action.action_id,
-      issueDescription: action.issue_description || action.status_reason || `${config.label} correction`,
-      metric: action.detail_json?.metric || '',
-      errorType: action.error_type || config.errorType,
-      pic: action.pic || config.pic,
-      action: action.action_taken || config.action,
-      severity: action.severity || (normalizeStatus(kpi?.status) === 'critical' ? 'Critical' : 'Watch'),
-      status,
-      createdDate: action.action_date || createdDate,
-      solvedDate,
-    };
-    return { ...nextIssue, escalation: action.escalation_level || escalationLevel(nextIssue) };
-  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -1394,302 +1347,122 @@ function MetricTiles({ kpiType, kpi }) {
 
 // Adoption Machine — per-machine gap contribution (Unidentified vs IDLE/long-M2).
 const ADOPTION_GAP_COLORS = { unidentified: '#ef4444', idle: '#f59e0b' };
-const ADOPTION_MACHINE_TARGET = 95;
-
-function adoptionMachineStatusHex(pct) {
-  if (pct == null || !Number.isFinite(pct)) return STATUS_HEX.no_data;
-  if (pct < 90) return STATUS_HEX.critical;
-  if (pct < ADOPTION_MACHINE_TARGET) return STATUS_HEX.watch;
-  return STATUS_HEX.normal;
-}
 
 function AdoptionMachineBreakdown({ kpi }) {
   const sd = kpi?.source_detail || {};
-  const rows = (sd.by_machine || []).map((m) => ({
-    machine: m.machine_name || `Mesin ${m.machine}`,
+  const data = (sd.by_machine || []).map((m) => ({
+    machine: `M-${m.machine}`,
     unidentified: numeric(m.unidentified_minutes),
     idle: numeric(m.idle_minutes),
     gap: numeric(m.gap_minutes),
     total: numeric(m.total_minutes),
-    adoption: m.adoption_pct == null ? null : numeric(m.adoption_pct),
   }));
-  // Chart 1: gap minutes, sorted descending (biggest offender first).
-  const gapData = [...rows].sort((a, b) => b.gap - a.gap);
-  // Chart 2 (insight): adoption % per machine, worst first — normalises for runtime,
-  // so a machine that only ran briefly but idled a lot isn't hidden by small absolute minutes.
-  const adoptData = rows
-    .filter((r) => r.adoption != null)
-    .sort((a, b) => a.adoption - b.adoption)
-    .slice(0, 12);
-
-  const totalUnid = numeric(sd.total_unidentified_minutes);
-  const totalIdle = numeric(sd.total_idle_minutes);
-  const totalGap = totalUnid + totalIdle;
-  const idleShare = totalGap > 0 ? (totalIdle / totalGap) * 100 : 0;
-  const worstMin = gapData[0];
-  const worstPct = adoptData[0];
-  const belowTarget = rows.filter((r) => r.adoption != null && r.adoption < ADOPTION_MACHINE_TARGET).length;
-  const many = gapData.length > 8;
-
-  const insights = [];
-  if (worstMin) {
-    insights.push({
-      tone: 'red',
-      text: `Penyumbang gap terbesar: ${worstMin.machine} — ${formatNumber(worstMin.gap)} menit (${formatNumber(worstMin.idle)}m IDLE + ${formatNumber(worstMin.unidentified)}m unidentified).`,
-    });
-  }
-  insights.push({
-    tone: idleShare >= 50 ? 'amber' : 'slate',
-    text: `IDLE (M2 >5 menit) = ${formatNumber(idleShare)}% dari total gap → akar masalah utama ${idleShare >= 50 ? 'MESIN nganggur, bukan salah input operator' : 'lebih ke record tak teridentifikasi'}.`,
-  });
-  if (worstPct) {
-    insights.push({
-      tone: worstPct.adoption < 90 ? 'red' : 'amber',
-      text: `Adoption terendah (relatif runtime): ${worstPct.machine} = ${formatNumber(worstPct.adoption)}%. ${belowTarget} mesin di bawah target ${ADOPTION_MACHINE_TARGET}%.`,
-    });
-  }
-  const insightTone = {
-    red: 'border-red-200 bg-red-50 text-red-700',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700',
-    slate: 'border-slate-200 bg-slate-50 text-slate-600',
-  };
-
+  const many = data.length > 10;
   return (
-    <div className="space-y-4">
-      <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {insights.map((it, i) => (
-          <div key={i} className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold leading-snug ${insightTone[it.tone]}`}>
-            {it.text}
-          </div>
-        ))}
-      </section>
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <PageCard>
-          <CardHead icon={BarChart3} title="Gap Adoption per Mesin (menit)" tag={`${gapData.length} mesin`} />
-          <div className="p-4">
-            {gapData.length ? (
-              <ResponsiveContainer width="100%" height={340}>
-                <BarChart data={gapData} margin={{ top: 8, right: 16, left: 4, bottom: many ? 60 : 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis
-                    dataKey="machine"
-                    tick={{ fontSize: 10 }}
-                    interval={0}
-                    angle={many ? -35 : 0}
-                    textAnchor={many ? 'end' : 'middle'}
-                    height={many ? 66 : 30}
-                  />
-                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}m`} />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(148,163,184,0.12)' }}
-                    content={({ active, payload, label }) => {
-                      if (!active || !payload?.length) return null;
-                      const row = payload[0]?.payload || {};
-                      return (
-                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
-                          <div className="font-extrabold text-slate-800">{label}</div>
-                          <div className="mt-1 font-semibold" style={{ color: ADOPTION_GAP_COLORS.unidentified }}>Unidentified: {formatNumber(row.unidentified)} m</div>
-                          <div className="font-semibold" style={{ color: ADOPTION_GAP_COLORS.idle }}>IDLE: {formatNumber(row.idle)} m</div>
-                          <div className="mt-1 border-t border-slate-100 pt-1 font-bold text-slate-600">Total gap {formatNumber(row.gap)} m · durasi {formatNumber(row.total)} m</div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
-                  <Bar dataKey="unidentified" stackId="gap" name="Unidentified" fill={ADOPTION_GAP_COLORS.unidentified} />
-                  <Bar dataKey="idle" stackId="gap" name="IDLE" fill={ADOPTION_GAP_COLORS.idle} radius={[6, 6, 0, 0]} maxBarSize={54} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <EmptyChart text="Tidak ada gap adoption mesin (unidentified / IDLE) pada window ini." />
-            )}
-            <p className="mt-2 text-[10px] font-semibold text-slate-400">
-              Unidentified = statusid 5 · IDLE = M2 (statusid 2) durasi &gt; 5 menit · sumber public.mch_productiondata
-            </p>
-          </div>
-        </PageCard>
-
-        <PageCard>
-          <CardHead icon={GaugeIcon} title="Adoption % per Mesin (terendah)" tag={`target ${ADOPTION_MACHINE_TARGET}%`} />
-          <div className="p-4">
-            {adoptData.length ? (
-              <ResponsiveContainer width="100%" height={340}>
-                <BarChart data={adoptData} layout="vertical" margin={{ top: 4, right: 40, left: 8, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                  <YAxis dataKey="machine" type="category" tick={{ fontSize: 10 }} width={96} interval={0} />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(148,163,184,0.12)' }}
-                    content={({ active, payload, label }) => {
-                      if (!active || !payload?.length) return null;
-                      const row = payload[0]?.payload || {};
-                      return (
-                        <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
-                          <div className="font-extrabold text-slate-800">{label}</div>
-                          <div className="mt-1 font-bold text-slate-700">Adoption: {formatNumber(row.adoption)}%</div>
-                          <div className="font-semibold text-slate-500">Gap {formatNumber(row.gap)} m dari {formatNumber(row.total)} m runtime</div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <ReferenceLine x={ADOPTION_MACHINE_TARGET} stroke="#0077b6" strokeDasharray="4 3" strokeWidth={1.5} />
-                  <Bar dataKey="adoption" radius={[0, 6, 6, 0]} maxBarSize={22}>
-                    {adoptData.map((r) => <Cell key={r.machine} fill={adoptionMachineStatusHex(r.adoption)} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <EmptyChart text="Belum ada mesin dengan runtime untuk dihitung adoption-nya." />
-            )}
-            <p className="mt-2 text-[10px] font-semibold text-slate-400">
-              adoption% = (runtime − gap) / runtime · garis putus = target {ADOPTION_MACHINE_TARGET}% · merah &lt;90%, amber &lt;{ADOPTION_MACHINE_TARGET}%
-            </p>
-          </div>
-        </PageCard>
-      </section>
-    </div>
+    <PageCard>
+      <CardHead icon={BarChart3} title="Gap Adoption per Mesin (menit)" tag={`${data.length} mesin`} />
+      <div className="p-4">
+        {data.length ? (
+          <ResponsiveContainer width="100%" height={340}>
+            <BarChart data={data} margin={{ top: 8, right: 16, left: 4, bottom: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+              <XAxis
+                dataKey="machine"
+                tick={{ fontSize: 11 }}
+                interval={0}
+                angle={many ? -35 : 0}
+                textAnchor={many ? 'end' : 'middle'}
+                height={many ? 54 : 30}
+              />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}m`} />
+              <Tooltip
+                cursor={{ fill: 'rgba(148,163,184,0.12)' }}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  const row = payload[0]?.payload || {};
+                  return (
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+                      <div className="font-extrabold text-slate-800">{label}</div>
+                      <div className="mt-1 font-semibold" style={{ color: ADOPTION_GAP_COLORS.unidentified }}>Unidentified: {formatNumber(row.unidentified)} m</div>
+                      <div className="font-semibold" style={{ color: ADOPTION_GAP_COLORS.idle }}>IDLE: {formatNumber(row.idle)} m</div>
+                      <div className="mt-1 border-t border-slate-100 pt-1 font-bold text-slate-600">Total gap {formatNumber(row.gap)} m · durasi {formatNumber(row.total)} m</div>
+                    </div>
+                  );
+                }}
+              />
+              <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
+              <Bar dataKey="unidentified" stackId="gap" name="Unidentified" fill={ADOPTION_GAP_COLORS.unidentified} />
+              <Bar dataKey="idle" stackId="gap" name="IDLE" fill={ADOPTION_GAP_COLORS.idle} radius={[6, 6, 0, 0]} maxBarSize={54} />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <EmptyChart text="Tidak ada gap adoption mesin (unidentified / IDLE) pada window ini." />
+        )}
+        <p className="mt-2 text-[10px] font-semibold text-slate-400">
+          Unidentified = statusid 5 · IDLE = M2 (statusid 2) durasi &gt; 5 menit · sumber public.mch_productiondata
+        </p>
+      </div>
+    </PageCard>
   );
 }
 
-// Adoption Labour — per-operator progressive coverage (who has / hasn't logged yet).
-const ATTEND_META = {
-  PRESENT: { label: 'Sudah Input', cls: 'border-emerald-200 bg-emerald-100 text-emerald-700' },
-  ABSENT: { label: 'Belum Log', cls: 'border-red-200 bg-red-100 text-red-700' },
-  NOT_STARTED: { label: 'Belum Mulai', cls: 'border-slate-200 bg-slate-100 text-slate-500' },
-  LEAVE: { label: 'Cuti', cls: 'border-sky-200 bg-sky-100 text-sky-700' },
-  SICK: { label: 'Sakit', cls: 'border-amber-200 bg-amber-100 text-amber-700' },
-  PERMIT: { label: 'Izin', cls: 'border-amber-200 bg-amber-100 text-amber-700' },
-  OFF: { label: 'Off', cls: 'border-slate-200 bg-slate-100 text-slate-400' },
-};
-
-function AttendanceBadge({ value }) {
-  const m = ATTEND_META[value] || { label: value || '-', cls: 'border-slate-200 bg-slate-100 text-slate-600' };
-  return <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-bold ${m.cls}`}>{m.label}</span>;
+// One per-operator progress bar: recorded hours vs shift standard, with the shortfall on the right.
+function ShiftProgressColumn({ icon: Icon, title, operators }) {
+  return (
+    <PageCard>
+      <CardHead
+        icon={Icon}
+        title={title}
+        right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{operators.length} ORG</span>}
+      />
+      <div className="max-h-[440px] space-y-3 overflow-y-auto p-4">
+        {operators.length === 0 ? (
+          <EmptyState text="Tidak ada operator pada shift ini." />
+        ) : operators.map((o) => {
+          const recorded = numeric(o.recorded_hours);
+          const standard = numeric(o.standard_hours) || 0;
+          const pct = standard > 0 ? Math.min(100, Math.round((recorded / standard) * 100)) : 0;
+          const barColor = pct >= 90 ? '#059669' : pct >= 70 ? '#f59e0b' : '#dc2626';
+          const inProgress = o.completed === false;
+          return (
+            <div key={o.operator_key || o.operator_name}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-xs font-bold text-slate-800">{o.operator_name || o.operator_key || 'UNKNOWN'}</span>
+                  {inProgress ? <span className="flex-shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">berjalan</span> : null}
+                </span>
+                <span className="flex-shrink-0 font-mono text-[11px] font-bold text-slate-500">{formatNumber(recorded)}/{formatNumber(standard)}</span>
+              </div>
+              <div className="mt-1 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </PageCard>
+  );
 }
 
+// adoption_labour breakdown: two progress-bar columns (day left, night right), one bar per
+// operator (recorded vs shift standard), sorted by biggest shortfall first. Excused roster
+// statuses (leave/sick/permit/off) are dropped — they are not adoption gaps.
 function AdoptionLabourBreakdown({ kpi }) {
   const sd = kpi?.source_detail || {};
-  const ops = useMemo(() => (Array.isArray(sd.by_operator) ? sd.by_operator : []), [sd.by_operator]);
-  const [page, setPage] = useState(0);
-  const [onlyProblem, setOnlyProblem] = useState(false);
-
-  const rows = useMemo(() => {
-    if (!onlyProblem) return ops;
-    return ops.filter((o) => o.attendance === 'ABSENT'
-      || (o.status === 'SCHEDULED' && numeric(o.expected_hours) - numeric(o.recorded_hours) > 0.01));
-  }, [ops, onlyProblem]);
-  const totalPages = pageCount(rows);
-  const safePage = Math.min(page, Math.max(totalPages - 1, 0));
-  const paged = pageSlice(rows, safePage);
-
-  const belumLog = numeric(sd.absent);
-  const present = numeric(sd.present);
-  const notStarted = numeric(sd.not_started);
-  const excused = numeric(sd.excused);
-  const day = sd.day_adoption_pct;
-  const night = sd.night_adoption_pct;
-  const worst = ops
-    .filter((o) => o.status === 'SCHEDULED')
-    .map((o) => ({ ...o, gap: Math.max(0, numeric(o.expected_hours) - numeric(o.recorded_hours)) }))
-    .sort((a, b) => b.gap - a.gap)[0];
-
-  const insights = [];
-  insights.push({
-    tone: belumLog > 0 ? 'red' : 'emerald',
-    text: belumLog > 0
-      ? `${belumLog} operator sudah lewat sebagian shift tapi BELUM input sama sekali (dihitung 0 → menekan angka).`
-      : 'Semua operator yang shift-nya berjalan sudah mulai input.',
-  });
-  insights.push({
-    tone: 'slate',
-    text: `Adoption DAY ${day == null ? '—' : `${formatNumber(day)}%`} · NIGHT ${night == null ? 'belum mulai' : `${formatNumber(night)}%`}. Angka tumbuh sepanjang shift, pas di akhir shift = nilai final.`,
-  });
-  if (worst && worst.gap > 0.01) {
-    insights.push({
-      tone: 'amber',
-      text: `Gap terbesar: ${worst.operator_name || worst.operator_key} — input ${formatHours(worst.recorded_hours)} dari ${formatHours(worst.expected_hours)} yang diharapkan.`,
-    });
-  }
-  const insightTone = {
-    red: 'border-red-200 bg-red-50 text-red-700',
-    amber: 'border-amber-200 bg-amber-50 text-amber-700',
-    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    slate: 'border-slate-200 bg-slate-50 text-slate-600',
-  };
-
+  const all = Array.isArray(sd.by_operator) ? sd.by_operator : [];
+  const excused = new Set(['LEAVE', 'SICK', 'PERMIT', 'OFF']);
+  const isDay = (o) => o.shift === 1 || String(o.shift).toUpperCase() === 'DAY' || String(o.shift) === '1';
+  const gapOf = (o) => (o.gap_hours != null ? numeric(o.gap_hours) : Math.max(numeric(o.standard_hours) - numeric(o.recorded_hours), 0));
+  const prep = (list) => list
+    .filter((o) => !excused.has(String(o.status || '').toUpperCase()))
+    .sort((a, b) => gapOf(b) - gapOf(a));
+  const day = prep(all.filter(isDay));
+  const night = prep(all.filter((o) => !isDay(o)));
   return (
-    <div className="space-y-4">
-      <section className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {insights.map((it, i) => (
-          <div key={i} className={`rounded-xl border px-3 py-2.5 text-[11px] font-bold leading-snug ${insightTone[it.tone]}`}>
-            {it.text}
-          </div>
-        ))}
-      </section>
-
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <MetricTile label="Sudah Input" value={formatNumber(present)} tone="good" />
-        <MetricTile label="Belum Log" value={formatNumber(belumLog)} tone={belumLog > 0 ? 'bad' : 'good'} />
-        <MetricTile label="Belum Mulai" value={formatNumber(notStarted)} tone="neutral" />
-        <MetricTile label="Cuti/Izin/Off" value={formatNumber(excused)} tone="info" />
-      </section>
-
-      <PageCard>
-        <CardHead
-          icon={Users}
-          title="Operator (yang belum input di atas)"
-          tag={`${rows.length}`}
-          right={(
-            <button
-              type="button"
-              onClick={() => { setOnlyProblem((v) => !v); setPage(0); }}
-              className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold transition ${onlyProblem ? 'border-[#0096c7] bg-[#0096c7] text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
-            >
-              {onlyProblem ? 'Tampilkan semua' : 'Hanya yang bermasalah'}
-            </button>
-          )}
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left text-sm">
-            <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>
-              <tr className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-slate-700">
-                <th className="px-3 py-2">Operator</th>
-                <th className="px-3 py-2 text-center">Shift</th>
-                <th className="px-3 py-2 text-right">Input</th>
-                <th className="px-3 py-2 text-right">Diharapkan</th>
-                <th className="px-3 py-2 text-right">Gap</th>
-                <th className="px-3 py-2">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {paged.length === 0 && (
-                <tr><td colSpan={6} className="px-3 py-6 text-center text-xs font-bold text-emerald-600">✓ Tidak ada operator pada filter ini.</td></tr>
-              )}
-              {paged.map((o) => {
-                const gap = Math.max(0, numeric(o.expected_hours) - numeric(o.recorded_hours));
-                return (
-                  <tr key={o.operator_key} className="align-top transition hover:bg-[#caf0f8]/25">
-                    <td className="px-3 py-2">
-                      <div className="font-bold text-slate-800">{o.operator_name || '—'}</div>
-                      <div className="font-mono text-[11px] text-slate-500">{o.operator_key}</div>
-                    </td>
-                    <td className="px-3 py-2 text-center font-mono text-[11px] font-bold text-slate-600">{o.shift}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-800">{formatHours(o.recorded_hours)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-500">{formatHours(o.expected_hours)}</td>
-                    <td className={`px-3 py-2 text-right font-mono font-bold ${gap > 0.01 ? 'text-red-600' : 'text-slate-400'}`}>{gap > 0.01 ? formatHours(gap) : '—'}</td>
-                    <td className="px-3 py-2"><AttendanceBadge value={o.attendance} /></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <TablePager page={safePage} totalPages={totalPages} totalRows={rows.length} onPageChange={setPage} />
-        <p className="px-4 pb-3 text-[10px] font-semibold text-slate-400">
-          Diharapkan = jam standar yang seharusnya sudah berlalu sampai sekarang · Belum Log = shift berjalan tapi 0 input · sumber ews.shift_roster + timesheet_transaction
-        </p>
-      </PageCard>
-    </div>
+    <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <ShiftProgressColumn icon={Sun} title="Shift 1 · Day" operators={day} />
+      <ShiftProgressColumn icon={Moon} title="Shift 2 · Night" operators={night} />
+    </section>
   );
 }
 
@@ -1821,6 +1594,92 @@ function DetailSkeleton() {
 /* ------------------------------------------------------------------ *
  * Main page
  * ------------------------------------------------------------------ */
+// Backend-generated issue log (ews.issue_log) for the current KPI category. Presentational:
+// the parent owns the rows + fetch and passes an onResolve(id) that PUTs /ews/issue-log/:id/resolve.
+function AutoIssueLogCard({ rows, loading, onResolve }) {
+  const [page, setPage] = useState(1);
+  const [resolvingId, setResolvingId] = useState(null);
+
+  const resolve = useCallback(async (id) => {
+    setResolvingId(id);
+    try {
+      await onResolve(id);
+    } finally {
+      setResolvingId(null);
+    }
+  }, [onResolve]);
+
+  const openCount = rows.filter((r) => r.status === 'open').length;
+  const totalPages = pageCount(rows);
+  const paged = pageSlice(rows, page);
+
+  return (
+    <PageCard className="overflow-hidden">
+      <CardHead
+        icon={AlertTriangle}
+        title="Issue Log & Action"
+        tag="auto-generated"
+        right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{loading && rows.length === 0 ? '…' : `${openCount} OPEN`}</span>}
+      />
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left text-sm">
+          <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>
+            <tr className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-slate-700">
+              <th className="px-3 py-2">Entitas</th>
+              <th className="px-3 py-2">Deskripsi</th>
+              <th className="px-3 py-2 text-right">Nilai</th>
+              <th className="px-3 py-2 text-center">Sev</th>
+              <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2 text-center">Resolve</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={6} className={`px-3 py-6 text-center text-xs font-bold ${loading ? 'text-slate-400' : 'text-emerald-600'}`}>
+                  {loading ? 'Memuat issue log…' : '✓ Tidak ada issue untuk KPI ini.'}
+                </td>
+              </tr>
+            )}
+            {paged.map((row) => {
+              const resolved = row.status === 'resolved';
+              return (
+                <tr key={row.id} className={`align-top transition hover:bg-[#caf0f8]/25 ${resolved ? 'opacity-55' : ''}`}>
+                  <td className="px-3 py-2">
+                    <div className="font-bold text-slate-800">{row.entity_name || row.entity_id || '—'}</div>
+                    <div className="mt-0.5 font-mono text-[10px] uppercase text-slate-400">{row.scope_type} · {row.business_date}</div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="max-w-[380px] text-[12px] leading-snug text-slate-700">{row.description || row.title}</div>
+                  </td>
+                  <td className="px-3 py-2 text-right font-black text-slate-800">
+                    {row.metric_value == null ? '—' : `${formatNumber(row.metric_value)}%`}
+                  </td>
+                  <td className="px-3 py-2 text-center"><SeverityDot severity={row.severity} /></td>
+                  <td className="px-3 py-2"><StatusBadge status={resolved ? 'Closed' : 'Open'} /></td>
+                  <td className="px-3 py-2 text-center">
+                    <button
+                      type="button"
+                      disabled={resolved || resolvingId === row.id}
+                      onClick={() => resolve(row.id)}
+                      className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-600 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-40"
+                      title="Resolve issue"
+                      aria-label="Resolve issue"
+                    >
+                      <CheckCircle2 size={17} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <TablePager page={page} totalPages={totalPages} totalRows={rows.length} onPageChange={setPage} />
+    </PageCard>
+  );
+}
+
 function EwsDetailPage() {
   const navigate = useNavigate();
   const { type } = useParams();
@@ -1829,41 +1688,42 @@ function EwsDetailPage() {
   const config = KPI_CONFIG[kpiType];
   const [kpi, setKpi] = useState(null);
   const [meta, setMeta] = useState(null);
-  const [actions, setActions] = useState([]);
   const [summary, setSummary] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [actionsLoading, setActionsLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionPage, setActionPage] = useState(1);
-  const [issuePage, setIssuePage] = useState(1);
+  const [autoIssues, setAutoIssues] = useState([]);
+  const [autoIssuesLoading, setAutoIssuesLoading] = useState(true);
 
   const manualDate = searchParams.get('date') || '';
   const usesManualDate = searchParams.get('basis') === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(manualDate);
   const ewsQuery = usesManualDate ? `basis=date&date=${encodeURIComponent(manualDate)}&live=1` : 'basis=today&live=1';
   const ewsSummaryQuery = usesManualDate ? ewsQuery : 'basis=today';
 
-  // Issue-log sync + fetch runs OFF the critical render path so the KPI
-  // breakdowns paint immediately instead of waiting on a DB write + extra GET.
-  const loadIssueLog = useCallback(async (nextKpi, nextMeta) => {
-    setActionsLoading(true);
+  // Backend-generated issue log (ews.issue_log) for this KPI category — replaces the legacy
+  // action_table sync. Runs on its own effect (by kpiType), off the critical detail render path.
+  const loadAutoIssues = useCallback(async () => {
+    setAutoIssuesLoading(true);
     try {
-      const rowsForSync = buildActionRows(nextKpi, config);
-      const issuesForSync = buildIssuePayloads({ actionRows: rowsForSync, kpi: nextKpi, config, meta: nextMeta });
-      if (issuesForSync.length) {
-        await sendJson(`${API_BASE}/ews/actions/sync`, 'POST', {
-          kpi_type: kpiType,
-          issues: issuesForSync,
-          updated_by: 'ews-detail-page',
-        }).catch(() => {});
-      }
-      const actionsPayload = await fetchJson(`${API_BASE}/ews/actions?status=all&kpi_type=${encodeURIComponent(kpiType)}`);
-      setActions(Array.isArray(actionsPayload?.data) ? actionsPayload.data : []);
+      const payload = await fetchJson(`${API_BASE}/ews/issue-log?category=${encodeURIComponent(kpiType)}&status=all`);
+      setAutoIssues(Array.isArray(payload?.data) ? payload.data : []);
     } catch {
-      // Issue-log failures must not block the main detail view.
+      setAutoIssues([]);
     } finally {
-      setActionsLoading(false);
+      setAutoIssuesLoading(false);
     }
-  }, [config, kpiType]);
+  }, [kpiType]);
+
+  useEffect(() => { loadAutoIssues(); }, [loadAutoIssues]);
+
+  const resolveAutoIssue = useCallback(async (id) => {
+    setAutoIssues((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'resolved', resolved_at: new Date().toISOString() } : r)));
+    try {
+      await sendJson(`${API_BASE}/ews/issue-log/${id}/resolve`, 'PUT', {});
+    } catch {
+      loadAutoIssues(); // revert to server truth on failure
+    }
+  }, [loadAutoIssues]);
 
   const loadData = useCallback(async () => {
     if (!config) return;
@@ -1880,7 +1740,6 @@ function EwsDetailPage() {
       setIsLoading(false);
     }
     if (cacheFresh) {
-      loadIssueLog(cachedEntry.kpi, cachedEntry.meta);
       return; // fresh enough — no network needed
     }
     if (!cachedEntry) setIsLoading(true);
@@ -1912,9 +1771,6 @@ function EwsDetailPage() {
       setSummary(summaryPayload);
       setIsLoading(false);
       detailMemCache.set(cacheKey, { at: Date.now(), kpi: nextKpi, meta: nextMeta, summary: summaryPayload });
-
-      // Then hydrate the issue log in the background.
-      loadIssueLog(nextKpi, nextMeta);
     } catch (err) {
       // Keep showing cached data if we have it; only surface hard errors on cold load.
       if (!cachedEntry) {
@@ -1922,7 +1778,7 @@ function EwsDetailPage() {
         setIsLoading(false);
       }
     }
-  }, [config, ewsQuery, ewsSummaryQuery, kpiType, usesManualDate, loadIssueLog]);
+  }, [config, ewsQuery, ewsSummaryQuery, kpiType, usesManualDate]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1931,29 +1787,20 @@ function EwsDetailPage() {
     return Object.fromEntries(list.map((k) => [k.key, k]));
   }, [summary]);
 
-  const relevantActions = useMemo(
-    () => actions.filter((action) => String(action.kpi_type || '').toLowerCase() === kpiType),
-    [actions, kpiType],
-  );
-
   const actionRows = useMemo(() => buildActionRows(kpi, config || KPI_CONFIG.accuracy), [config, kpi]);
 
-  const issueRows = useMemo(
-    () => buildIssueRows({ actions: relevantActions, config: config || KPI_CONFIG.accuracy, kpi, meta }),
-    [config, kpi, meta, relevantActions],
+  // Counters now reflect the backend issue log (ews.issue_log), consistent with the card below.
+  const openAutoIssues = useMemo(() => autoIssues.filter((i) => i.status === 'open'), [autoIssues]);
+  const criticalOpenIssues = useMemo(
+    () => openAutoIssues.filter((i) => String(i.severity).toLowerCase() === 'critical').length,
+    [openAutoIssues],
   );
 
-  const openIssues = useMemo(() => issueRows.filter((i) => i.status !== 'Closed'), [issueRows]);
-  const criticalEscalations = useMemo(() => issueRows.filter((i) => i.escalation === 'Plant Manager').length, [issueRows]);
-
   const actionTotalPages = useMemo(() => pageCount(actionRows), [actionRows]);
-  const issueTotalPages = useMemo(() => pageCount(issueRows), [issueRows]);
   const pagedActionRows = useMemo(() => pageSlice(actionRows, actionPage), [actionPage, actionRows]);
-  const pagedIssueRows = useMemo(() => pageSlice(issueRows, issuePage), [issuePage, issueRows]);
 
-  useEffect(() => { setActionPage(1); setIssuePage(1); }, [kpiType, kpi?.value, meta?.window_end]);
+  useEffect(() => { setActionPage(1); }, [kpiType, kpi?.value, meta?.window_end]);
   useEffect(() => { if (actionPage > actionTotalPages) setActionPage(actionTotalPages); }, [actionPage, actionTotalPages]);
-  useEffect(() => { if (issuePage > issueTotalPages) setIssuePage(issueTotalPages); }, [issuePage, issueTotalPages]);
 
   const diagnosis = useMemo(() => buildDiagnosis(kpiType, kpi, kpisByKey), [kpiType, kpi, kpisByKey]);
 
@@ -1963,18 +1810,8 @@ function EwsDetailPage() {
   const handleRefresh = useCallback(() => {
     detailMemCache.delete(`${kpiType}|${ewsQuery}`);
     loadData();
-  }, [kpiType, ewsQuery, loadData]);
-
-  const handleResolve = useCallback(async (issue) => {
-    if (!issue.actionId) return;
-    try {
-      await sendJson(`${API_BASE}/ews/actions/${issue.actionId}/resolve`, 'PUT', { updated_by: 'ews-detail-page' });
-      // Only refresh the issue log — no need to re-run the heavy detail query.
-      await loadIssueLog(kpi, meta);
-    } catch (err) {
-      setError(err.message || 'Failed to resolve EWS issue.');
-    }
-  }, [loadIssueLog, kpi, meta]);
+    loadAutoIssues();
+  }, [kpiType, ewsQuery, loadData, loadAutoIssues]);
 
   if (!config) {
     return (
@@ -2074,7 +1911,9 @@ function EwsDetailPage() {
                     <Lightbulb size={16} style={{ color: diagnosisAccent }} />
                     <h2 className="text-sm font-black text-slate-900">{diagnosis.headline}</h2>
                   </div>
-                  <p className="mt-1 text-xs font-semibold text-slate-600">{kpi?.helper}</p>
+                  {kpi?.helper && kpi.helper !== diagnosis.headline ? (
+                    <p className="mt-1 text-xs font-semibold text-slate-600">{kpi.helper}</p>
+                  ) : null}
                   <ul className="mt-3 space-y-1.5">
                     {diagnosis.points.map((point, i) => (
                       <li key={i} className="flex gap-2 text-xs leading-relaxed text-slate-700">
@@ -2095,8 +1934,8 @@ function EwsDetailPage() {
 
             {/* Summary counters */}
             <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <MetricTile label="Open Issues" value={openIssues.length} sub="butuh tindakan" tone={openIssues.length > 0 ? 'warn' : 'good'} />
-              <MetricTile label="Critical Escalation" value={criticalEscalations} sub="critical > 3 jam" tone={criticalEscalations > 0 ? 'bad' : 'good'} />
+              <MetricTile label="Open Issues" value={openAutoIssues.length} sub="butuh tindakan" tone={openAutoIssues.length > 0 ? 'warn' : 'good'} />
+              <MetricTile label="Critical" value={criticalOpenIssues} sub="issue critical terbuka" tone={criticalOpenIssues > 0 ? 'bad' : 'good'} />
               <MetricTile label="Data to Fix" value={actionRows.length} sub={`entitas (${config.unit})`} tone={actionRows.length > 0 ? 'info' : 'good'} />
               <MetricTile label="Status" value={kpiStatus === 'no_data' ? 'NO DATA' : kpiStatus.toUpperCase()} sub={`vs target ${config.target}%`} tone={kpiStatus === 'critical' ? 'bad' : kpiStatus === 'watch' ? 'warn' : 'good'} />
             </section>
@@ -2106,69 +1945,7 @@ function EwsDetailPage() {
 
             {/* Issue log + Data-to-fix */}
             <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              <PageCard className="overflow-hidden">
-                <CardHead
-                  icon={AlertTriangle}
-                  title="Issue Log & Correction"
-                  right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{actionsLoading && issueRows.length === 0 ? '…' : `${issueRows.length} LOGS`}</span>}
-                />
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-[11px] font-semibold text-slate-500">
-                  Critical dieskalasi ke Supervisor/Foreman &gt;1 jam, Plant Manager &gt;3 jam. Hanya issue teragregasi (bukan per-baris mentah) yang masuk log.
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px] text-left text-sm">
-                    <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>
-                      <tr className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-slate-700">
-                        <th className="px-3 py-2">Issue</th>
-                        <th className="px-3 py-2">Owner</th>
-                        <th className="px-3 py-2 text-center">Sev</th>
-                        <th className="px-3 py-2">Status</th>
-                        <th className="px-3 py-2 text-center">Resolve</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {issueRows.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className={`px-3 py-6 text-center text-xs font-bold ${actionsLoading ? 'text-slate-400' : 'text-emerald-600'}`}>
-                            {actionsLoading ? 'Memuat issue log…' : '✓ Tidak ada issue aktif untuk KPI ini. Semua sehat atau sudah di-resolve.'}
-                          </td>
-                        </tr>
-                      )}
-                      {pagedIssueRows.map((issue) => (
-                        <tr key={issue.id} className="align-top transition hover:bg-[#caf0f8]/25">
-                          <td className="px-3 py-2">
-                            <div className="font-bold text-slate-800">{issue.issueDescription}</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                              <span className="font-mono text-[11px] font-bold uppercase text-[#0077b6]">{issue.errorType}</span>
-                              {issue.metric ? <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">{issue.metric}</span> : null}
-                            </div>
-                            <div className="mt-1 font-mono text-[11px] text-slate-500">{formatDateTime(issue.createdDate)}{issue.solvedDate ? ` · solved ${formatDateTime(issue.solvedDate)}` : ''}</div>
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="font-bold text-slate-700">{issue.pic}</div>
-                            <div className="mt-1 font-mono text-[11px] font-semibold text-slate-500">{issue.escalation}</div>
-                          </td>
-                          <td className="px-3 py-2 text-center"><SeverityDot severity={issue.severity} /></td>
-                          <td className="px-3 py-2"><StatusBadge status={issue.status} /></td>
-                          <td className="px-3 py-2 text-center">
-                            <button
-                              type="button"
-                              disabled={issue.status === 'Closed'}
-                              onClick={() => handleResolve(issue)}
-                              className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-600 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-40"
-                              title="Resolve issue"
-                              aria-label="Resolve issue"
-                            >
-                              <CheckCircle2 size={17} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <TablePager page={issuePage} totalPages={issueTotalPages} totalRows={issueRows.length} onPageChange={setIssuePage} />
-              </PageCard>
+              <AutoIssueLogCard rows={autoIssues} loading={autoIssuesLoading} onResolve={resolveAutoIssue} />
 
               <PageCard className="overflow-hidden">
                 <CardHead
@@ -2176,9 +1953,6 @@ function EwsDetailPage() {
                   title="Data yang Perlu Diperbaiki"
                   right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{actionRows.length} ITEM</span>}
                 />
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-[11px] font-semibold text-slate-500">
-                  Daftar teragregasi per {config.unit} — sudah difilter dari noise. Fokus ke area dengan impact terbesar.
-                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[720px] text-left text-sm">
                     <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>

@@ -729,16 +729,16 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             user_map = fetch_nfc_user_maps(cursor, operator_ids)
             sow_map = fetch_sow_maps(cursor, job_keys)
 
-        matched_source_rows = [
-            row
-            for row in source_rows
-            if has_v3_job_match(row, ph3_map, sow_map)
-        ]
-        skipped_no_v3_match = len(source_rows) - len(matched_source_rows)
+        # Insert ALL rows (no V3-match filter). Completeness is flagged per row by the
+        # generated column mch_transaction.status_record, not by dropping rows — so the
+        # accuracy_machine metric can show which records are incomplete instead of missing.
+        no_v3_match = len(source_rows) - sum(
+            1 for row in source_rows if has_v3_job_match(row, ph3_map, sow_map)
+        )
 
         values = [
             build_target_tuple(row, machine_map, status_map, ph3_map, user_map, sow_map)
-            for row in matched_source_rows
+            for row in source_rows
         ]
 
         operator_lookup_count = sum(1 for row in source_rows if normalize_operatorid(row.get("operatorid")))
@@ -769,7 +769,7 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
                 "operator_rows_matched=%d operator_ids_matched=%d job_rows_parsed=%d "
                 "job_keys_parsed=%d ph3_rows_matched=%d ph3_keys_matched=%d "
                 "sow_rows_matched=%d sow_keys_matched=%d upsert_candidates=%d "
-                "skipped_no_v3_match=%d"
+                "no_v3_match_flagged=%d"
             ),
             offset,
             len(source_rows),
@@ -783,7 +783,7 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             sow_rows_matched,
             len(sow_map),
             len(values),
-            skipped_no_v3_match,
+            no_v3_match,
         )
 
         if dry_run:
@@ -795,7 +795,7 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             total_upserted += len(values)
             log.info("Committed batch offset=%d count=%d", offset, len(values))
         else:
-            log.info("Skipped commit for batch offset=%d because no V3-matched rows.", offset)
+            log.info("Skipped commit for batch offset=%d because it produced no rows.", offset)
 
         offset += BATCH_SIZE
 

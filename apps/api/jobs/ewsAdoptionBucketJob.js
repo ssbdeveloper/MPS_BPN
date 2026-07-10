@@ -332,6 +332,34 @@ async function upsertMachineSummary(client, bounds) {
         COALESCE(SUM(duration_seconds) FILTER (WHERE is_adoption_gap), 0)::numeric AS gap_duration_seconds
       FROM base
     ),
+    by_machine AS (
+      -- Per-machine gap breakdown, consumed by the adoption_machine issue generator so it
+      -- never recomputes anything. Only machines WITH a gap are kept. Same duration rule
+      -- as the summary above (statusid 5, or statusid 2 idle > 5 min).
+      SELECT COALESCE(
+        jsonb_agg(m ORDER BY (m->>'gap_minutes')::numeric DESC),
+        '[]'::jsonb
+      ) AS machines
+      FROM (
+        SELECT jsonb_build_object(
+          'machine_key', b.machine_key,
+          'machine_name', MAX(mm.machinename),
+          'run_minutes', ROUND(SUM(b.duration_seconds) / 60.0, 1),
+          'gap_minutes', ROUND(SUM(b.duration_seconds) FILTER (WHERE b.is_adoption_gap) / 60.0, 1),
+          'unidentified_minutes', ROUND(SUM(b.duration_seconds) FILTER (WHERE b.statusid = 5) / 60.0, 1),
+          'cover_pct', CASE
+            WHEN SUM(b.duration_seconds) > 0
+              THEN ROUND((SUM(b.duration_seconds) - SUM(b.duration_seconds) FILTER (WHERE b.is_adoption_gap))
+                         / SUM(b.duration_seconds) * 100, 1)
+            ELSE NULL
+          END
+        ) AS m
+        FROM base b
+        LEFT JOIN public.mch_machines mm ON mm.machineno::text = b.machine_key
+        GROUP BY b.machine_key
+        HAVING SUM(b.duration_seconds) FILTER (WHERE b.is_adoption_gap) > 0
+      ) x
+    ),
     payload AS (
       SELECT
         s.*,
@@ -347,6 +375,7 @@ async function upsertMachineSummary(client, bounds) {
         END AS gap_pct,
         jsonb_build_object(
           'source', 'public.mch_productiondata',
+          'per_machine', bm.machines,
           'adoption_source', 'machine',
           'duration_rule', 'duration_seconds = enddatetime - startdatetime',
           'denominator', 'SUM(duration_seconds) for rows in window with enddatetime > startdatetime',
@@ -383,7 +412,7 @@ async function upsertMachineSummary(client, bounds) {
               'h machine duration'
             )
         ) AS detail_json
-      FROM summary s
+      FROM summary s CROSS JOIN by_machine bm
     )
     INSERT INTO ews.adoption_summary_snapshot (
       window_start,

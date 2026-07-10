@@ -140,6 +140,7 @@ async function getCachedAdoptionCalculation(grain) {
           gap_pct: num(summary.detail_json?.gap_pct),
           long_status_2_count: num(summary.detail_json?.long_status_2_count, 0),
           missing_time_buckets: summary.detail_json?.missing_time_buckets || [],
+          per_machine: summary.detail_json?.per_machine || [],
           source: "ews.adoption_summary_snapshot",
           cache_hit: true,
           cached_at: summary.calculated_at,
@@ -499,19 +500,19 @@ async function calculateAccuracyLabour(bounds) {
   };
 }
 
-// accuracy_machine: unchanged math — mch_productiondata rows matched to mch_transaction.
+// accuracy_machine: mch_transaction rows with complete job/operator data (status_record).
+// TRUE = statusid 0/3/4 (Off/Downtime/NoJob) OR order_no+operation_no+sn_employee+
+// confirmation_number all present. FALSE = incomplete record.
 async function calculateAccuracyMachine(bounds) {
   const result = await db.query(
     `
     SELECT
       COUNT(*)::int AS total_records,
-      COUNT(*) FILTER (WHERE mt.proddataid IS NOT NULL)::int AS ready_records,
-      COUNT(*) FILTER (WHERE mt.proddataid IS NULL)::int AS missing_mch_transaction
-    FROM public.mch_productiondata pd
-    LEFT JOIN public.mch_transaction mt
-      ON mt.proddataid = pd.proddataid
-    WHERE pd.startdatetime >= $1
-      AND pd.startdatetime < $2
+      COUNT(*) FILTER (WHERE status_record)::int AS ready_records,
+      COUNT(*) FILTER (WHERE NOT status_record)::int AS not_ready_records
+    FROM public.mch_transaction
+    WHERE startdatetime >= $1
+      AND startdatetime < $2
     `,
     [bounds.window_start, bounds.window_end],
   );
@@ -522,15 +523,14 @@ async function calculateAccuracyMachine(bounds) {
   const value = pct(ready, total);
   return {
     value,
-    helper: value === null ? "No machine record in window" : `${ready}/${total} matched machine records`,
+    helper: value === null ? "No machine record in window" : `${ready}/${total} record lengkap`,
     detail: {
       total_records: total,
       ready_records: ready,
-      not_ready_records: Math.max(0, total - ready),
-      missing_mch_transaction: num(row.missing_mch_transaction, 0),
+      not_ready_records: num(row.not_ready_records, 0),
       minimum_sample_met: total >= 50,
-      denominator: "mch_productiondata rows in window",
-      numerator: "mch_productiondata rows present in mch_transaction",
+      denominator: "mch_transaction rows in window",
+      numerator: "rows with status_record = true (order_no+operation_no+sn_employee+confirmation_number present, or statusid 0/3/4)",
     },
   };
 }
@@ -711,7 +711,8 @@ async function calculateAdoptionLabourFromRoster(bounds) {
       SELECT ro.serialnumber, ro.operator_name, ro.shift, ro.std, ro.status, ro.business_date,
              COALESCE(lg.recorded, 0) AS recorded,
              GREATEST(LEAST(EXTRACT(EPOCH FROM (now() - ro.shift_start_ts)) / 3600.0, ro.clock_hours), 0)
-               * (ro.std / NULLIF(ro.clock_hours, 0)) AS expected_so_far
+               * (ro.std / NULLIF(ro.clock_hours, 0)) AS expected_so_far,
+             (ro.shift_start_ts + (ro.clock_hours * INTERVAL '1 hour')) <= now() AS completed
       FROM roster ro LEFT JOIN logged lg ON lg.operator_key = ro.serialnumber
     )
     SELECT
@@ -734,6 +735,8 @@ async function calculateAdoptionLabourFromRoster(bounds) {
         'shift', j.shift, 'business_date', j.business_date,
         'recorded_hours', ROUND(j.recorded::numeric, 2), 'standard_hours', j.std,
         'expected_hours', ROUND(j.expected_so_far::numeric, 2),
+        'gap_hours', ROUND(GREATEST(j.std - j.recorded, 0)::numeric, 2),
+        'completed', j.completed,
         'status', j.status,
         'attendance', CASE WHEN j.status <> 'SCHEDULED' THEN j.status
                            WHEN j.expected_so_far <= 0 THEN 'NOT_STARTED'
@@ -891,9 +894,31 @@ async function calculateAdoption(bounds) {
         ORDER BY bucket_start DESC, machine_key, operator_key NULLS LAST
         LIMIT 12
       ) gap_row
+    ),
+    -- Per-machine gap breakdown, reused by the adoption_machine issue generator so it
+    -- never has to re-run this expensive bucket query. Only machines WITH a gap are kept.
+    by_machine AS (
+      SELECT COALESCE(
+        jsonb_agg(m ORDER BY (m->>'gap_minutes')::int DESC),
+        '[]'::jsonb
+      ) AS machines
+      FROM (
+        SELECT jsonb_build_object(
+          'machine_key', machine_key,
+          'expected_buckets', COUNT(*),
+          'covered_buckets', COUNT(*) FILTER (WHERE has_timesheet_match AND NOT has_unidentified),
+          'missing_buckets', COUNT(*) FILTER (WHERE NOT has_timesheet_match AND NOT has_unidentified),
+          'unidentified_buckets', COUNT(*) FILTER (WHERE has_unidentified),
+          'gap_minutes', (COUNT(*) FILTER (WHERE NOT has_timesheet_match OR has_unidentified)) * 5,
+          'cover_pct', ROUND(100.0 * COUNT(*) FILTER (WHERE has_timesheet_match AND NOT has_unidentified) / COUNT(*), 1)
+        ) AS m
+        FROM classified
+        GROUP BY machine_key
+        HAVING COUNT(*) FILTER (WHERE NOT has_timesheet_match OR has_unidentified) > 0
+      ) x
     )
-    SELECT summary.*, sample_gaps.gaps
-    FROM summary CROSS JOIN sample_gaps
+    SELECT summary.*, sample_gaps.gaps, by_machine.machines
+    FROM summary CROSS JOIN sample_gaps CROSS JOIN by_machine
     `,
     [bounds.window_start, bounds.window_end],
   );
@@ -917,6 +942,7 @@ async function calculateAdoption(bounds) {
       expected_minutes: expectedMinutes,
       missing_minutes: missingMinutes,
       missing_time_buckets: row.gaps || [],
+      per_machine: row.machines || [],
       denominator: "5-minute machine/operator buckets from mch_transaction, excluding No Job and Off but including statusid 5",
       numerator: "buckets with matching timesheet by operator serialnumber or machine/workcenter, excluding unidentified buckets",
       unidentified_rule: "statusid = 5 or status_description = Unidentified is counted as an adoption gap category, not excluded from denominator",
@@ -929,6 +955,7 @@ async function calculateOee(bounds) {
     `
     WITH base AS (
       SELECT
+        COALESCE(NULLIF(BTRIM(machineid), ''), NULLIF(BTRIM(workcentercode), ''), 'UNKNOWN') AS machine_key,
         duration_hours::float AS duration_hours,
         statusid,
         COALESCE(status_activitytype, '') AS status_activitytype,
@@ -937,32 +964,63 @@ async function calculateOee(bounds) {
       WHERE startdatetime >= $1
         AND startdatetime < $2
         AND COALESCE(duration_hours, 0) > 0
+    ),
+    sys AS (
+      SELECT
+        COALESCE(SUM(duration_hours) FILTER (
+          WHERE status_activitytype IN ('M1', 'M2')
+             OR status_description = 'productive'
+        ), 0)::float AS running_hours,
+        COALESCE(SUM(duration_hours) FILTER (
+          WHERE status_description NOT IN (
+            'no job',
+            'off',
+            'preventive',
+            'breakdown',
+            'coffee break / lunch',
+            'daily pm'
+          )
+        ), 0)::float AS denominator_hours,
+        COALESCE(SUM(duration_hours) FILTER (
+          WHERE status_description = 'downtime'
+        ), 0)::float AS downtime_hours,
+        COALESCE(SUM(duration_hours) FILTER (
+          WHERE status_activitytype = 'M2'
+        ), 0)::float AS setup_hours,
+        COALESCE(SUM(duration_hours) FILTER (WHERE statusid = 5), 0)::float AS missing_hours,
+        COALESCE(SUM(duration_hours) FILTER (WHERE statusid = 4), 0)::float AS nojob_hours,
+        COALESCE(SUM(duration_hours), 0)::float AS total_hours
+      FROM base
+    ),
+    -- Per-machine OEE breakdown, consumed by the oee issue generator (no re-query).
+    by_machine AS (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'machine_key', machine_key,
+        'running_hours', ROUND(running_h::numeric, 2),
+        'denominator_hours', ROUND(denom_h::numeric, 2),
+        'oee_pct', CASE WHEN denom_h > 0 THEN ROUND((running_h / denom_h * 100)::numeric, 1) ELSE NULL END,
+        'loss_hours', ROUND((denom_h - running_h)::numeric, 2)
+      ) ORDER BY (denom_h - running_h) DESC), '[]'::jsonb) AS machines
+      FROM (
+        SELECT
+          b.machine_key,
+          SUM(b.duration_hours) FILTER (
+            WHERE b.status_activitytype IN ('M1', 'M2') OR b.status_description = 'productive'
+          ) AS running_h,
+          SUM(b.duration_hours) FILTER (
+            WHERE b.status_description NOT IN
+              ('no job', 'off', 'preventive', 'breakdown', 'coffee break / lunch', 'daily pm')
+          ) AS denom_h
+        FROM base b
+        GROUP BY b.machine_key
+        HAVING SUM(b.duration_hours) FILTER (
+          WHERE b.status_description NOT IN
+            ('no job', 'off', 'preventive', 'breakdown', 'coffee break / lunch', 'daily pm')
+        ) > 0
+      ) g
     )
-    SELECT
-      COALESCE(SUM(duration_hours) FILTER (
-        WHERE status_activitytype IN ('M1', 'M2')
-           OR status_description = 'productive'
-      ), 0)::float AS running_hours,
-      COALESCE(SUM(duration_hours) FILTER (
-        WHERE status_description NOT IN (
-          'no job',
-          'off',
-          'preventive',
-          'breakdown',
-          'coffee break / lunch',
-          'daily pm'
-        )
-      ), 0)::float AS denominator_hours,
-      COALESCE(SUM(duration_hours) FILTER (
-        WHERE status_description = 'downtime'
-      ), 0)::float AS downtime_hours,
-      COALESCE(SUM(duration_hours) FILTER (
-        WHERE status_activitytype = 'M2'
-      ), 0)::float AS setup_hours,
-      COALESCE(SUM(duration_hours) FILTER (WHERE statusid = 5), 0)::float AS missing_hours,
-      COALESCE(SUM(duration_hours) FILTER (WHERE statusid = 4), 0)::float AS nojob_hours,
-      COALESCE(SUM(duration_hours), 0)::float AS total_hours
-    FROM base
+    SELECT sys.*, by_machine.machines
+    FROM sys CROSS JOIN by_machine
     `,
     [bounds.window_start, bounds.window_end],
   );
@@ -981,6 +1039,7 @@ async function calculateOee(bounds) {
       missing_hours: num(row.missing_hours, 0),
       nojob_hours: num(row.nojob_hours, 0),
       total_hours: num(row.total_hours, 0),
+      per_machine: row.machines || [],
       denominator: "Positive machine time excluding No Job, Off, Preventive, Breakdown, Coffee Break/Lunch, and Daily PM",
       numerator: "M1 + M2 + Productive machine event time",
       note: "This is an EWS time-based OEE proxy, not classic Availability x Performance x Quality OEE.",
@@ -991,20 +1050,59 @@ async function calculateOee(bounds) {
 async function calculateOle(bounds) {
   const result = await db.query(
     `
-    SELECT
-      COALESCE(SUM(duration) FILTER (
-        WHERE activitytype IS NULL
-          AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
-          AND COALESCE(duration, 0) > 0
-      ), 0)::float AS working_hours,
-      COALESCE(SUM(duration) FILTER (
-        WHERE COALESCE(duration, 0) > 0
-      ), 0)::float AS available_recorded_hours,
-      COUNT(DISTINCT serialnumber) FILTER (WHERE serialnumber IS NOT NULL)::int AS operator_count
-    FROM public.timesheet_transaction
-    WHERE longdate_checkin >= $1
-      AND longdate_checkin < $2
-      AND COALESCE(state_flag, 1) <> 5
+    WITH base AS (
+      SELECT
+        NULLIF(BTRIM(serialnumber), '') AS operator_key,
+        NULLIF(BTRIM(full_name), '') AS operator_name,
+        activitytype,
+        order_no,
+        duration::float AS duration
+      FROM public.timesheet_transaction
+      WHERE longdate_checkin >= $1
+        AND longdate_checkin < $2
+        AND COALESCE(state_flag, 1) <> 5
+    ),
+    sys AS (
+      SELECT
+        COALESCE(SUM(duration) FILTER (
+          WHERE activitytype IS NULL
+            AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
+            AND COALESCE(duration, 0) > 0
+        ), 0)::float AS working_hours,
+        COALESCE(SUM(duration) FILTER (
+          WHERE COALESCE(duration, 0) > 0
+        ), 0)::float AS available_recorded_hours,
+        COUNT(DISTINCT operator_key) FILTER (WHERE operator_key IS NOT NULL)::int AS operator_count
+      FROM base
+    ),
+    -- Per-operator OLE breakdown, consumed by the ole issue generator (no re-query).
+    by_operator AS (
+      SELECT COALESCE(jsonb_agg(jsonb_build_object(
+        'operator_key', operator_key,
+        'operator_name', operator_name,
+        'working_hours', ROUND(working_h::numeric, 2),
+        'available_hours', ROUND(avail_h::numeric, 2),
+        'ole_pct', CASE WHEN avail_h > 0 THEN ROUND((working_h / avail_h * 100)::numeric, 1) ELSE NULL END,
+        'nva_hours', ROUND((avail_h - working_h)::numeric, 2)
+      ) ORDER BY (avail_h - working_h) DESC), '[]'::jsonb) AS operators
+      FROM (
+        SELECT
+          operator_key,
+          MAX(operator_name) AS operator_name,
+          SUM(duration) FILTER (
+            WHERE activitytype IS NULL
+              AND NULLIF(BTRIM(COALESCE(order_no, '')), '') IS NOT NULL
+              AND COALESCE(duration, 0) > 0
+          ) AS working_h,
+          SUM(duration) FILTER (WHERE COALESCE(duration, 0) > 0) AS avail_h
+        FROM base
+        WHERE operator_key IS NOT NULL
+        GROUP BY operator_key
+        HAVING SUM(duration) FILTER (WHERE COALESCE(duration, 0) > 0) > 0
+      ) g
+    )
+    SELECT sys.*, by_operator.operators
+    FROM sys CROSS JOIN by_operator
     `,
     [bounds.window_start, bounds.window_end],
   );
@@ -1019,6 +1117,7 @@ async function calculateOle(bounds) {
       working_hours: num(row.working_hours, 0),
       available_recorded_hours: num(row.available_recorded_hours, 0),
       operator_count: num(row.operator_count, 0),
+      per_operator: row.operators || [],
       denominator: "total recorded operator duration, excluding deleted rows",
       numerator: "productive rows with order_no and activitytype NULL",
     },
