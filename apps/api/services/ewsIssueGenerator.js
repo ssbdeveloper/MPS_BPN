@@ -124,12 +124,17 @@ async function autoResolveStale(exec, bounds) {
   const result = await exec.query(
     `
     UPDATE ews.issue_log
-    SET status      = 'resolved',
-        resolved_at = COALESCE(resolved_at, now()),
-        updated_at  = now(),
-        detail      = COALESCE(detail, '{}'::jsonb)
-                      || jsonb_build_object('auto_resolved', true,
-                                            'auto_resolved_reason', 'business day rolled over')
+    SET status          = 'resolved',
+        resolved_at     = COALESCE(resolved_at, now()),
+        updated_at      = now(),
+        -- resolution_note is NOT NULL for resolved rows (CHECK issue_log_resolution_note_required).
+        -- The system must state its reason too, or this UPDATE violates the constraint.
+        resolution_note = COALESCE(NULLIF(BTRIM(resolution_note), ''),
+                                   'Auto-resolved: business day rolled over.'),
+        resolved_by     = COALESCE(NULLIF(BTRIM(resolved_by), ''), 'system'),
+        detail          = COALESCE(detail, '{}'::jsonb)
+                          || jsonb_build_object('auto_resolved', true,
+                                                'auto_resolved_reason', 'business day rolled over')
     WHERE status = 'open'
       AND business_date < $1::date
     `,
@@ -324,11 +329,19 @@ async function generateAdoptionMachine(exec, bounds) {
   return count;
 }
 
-// adoption_labour — operators whose COMPLETED shift logged fewer hours than the shift standard,
-// per (operator, shift). Like adoption_machine, this reuses the snapshot: the adoption_labour KPI
-// (computed in-main every snapshot) already carries a per-operator `breakdown`; we read it back
-// and turn each completed short shift into an issue. In-progress shifts are skipped (a not-yet-
-// logged operator is indistinguishable from an absent one until the shift ends).
+// adoption_labour — operators who are behind their PROGRESSIVE target, per (operator, shift).
+// Reuses the snapshot: the adoption_labour KPI already carries a per-operator `breakdown`.
+//
+// The target is expected_hours — the hours that should have been logged BY NOW — not the full
+// shift standard. This used to gate on `completed`, because comparing against a static 8h
+// mid-shift would flag everybody. That made the category a post-mortem: day-shift issues only
+// appeared at 17:00 (shift over, nothing to intervene in) and night-shift ones at 04:00, three
+// hours before the business day rolled over and auto-resolved them. An early-warning system that
+// only speaks after the fact is not one.
+//
+// The MIN_GAP_H floor handles the early-shift noise the `completed` gate used to: 30 minutes in,
+// expected is ~0.44h, so nobody is flagged until roughly an hour of shift has elapsed. For a
+// finished shift expected == standard, so end-of-shift behaviour is unchanged.
 async function generateAdoptionLabour(exec, bounds) {
   const snap = await exec.query(
     `
@@ -350,19 +363,38 @@ async function generateAdoptionLabour(exec, bounds) {
   const bizDate = bounds.business_date;
   let count = 0;
   for (const b of breakdown) {
-    if (!b || b.completed !== true) continue; // completed shifts only
+    if (!b) continue;
     const status = String(b.status || "").toUpperCase();
     if (EXCUSED_STATUSES.has(status)) continue; // leave/sick/permit/off are not adoption gaps
+
     const recorded = Number(b.recorded_hours) || 0;
     const standard = Number(b.standard_hours) || 0;
-    const gap = b.gap_hours != null ? Number(b.gap_hours) : Math.max(standard - recorded, 0);
+
+    // ABSENT expected_hours (log-based variant, no progressive target) is not the same as
+    // expected_hours = 0 (roster variant: the shift has not started yet). Collapsing the two
+    // falls back to the full shift standard and flags every night-shift operator at 16:00 for
+    // "missing" 7 hours they are not yet expected to have logged.
+    const hasExpected = b.expected_hours != null;
+    const expected = hasExpected ? Number(b.expected_hours) : null;
+    if (hasExpected && !(expected > 0)) continue; // scheduled, not started — nothing is owed yet
+    // No progressive target available: only judge the shift once it is over, as before.
+    if (!hasExpected && b.completed !== true) continue;
+
+    const target = hasExpected ? expected : standard;
+    if (!(target > 0)) continue;
+
+    const gap = Math.round(Math.max(target - recorded, 0) * 100) / 100;
     if (gap < ADOPTION_LABOUR_MIN_GAP_H) continue;
+
     const key = String(b.operator_key || "UNKNOWN");
     const name = b.operator_name || key;
-    const pct = standard > 0 ? Math.round((recorded / standard) * 1000) / 10 : 0;
+    const pct = Math.round((recorded / target) * 1000) / 10;
     const severity = pct <= ADOPTION_LABOUR_CRITICAL_PCT ? "critical" : "warning";
     const shiftCode = String(b.shift ?? "");
     const shiftLabel = shiftCode === "1" || shiftCode.toUpperCase() === "DAY" ? "shift 1" : "shift 2";
+    const finished = b.completed === true;
+    const targetLabel = finished ? "shift standard" : "expected so far";
+
     await exec.query(UPSERT_SQL, [
       `adoption_labour:${bizDate}:operator:${key}:s${shiftCode}`,
       "adoption_labour",
@@ -372,14 +404,17 @@ async function generateAdoptionLabour(exec, bounds) {
       name,
       severity,
       `Jam kerja kurang: ${name}`,
-      `${recorded} jam tercatat dari standar ${standard} jam (${shiftLabel}) — kurang ${gap} jam (${pct}%). Pastikan operator input timesheet penuh selama shift.`,
+      `${recorded} jam tercatat dari ${target} jam (${targetLabel}, ${shiftLabel}) — kurang ${gap} jam (${pct}%). Pastikan operator input timesheet selama shift.`,
       pct,
       JSON.stringify({
         operator_key: key,
         shift: b.shift,
         recorded_hours: recorded,
+        expected_hours: expected,
         standard_hours: standard,
+        target_hours: target,
         gap_hours: gap,
+        shift_completed: finished,
       }),
     ]);
     count += 1;

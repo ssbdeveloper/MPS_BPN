@@ -260,6 +260,15 @@ function formatDateTime(value) {
   });
 }
 
+function currentUserId() {
+  try {
+    const user = JSON.parse(sessionStorage.getItem('authUser') || 'null');
+    return String(user?.username || user?.name || user?.id || 'unknown');
+  } catch {
+    return 'unknown';
+  }
+}
+
 async function fetchJson(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Request failed: ${response.status}`);
@@ -1804,22 +1813,52 @@ function DetailSkeleton() {
 /* ------------------------------------------------------------------ *
  * Main page
  * ------------------------------------------------------------------ */
+const RESOLUTION_NOTE_MIN = 5;
+
 // Backend-generated issue log (ews.issue_log) for the current KPI category. Presentational:
-// the parent owns the rows + fetch and passes an onResolve(id) that PUTs /ews/issue-log/:id/resolve.
+// the parent owns the rows + fetch and passes an onResolve(id, note) that PUTs
+// /ews/issue-log/:id/resolve. Closing always goes through the dialog — a justification is
+// mandatory in the API and enforced by a CHECK constraint, so a bare click cannot succeed.
 function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHistory }) {
   const [page, setPage] = useState(1);
-  const [resolvingId, setResolvingId] = useState(null);
+  const [pending, setPending] = useState(null); // the issue awaiting a justification
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => { setPage(1); }, [showHistory]);
 
-  const resolve = useCallback(async (id) => {
-    setResolvingId(id);
-    try {
-      await onResolve(id);
-    } finally {
-      setResolvingId(null);
+  const openDialog = useCallback((issue) => {
+    setPending(issue);
+    setNote('');
+    setError('');
+  }, []);
+
+  const closeDialog = useCallback(() => {
+    if (submitting) return;
+    setPending(null);
+    setNote('');
+    setError('');
+  }, [submitting]);
+
+  const submit = useCallback(async () => {
+    const text = note.trim();
+    if (text.length < RESOLUTION_NOTE_MIN) {
+      setError(`Please describe the corrective action (at least ${RESOLUTION_NOTE_MIN} characters).`);
+      return;
     }
-  }, [onResolve]);
+    setSubmitting(true);
+    setError('');
+    try {
+      await onResolve(pending.id, text);
+      setPending(null);
+      setNote('');
+    } catch (err) {
+      setError(err.message || 'Failed to resolve the issue.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [note, onResolve, pending]);
 
   const openCount = rows.filter((r) => r.status === 'open').length;
   const totalPages = pageCount(rows);
@@ -1878,6 +1917,11 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
                   </td>
                   <td className="px-3 py-2">
                     <div className="max-w-[380px] text-[12px] leading-snug text-slate-700">{row.description || row.title}</div>
+                    {resolved && row.resolution_note ? (
+                      <div className="mt-1 max-w-[380px] border-l-2 border-slate-200 pl-2 text-[11px] leading-snug text-slate-500">
+                        <span className="font-bold text-slate-600">{row.resolved_by || 'system'}:</span> {row.resolution_note}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-3 py-2 text-right font-black text-slate-800">
                     {row.metric_value == null ? '—' : `${formatNumber(row.metric_value)}%`}
@@ -1887,8 +1931,8 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
                   <td className="px-3 py-2 text-center">
                     <button
                       type="button"
-                      disabled={resolved || resolvingId === row.id}
-                      onClick={() => resolve(row.id)}
+                      disabled={resolved || submitting}
+                      onClick={() => openDialog(row)}
                       className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-600 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-40"
                       title="Resolve issue"
                       aria-label="Resolve issue"
@@ -1903,6 +1947,59 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
         </table>
       </div>
       <TablePager page={page} totalPages={totalPages} totalRows={rows.length} onPageChange={setPage} />
+
+      {pending ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 px-0 backdrop-blur-sm md:items-center md:px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Resolve issue"
+          onClick={closeDialog}
+        >
+          <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-base font-bold text-slate-800">Resolve issue</h2>
+            <p className="mt-1 text-xs font-semibold text-slate-500">{pending.entity_name || pending.entity_id}</p>
+            <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-[12px] leading-snug text-slate-600">{pending.description || pending.title}</p>
+
+            <label htmlFor="ews-resolution-note" className="mt-4 block text-xs font-bold text-slate-700">
+              Justification / corrective action <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="ews-resolution-note"
+              rows={4}
+              autoFocus
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={1000}
+              placeholder="What was done, or why this is acceptable?"
+              className={`mt-1 w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 transition-all focus:outline-none focus:ring-2 focus:ring-[#00b4d8] ${error ? 'border-red-400 ring-2 ring-red-200' : 'border-slate-200 focus:border-[#0096c7]'}`}
+            />
+            <div className="mt-1 flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-red-600">{error}</span>
+              <span className="font-mono text-[11px] text-slate-400">{note.trim().length}/1000</span>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDialog}
+                disabled={submitting}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] active:scale-95 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={submitting || note.trim().length < RESOLUTION_NOTE_MIN}
+                className="rounded-lg bg-[#0096c7] px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-[#0077b6] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {submitting ? 'Resolving…' : 'Resolve'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </PageCard>
   );
 }
@@ -1951,14 +2048,16 @@ function EwsDetailPage() {
 
   useEffect(() => { loadAutoIssues(); }, [loadAutoIssues]);
 
-  const resolveAutoIssue = useCallback(async (id) => {
-    setAutoIssues((prev) => prev.map((r) => (r.id === id ? { ...r, status: 'resolved', resolved_at: new Date().toISOString() } : r)));
-    try {
-      await sendJson(`${API_BASE}/ews/issue-log/${id}/resolve`, 'PUT', {});
-    } catch {
-      loadAutoIssues(); // revert to server truth on failure
-    }
-  }, [loadAutoIssues]);
+  // The note is mandatory server-side (and at the DB level). No optimistic update here: if the
+  // write is rejected the row must not appear closed, so we only reflect the server's answer.
+  const resolveAutoIssue = useCallback(async (id, note) => {
+    const payload = await sendJson(`${API_BASE}/ews/issue-log/${id}/resolve`, 'PUT', {
+      resolution_note: note,
+      resolved_by: currentUserId(),
+    });
+    const saved = payload?.data;
+    setAutoIssues((prev) => prev.map((r) => (r.id === id ? { ...r, ...(saved || {}), status: 'resolved' } : r)));
+  }, []);
 
   const loadData = useCallback(async () => {
     if (!config) return;

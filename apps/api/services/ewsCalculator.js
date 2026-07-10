@@ -560,16 +560,22 @@ async function calculateAdoptionLabourFromLogs(bounds) {
     scoped AS (
       -- Scan the target day plus the following early morning so a night shift's post-midnight
       -- tail (check-in before 07:00, business_date = previous day) is captured whole.
+      -- An in-progress row accrues elapsed time (see logged_rows in the roster variant): duration
+      -- is only written at checkout, and dropping the open row understates the operator.
       SELECT
         NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
         NULLIF(BTRIM(t.full_name), '') AS operator_name,
         (t.longdate_checkin AT TIME ZONE $2) AS lct,
-        t.duration::float AS dur
+        (CASE
+           WHEN t.longdate_checkout IS NULL
+             THEN LEAST(GREATEST(EXTRACT(EPOCH FROM (now() - t.longdate_checkin)) / 3600.0, 0), 12)
+           ELSE COALESCE(t.duration, 0)
+         END)::float AS dur
       FROM public.timesheet_transaction t, params
       WHERE t.longdate_checkin >= (params.target_bd::timestamp AT TIME ZONE $2)
         AND t.longdate_checkin <  ((params.target_bd + 2)::timestamp AT TIME ZONE $2)
         AND COALESCE(t.state_flag, 0) <> 5
-        AND COALESCE(t.duration, 0) > 0
+        AND (COALESCE(t.duration, 0) > 0 OR t.longdate_checkout IS NULL)
         AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
     ),
     classified AS (
@@ -639,9 +645,9 @@ async function calculateAdoptionLabourFromLogs(bounds) {
   return {
     value,
     helper: completed > 0
-      ? `${completed} shift selesai${inProgress ? `, ${inProgress} berjalan` : ""}`
+      ? `${completed} shifts completed${inProgress ? `, ${inProgress} in progress` : ""}`
       : inProgress > 0
-        ? `${inProgress} shift berjalan, belum ada yang selesai`
+        ? `${inProgress} shifts in progress, none completed yet`
         : "No completed operator shift on this business date",
     detail: {
       completed_shift_count: completed,
@@ -675,14 +681,25 @@ async function calculateAdoptionLabourFromRoster(bounds) {
     `
     WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
     logged_rows AS (
+      -- duration is only written at CHECKOUT, so a row still in progress reads as 0 hours. This
+      -- KPI compares recorded hours against expected-SO-FAR (elapsed clock), so ignoring the open
+      -- row compares closed work against running time and understates every operator who happens
+      -- to be mid-task: measured at 16:22, 33 of 44 day-shift operators looked behind, but only 8
+      -- were once the in-progress row was counted. An open row therefore accrues its elapsed time,
+      -- which is exactly the value duration will take at checkout. Capped at 12h so a forgotten
+      -- checkout cannot inflate the day.
       SELECT NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
              (t.longdate_checkin AT TIME ZONE $2) AS lci,
-             t.duration::float AS dur
+             (CASE
+                WHEN t.longdate_checkout IS NULL
+                  THEN LEAST(GREATEST(EXTRACT(EPOCH FROM (now() - t.longdate_checkin)) / 3600.0, 0), 12)
+                ELSE COALESCE(t.duration, 0)
+              END)::float AS dur
       FROM public.timesheet_transaction t, params
       WHERE t.longdate_checkin >= (params.target_bd::timestamp AT TIME ZONE $2)
         AND t.longdate_checkin <  ((params.target_bd + 2)::timestamp AT TIME ZONE $2)
         AND COALESCE(t.state_flag, 0) <> 5
-        AND COALESCE(t.duration, 0) > 0
+        AND (COALESCE(t.duration, 0) > 0 OR t.longdate_checkout IS NULL)
         AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
     ),
     logged AS (
@@ -759,9 +776,9 @@ async function calculateAdoptionLabourFromRoster(bounds) {
   return {
     value,
     helper: started > 0
-      ? `${present}/${started} sudah input, ${absent} belum${notStarted ? `, ${notStarted} belum mulai` : ""}`
+      ? `${present}/${started} logged, ${absent} with nothing yet${notStarted ? `, ${notStarted} not started` : ""}`
       : notStarted > 0
-        ? `${notStarted} shift terjadwal, belum ada yang mulai`
+        ? `${notStarted} shifts scheduled, none started yet`
         : "No scheduled operator on this business date",
     detail: {
       basis: "roster_progressive",
@@ -814,17 +831,20 @@ async function getMachineHoursByOperator(bounds) {
     `
     WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
     ts_scoped AS (
+      -- An open row runs until now(). It must be part of the timesheet interval, because its
+      -- elapsed time is now counted as recorded hours: leaving it out would credit the machine
+      -- time inside that task a second time as "outside the timesheet".
       SELECT
         NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
         (t.longdate_checkin AT TIME ZONE $2) AS a,
-        (COALESCE(t.longdate_checkout, t.longdate_checkin) AT TIME ZONE $2) AS b
+        (COALESCE(t.longdate_checkout, now()) AT TIME ZONE $2) AS b
       FROM public.timesheet_transaction t, params p
       WHERE t.longdate_checkin >= (p.target_bd::timestamp AT TIME ZONE $2)
         AND t.longdate_checkin <  ((p.target_bd + 2)::timestamp AT TIME ZONE $2)
         AND COALESCE(t.state_flag, 0) <> 5
-        AND COALESCE(t.duration, 0) > 0
+        AND (COALESCE(t.duration, 0) > 0 OR t.longdate_checkout IS NULL)
         AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
-        AND COALESCE(t.longdate_checkout, t.longdate_checkin) > t.longdate_checkin
+        AND COALESCE(t.longdate_checkout, now()) > t.longdate_checkin
     ),
     ts_biz AS (
       SELECT s.* FROM ts_scoped s, params p
@@ -956,7 +976,7 @@ function applyMachineHoursToAdoptionLabour(base, machine) {
     ...base,
     value,
     helper: isRoster
-      ? `${present}/${eligible.length} sudah input, ${absent} belum`
+      ? `${present}/${eligible.length} logged, ${absent} with nothing yet`
       : base.helper,
     detail: {
       ...base.detail,

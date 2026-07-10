@@ -1540,7 +1540,7 @@ async function getIssueLog(req, res) {
       `
       SELECT id, issue_key, category, business_date, scope_type, entity_id, entity_name,
              severity, title, description, metric_value, detail, status,
-             created_at, updated_at, resolved_at
+             created_at, updated_at, resolved_at, resolved_by, resolution_note
       FROM ews.issue_log
       WHERE ${filters.join(" AND ")}
       ORDER BY (status = 'open') DESC, (severity = 'critical') DESC, business_date DESC, created_at DESC
@@ -1559,20 +1559,49 @@ async function getIssueLog(req, res) {
   }
 }
 
+const RESOLUTION_NOTE_MIN = 5;
+const RESOLUTION_NOTE_MAX = 1000;
+
+// Closing an issue REQUIRES a justification / corrective action. The old endpoint just flipped
+// `status`, leaving no record of why — and no way to tell a human close from a system close.
+// The UPDATE is guarded on status = 'open' so a second click cannot overwrite the first person's
+// note, nor silently re-close what the auto-resolver already closed.
 async function resolveIssueLog(req, res) {
   const id = Number.parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) { res.status(400).json({ error: "Invalid issue id" }); return; }
+
+  const note = String(req.body?.resolution_note ?? req.body?.note ?? "").trim();
+  if (note.length < RESOLUTION_NOTE_MIN) {
+    res.status(400).json({ error: `A justification / corrective action of at least ${RESOLUTION_NOTE_MIN} characters is required.` });
+    return;
+  }
+  if (note.length > RESOLUTION_NOTE_MAX) {
+    res.status(400).json({ error: `Justification is too long (max ${RESOLUTION_NOTE_MAX} characters).` });
+    return;
+  }
+  const resolvedBy = String(req.body?.resolved_by ?? req.headers["x-user-id"] ?? "unknown").trim().slice(0, 120) || "unknown";
+
   try {
     const result = await db.query(
       `
       UPDATE ews.issue_log
-      SET status = 'resolved', resolved_at = COALESCE(resolved_at, now()), updated_at = now()
+      SET status          = 'resolved',
+          resolution_note = $2,
+          resolved_by     = $3,
+          resolved_at     = now(),
+          updated_at      = now()
       WHERE id = $1
+        AND status = 'open'
       RETURNING *
       `,
-      [id],
+      [id, note, resolvedBy],
     );
-    if (!result.rows.length) { res.status(404).json({ error: "Issue not found" }); return; }
+    if (!result.rows.length) {
+      const existing = await db.query("SELECT status FROM ews.issue_log WHERE id = $1", [id]);
+      if (!existing.rows.length) { res.status(404).json({ error: "Issue not found" }); return; }
+      res.status(409).json({ error: "Issue is already resolved" });
+      return;
+    }
     res.json({ data: result.rows[0] });
   } catch (err) {
     console.error("ews issue-log resolve error:", err);
