@@ -1070,12 +1070,107 @@ async function buildAdoptionMachineSourceDetail(windowStart, windowEnd) {
   };
 }
 
+// accuracy_machine breakdown — built straight from mch_transaction.status_record.
+// Two questions the detail page must answer:
+//   1. WHICH machine produces incomplete records (by_machine)
+//   2. WHY they are incomplete (by_reason) — mutually exclusive causes, so the shares sum to 100%.
+// A raw "which field is missing" count would double-count (a record can miss several fields at
+// once), which is why the reasons are ranked and exclusive instead.
+async function buildAccuracyMachineSourceDetail(windowStart, windowEnd) {
+  const result = await db.query(
+    `
+    WITH base AS (
+      SELECT
+        COALESCE(NULLIF(BTRIM(machineid), ''), NULLIF(BTRIM(workcentercode), ''), 'UNKNOWN') AS machine_key,
+        machinename,
+        status_record,
+        statusid,
+        status_description,
+        (NULLIF(BTRIM(order_no), '') IS NULL)            AS miss_order,
+        (NULLIF(BTRIM(operation_no), '') IS NULL)        AS miss_operation,
+        (NULLIF(BTRIM(sn_employee), '') IS NULL)         AS miss_operator,
+        (NULLIF(BTRIM(confirmation_number), '') IS NULL) AS miss_confirmation
+      FROM public.mch_transaction
+      WHERE startdatetime >= $1::timestamp
+        AND startdatetime < $2::timestamp
+    ),
+    classified AS (
+      SELECT
+        *,
+        CASE
+          WHEN status_record THEN NULL
+          WHEN miss_order OR miss_operation THEN 'no_job'
+          WHEN miss_operator THEN 'no_operator'
+          WHEN miss_confirmation THEN 'no_confirmation'
+          ELSE 'other'
+        END AS reason
+      FROM base
+    ),
+    totals AS (
+      SELECT
+        COUNT(*)::int AS total_records,
+        COUNT(*) FILTER (WHERE status_record)::int AS ready_records,
+        COUNT(*) FILTER (WHERE NOT status_record)::int AS incomplete_records,
+        COUNT(*) FILTER (WHERE statusid IN (0, 3, 4))::int AS exempt_records,
+        CASE WHEN COUNT(*) > 0
+          THEN ROUND((100.0 * COUNT(*) FILTER (WHERE status_record) / COUNT(*))::numeric, 2)::float
+          ELSE NULL
+        END AS accuracy_pct
+      FROM classified
+    )
+    SELECT
+      (SELECT row_to_json(t) FROM totals t) AS totals,
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.incomplete DESC, x.accuracy_pct ASC NULLS LAST), '[]'::jsonb)
+       FROM (
+         SELECT
+           machine_key,
+           MAX(machinename) AS machinename,
+           COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE NOT status_record)::int AS incomplete,
+           ROUND((100.0 * COUNT(*) FILTER (WHERE status_record) / COUNT(*))::numeric, 1)::float AS accuracy_pct,
+           CASE
+             -- Bands mirror the accuracy_machine KPI (normal >= 98, critical < 95). Guard the NULL
+             -- case explicitly: a NULL comparison yields NULL, falls through to ELSE, and would
+             -- paint a machine green that has no records at all.
+             WHEN COUNT(*) = 0 THEN 'no_data'
+             WHEN (100.0 * COUNT(*) FILTER (WHERE status_record) / COUNT(*)) < 95 THEN 'critical'
+             WHEN (100.0 * COUNT(*) FILTER (WHERE status_record) / COUNT(*)) < 98 THEN 'watch'
+             ELSE 'normal'
+           END AS status
+         FROM classified
+         GROUP BY machine_key
+         HAVING COUNT(*) FILTER (WHERE NOT status_record) > 0
+         ORDER BY COUNT(*) FILTER (WHERE NOT status_record) DESC
+         LIMIT 20
+       ) x) AS by_machine,
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.count DESC), '[]'::jsonb)
+       FROM (
+         SELECT reason, COUNT(*)::int AS count
+         FROM classified
+         WHERE reason IS NOT NULL
+         GROUP BY reason
+       ) x) AS by_reason
+    `,
+    [windowStart, windowEnd],
+  );
+
+  const row = result.rows[0] || {};
+  return {
+    source_tables: ["public.mch_transaction"],
+    basis: "status_record = TRUE when statusid IN (0,3,4) OR order_no + operation_no + sn_employee + confirmation_number are all present",
+    totals: row.totals || {},
+    by_machine: row.by_machine || [],
+    by_reason: row.by_reason || [],
+  };
+}
+
 async function buildKpiSourceDetail(type, summary) {
   const windowStart = summary.window_start;
   const windowEnd = summary.window_end;
   if (!windowStart || !windowEnd) return null;
 
   if (type === "uptime") return buildUptimeSourceDetail(windowStart, windowEnd);
+  if (type === "accuracy_machine") return buildAccuracyMachineSourceDetail(windowStart, windowEnd);
   if (type === "uptime_hmi") {
     // Reuse the per-machine breakdown already computed by the KPI (no extra query).
     const k = (summary.kpis || []).find((x) => x.key === "uptime_hmi");
@@ -1093,14 +1188,19 @@ async function buildKpiSourceDetail(type, summary) {
   if (type === "accuracy") return buildAccuracySourceDetail(windowStart, windowEnd);
   if (type === "adoption") return buildAdoptionSourceDetail(windowStart, windowEnd);
   if (type === "adoption_labour") {
-    // Reuse the per-operator breakdown already computed by the KPI calculation
-    // (no extra query) — it carries every scheduled operator with recorded vs expected hours.
+    // Reuse the per-operator breakdown already computed by the KPI calculation (no extra query).
+    // It already carries timesheet_hours, machine_hours, machine_extra_hours and the merged
+    // recorded_hours, because the machine credit is folded in by the calculator itself — the
+    // detail page and the KPI headline must never disagree about what "recorded" means.
     const k = (summary.kpis || []).find((x) => x.key === "adoption_labour");
     const d = k?.detail || {};
+
     return {
-      source_tables: ["ews.shift_roster", "public.timesheet_transaction"],
+      source_tables: ["ews.shift_roster", "public.timesheet_transaction", "public.mch_transaction"],
       basis: d.basis || "roster_progressive",
+      recorded_rule: d.recorded_rule || null,
       by_operator: Array.isArray(d.breakdown) ? d.breakdown : [],
+      machine_attribution: d.machine_attribution || null,
       started: num(d.started),
       present: num(d.present),
       absent: num(d.absent),

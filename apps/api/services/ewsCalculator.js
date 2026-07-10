@@ -787,20 +787,210 @@ async function calculateAdoptionLabourFromRoster(bounds) {
   };
 }
 
+// Machine time an operator can be credited with, per business day.
+//
+// An operator only appears in mch_transaction.sn_employee if they tapped their NFC at the HMI, so
+// the machine IS a time record for them: running time outside their timesheet windows is real work
+// the system captured but the timesheet missed. It is therefore ADDED to recorded hours.
+//
+// Two rules make the addition safe:
+//   * running only (M1/M2/productive) — a machine stays linked to its operator while Off/NoJob, so
+//     raw duration would credit 27h days.
+//   * only the portion OUTSIDE the operator's timesheet intervals. The timesheet intervals are
+//     merged first (gaps-and-islands), because an operator can have overlapping timesheet rows;
+//     summing per-row overlaps without merging subtracts the same second twice and can even yield
+//     a negative remainder.
+//
+// Empirically the overlap is near zero for most operators (machine work happens in gaps the
+// timesheet never recorded), so extra ≈ machine_hours — but it is computed exactly, not assumed.
+async function getMachineHoursByOperator(bounds) {
+  const timezone = resolveTimezone();
+  const result = await db.query(
+    `
+    WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
+    ts_scoped AS (
+      SELECT
+        NULLIF(BTRIM(t.serialnumber), '') AS operator_key,
+        (t.longdate_checkin AT TIME ZONE $2) AS a,
+        (COALESCE(t.longdate_checkout, t.longdate_checkin) AT TIME ZONE $2) AS b
+      FROM public.timesheet_transaction t, params p
+      WHERE t.longdate_checkin >= (p.target_bd::timestamp AT TIME ZONE $2)
+        AND t.longdate_checkin <  ((p.target_bd + 2)::timestamp AT TIME ZONE $2)
+        AND COALESCE(t.state_flag, 0) <> 5
+        AND COALESCE(t.duration, 0) > 0
+        AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+        AND COALESCE(t.longdate_checkout, t.longdate_checkin) > t.longdate_checkin
+    ),
+    ts_biz AS (
+      SELECT s.* FROM ts_scoped s, params p
+      WHERE (CASE WHEN s.a::time < make_time($3::int, 0, 0) THEN (s.a::date - 1) ELSE s.a::date END) = p.target_bd
+    ),
+    ts_ord AS (
+      SELECT operator_key, a, b,
+        MAX(b) OVER (PARTITION BY operator_key ORDER BY a
+                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_max
+      FROM ts_biz
+    ),
+    ts_grp AS (
+      SELECT *, SUM(CASE WHEN prev_max IS NULL OR a > prev_max THEN 1 ELSE 0 END)
+                  OVER (PARTITION BY operator_key ORDER BY a ROWS UNBOUNDED PRECEDING) AS grp
+      FROM ts_ord
+    ),
+    ts_merged AS (
+      SELECT operator_key, MIN(a) AS a, MAX(b) AS b FROM ts_grp GROUP BY operator_key, grp
+    ),
+    mch AS (
+      SELECT
+        ROW_NUMBER() OVER () AS rid,
+        NULLIF(BTRIM(m.sn_employee), '') AS operator_key,
+        m.startdatetime AS a,
+        m.enddatetime AS b
+      FROM public.mch_transaction m, params p
+      WHERE (CASE WHEN m.startdatetime::time < make_time($3::int, 0, 0)
+                  THEN (m.startdatetime::date - 1) ELSE m.startdatetime::date END) = p.target_bd
+        AND m.enddatetime > m.startdatetime
+        AND (m.status_activitytype IN ('M1', 'M2')
+             OR LOWER(BTRIM(COALESCE(m.status_description, ''))) = 'productive')
+    ),
+    mch_extra AS (
+      SELECT
+        n.operator_key,
+        n.rid,
+        EXTRACT(EPOCH FROM (n.b - n.a)) AS dur_sec,
+        -- FILTER is load-bearing. Postgres LEAST/GREATEST IGNORE NULL arguments, so on a
+        -- LEFT JOIN miss (t.* NULL) the expression collapses to (n.b - n.a) and reports a
+        -- non-overlapping machine interval as 100% overlapping — silently zeroing the credit.
+        COALESCE(
+          SUM(EXTRACT(EPOCH FROM (LEAST(n.b, t.b) - GREATEST(n.a, t.a))))
+            FILTER (WHERE t.operator_key IS NOT NULL),
+          0
+        ) AS ov_sec
+      FROM mch n
+      LEFT JOIN ts_merged t ON t.operator_key = n.operator_key AND t.a < n.b AND t.b > n.a
+      WHERE n.operator_key IS NOT NULL
+      GROUP BY n.operator_key, n.rid, n.a, n.b
+    ),
+    per_op AS (
+      SELECT
+        operator_key,
+        ROUND((SUM(dur_sec) / 3600.0)::numeric, 2)::float AS machine_hours,
+        ROUND((SUM(GREATEST(dur_sec - ov_sec, 0)) / 3600.0)::numeric, 2)::float AS machine_extra_hours
+      FROM mch_extra
+      GROUP BY operator_key
+    )
+    SELECT
+      (SELECT COALESCE(jsonb_object_agg(operator_key,
+                jsonb_build_object('machine_hours', machine_hours, 'machine_extra_hours', machine_extra_hours)),
+              '{}'::jsonb) FROM per_op) AS by_operator,
+      (SELECT COUNT(*)::int FROM per_op WHERE machine_hours > 0) AS operators_with_machine,
+      COALESCE(ROUND((SUM(EXTRACT(EPOCH FROM (b - a))) FILTER (WHERE operator_key IS NOT NULL) / 3600.0)::numeric, 1), 0)::float AS attributed_hours,
+      COALESCE(ROUND((SUM(EXTRACT(EPOCH FROM (b - a))) FILTER (WHERE operator_key IS NULL) / 3600.0)::numeric, 1), 0)::float AS unattributed_hours
+    FROM mch
+    `,
+    [bounds.window_start, timezone, EWS_DAY_START_HOUR],
+  );
+
+  const row = result.rows[0] || {};
+  const attributed = num(row.attributed_hours, 0);
+  const unattributed = num(row.unattributed_hours, 0);
+  const totalRunning = attributed + unattributed;
+  return {
+    byOperator: row.by_operator || {},
+    attribution: {
+      rule: "running machine time (M1/M2/productive) by sn_employee, minus the part overlapping the operator's merged timesheet intervals",
+      operators_with_machine: num(row.operators_with_machine, 0),
+      attributed_hours: attributed,
+      unattributed_hours: unattributed,
+      coverage_pct: totalRunning > 0 ? round1((attributed / totalRunning) * 100) : null,
+    },
+  };
+}
+
+// Fold machine time into the adoption_labour result: recorded = timesheet + machine-outside-timesheet.
+// The KPI aggregates are recomputed from the enriched breakdown so the headline number, the shift
+// split, and present/absent all agree with the bars the detail page draws.
+function applyMachineHoursToAdoptionLabour(base, machine) {
+  const rows = Array.isArray(base?.detail?.breakdown) ? base.detail.breakdown : [];
+  if (!rows.length) return base;
+
+  const isRoster = base.detail.basis === "roster_progressive";
+  const enriched = rows.map((r) => {
+    const entry = machine.byOperator[r.operator_key];
+    const timesheetHours = num(r.recorded_hours, 0);
+    const extra = entry ? num(entry.machine_extra_hours, 0) : 0;
+    const recorded = Math.round((timesheetHours + extra) * 100) / 100;
+    const standard = num(r.standard_hours, 0);
+    return {
+      ...r,
+      timesheet_hours: timesheetHours,
+      machine_hours: entry ? num(entry.machine_hours, 0) : null,
+      machine_extra_hours: entry ? extra : null,
+      recorded_hours: recorded,
+      gap_hours: Math.round(Math.max(standard - recorded, 0) * 100) / 100,
+    };
+  });
+
+  const eligible = isRoster
+    ? enriched.filter((r) => r.status === "SCHEDULED" && num(r.expected_hours, 0) > 0)
+    : enriched.filter((r) => r.completed === true);
+  const denomOf = (r) => (isRoster ? num(r.expected_hours, 0) : num(r.standard_hours, 0));
+
+  const ratio = (list) => {
+    const den = list.reduce((a, r) => a + denomOf(r), 0);
+    if (den <= 0) return null;
+    const numer = list.reduce((a, r) => a + Math.min(num(r.recorded_hours, 0), denomOf(r)), 0);
+    return round1((numer / den) * 100);
+  };
+  const isDayShift = (r) => r.shift === 1 || String(r.shift).toUpperCase() === "DAY";
+
+  const value = ratio(eligible);
+  const present = eligible.filter((r) => num(r.recorded_hours, 0) > 0).length;
+  const absent = eligible.filter((r) => num(r.recorded_hours, 0) === 0).length;
+
+  return {
+    ...base,
+    value,
+    helper: isRoster
+      ? `${present}/${eligible.length} sudah input, ${absent} belum`
+      : base.helper,
+    detail: {
+      ...base.detail,
+      breakdown: enriched,
+      machine_attribution: machine.attribution,
+      recorded_rule: "recorded_hours = timesheet duration + machine running time outside the timesheet intervals",
+      day_adoption_pct: ratio(eligible.filter(isDayShift)),
+      night_adoption_pct: ratio(eligible.filter((r) => !isDayShift(r))),
+      total_recorded_hours: Math.round(eligible.reduce((a, r) => a + num(r.recorded_hours, 0), 0) * 100) / 100,
+      ...(isRoster ? { present, absent } : {}),
+    },
+  };
+}
+
 // Dispatcher: use the roster (attendance-based) when the target business_date has roster rows;
 // otherwise fall back to the log-based computation (pre-roster dates).
 async function calculateAdoptionLabour(bounds) {
   const timezone = resolveTimezone();
+  let base;
   if (!(await tableExists("ews", "shift_roster"))) {
-    return calculateAdoptionLabourFromLogs(bounds);
+    base = await calculateAdoptionLabourFromLogs(bounds);
+  } else {
+    const has = await db.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM ews.shift_roster WHERE business_date = ($1::timestamptz AT TIME ZONE $2)::date
+       ) AS e`,
+      [bounds.window_start, timezone],
+    );
+    base = has.rows[0]?.e ? await calculateAdoptionLabourFromRoster(bounds) : await calculateAdoptionLabourFromLogs(bounds);
   }
-  const has = await db.query(
-    `SELECT EXISTS (
-       SELECT 1 FROM ews.shift_roster WHERE business_date = ($1::timestamptz AT TIME ZONE $2)::date
-     ) AS e`,
-    [bounds.window_start, timezone],
-  );
-  return has.rows[0]?.e ? calculateAdoptionLabourFromRoster(bounds) : calculateAdoptionLabourFromLogs(bounds);
+
+  try {
+    const machine = await getMachineHoursByOperator(bounds);
+    return applyMachineHoursToAdoptionLabour(base, machine);
+  } catch (err) {
+    // Machine credit is an enrichment: never let it take down the KPI.
+    console.error("EWS adoption_labour machine-hours error:", err.message);
+    return base;
+  }
 }
 
 async function calculateAdoption(bounds) {

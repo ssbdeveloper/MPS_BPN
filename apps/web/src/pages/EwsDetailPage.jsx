@@ -1432,6 +1432,91 @@ function AdoptionMachineBreakdown({ kpi }) {
   );
 }
 
+// accuracy_machine reasons are mutually exclusive (backend ranks them), so the shares sum to 100%.
+const ACC_MACHINE_REASONS = {
+  no_operator: { label: 'Operator tidak teridentifikasi', color: '#dc2626', hint: 'Job ada, tapi operator tidak tap di HMI.' },
+  no_job: { label: 'Job tidak terhubung', color: '#f59e0b', hint: 'Record tanpa order / operasi sama sekali.' },
+  no_confirmation: { label: 'Confirmation SAP belum ada', color: '#0096c7', hint: 'Job & operator ada, confirmation belum terbit.' },
+  other: { label: 'Lainnya', color: '#94a3b8', hint: 'Tidak masuk kategori di atas.' },
+};
+
+function AccuracyMachineBreakdown({ kpi }) {
+  const sd = kpi?.source_detail || {};
+  const totals = sd.totals || {};
+  const byMachine = (sd.by_machine || []).slice(0, 10);
+  const reasons = (sd.by_reason || []).map((r) => ({
+    key: r.reason,
+    name: ACC_MACHINE_REASONS[r.reason]?.label || r.reason,
+    color: ACC_MACHINE_REASONS[r.reason]?.color || '#94a3b8',
+    hint: ACC_MACHINE_REASONS[r.reason]?.hint || '',
+    value: numeric(r.count),
+  }));
+  const incomplete = numeric(totals.incomplete_records);
+
+  return (
+    <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <PageCard>
+        <CardHead
+          icon={GaugeIcon}
+          title="Record Tidak Lengkap per Mesin"
+          right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{formatNumber(incomplete)} REC</span>}
+        />
+        <div className="p-4">
+          <RankedList
+            items={byMachine}
+            valueOf={(m) => numeric(m.incomplete)}
+            labelOf={(m) => m.machinename || m.machine_key || 'UNKNOWN'}
+            valueFmt={(m) => `${formatNumber(m.incomplete)} rec`}
+            colorOf={(m) => severityColorForStatusStr(m.status)}
+            subOf={(m) => `akurasi ${formatNumber(m.accuracy_pct)}% dari ${formatNumber(m.total)} record`}
+            emptyText="Semua record mesin lengkap pada window ini."
+            initialCount={10}
+          />
+          <p className="mt-2 text-[10px] font-semibold text-slate-400">
+            Warna mengikuti band KPI: &lt;95% critical, &lt;98% watch. Hanya mesin dengan record tidak lengkap yang tampil.
+          </p>
+        </div>
+      </PageCard>
+
+      <PageCard>
+        <CardHead icon={AlertTriangle} title="Penyebab Ketidaklengkapan" />
+        <div className="p-4">
+          {reasons.length ? (
+            <>
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie data={reasons} dataKey="value" nameKey="name" innerRadius={48} outerRadius={78} paddingAngle={2}>
+                    {reasons.map((r) => <Cell key={r.key} fill={r.color} />)}
+                  </Pie>
+                  <Tooltip formatter={(value, name) => [`${formatNumber(value)} record`, name]} />
+                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <ul className="mt-3 space-y-1.5">
+                {reasons.map((r) => (
+                  <li key={r.key} className="flex items-start gap-2 text-[11px] leading-snug">
+                    <span className="mt-1 h-2 w-2 flex-shrink-0 rounded-full" style={{ background: r.color }} />
+                    <span className="text-slate-600">
+                      <span className="font-bold text-slate-800">{formatNumber(r.value)}</span>
+                      {incomplete > 0 ? ` (${formatNumber((r.value / incomplete) * 100)}%)` : ''} — {r.hint}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <EmptyState text="Tidak ada record tidak lengkap pada window ini." />
+          )}
+          <p className="mt-3 text-[10px] font-semibold text-slate-400">
+            Kategori saling eksklusif (dinilai berurutan), jadi totalnya = {formatNumber(incomplete)} record tidak lengkap.
+            Status Off / Downtime / No Job ({formatNumber(totals.exempt_records)} record) dikecualikan — memang tidak punya job.
+          </p>
+        </div>
+      </PageCard>
+    </section>
+  );
+}
+
 // One per-operator progress bar: recorded hours vs shift standard, with the shortfall on the right.
 function ShiftProgressColumn({ icon: Icon, title, operators }) {
   return (
@@ -1450,6 +1535,15 @@ function ShiftProgressColumn({ icon: Icon, title, operators }) {
           const pct = standard > 0 ? Math.min(100, Math.round((recorded / standard) * 100)) : 0;
           const barColor = pct >= 90 ? '#059669' : pct >= 70 ? '#f59e0b' : '#dc2626';
           const inProgress = o.completed === false;
+
+          // machine_extra_hours is machine running time OUTSIDE the operator's timesheet windows,
+          // so it is disjoint from timesheet_hours by construction — stacking the two is exact,
+          // not double counting. null (no attributable machine record) is NOT 0.
+          const tsHours = o.timesheet_hours == null ? recorded : numeric(o.timesheet_hours);
+          const extra = o.machine_extra_hours == null ? 0 : numeric(o.machine_extra_hours);
+          const tsPct = standard > 0 ? Math.min(100, (tsHours / standard) * 100) : 0;
+          const extraPct = standard > 0 ? Math.max(0, Math.min(100 - tsPct, (extra / standard) * 100)) : 0;
+
           return (
             <div key={o.operator_key || o.operator_name}>
               <div className="flex items-center justify-between gap-2">
@@ -1457,10 +1551,19 @@ function ShiftProgressColumn({ icon: Icon, title, operators }) {
                   <span className="truncate text-xs font-bold text-slate-800">{o.operator_name || o.operator_key || 'UNKNOWN'}</span>
                   {inProgress ? <span className="flex-shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">berjalan</span> : null}
                 </span>
-                <span className="flex-shrink-0 font-mono text-[11px] font-bold text-slate-500">{formatNumber(recorded)}/{formatNumber(standard)}</span>
+                <span className="flex-shrink-0 font-mono text-[11px] font-bold text-slate-500">
+                  {formatNumber(recorded)}/{formatNumber(standard)}
+                  {extra > 0.05 ? <span className="ml-1 font-bold text-[#0077b6]">+{formatNumber(extra)} mesin</span> : null}
+                </span>
               </div>
-              <div className="mt-1 h-2.5 overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: barColor }} />
+              <div
+                className="mt-1 flex h-2.5 overflow-hidden rounded-full bg-slate-100"
+                title={o.machine_hours == null
+                  ? 'Tidak ada jam mesin yang bisa diatribusikan'
+                  : `Timesheet ${formatNumber(tsHours)} jam + mesin di luar timesheet ${formatNumber(extra)} jam (total mesin ${formatNumber(o.machine_hours)} jam)`}
+              >
+                <div className="h-full transition-all" style={{ width: `${tsPct}%`, background: barColor }} />
+                {extraPct > 0 ? <div className="h-full transition-all" style={{ width: `${extraPct}%`, background: '#ade8f4' }} /> : null}
               </div>
             </div>
           );
@@ -1484,11 +1587,47 @@ function AdoptionLabourBreakdown({ kpi }) {
     .sort((a, b) => gapOf(b) - gapOf(a));
   const day = prep(all.filter(isDay));
   const night = prep(all.filter((o) => !isDay(o)));
+  const ma = sd.machine_attribution || {};
+  const coverage = ma.coverage_pct;
+  const withMachine = numeric(ma.operators_with_machine);
+
   return (
-    <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <ShiftProgressColumn icon={Sun} title="Shift 1 · Day" operators={day} />
-      <ShiftProgressColumn icon={Moon} title="Shift 2 · Night" operators={night} />
-    </section>
+    <div className="space-y-4">
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ShiftProgressColumn icon={Sun} title="Shift 1 · Day" operators={day} />
+        <ShiftProgressColumn icon={Moon} title="Shift 2 · Night" operators={night} />
+      </section>
+
+      <PageCard>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3">
+          <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
+            <span className="h-2.5 w-5 rounded-full" style={{ background: '#059669' }} />
+            Jam tercatat (timesheet)
+          </span>
+          <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
+            <span className="h-2.5 w-5 rounded-full" style={{ background: '#ade8f4' }} />
+            Jam mesin di luar jendela timesheet
+          </span>
+          <span className="text-[11px] font-semibold text-slate-500">
+            Keduanya dijumlahkan menjadi jam tercatat operator.
+          </span>
+        </div>
+        <div className="border-t border-slate-100 px-4 py-2.5 text-[10px] font-semibold leading-relaxed text-slate-500">
+          Operator yang tap NFC di HMI punya catatan waktu di mesin, jadi jam mesin dihitung sebagai jam kerja.
+          Hanya bagian yang <span className="font-bold">tidak beririsan</span> dengan jendela timesheet yang ditambahkan (interval timesheet digabung dulu),
+          sehingga waktu yang sama tidak pernah dihitung dua kali. Jam mesin hanya status running (M1 / M2 / Productive);
+          Off, No Job, dan Idle tidak dihitung karena mesin tetap tertaut ke operator saat mati.
+          {coverage !== null && coverage !== undefined ? (
+            <>
+              {' '}<span className="font-bold text-slate-700">Batas:</span> hanya <span className="font-bold text-slate-700">{formatNumber(withMachine)} operator</span> punya
+              jam mesin yang bisa diatribusikan, dan <span className="font-bold text-slate-700">{formatNumber(coverage)}%</span> jam mesin running punya <code>sn_employee</code>
+              {' '}({formatNumber(ma.unattributed_hours)} jam tidak teratribusi). Operator tanpa bar muda berarti
+              {' '}<span className="font-bold">tidak ada data mesin</span> — bukan berarti tidak menyentuh mesin, sehingga kredit ini belum merata. Lihat KPI Accuracy Machine.
+            </>
+          ) : null}
+        </div>
+      </PageCard>
+    </div>
   );
 }
 
@@ -1498,6 +1637,7 @@ function KpiBreakdown({ kpiType, kpi }) {
   }
   if (kpiType === 'uptime') return <UptimeBreakdown kpi={kpi} />;
   if (kpiType === 'accuracy') return <AccuracyBreakdown kpi={kpi} />;
+  if (kpiType === 'accuracy_machine') return <AccuracyMachineBreakdown kpi={kpi} />;
   if (kpiType === 'adoption') return <AdoptionBreakdown kpi={kpi} />;
   if (kpiType === 'adoption_labour') return <AdoptionLabourBreakdown kpi={kpi} />;
   if (kpiType === 'adoption_machine') return <AdoptionMachineBreakdown kpi={kpi} />;
