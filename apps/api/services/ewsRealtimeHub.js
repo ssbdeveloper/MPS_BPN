@@ -148,7 +148,10 @@ function buildFallbackKpis(row) {
   }));
 }
 
-async function getLatestSnapshotForQuery(query = {}) {
+// options.includeKpiDetail keeps each KPI's `detail` payload. compactKpi drops it so the summary
+// and stream stay small, but the per-KPI source-detail builders (adoption_labour, uptime_hmi) read
+// `kpi.detail` instead of re-querying — without it their breakdown silently comes back empty.
+async function getLatestSnapshotForQuery(query = {}, options = {}) {
   const pool = poolRef || global.pool;
   if (!pool) throw new Error("Database pool is not ready");
 
@@ -198,7 +201,9 @@ async function getLatestSnapshotForQuery(query = {}) {
     previous_window_end: detail.previous_window_end || null,
     basis: row.grain === "today" ? "today" : "rolling",
     grain: row.grain,
-    kpis: Array.isArray(detail.kpis) && detail.kpis.length ? detail.kpis.map(compactKpi) : buildFallbackKpis(row),
+    kpis: Array.isArray(detail.kpis) && detail.kpis.length
+      ? detail.kpis.map((kpi) => (options.includeKpiDetail ? kpi : compactKpi(kpi)))
+      : buildFallbackKpis(row),
     issues: Array.isArray(detail.issues) ? detail.issues.slice(0, 5) : [],
     correction_queue: detail.correction_queue || {
       open_actions: 0,

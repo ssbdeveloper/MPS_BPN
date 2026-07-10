@@ -57,7 +57,7 @@ const KPI_CONFIG = {
     icon: Wifi,
     pic: 'IT (Wira)',
     errorType: 'Machine Offline',
-    action: 'Cek jalur jaringan HMI dan ping DOWN yang berulang.',
+    action: 'Check the HMI network path and repeated DOWN pings.',
     unit: 'machine',
   },
   accuracy: {
@@ -67,7 +67,7 @@ const KPI_CONFIG = {
     icon: ClipboardCheck,
     pic: 'Foreman/Spv',
     errorType: 'Invalid Timesheet Data',
-    action: 'Koreksi record error, cek master/order, lalu re-post ke SAP.',
+    action: 'Fix the error records, check master/order, then re-post to SAP.',
     unit: 'record',
   },
   adoption: {
@@ -77,7 +77,7 @@ const KPI_CONFIG = {
     icon: UserCheck,
     pic: 'Foreman/Spv',
     errorType: 'Missing Time',
-    action: 'Konfirmasi operator dan lengkapi input timesheet yang hilang.',
+    action: 'Confirm the operator and complete the missing timesheet entries.',
     unit: 'bucket',
   },
   oee: {
@@ -87,43 +87,43 @@ const KPI_CONFIG = {
     icon: GaugeIcon,
     pic: 'PPIC / Spv',
     errorType: 'Machine Loss',
-    action: 'Review downtime, setup (M2), dan waktu mesin terhitung.',
+    action: 'Review downtime, setup (M2), and counted machine time.',
     unit: 'machine',
   },
   ole: {
     label: 'OLE',
-    title: 'Labor OLE Detail',
+    title: 'Labour OLE Detail',
     target: 85,
     icon: HardHat,
     pic: 'Supervisor',
-    errorType: 'Labor Efficiency Loss',
-    action: 'Cek workflow, kesiapan material, dan coaching operator.',
+    errorType: 'Labour Efficiency Loss',
+    action: 'Check workflow, material readiness, and operator coaching.',
     unit: 'operator',
   },
   // 8-KPI restructure (labour vs machine). Uptime placeholders + split accuracy/adoption.
   uptime_tablet: {
     label: 'Uptime Tablet', title: 'Uptime Tablet Detail', target: 99, icon: Wifi,
-    pic: 'IT (Wira)', errorType: 'Tablet Offline', action: 'Cek konektivitas tablet operator.', unit: 'device',
+    pic: 'IT (Wira)', errorType: 'Tablet Offline', action: 'Check operator tablet connectivity.', unit: 'device',
   },
   uptime_hmi: {
     label: 'Uptime HMI', title: 'Uptime HMI Detail', target: 99, icon: Wifi,
-    pic: 'IT (Wira)', errorType: 'HMI Offline', action: 'Cek jalur jaringan HMI dan ping DOWN berulang.', unit: 'machine',
+    pic: 'IT (Wira)', errorType: 'HMI Offline', action: 'Check the HMI network path and repeated DOWN pings.', unit: 'machine',
   },
   accuracy_labour: {
     label: 'Accuracy Labour', title: 'Accuracy Labour Detail', target: 98, icon: ClipboardCheck,
-    pic: 'Foreman/Spv', errorType: 'Invalid Timesheet Data', action: 'Koreksi order/operasi timesheet, cek SOW/SAP.', unit: 'record',
+    pic: 'Foreman/Spv', errorType: 'Invalid Timesheet Data', action: 'Fix the timesheet order/operation, check SOW/SAP.', unit: 'record',
   },
   accuracy_machine: {
     label: 'Accuracy Machine', title: 'Accuracy Machine Detail', target: 98, icon: ClipboardCheck,
-    pic: 'Foreman/Spv', errorType: 'Missing Machine Transaction', action: 'Cek mch_productiondata tanpa mch_transaction.', unit: 'record',
+    pic: 'Foreman/Spv', errorType: 'Missing Machine Transaction', action: 'Check mch_productiondata rows without mch_transaction.', unit: 'record',
   },
   adoption_labour: {
     label: 'Adoption Labour', title: 'Adoption Labour Detail', target: 95, icon: UserCheck,
-    pic: 'Foreman/Spv', errorType: 'Missing Attendance', action: 'Tandai cuti/sakit/izin operator; konfirmasi absen nyata.', unit: 'operator',
+    pic: 'Foreman/Spv', errorType: 'Missing Attendance', action: 'Flag leave/sick/permit; confirm a genuine absence.', unit: 'operator',
   },
   adoption_machine: {
     label: 'Adoption Machine', title: 'Adoption Machine Detail', target: 95, icon: UserCheck,
-    pic: 'PPIC / Spv', errorType: 'Missing Time', action: 'Cek waktu mesin unidentified/idle vs input operator.', unit: 'machine',
+    pic: 'PPIC / Spv', errorType: 'Missing Time', action: 'Check unidentified/idle machine time against operator input.', unit: 'machine',
   },
 };
 
@@ -184,11 +184,11 @@ function unprodRedShade(index, total) {
 }
 
 const errorTypeLabels = {
-  Missing: 'Missing (field kosong)',
-  Invalid: 'Invalid (nilai salah)',
-  Inconsistent: 'Inconsistent (durasi tidak cocok)',
-  Outlier: 'Outlier (runtime abnormal)',
-  Duplicate: 'Duplicate (record ganda)',
+  Missing: 'Missing (empty field)',
+  Invalid: 'Invalid (wrong value)',
+  Inconsistent: 'Inconsistent (duration mismatch)',
+  Outlier: 'Outlier (abnormal runtime)',
+  Duplicate: 'Duplicate (repeated record)',
 };
 
 const gapTypeLabels = {
@@ -307,20 +307,20 @@ function buildDiagnosis(kpiType, kpi, kpisByKey) {
   const isLow = (val, target) => val !== null && target !== null && val < target;
 
   if (kpiType === 'uptime') {
-    headline = low ? 'Konektivitas mesin bermasalah' : 'Konektivitas mesin sehat';
-    if (low) points.push('Ping/heartbeat gagal berulang. Saat uptime turun, KPI mesin (OEE & Adoption) bisa misleading karena telemetry tertunda.');
-    points.push('Proteksi false-alert: hanya kegagalan ≥6 sampel berturut (±1 menit) yang dihitung sebagai downtime nyata — ping blip tunggal diabaikan.');
+    headline = low ? 'Machine connectivity degraded' : 'Machine connectivity healthy';
+    if (low) points.push('Ping/heartbeat fails repeatedly. When uptime drops, machine KPIs (OEE and Adoption) can mislead because telemetry lags.');
+    points.push('False-alert guard: only 6 or more consecutive failed samples (about 1 minute) count as real downtime — a single ping blip is ignored.');
   } else if (kpiType === 'accuracy') {
-    headline = low ? 'Kualitas data rendah — perlu koreksi' : 'Data akurat & dapat dipercaya';
-    if (low) points.push('Data belum bisa dipercaya sebelum error dikoreksi. Perbaiki record error dulu sebelum menilai KPI produksi.');
-    if (kpi?.detail?.minimum_sample_met === false) points.push('Sampel < 50 record — alert diperlakukan sebagai indikatif (proteksi false-alert).');
-    if (low && isLow(adoption, 95)) points.push('Accuracy + Adoption sama-sama rendah → indikasi masalah input/disiplin operator, bukan performa produksi (Insight #6).');
+    headline = low ? 'Data quality is low — needs correction' : 'Data is accurate and trustworthy';
+    if (low) points.push('The data cannot be trusted until the errors are fixed. Correct the error records before judging production KPIs.');
+    if (kpi?.detail?.minimum_sample_met === false) points.push('Fewer than 50 records — the alert is indicative only (false-alert guard).');
+    if (low && isLow(adoption, 95)) points.push('Accuracy and Adoption are both low, which points to an input/discipline problem rather than production performance (Insight #6).');
   } else if (kpiType === 'adoption') {
-    headline = low ? 'Coverage input rendah (trust ↓)' : 'Adopsi input operator baik';
-    points.push('Adoption adalah indikator TRUST. Coverage rendah membuat OEE & OLE understated karena aktivitas mesin tidak terwakili timesheet.');
-    if (low && isLow(ole, 85)) points.push('Adoption + OLE sama-sama rendah → kemungkinan besar input issue, bukan inefisiensi nyata (Insight #6).');
+    headline = low ? 'Input coverage is low (trust down)' : 'Operator input adoption is healthy';
+    points.push('Adoption is a TRUST indicator. Low coverage understates OEE and OLE because machine activity is not represented in the timesheet.');
+    if (low && isLow(ole, 85)) points.push('Adoption and OLE are both low, so this is most likely an input issue rather than real inefficiency (Insight #6).');
   } else if (kpiType === 'adoption_labour') {
-    headline = low ? 'Input jam operator di bawah target' : 'Input jam operator sehat';
+    headline = low ? 'Operator hour logging is below target' : 'Operator hour logging is healthy';
     const sd = kpi?.source_detail || {};
     const n = (x) => Number(x) || 0;
     const started = n(sd.started);
@@ -334,27 +334,27 @@ function buildDiagnosis(kpiType, kpi, kpisByKey) {
     const pctText = (v) => (v === null || v === undefined ? '—' : `${formatNumber(v)}%`);
 
     if (started > 0) {
-      points.push(`${present} dari ${started} operator yang shiftnya sudah berjalan tercatat input timesheet — ${absent} belum input sama sekali.`);
+      points.push(`${present} of ${started} operators whose shift has started have logged time — ${absent} have logged nothing at all.`);
     }
     if (expected > 0) {
-      points.push(`Tercatat ${formatNumber(recorded)} jam dari ${formatNumber(expected)} jam yang seharusnya sudah masuk sampai saat ini — kurang ${formatNumber(shortfall)} jam.`);
+      points.push(`${formatNumber(recorded)}h recorded out of the ${formatNumber(expected)}h expected by now — ${formatNumber(shortfall)}h short.`);
     }
-    points.push(`Per shift: Day ${pctText(sd.day_adoption_pct)} · Night ${pctText(sd.night_adoption_pct)}. Lihat grafik di bawah untuk operator dengan kekurangan terbesar.`);
-    if (notStarted > 0) points.push(`${notStarted} operator terjadwal belum mulai shift — belum ikut dihitung.`);
-    if (excused > 0) points.push(`${excused} operator cuti/sakit/izin/off dikecualikan dari denominator.`);
-    points.push('Operator absen (terjadwal tapi nol timesheet) adalah penekan terbesar KPI ini — bukan operator yang jamnya sedikit kurang.');
+    points.push(`Per shift: Day ${pctText(sd.day_adoption_pct)} · Night ${pctText(sd.night_adoption_pct)}. The charts below rank operators by the largest shortfall.`);
+    if (notStarted > 0) points.push(`${notStarted} scheduled operators have not started their shift yet and are not counted.`);
+    if (excused > 0) points.push(`${excused} operators on leave/sick/permit/off are excluded from the denominator.`);
+    points.push('Absent operators (scheduled but zero logged time) drag this KPI down far more than operators who are only slightly short.');
   } else if (kpiType === 'oee') {
-    headline = low ? 'Utilisasi mesin di bawah target' : 'Utilisasi mesin sehat';
-    if (low && ole !== null && ole >= 85) points.push('OEE rendah + OLE tinggi → masalah ada di MESIN (downtime/setup). Operator sudah efektif (Insight #4).');
-    if (low && isLow(ole, 85)) points.push('OEE & OLE sama-sama rendah → cek dulu Uptime/Adoption; bisa jadi masalah data, bukan mesin.');
-    points.push('NoJob & Off dikecualikan dari denominator; micro-stop <1 jam ditandai terpisah agar tidak dianggap downtime besar.');
+    headline = low ? 'Machine utilisation is below target' : 'Machine utilisation is healthy';
+    if (low && ole !== null && ole >= 85) points.push('OEE is low while OLE is high, so the problem is the MACHINE (downtime/setup). Operators are already effective (Insight #4).');
+    if (low && isLow(ole, 85)) points.push('OEE and OLE are both low. Check Uptime and Adoption first — this may be a data problem, not a machine one.');
+    points.push('NoJob and Off are excluded from the denominator; micro-stops under an hour are flagged separately so they are not read as major downtime.');
   } else if (kpiType === 'ole') {
-    headline = low ? 'Efektivitas labor di bawah target' : 'Efektivitas labor sehat';
-    if (low && oee !== null && oee >= 80) points.push('OLE rendah + OEE tinggi → mesin OK tapi LABOR tidak efektif. Cek workflow & kesiapan material (Insight #4).');
-    if (low && isLow(adoption, 95)) points.push('OLE rendah + Adoption rendah → cek dulu apakah ini input issue sebelum menyalahkan operator (Insight #6).');
-    points.push('Waktu Idle = labor tercatat tanpa order produktif; inilah gap utama yang menekan OLE.');
+    headline = low ? 'Labour effectiveness is below target' : 'Labour effectiveness is healthy';
+    if (low && oee !== null && oee >= 80) points.push('OLE is low while OEE is high, so the machines are fine but LABOUR is not effective. Check workflow and material readiness (Insight #4).');
+    if (low && isLow(adoption, 95)) points.push('OLE and Adoption are both low. Check whether this is an input issue before blaming the operator (Insight #6).');
+    points.push('Idle time is labour recorded without a productive order — the main gap dragging OLE down.');
   } else {
-    headline = kpi?.helper || 'Detail KPI';
+    headline = kpi?.helper || 'KPI detail';
   }
 
   return { tone: status, headline, points };
@@ -395,7 +395,7 @@ function buildUptimeRows(kpi, config) {
         detail: `${formatNumber(failed)} gagal · ${consecutive} berturut · loss ${formatNumber(m.downtime_minutes)} min · ${m.ipaddress || '-'}`,
         severity: real ? 'Critical' : 'Watch',
         errorType: real ? 'Machine Offline' : 'Ping Blip',
-        action: real ? 'Cek power/network device, restart HMI, notify IT.' : 'Monitor — belum mencapai ambang downtime nyata.',
+        action: real ? 'Check device power/network, restart the HMI, notify IT.' : 'Monitor — has not reached the real-downtime threshold.',
         pic: config.pic,
         sortValue: consecutive * 1000 + failed,
         isIssue: real,
@@ -416,15 +416,15 @@ function buildAccuracyRows(kpi, config, kpiStatus) {
       area: errorTypeLabels[t.error_type] || t.error_type,
       metric: `${formatNumber(t.error_records)}`,
       metricLabel: 'record',
-      detail: 'Kategori error dari timesheet + SAP staging pada window ini.',
+      detail: 'Error categories from the timesheet and SAP staging in this window.',
       severity: kpiStatus === 'critical' ? 'Critical' : 'Watch',
       errorType: t.error_type,
       action: t.error_type === 'Missing'
-        ? 'Lengkapi field kosong (order/operasi/planhours) lalu validasi ulang.'
+        ? 'Fill the empty fields (order/operation/planhours) and re-validate.'
         : t.error_type === 'Invalid'
-          ? 'Koreksi nilai tidak valid, cek QR/order/master data.'
+          ? 'Fix the invalid values, check QR/order/master data.'
           : t.error_type === 'Duplicate'
-            ? 'Hapus/gabung record ganda dengan timestamp identik.'
+            ? 'Remove or merge duplicate records with identical timestamps.'
             : config.action,
       pic: config.pic,
       sortValue: numeric(t.error_records),
@@ -449,7 +449,7 @@ function buildAdoptionRows(kpi, config, kpiStatus) {
       detail: `${formatNumber(m.gap_buckets)} bucket 5-menit tanpa timesheet cocok.`,
       severity: kpiStatus === 'critical' ? 'Critical' : 'Watch',
       errorType: config.errorType,
-      action: 'Konfirmasi operator yang menjalankan mesin & lengkapi input timesheet.',
+      action: 'Confirm who ran the machine and complete the timesheet entry.',
       pic: config.pic,
       sortValue: numeric(m.missing_minutes),
       isIssue: kpiStatus === 'critical' || kpiStatus === 'watch',
@@ -467,10 +467,10 @@ function buildOeeRows(kpi, config) {
       area: m.machinename || m.machineid || 'UNKNOWN',
       metric: `${formatNumber(m.oee_time_pct)}%`,
       metricLabel: 'oee',
-      detail: `Loss ${formatHours(m.loss_hours)} dari ${formatHours(m.total_hours)} · ${formatNumber(m.stop_count)} stop event`,
+      detail: `Loss ${formatHours(m.loss_hours)} of ${formatHours(m.total_hours)} · ${formatNumber(m.stop_count)} stop events`,
       severity: sevFromStatus(m.status),
       errorType: 'Machine Loss',
-      action: 'Cek breakdown/setup mesin, material readiness, dan technical support.',
+      action: 'Check machine breakdown/setup, material readiness, and technical support.',
       pic: config.pic,
       sortValue: numeric(m.loss_hours),
       isIssue: normalizeStatus(m.status) === 'critical' || normalizeStatus(m.status) === 'watch',
@@ -488,10 +488,10 @@ function buildOleRows(kpi, config) {
       area: o.operator_name || o.operator_id || 'UNKNOWN',
       metric: `${formatNumber(o.ole_time_pct)}%`,
       metricLabel: 'ole',
-      detail: `Non-produktif ${formatHours(o.nva_hours)} dari ${formatHours(o.total_hours)} tercatat`,
+      detail: `Non-productive ${formatHours(o.nva_hours)} of ${formatHours(o.total_hours)} recorded`,
       severity: sevFromStatus(o.status),
-      errorType: 'Labor Efficiency Loss',
-      action: 'Cek workflow, kesiapan material, dan koordinasi; coaching bila perlu.',
+      errorType: 'Labour Efficiency Loss',
+      action: 'Check workflow, material readiness, and coordination; coach if needed.',
       pic: config.pic,
       sortValue: numeric(o.nva_hours),
       isIssue: normalizeStatus(o.status) === 'critical' || normalizeStatus(o.status) === 'watch',
@@ -647,7 +647,7 @@ function MetricTile({ label, value, sub, tone = 'neutral' }) {
   );
 }
 
-function RankedList({ items = [], valueOf, labelOf, subOf, colorOf, valueFmt, emptyText = 'Tidak ada data.', initialCount }) {
+function RankedList({ items = [], valueOf, labelOf, subOf, colorOf, valueFmt, emptyText = 'No data.', initialCount }) {
   const [page, setPage] = useState(0);
   if (!items.length) return <EmptyState text={emptyText} />;
   const max = Math.max(...items.map((i) => Math.abs(numeric(valueOf(i)))), 1);
@@ -898,7 +898,7 @@ function UptimeBreakdown({ kpi }) {
   return (
     <div className="space-y-4">
       <PageCard>
-        <CardHead icon={Activity} title="Uptime per Jam — Tanggal Terakhir" tag={`${hourly.length}j`} />
+        <CardHead icon={Activity} title="Uptime per Hour — Latest Date" tag={`${hourly.length}h`} />
         <div className="p-4">
           {hourly.length ? (
             <>
@@ -915,7 +915,7 @@ function UptimeBreakdown({ kpi }) {
                         ? [`${formatFixed2(value)}%`, 'Uptime']
                         : [`${formatNumber(value)} gagal`, 'Failed ping']
                     )}
-                    labelFormatter={(label) => `Jam ${label}`}
+                    labelFormatter={(label) => `Hour ${label}`}
                   />
                   <Bar yAxisId="left" dataKey="failed" radius={[4, 4, 0, 0]} maxBarSize={26}>
                     {hourly.map((h) => (
@@ -925,18 +925,15 @@ function UptimeBreakdown({ kpi }) {
                   <Line yAxisId="right" type="monotone" dataKey="uptime" stroke={uptimeColor(kpi?.value)} strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 4 }} />
                 </ComposedChart>
               </ResponsiveContainer>
-              <p className="mt-2 text-[10px] font-semibold text-slate-400">
-                Bar = failed ping/jam (tinggi = naik-turun) · warna = status uptime jam itu · garis = uptime% (skala kanan). Hijau ≥ {UPTIME_TARGET_PCT}%, amber {UPTIME_TARGET_PCT - UPTIME_WATCH_MARGIN_PCT}–{UPTIME_TARGET_PCT}%, merah &lt; {UPTIME_TARGET_PCT - UPTIME_WATCH_MARGIN_PCT}%.
-              </p>
             </>
           ) : (
-            <EmptyChart text="Tidak ada data ping per jam untuk tanggal terakhir." />
+            <EmptyChart text="No hourly ping data for the latest date." />
           )}
         </div>
       </PageCard>
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
       <PageCard>
-        <CardHead icon={Wifi} title="Uptime per Mesin (terendah)" tag={`${byMachine.length}`} />
+        <CardHead icon={Wifi} title="Uptime per Machine (lowest)" tag={`${byMachine.length}`} />
         <div className="p-4">
           <RankedList
             items={byMachine}
@@ -945,7 +942,7 @@ function UptimeBreakdown({ kpi }) {
             valueFmt={(m) => `${formatNumber(m.uptime_pct)}%`}
             colorOf={(m) => uptimeColor(m.uptime_pct)}
             subOf={(m) => `${formatNumber(m.failed_count)} gagal · ${numeric(m.max_consecutive_fail)} berturut · loss ${formatNumber(m.downtime_minutes)} min`}
-            emptyText="Semua mesin online — tidak ada kegagalan ping."
+            emptyText="All machines online — no ping failures."
           />
         </div>
       </PageCard>
@@ -962,7 +959,7 @@ function UptimeBreakdown({ kpi }) {
               subOf={(m) => `${m.ipaddress || '-'} · latency ${formatNumber(m.avg_latency_ms)} ms · packet loss ${formatNumber(m.max_packet_loss_percent)}%`}
             />
           ) : (
-            <EmptyState text="Belum ada mesin yang mencapai ambang downtime nyata (≥6 gagal berturut)." />
+            <EmptyState text="No machine has reached the real-downtime threshold (6+ consecutive failures)." />
           )}
         </div>
       </PageCard>
@@ -987,12 +984,12 @@ function AccuracyBreakdown({ kpi }) {
             labelOf={(t) => errorTypeLabels[t.error_type] || t.error_type}
             valueFmt={(t) => formatNumber(t.error_records)}
             colorOf={() => SEV_HEX.Watch}
-            emptyText="Tidak ada error terklasifikasi pada window ini."
+            emptyText="No classified errors in this window."
           />
         </div>
       </PageCard>
       <PageCard>
-        <CardHead icon={GaugeIcon} title="Hotspot Mesin" />
+        <CardHead icon={GaugeIcon} title="Machine Hotspot" />
         <div className="p-4">
           <RankedList
             items={byMachine}
@@ -1000,7 +997,7 @@ function AccuracyBreakdown({ kpi }) {
             labelOf={(m) => m.machine_id || 'UNKNOWN'}
             valueFmt={(m) => formatNumber(m.error_records)}
             colorOf={() => '#0096c7'}
-            emptyText="Tidak ada mesin dengan error."
+            emptyText="No machine with errors."
           />
         </div>
       </PageCard>
@@ -1013,7 +1010,7 @@ function AccuracyBreakdown({ kpi }) {
             labelOf={(o) => o.operator_name || o.operator_id || 'UNKNOWN'}
             valueFmt={(o) => formatNumber(o.error_records)}
             colorOf={() => '#0077b6'}
-            emptyText="Tidak ada operator dengan error."
+            emptyText="No operator with errors."
           />
         </div>
       </PageCard>
@@ -1030,7 +1027,7 @@ function AdoptionBreakdown({ kpi }) {
   return (
     <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <PageCard>
-        <CardHead icon={AlertTriangle} title="Tipe Gap" />
+        <CardHead icon={AlertTriangle} title="Gap Type" />
         <div className="p-4">
           {byGap.length ? (
             <ResponsiveContainer width="100%" height={200}>
@@ -1043,12 +1040,12 @@ function AdoptionBreakdown({ kpi }) {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState text="Tidak ada gap adopsi pada window ini." />
+            <EmptyState text="No adoption gap in this window." />
           )}
         </div>
       </PageCard>
       <PageCard>
-        <CardHead icon={GaugeIcon} title="Gap per Mesin" />
+        <CardHead icon={GaugeIcon} title="Gap per Machine" />
         <div className="p-4">
           <RankedList
             items={byMachine}
@@ -1057,7 +1054,7 @@ function AdoptionBreakdown({ kpi }) {
             valueFmt={(m) => `${formatNumber(m.missing_minutes)} min`}
             colorOf={() => SEV_HEX.Watch}
             subOf={(m) => `${formatNumber(m.gap_buckets)} bucket`}
-            emptyText="Tidak ada gap per mesin."
+            emptyText="No gap per machine."
           />
         </div>
       </PageCard>
@@ -1071,7 +1068,7 @@ function AdoptionBreakdown({ kpi }) {
             valueFmt={(o) => `${formatNumber(o.missing_minutes)} min`}
             colorOf={() => '#0077b6'}
             subOf={(o) => `${formatNumber(o.gap_buckets)} bucket`}
-            emptyText="Tidak ada gap per operator."
+            emptyText="No gap per operator."
           />
         </div>
       </PageCard>
@@ -1091,7 +1088,7 @@ function OeeBreakdown({ kpi }) {
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PageCard>
           <CardHead icon={BarChart3} title="OEE Time Waterfall" />
-          <div className="p-4">{waterfall.length ? <OeeWaterfallChart data={waterfall} /> : <EmptyChart text="Tidak ada data waterfall pada window ini." />}</div>
+          <div className="p-4">{waterfall.length ? <OeeWaterfallChart data={waterfall} /> : <EmptyChart text="No waterfall data in this window." />}</div>
         </PageCard>
         <PageCard>
           <CardHead icon={BarChart3} title="Machine Time Mix (100%)" />
@@ -1124,17 +1121,14 @@ function OeeBreakdown({ kpi }) {
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <EmptyChart text="Tidak ada distribusi per-mesin pada window ini." />
+              <EmptyChart text="No per-machine distribution in this window." />
             )}
-            <p className="mt-2 text-[10px] font-semibold text-slate-400">
-              NoJob dikeluarkan — mix dihitung atas waktu mesin aktual (VA + NNVA + NVA).
-            </p>
           </div>
         </PageCard>
       </section>
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PageCard>
-          <CardHead icon={GaugeIcon} title="OEE per Mesin (terendah)" />
+          <CardHead icon={GaugeIcon} title="OEE per Machine (lowest)" />
           <div className="p-4">
             <RankedList
               items={byMachine}
@@ -1145,9 +1139,9 @@ function OeeBreakdown({ kpi }) {
               valueFmt={(m) => (m.oee_time_pct === null || m.oee_time_pct === undefined ? 'n/a' : `${formatNumber(m.oee_time_pct)}%`)}
               colorOf={(m) => severityColorForStatusStr(m.status)}
               subOf={(m) => (m.oee_time_pct === null || m.oee_time_pct === undefined
-                ? `tidak ada waktu terhitung · ${formatHours(m.total_hours)} NoJob/PM/breakdown`
+                ? `no counted time · ${formatHours(m.total_hours)} NoJob/PM/breakdown`
                 : `run ${formatHours(m.running_hours)} / ${formatHours(m.total_hours)} · loss ${formatHours(m.loss_hours)}`)}
-              emptyText="Tidak ada data mesin."
+              emptyText="No machine data."
             />
           </div>
         </PageCard>
@@ -1161,16 +1155,13 @@ function OeeBreakdown({ kpi }) {
               valueFmt={(l) => formatHours(l.hours)}
               colorOf={(l) => machineMixColors[l.name] || '#ef4444'}
               subOf={(l) => `${formatNumber(l.events)} event`}
-              emptyText="Tidak ada loss tercatat."
+              emptyText="No loss recorded."
             />
-            <p className="mt-2 text-[10px] font-semibold text-slate-400">
-              NoJob tidak dihitung sebagai loss — lihat kartu NoJob per Mesin.
-            </p>
           </div>
         </PageCard>
       </section>
       <PageCard>
-        <CardHead icon={Clock3} title="NoJob per Mesin (tertinggi)" tag={`${byNoJob.length} mesin`} />
+        <CardHead icon={Clock3} title="NoJob per Machine (highest)" tag={`${byNoJob.length} machines`} />
         <div className="p-4">
           <RankedList
             items={byNoJob}
@@ -1178,13 +1169,10 @@ function OeeBreakdown({ kpi }) {
             labelOf={(m) => m.machinename || m.machineid || 'UNKNOWN'}
             valueFmt={(m) => formatHours(m.nojob_hours)}
             colorOf={() => machineMixColors.NoJob}
-            subOf={(m) => `${formatNumber(m.nojob_pct)}% dari ${formatHours(m.total_hours)} waktu mesin`}
-            emptyText="Tidak ada waktu NoJob pada window ini."
+            subOf={(m) => `${formatNumber(m.nojob_pct)}% of ${formatHours(m.total_hours)} machine time`}
+            emptyText="No NoJob time in this window."
             initialCount={10}
           />
-          <p className="mt-2 text-[10px] font-semibold text-slate-400">
-            NoJob = tidak ada pekerjaan terjadwal (statusid 4 / status &quot;No Job&quot; atau &quot;Off&quot;). Ini masalah penjadwalan, bukan performa mesin.
-          </p>
         </div>
       </PageCard>
     </div>
@@ -1209,7 +1197,7 @@ function OleBreakdown({ kpi }) {
   return (
     <section className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-3">
       <PageCard>
-        <CardHead icon={Activity} title="Distribusi Non-Produktif Labor" tag={`${byActivity.length}`} />
+        <CardHead icon={Activity} title="Non-Productive Labour Distribution" tag={`${byActivity.length}`} />
         <div className="p-4">
           {chartActivity.length ? (
             <ResponsiveContainer width="100%" height={300}>
@@ -1228,13 +1216,12 @@ function OleBreakdown({ kpi }) {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState text="Tidak ada waktu non-produktif labor pada window ini." />
+            <EmptyState text="No non-productive labour time in this window." />
           )}
-          <p className="mt-2 text-[10px] font-semibold text-slate-400">Durasi non-produktif per jenis aktivitas (activitytype) hari ini · top 8</p>
         </div>
       </PageCard>
       <PageCard>
-        <CardHead icon={Users} title="OLE per Operator (terendah)" tag={`${byOperator.length}`} />
+        <CardHead icon={Users} title="OLE per Operator (lowest)" tag={`${byOperator.length}`} />
         <div className="p-4">
           <RankedList
             items={byOperator}
@@ -1244,12 +1231,12 @@ function OleBreakdown({ kpi }) {
             valueFmt={(o) => `${formatNumber(o.ole_time_pct)}%`}
             colorOf={(o) => severityColorForStatusStr(o.status)}
             subOf={(o) => `produktif ${formatHours(o.working_hours)} / ${formatHours(o.total_hours)}`}
-            emptyText="Tidak ada data operator."
+            emptyText="No operator data."
           />
         </div>
       </PageCard>
       <PageCard>
-        <CardHead icon={GaugeIcon} title="Non-Produktif per Mesin" tag={`${byMachine.length}`} />
+        <CardHead icon={GaugeIcon} title="Non-Productive per Machine" tag={`${byMachine.length}`} />
         <div className="p-4">
           <RankedList
             items={byMachine}
@@ -1258,8 +1245,8 @@ function OleBreakdown({ kpi }) {
             labelOf={(m) => m.machine_name || m.machine_id || 'UNKNOWN'}
             valueFmt={(m) => formatHours(m.nva_hours)}
             colorOf={() => SEV_HEX.Watch}
-            subOf={(m) => `dari ${formatHours(m.total_hours)} total`}
-            emptyText="Tidak ada data mesin."
+            subOf={(m) => `of ${formatHours(m.total_hours)} total`}
+            emptyText="No machine data."
           />
         </div>
       </PageCard>
@@ -1303,11 +1290,11 @@ function ActionSummaryPanel({ rows, config }) {
         </ul>
       ) : (
         <div className="mt-3 flex flex-1 items-center rounded-lg border border-dashed border-emerald-200 bg-emerald-50/50 px-3 py-2 text-xs font-bold text-emerald-600">
-          ✓ Tidak ada tindakan mendesak untuk KPI ini.
+          ✓ No urgent action for this KPI.
         </div>
       )}
       <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-2 text-[11px] font-semibold text-slate-500">
-        <span>Owner utama</span>
+        <span>Primary owner</span>
         <span className="font-extrabold text-[#0077b6]">{config.pic}</span>
       </div>
     </div>
@@ -1329,7 +1316,7 @@ function MetricTiles({ kpiType, kpi }) {
       { label: 'SAP-Ready', value: `${formatNumber(d.ready_records)}/${formatNumber(d.total_records)}`, tone: 'good' },
       { label: 'Error Records', value: formatNumber(d.error_records), tone: numeric(d.error_records) > 0 ? 'bad' : 'good' },
       { label: 'TS Not Staged', value: formatNumber(d.timesheet_not_staged_records), tone: 'warn' },
-      { label: 'Min Sample (≥50)', value: d.minimum_sample_met === false ? 'No' : 'Yes', sub: `${formatNumber(d.total_records)} record`, tone: d.minimum_sample_met === false ? 'warn' : 'good' },
+      { label: 'Min Sample (≥50)', value: d.minimum_sample_met === false ? 'No' : 'Yes', sub: `${formatNumber(d.total_records)} records`, tone: d.minimum_sample_met === false ? 'warn' : 'good' },
     ];
   } else if (kpiType === 'adoption') {
     tiles = [
@@ -1340,7 +1327,7 @@ function MetricTiles({ kpiType, kpi }) {
     ];
   } else if (kpiType === 'oee') {
     tiles = [
-      { label: 'Productive', value: formatHours(d.running_hours), sub: `dari ${formatHours(d.denominator_hours)} counted`, tone: 'good' },
+      { label: 'Productive', value: formatHours(d.running_hours), sub: `of ${formatHours(d.denominator_hours)} counted`, tone: 'good' },
       { label: 'Downtime', value: formatHours(d.downtime_hours), tone: 'bad' },
       { label: 'NNVA', value: formatHours(d.setup_hours), tone: 'warn' },
       { label: 'NoJob / Missing', value: `${formatHours(d.nojob_hours)} / ${formatHours(d.missing_hours)}`, tone: 'neutral' },
@@ -1349,16 +1336,16 @@ function MetricTiles({ kpiType, kpi }) {
     const unidMin = numeric(d.unidentified_duration_seconds) / 60;
     const idleMin = numeric(d.long_status_2_duration_seconds) / 60;
     tiles = [
-      { label: 'Mesin', value: formatNumber(d.machine_count), tone: 'info' },
+      { label: 'Machines', value: formatNumber(d.machine_count), tone: 'info' },
       { label: 'Total Gap', value: `${formatNumber(d.gap_pct)}%`, tone: numeric(d.gap_pct) > 0 ? 'bad' : 'good' },
       { label: 'Unidentified', value: `${formatNumber(unidMin)} m`, sub: `${formatNumber(d.unidentified_pct)}%`, tone: unidMin > 0 ? 'warn' : 'good' },
-      { label: 'IDLE (M2 >5m)', value: `${formatNumber(idleMin)} m`, sub: `${formatNumber(d.long_status_2_pct)}% · ${formatNumber(d.long_status_2_count)} event`, tone: idleMin > 0 ? 'warn' : 'good' },
+      { label: 'IDLE (M2 >5m)', value: `${formatNumber(idleMin)} m`, sub: `${formatNumber(d.long_status_2_pct)}% · ${formatNumber(d.long_status_2_count)} events`, tone: idleMin > 0 ? 'warn' : 'good' },
     ];
   } else if (kpiType === 'ole') {
     const gap = Math.max(0, numeric(d.available_recorded_hours) - numeric(d.working_hours));
     tiles = [
-      { label: 'Produktif', value: formatHours(d.working_hours), sub: `dari ${formatHours(d.available_recorded_hours)} tercatat`, tone: 'good' },
-      { label: 'Non-Produktif', value: formatHours(gap), tone: gap > 0 ? 'bad' : 'good' },
+      { label: 'Productive', value: formatHours(d.working_hours), sub: `of ${formatHours(d.available_recorded_hours)} recorded`, tone: 'good' },
+      { label: 'Non-Productive', value: formatHours(gap), tone: gap > 0 ? 'bad' : 'good' },
       { label: 'Operator', value: formatNumber(d.operator_count), tone: 'info' },
       { label: 'Recorded', value: formatHours(d.available_recorded_hours), tone: 'neutral' },
     ];
@@ -1372,61 +1359,114 @@ function MetricTiles({ kpiType, kpi }) {
 }
 
 // Adoption Machine — per-machine gap contribution (Unidentified vs IDLE/long-M2).
-const ADOPTION_GAP_COLORS = { unidentified: '#ef4444', idle: '#f59e0b' };
+// Unidentified and IDLE are an ORDERED pair (unidentified is the worse cause), so this is a
+// two-step sequential ramp on one hue rather than two categorical hues — validated against the
+// light surface (monotone L, ΔL ≥ 0.06, light end ≥ 2:1 contrast, hue spread 39°). The previous
+// red/amber pair was reserved status colour used for non-status series.
+const ADOPTION_GAP_COLORS = { unidentified: '#023e8a', idle: '#00b4d8' };
+const SURFACE_GAP_PX = 2;
+
+// Recharts has no per-cell radius, and IDLE is zero for most machines — so the rounded data-end
+// and the tip label must follow the last VISIBLE segment, otherwise 4 of 5 bars end square and
+// (if Recharts skips zero-width bars) lose their label entirely. Drawing both inside the shape
+// removes that dependency. The 2px separation is a gap carved out of the bar, not a stroke.
+function GapSegment(props) {
+  const { x, y, width, height, fill, payload, segment } = props;
+  if (!(width > 0)) return null;
+  const idleVisible = numeric(payload?.idle) > 0;
+  const isLast = segment === 'idle' ? true : !idleVisible;
+  const w = segment === 'unidentified' && idleVisible ? Math.max(width - SURFACE_GAP_PX, 0) : width;
+  if (!(w > 0)) return null;
+  const r = Math.min(4, height / 2, w);
+  const d = isLast
+    ? `M${x},${y} H${x + w - r} A${r},${r} 0 0 1 ${x + w},${y + r} V${y + height - r} A${r},${r} 0 0 1 ${x + w - r},${y + height} H${x} Z`
+    : `M${x},${y} H${x + w} V${y + height} H${x} Z`;
+  return (
+    <g>
+      <path d={d} fill={fill} />
+      {isLast ? (
+        // Value at the tip, in ink tokens — never the series colour.
+        <text x={x + w + 8} y={y + height / 2} dominantBaseline="central" fontSize={11} fontWeight={700} fill="#334155">
+          {`${formatNumber(payload?.gap)}m`}
+        </text>
+      ) : null}
+    </g>
+  );
+}
 
 function AdoptionMachineBreakdown({ kpi }) {
   const sd = kpi?.source_detail || {};
   const data = (sd.by_machine || []).map((m) => ({
-    machine: `M-${m.machine}`,
+    machine: m.machine_name || `Machine ${m.machine}`,
     unidentified: numeric(m.unidentified_minutes),
     idle: numeric(m.idle_minutes),
     gap: numeric(m.gap_minutes),
     total: numeric(m.total_minutes),
+    adoption: m.adoption_pct == null ? null : numeric(m.adoption_pct),
   }));
-  const many = data.length > 10;
+  const machineCount = numeric(sd.machine_count);
+  // Horizontal: machine names are long, and a vertical chart forced angled tick labels.
+  const height = Math.max(200, data.length * 40 + 64);
+
   return (
     <PageCard>
-      <CardHead icon={BarChart3} title="Gap Adoption per Mesin (menit)" tag={`${data.length} mesin`} />
+      <CardHead
+        icon={BarChart3}
+        title="Adoption Gap per Machine"
+        tag={machineCount ? `${data.length} of ${machineCount} machines` : `${data.length} machines`}
+      />
       <div className="p-4">
         {data.length ? (
-          <ResponsiveContainer width="100%" height={340}>
-            <BarChart data={data} margin={{ top: 8, right: 16, left: 4, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-              <XAxis
+          <ResponsiveContainer width="100%" height={height}>
+            <BarChart data={data} layout="vertical" margin={{ top: 4, right: 64, left: 4, bottom: 4 }} barCategoryGap="35%">
+              <CartesianGrid horizontal={false} stroke="#e2e8f0" />
+              <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(v) => `${v}m`} axisLine={false} tickLine={false} />
+              <YAxis
+                type="category"
                 dataKey="machine"
-                tick={{ fontSize: 11 }}
-                interval={0}
-                angle={many ? -35 : 0}
-                textAnchor={many ? 'end' : 'middle'}
-                height={many ? 54 : 30}
+                width={112}
+                tick={{ fontSize: 11, fill: '#334155' }}
+                axisLine={false}
+                tickLine={false}
               />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}m`} />
               <Tooltip
-                cursor={{ fill: 'rgba(148,163,184,0.12)' }}
+                cursor={{ fill: 'rgba(148,163,184,0.10)' }}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   const row = payload[0]?.payload || {};
+                  const share = row.total > 0 ? (row.gap / row.total) * 100 : null;
                   return (
                     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
                       <div className="font-extrabold text-slate-800">{label}</div>
-                      <div className="mt-1 font-semibold" style={{ color: ADOPTION_GAP_COLORS.unidentified }}>Unidentified: {formatNumber(row.unidentified)} m</div>
-                      <div className="font-semibold" style={{ color: ADOPTION_GAP_COLORS.idle }}>IDLE: {formatNumber(row.idle)} m</div>
-                      <div className="mt-1 border-t border-slate-100 pt-1 font-bold text-slate-600">Total gap {formatNumber(row.gap)} m · durasi {formatNumber(row.total)} m</div>
+                      <div className="mt-1.5 space-y-1">
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: ADOPTION_GAP_COLORS.unidentified }} />
+                          <span className="font-semibold">Unidentified</span>
+                          <span className="ml-auto font-mono font-bold text-slate-800">{formatNumber(row.unidentified)}m</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: ADOPTION_GAP_COLORS.idle }} />
+                          <span className="font-semibold">IDLE</span>
+                          <span className="ml-auto font-mono font-bold text-slate-800">{formatNumber(row.idle)}m</span>
+                        </div>
+                      </div>
+                      <div className="mt-1.5 border-t border-slate-100 pt-1.5 font-semibold text-slate-500">
+                        Gap {formatNumber(row.gap)}m of {formatNumber(row.total)}m
+                        {share !== null ? ` · ${formatNumber(share)}%` : ''}
+                        {row.adoption !== null ? ` · adoption ${formatNumber(row.adoption)}%` : ''}
+                      </div>
                     </div>
                   );
                 }}
               />
-              <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
-              <Bar dataKey="unidentified" stackId="gap" name="Unidentified" fill={ADOPTION_GAP_COLORS.unidentified} />
-              <Bar dataKey="idle" stackId="gap" name="IDLE" fill={ADOPTION_GAP_COLORS.idle} radius={[6, 6, 0, 0]} maxBarSize={54} />
+              <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700, paddingTop: 8 }} iconType="circle" iconSize={8} />
+              <Bar dataKey="unidentified" stackId="gap" name="Unidentified" fill={ADOPTION_GAP_COLORS.unidentified} barSize={18} shape={<GapSegment segment="unidentified" />} />
+              <Bar dataKey="idle" stackId="gap" name="IDLE" fill={ADOPTION_GAP_COLORS.idle} barSize={18} shape={<GapSegment segment="idle" />} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <EmptyChart text="Tidak ada gap adoption mesin (unidentified / IDLE) pada window ini." />
+          <EmptyChart text="No machine adoption gap (unidentified / IDLE) in this window." />
         )}
-        <p className="mt-2 text-[10px] font-semibold text-slate-400">
-          Unidentified = statusid 5 · IDLE = M2 (statusid 2) durasi &gt; 5 menit · sumber public.mch_productiondata
-        </p>
       </div>
     </PageCard>
   );
@@ -1434,10 +1474,10 @@ function AdoptionMachineBreakdown({ kpi }) {
 
 // accuracy_machine reasons are mutually exclusive (backend ranks them), so the shares sum to 100%.
 const ACC_MACHINE_REASONS = {
-  no_operator: { label: 'Operator tidak teridentifikasi', color: '#dc2626', hint: 'Job ada, tapi operator tidak tap di HMI.' },
-  no_job: { label: 'Job tidak terhubung', color: '#f59e0b', hint: 'Record tanpa order / operasi sama sekali.' },
-  no_confirmation: { label: 'Confirmation SAP belum ada', color: '#0096c7', hint: 'Job & operator ada, confirmation belum terbit.' },
-  other: { label: 'Lainnya', color: '#94a3b8', hint: 'Tidak masuk kategori di atas.' },
+  no_operator: { label: 'Operator not identified', color: '#dc2626' },
+  no_job: { label: 'Job not linked', color: '#f59e0b' },
+  no_confirmation: { label: 'SAP confirmation missing', color: '#0096c7' },
+  other: { label: 'Other', color: '#94a3b8' },
 };
 
 function AccuracyMachineBreakdown({ kpi }) {
@@ -1448,7 +1488,6 @@ function AccuracyMachineBreakdown({ kpi }) {
     key: r.reason,
     name: ACC_MACHINE_REASONS[r.reason]?.label || r.reason,
     color: ACC_MACHINE_REASONS[r.reason]?.color || '#94a3b8',
-    hint: ACC_MACHINE_REASONS[r.reason]?.hint || '',
     value: numeric(r.count),
   }));
   const incomplete = numeric(totals.incomplete_records);
@@ -1458,7 +1497,7 @@ function AccuracyMachineBreakdown({ kpi }) {
       <PageCard>
         <CardHead
           icon={GaugeIcon}
-          title="Record Tidak Lengkap per Mesin"
+          title="Incomplete Records per Machine"
           right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{formatNumber(incomplete)} REC</span>}
         />
         <div className="p-4">
@@ -1468,18 +1507,15 @@ function AccuracyMachineBreakdown({ kpi }) {
             labelOf={(m) => m.machinename || m.machine_key || 'UNKNOWN'}
             valueFmt={(m) => `${formatNumber(m.incomplete)} rec`}
             colorOf={(m) => severityColorForStatusStr(m.status)}
-            subOf={(m) => `akurasi ${formatNumber(m.accuracy_pct)}% dari ${formatNumber(m.total)} record`}
-            emptyText="Semua record mesin lengkap pada window ini."
+            subOf={(m) => `accuracy ${formatNumber(m.accuracy_pct)}% of ${formatNumber(m.total)} records`}
+            emptyText="All machine records complete in this window."
             initialCount={10}
           />
-          <p className="mt-2 text-[10px] font-semibold text-slate-400">
-            Warna mengikuti band KPI: &lt;95% critical, &lt;98% watch. Hanya mesin dengan record tidak lengkap yang tampil.
-          </p>
         </div>
       </PageCard>
 
       <PageCard>
-        <CardHead icon={AlertTriangle} title="Penyebab Ketidaklengkapan" />
+        <CardHead icon={AlertTriangle} title="Incompleteness Cause" />
         <div className="p-4">
           {reasons.length ? (
             <>
@@ -1498,72 +1534,85 @@ function AccuracyMachineBreakdown({ kpi }) {
                     <span className="mt-1 h-2 w-2 flex-shrink-0 rounded-full" style={{ background: r.color }} />
                     <span className="text-slate-600">
                       <span className="font-bold text-slate-800">{formatNumber(r.value)}</span>
-                      {incomplete > 0 ? ` (${formatNumber((r.value / incomplete) * 100)}%)` : ''} — {r.hint}
+                      {incomplete > 0 ? ` (${formatNumber((r.value / incomplete) * 100)}%)` : ''} — {r.name}
                     </span>
                   </li>
                 ))}
               </ul>
             </>
           ) : (
-            <EmptyState text="Tidak ada record tidak lengkap pada window ini." />
+            <EmptyState text="No incomplete records in this window." />
           )}
-          <p className="mt-3 text-[10px] font-semibold text-slate-400">
-            Kategori saling eksklusif (dinilai berurutan), jadi totalnya = {formatNumber(incomplete)} record tidak lengkap.
-            Status Off / Downtime / No Job ({formatNumber(totals.exempt_records)} record) dikecualikan — memang tidak punya job.
-          </p>
         </div>
       </PageCard>
     </section>
   );
 }
 
-// One per-operator progress bar: recorded hours vs shift standard, with the shortfall on the right.
+const ADOPTION_BAR = { timesheet: '#0096c7', hmi: '#ade8f4' };
+
+// Target is the PROGRESSIVE expectation (expected_hours = hours that should have been logged by
+// now), not the full shift standard. Mid-shift, comparing against a static 8h paints everyone red.
+// Falls back to standard_hours for the log-based variant, which has no progressive expectation.
+function adoptionTargetHours(o) {
+  const expected = o.expected_hours == null ? null : numeric(o.expected_hours);
+  return expected !== null && expected > 0 ? expected : numeric(o.standard_hours);
+}
+
+// One bar per operator: TIMESHEET hours plus HMI hours recorded outside the timesheet windows.
+// The two are disjoint by construction, so stacking them is exact. Single colour by design — the
+// status band is already carried by the KPI gauge; recolouring every bar just adds noise.
 function ShiftProgressColumn({ icon: Icon, title, operators }) {
   return (
     <PageCard>
       <CardHead
         icon={Icon}
         title={title}
-        right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{operators.length} ORG</span>}
+        right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{operators.length} OPS</span>}
       />
       <div className="max-h-[440px] space-y-3 overflow-y-auto p-4">
         {operators.length === 0 ? (
-          <EmptyState text="Tidak ada operator pada shift ini." />
+          <EmptyState text="No operator on this shift." />
         ) : operators.map((o) => {
           const recorded = numeric(o.recorded_hours);
-          const standard = numeric(o.standard_hours) || 0;
-          const pct = standard > 0 ? Math.min(100, Math.round((recorded / standard) * 100)) : 0;
-          const barColor = pct >= 90 ? '#059669' : pct >= 70 ? '#f59e0b' : '#dc2626';
+          const target = adoptionTargetHours(o);
           const inProgress = o.completed === false;
 
-          // machine_extra_hours is machine running time OUTSIDE the operator's timesheet windows,
-          // so it is disjoint from timesheet_hours by construction — stacking the two is exact,
-          // not double counting. null (no attributable machine record) is NOT 0.
+          // machine_extra_hours is HMI running time OUTSIDE the timesheet windows; null means no
+          // attributable HMI record, which must not be read as "touched no machine".
           const tsHours = o.timesheet_hours == null ? recorded : numeric(o.timesheet_hours);
           const extra = o.machine_extra_hours == null ? 0 : numeric(o.machine_extra_hours);
-          const tsPct = standard > 0 ? Math.min(100, (tsHours / standard) * 100) : 0;
-          const extraPct = standard > 0 ? Math.max(0, Math.min(100 - tsPct, (extra / standard) * 100)) : 0;
+          const rawTs = target > 0 ? (tsHours / target) * 100 : 0;
+          const rawExtra = target > 0 ? (extra / target) * 100 : 0;
+          const rawTotal = rawTs + rawExtra;
+          // Past the target, scale both segments proportionally instead of clamping timesheet to
+          // 100% — clamping squeezes the HMI segment to zero width exactly for the operators who
+          // already met their target, which is precisely where the HMI contribution is worth seeing.
+          const overflow = rawTotal > 100;
+          const tsPct = overflow ? (rawTs / rawTotal) * 100 : rawTs;
+          const extraPct = overflow ? (rawExtra / rawTotal) * 100 : rawExtra;
 
           return (
             <div key={o.operator_key || o.operator_name}>
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="truncate text-xs font-bold text-slate-800">{o.operator_name || o.operator_key || 'UNKNOWN'}</span>
-                  {inProgress ? <span className="flex-shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">berjalan</span> : null}
+                  <span className="truncate text-xs font-semibold text-slate-800">{o.operator_name || o.operator_key || 'UNKNOWN'}</span>
+                  {inProgress ? <span className="flex-shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">live</span> : null}
                 </span>
-                <span className="flex-shrink-0 font-mono text-[11px] font-bold text-slate-500">
-                  {formatNumber(recorded)}/{formatNumber(standard)}
-                  {extra > 0.05 ? <span className="ml-1 font-bold text-[#0077b6]">+{formatNumber(extra)} mesin</span> : null}
+                <span className="flex-shrink-0 font-mono text-[11px] tabular-nums text-slate-500">
+                  <span className="font-bold text-slate-700">{formatNumber(recorded)}</span>
+                  <span className="mx-0.5 text-slate-300">/</span>
+                  {formatNumber(target)}h
                 </span>
               </div>
               <div
-                className="mt-1 flex h-2.5 overflow-hidden rounded-full bg-slate-100"
+                className="mt-1.5 flex h-2 overflow-hidden rounded-full bg-slate-100"
                 title={o.machine_hours == null
-                  ? 'Tidak ada jam mesin yang bisa diatribusikan'
-                  : `Timesheet ${formatNumber(tsHours)} jam + mesin di luar timesheet ${formatNumber(extra)} jam (total mesin ${formatNumber(o.machine_hours)} jam)`}
+                  ? `Timesheet ${formatNumber(tsHours)}h · no attributable HMI record`
+                  : `Timesheet ${formatNumber(tsHours)}h + HMI outside timesheet ${formatNumber(extra)}h (HMI total ${formatNumber(o.machine_hours)}h)`}
               >
-                <div className="h-full transition-all" style={{ width: `${tsPct}%`, background: barColor }} />
-                {extraPct > 0 ? <div className="h-full transition-all" style={{ width: `${extraPct}%`, background: '#ade8f4' }} /> : null}
+                <div className="h-full transition-all" style={{ width: `${tsPct}%`, background: ADOPTION_BAR.timesheet }} />
+                {extraPct > 0 ? <div className="h-full transition-all" style={{ width: `${extraPct}%`, background: ADOPTION_BAR.hmi }} /> : null}
               </div>
             </div>
           );
@@ -1581,7 +1630,9 @@ function AdoptionLabourBreakdown({ kpi }) {
   const all = Array.isArray(sd.by_operator) ? sd.by_operator : [];
   const excused = new Set(['LEAVE', 'SICK', 'PERMIT', 'OFF']);
   const isDay = (o) => o.shift === 1 || String(o.shift).toUpperCase() === 'DAY' || String(o.shift) === '1';
-  const gapOf = (o) => (o.gap_hours != null ? numeric(o.gap_hours) : Math.max(numeric(o.standard_hours) - numeric(o.recorded_hours), 0));
+  // Rank by shortfall against the PROGRESSIVE target, so mid-shift the list surfaces who is behind
+  // right now rather than everyone who has simply not finished an 8-hour shift yet.
+  const gapOf = (o) => Math.max(adoptionTargetHours(o) - numeric(o.recorded_hours), 0);
   const prep = (list) => list
     .filter((o) => !excused.has(String(o.status || '').toUpperCase()))
     .sort((a, b) => gapOf(b) - gapOf(a));
@@ -1599,31 +1650,24 @@ function AdoptionLabourBreakdown({ kpi }) {
       </section>
 
       <PageCard>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3">
-          <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
-            <span className="h-2.5 w-5 rounded-full" style={{ background: '#059669' }} />
-            Jam tercatat (timesheet)
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+          <span className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+            <span className="h-2 w-6 rounded-full" style={{ background: ADOPTION_BAR.timesheet }} />
+            Timesheet
           </span>
-          <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
-            <span className="h-2.5 w-5 rounded-full" style={{ background: '#ade8f4' }} />
-            Jam mesin di luar jendela timesheet
+          <span className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+            <span className="h-2 w-6 rounded-full" style={{ background: ADOPTION_BAR.hmi }} />
+            HMI
           </span>
-          <span className="text-[11px] font-semibold text-slate-500">
-            Keduanya dijumlahkan menjadi jam tercatat operator.
-          </span>
-        </div>
-        <div className="border-t border-slate-100 px-4 py-2.5 text-[10px] font-semibold leading-relaxed text-slate-500">
-          Operator yang tap NFC di HMI punya catatan waktu di mesin, jadi jam mesin dihitung sebagai jam kerja.
-          Hanya bagian yang <span className="font-bold">tidak beririsan</span> dengan jendela timesheet yang ditambahkan (interval timesheet digabung dulu),
-          sehingga waktu yang sama tidak pernah dihitung dua kali. Jam mesin hanya status running (M1 / M2 / Productive);
-          Off, No Job, dan Idle tidak dihitung karena mesin tetap tertaut ke operator saat mati.
           {coverage !== null && coverage !== undefined ? (
-            <>
-              {' '}<span className="font-bold text-slate-700">Batas:</span> hanya <span className="font-bold text-slate-700">{formatNumber(withMachine)} operator</span> punya
-              jam mesin yang bisa diatribusikan, dan <span className="font-bold text-slate-700">{formatNumber(coverage)}%</span> jam mesin running punya <code>sn_employee</code>
-              {' '}({formatNumber(ma.unattributed_hours)} jam tidak teratribusi). Operator tanpa bar muda berarti
-              {' '}<span className="font-bold">tidak ada data mesin</span> — bukan berarti tidak menyentuh mesin, sehingga kredit ini belum merata. Lihat KPI Accuracy Machine.
-            </>
+            // Kept as a data chip, not prose: a missing HMI segment means "no HMI record", not
+            // "no machine work". Without the coverage figure the empty bars read as an accusation.
+            <span
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700"
+              title={`${formatNumber(withMachine)} operators have attributable HMI hours. ${formatNumber(ma.unattributed_hours)}h of HMI time carries no sn_employee, so a missing HMI segment means no HMI record — not zero machine work.`}
+            >
+              HMI COVERAGE {formatNumber(coverage)}%
+            </span>
           ) : null}
         </div>
       </PageCard>
@@ -1633,7 +1677,7 @@ function AdoptionLabourBreakdown({ kpi }) {
 
 function KpiBreakdown({ kpiType, kpi }) {
   if (!kpi?.source_detail) {
-    return <PageCard className="p-6 text-center text-sm font-bold text-slate-500">Detail sumber tidak tersedia untuk window ini. Jalankan kalkulasi live atau cek snapshot.</PageCard>;
+    return <PageCard className="p-6 text-center text-sm font-bold text-slate-500">Source detail is not available for this window.</PageCard>;
   }
   if (kpiType === 'uptime') return <UptimeBreakdown kpi={kpi} />;
   if (kpiType === 'accuracy') return <AccuracyBreakdown kpi={kpi} />;
@@ -1786,7 +1830,7 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
       <CardHead
         icon={AlertTriangle}
         title="Issue Log & Action"
-        tag={showHistory ? 'riwayat' : 'hari ini'}
+        tag={showHistory ? 'history' : 'today'}
         right={(
           <div className="flex items-center gap-2">
             <button
@@ -1794,7 +1838,7 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
               onClick={onToggleHistory}
               className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 transition hover:bg-slate-50 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
             >
-              {showHistory ? 'Hari ini' : 'Riwayat'}
+              {showHistory ? 'Today' : 'History'}
             </button>
             <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{loading && rows.length === 0 ? '…' : `${openCount} OPEN`}</span>
           </div>
@@ -1804,9 +1848,9 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>
             <tr className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-slate-700">
-              <th className="px-3 py-2">Entitas</th>
-              <th className="px-3 py-2">Deskripsi</th>
-              <th className="px-3 py-2 text-right">Nilai</th>
+              <th className="px-3 py-2">Entity</th>
+              <th className="px-3 py-2">Description</th>
+              <th className="px-3 py-2 text-right">Value</th>
               <th className="px-3 py-2 text-center">Sev</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2 text-center">Resolve</th>
@@ -1817,10 +1861,10 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
               <tr>
                 <td colSpan={6} className={`px-3 py-6 text-center text-xs font-bold ${loading ? 'text-slate-400' : 'text-emerald-600'}`}>
                   {loading
-                    ? 'Memuat issue log…'
+                    ? 'Loading issue log…'
                     : showHistory
-                      ? '✓ Belum ada issue tercatat untuk KPI ini.'
-                      : '✓ Tidak ada issue hari ini untuk KPI ini.'}
+                      ? '✓ No issues recorded for this KPI.'
+                      : '✓ No issues today for this KPI.'}
                 </td>
               </tr>
             )}
@@ -1881,7 +1925,10 @@ function EwsDetailPage() {
 
   const manualDate = searchParams.get('date') || '';
   const usesManualDate = searchParams.get('basis') === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(manualDate);
-  const ewsQuery = usesManualDate ? `basis=date&date=${encodeURIComponent(manualDate)}&live=1` : 'basis=today&live=1';
+  // No live=1 for "today": the detail page must explain the SAME number the Operations Hub card
+  // shows, and the hub reads ews.kpi_snapshot. Recomputing live gives a different now(), which for
+  // a progressive KPI like adoption_labour alone is enough to disagree with the card.
+  const ewsQuery = usesManualDate ? `basis=date&date=${encodeURIComponent(manualDate)}&live=1` : 'basis=today';
   const ewsSummaryQuery = usesManualDate ? ewsQuery : 'basis=today';
 
   // Backend-generated issue log (ews.issue_log) for this KPI category — replaces the legacy
@@ -2122,9 +2169,9 @@ function EwsDetailPage() {
 
             {/* Summary counters */}
             <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <MetricTile label="Open Issues" value={openAutoIssues.length} sub="butuh tindakan" tone={openAutoIssues.length > 0 ? 'warn' : 'good'} />
-              <MetricTile label="Critical" value={criticalOpenIssues} sub="issue critical terbuka" tone={criticalOpenIssues > 0 ? 'bad' : 'good'} />
-              <MetricTile label="Data to Fix" value={actionRows.length} sub={`entitas (${config.unit})`} tone={actionRows.length > 0 ? 'info' : 'good'} />
+              <MetricTile label="Open Issues" value={openAutoIssues.length} sub="needs action" tone={openAutoIssues.length > 0 ? 'warn' : 'good'} />
+              <MetricTile label="Critical" value={criticalOpenIssues} sub="open critical issues" tone={criticalOpenIssues > 0 ? 'bad' : 'good'} />
+              <MetricTile label="Data to Fix" value={actionRows.length} sub={`entities (${config.unit})`} tone={actionRows.length > 0 ? 'info' : 'good'} />
               <MetricTile label="Status" value={kpiStatus === 'no_data' ? 'NO DATA' : kpiStatus.toUpperCase()} sub={`vs target ${config.target}%`} tone={kpiStatus === 'critical' ? 'bad' : kpiStatus === 'watch' ? 'warn' : 'good'} />
             </section>
 
@@ -2144,7 +2191,7 @@ function EwsDetailPage() {
               <PageCard className="overflow-hidden">
                 <CardHead
                   icon={Wrench}
-                  title="Data yang Perlu Diperbaiki"
+                  title="Data to Fix"
                   right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{actionRows.length} ITEM</span>}
                 />
                 <div className="overflow-x-auto">
@@ -2152,7 +2199,7 @@ function EwsDetailPage() {
                     <thead className="border-b border-[#90e0ef]" style={{ background: '#caf0f8' }}>
                       <tr className="font-mono text-[10px] font-black uppercase tracking-[0.12em] text-slate-700">
                         <th className="px-3 py-2">Area</th>
-                        <th className="px-3 py-2">Kondisi</th>
+                        <th className="px-3 py-2">Condition</th>
                         <th className="px-3 py-2 text-right">Metric</th>
                         <th className="px-3 py-2">Action</th>
                       </tr>
@@ -2160,7 +2207,7 @@ function EwsDetailPage() {
                     <tbody className="divide-y divide-slate-100">
                       {actionRows.length === 0 && (
                         <tr>
-                          <td colSpan={4} className="px-3 py-6 text-center text-xs font-bold text-emerald-600">✓ Tidak ada data bermasalah pada window ini.</td>
+                          <td colSpan={4} className="px-3 py-6 text-center text-xs font-bold text-emerald-600">✓ No problematic data in this window.</td>
                         </tr>
                       )}
                       {pagedActionRows.map((row, idx) => (

@@ -787,22 +787,27 @@ async function calculateAdoptionLabourFromRoster(bounds) {
   };
 }
 
-// Machine time an operator can be credited with, per business day.
+// HMI time an operator can be credited with, per business day.
 //
 // An operator only appears in mch_transaction.sn_employee if they tapped their NFC at the HMI, so
-// the machine IS a time record for them: running time outside their timesheet windows is real work
-// the system captured but the timesheet missed. It is therefore ADDED to recorded hours.
+// the machine IS a time record for them: time outside their timesheet windows is real work the
+// system captured but the timesheet missed. It is therefore ADDED to recorded hours.
 //
-// Two rules make the addition safe:
-//   * running only (M1/M2/productive) — a machine stays linked to its operator while Off/NoJob, so
-//     raw duration would credit 27h days.
-//   * only the portion OUTSIDE the operator's timesheet intervals. The timesheet intervals are
-//     merged first (gaps-and-islands), because an operator can have overlapping timesheet rows;
-//     summing per-row overlaps without merging subtracts the same second twice and can even yield
-//     a negative remainder.
+// WHAT COUNTS: everything except the machine being out of service — statusid 0 (Off), 4 (No Job)
+// and 5 (Unidentified). VA (M1/productive), NNVA (M2/setup) AND NVA (Idle, Wait For Handling,
+// Tool Preparation, Coffee Break…) all count, because the timesheet side counts them too:
+// timesheet_transaction.activitytype and mch_transaction.status_activitytype share one code space
+// (1670 Idle, 1520 Coffee Break, 1590 Wait For Handling, …) and adoption_labour's recorded hours
+// already include those rows. Crediting only running time would recognise unproductive time from
+// the timesheet but discard it from the HMI — penalising the operators who did tap in.
+// Off/NoJob must stay out: a machine stays linked to its operator while parked, and raw duration
+// would credit 27-hour days (one operator: 27.4h total, 26.9h of it Off).
 //
-// Empirically the overlap is near zero for most operators (machine work happens in gaps the
-// timesheet never recorded), so extra ≈ machine_hours — but it is computed exactly, not assumed.
+// Overlap is subtracted exactly: only the portion OUTSIDE the operator's timesheet intervals is
+// added. Those intervals are merged first (gaps-and-islands) because an operator can have
+// overlapping timesheet rows; subtracting per-row overlaps without merging removes the same second
+// twice and can even go negative. This is also what protects against double counting a break that
+// the operator logged in BOTH systems.
 async function getMachineHoursByOperator(bounds) {
   const timezone = resolveTimezone();
   const result = await db.query(
@@ -849,8 +854,8 @@ async function getMachineHoursByOperator(bounds) {
       WHERE (CASE WHEN m.startdatetime::time < make_time($3::int, 0, 0)
                   THEN (m.startdatetime::date - 1) ELSE m.startdatetime::date END) = p.target_bd
         AND m.enddatetime > m.startdatetime
-        AND (m.status_activitytype IN ('M1', 'M2')
-             OR LOWER(BTRIM(COALESCE(m.status_description, ''))) = 'productive')
+        AND COALESCE(m.statusid, 0) NOT IN (0, 4, 5)
+        AND LOWER(BTRIM(COALESCE(m.status_description, ''))) NOT IN ('no job', 'off')
     ),
     mch_extra AS (
       SELECT
@@ -897,7 +902,7 @@ async function getMachineHoursByOperator(bounds) {
   return {
     byOperator: row.by_operator || {},
     attribution: {
-      rule: "running machine time (M1/M2/productive) by sn_employee, minus the part overlapping the operator's merged timesheet intervals",
+      rule: "HMI time by sn_employee excluding statusid 0/4/5 (Off, No Job, Unidentified) — VA + NNVA + NVA — minus the part overlapping the operator's merged timesheet intervals",
       operators_with_machine: num(row.operators_with_machine, 0),
       attributed_hours: attributed,
       unattributed_hours: unattributed,

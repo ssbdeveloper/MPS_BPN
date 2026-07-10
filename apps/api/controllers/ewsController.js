@@ -1029,7 +1029,7 @@ async function buildAdoptionMachineSourceDetail(windowStart, windowEnd) {
       SELECT
         b.machine_no::text AS machine,
         COALESCE(NULLIF(BTRIM(mm.machinename), ''), NULLIF(BTRIM(mm.description), ''),
-                 'Mesin ' || COALESCE(b.machine_no::text, '?')) AS machine_name,
+                 'Machine ' || COALESCE(b.machine_no::text, '?')) AS machine_name,
         ROUND(COALESCE(SUM(dur) FILTER (WHERE statusid = 5), 0) / 60.0, 2)::float AS unidentified_minutes,
         ROUND(COALESCE(SUM(dur) FILTER (WHERE statusid = 2 AND dur > 300), 0) / 60.0, 2)::float AS idle_minutes,
         ROUND((COALESCE(SUM(dur) FILTER (WHERE statusid = 5), 0)
@@ -1438,13 +1438,16 @@ async function getKpiDetailWithSource(req, res) {
     }
 
     const isManualDate = req.query.basis === "date" && req.query.date;
+    // includeKpiDetail: the snapshot path must hand back each KPI's `detail`, because the
+    // source-detail builders reuse it (adoption_labour breakdown, uptime_hmi machines) instead of
+    // re-querying. The default compact payload strips it and the charts render empty.
     const summary = req.query.live === "1" || isManualDate
       ? await ewsCalculator.calculateSystemSummary({
         basis: req.query.basis || "rolling",
         window: req.query.window,
         date: req.query.date,
       })
-      : await ewsRealtimeHub.getLatestSnapshotForQuery(req.query);
+      : await ewsRealtimeHub.getLatestSnapshotForQuery(req.query, { includeKpiDetail: true });
 
     const kpi = summary.kpis.find((item) => item.key === type);
     if (!kpi) return res.status(404).json({ error: "Unknown KPI type" });
