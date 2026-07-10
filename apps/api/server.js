@@ -7,6 +7,7 @@ const { WebSocketServer } = require('ws');
 const { envPath, loaded: envLoaded } = require('./config/loadEnv');
 const { startKanbanRefreshJob } = require('./jobs/kanbanRefreshJob');
 const ewsRealtimeHub = require('./services/ewsRealtimeHub');
+const { resolveTimezone } = require("./config/timezone");
 
 // ========================================
 // ENVIRONMENT SETUP
@@ -18,7 +19,7 @@ if (!envLoaded) {
 }
 
 // Set timezone
-process.env.TZ = process.env.TIMEZONE || 'Asia/Makassar';
+process.env.TZ = resolveTimezone();
 
 console.log('================================');
 console.log('Server Configuration');
@@ -63,7 +64,7 @@ function createPgPool({
   idleInTransactionTimeoutMs,
 }) {
   const usesPgbouncer = String(host || '').toLowerCase().includes('pgbouncer') || String(port || '') === '6432';
-  const startupOptions = [`-c timezone=${process.env.TIMEZONE || 'Asia/Makassar'}`];
+  const startupOptions = [`-c timezone=${resolveTimezone()}`];
 
   if (!usesPgbouncer) {
     startupOptions.push(

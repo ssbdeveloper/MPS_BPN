@@ -72,7 +72,10 @@ def plant_code() -> str:
 
 
 def app_timezone() -> str:
-    return env_value("TIMEZONE", "Asia/Jakarta")
+    # Configured once in the root .env (TIMEZONE). The default must match the rest of the
+    # codebase (apps/api/config/timezone.js) — a divergent default silently shifts day
+    # boundaries by an hour between WITA and WIB.
+    return env_value("TIMEZONE", "Asia/Makassar")
 
 
 def ph3_order_table() -> str:

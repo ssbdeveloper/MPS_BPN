@@ -1,4 +1,5 @@
 const db = global.pool || require("../db");
+const { resolveTimezone } = require("../config/timezone");
 
 const MAX_LIMIT = 500;
 const PLAN_EXCEEDED_MESSAGE = "Melebihi Standard SOW";
@@ -44,7 +45,7 @@ function clampLimit(value) {
 
 function todayDate() {
   return new Date().toLocaleDateString("en-CA", {
-    timeZone: process.env.TIMEZONE || "Asia/Jakarta",
+    timeZone: resolveTimezone(),
   });
 }
 

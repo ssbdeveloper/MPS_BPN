@@ -1,4 +1,5 @@
 const db = global.pool || require("../db");
+const { resolveTimezone } = require("../config/timezone");
 
 const KPI_DEFS = {
   uptime_tablet: { label: "Uptime Tablet", target: 99, owner: "IT (Wira)", group: "labour", dimension: "health" },
@@ -298,7 +299,7 @@ async function calculateUptime(bounds, options = {}) {
   }
 
   const useTodayPingWindow = options.grain === "today" && options.role !== "previous";
-  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const timezone = resolveTimezone();
   const result = await db.query(
     `
     WITH effective_bounds AS (
@@ -358,7 +359,7 @@ async function calculateUptimeHmi(options = {}) {
     return { value: null, helper: "Table ews.machine_heartbeat_daily tidak tersedia", detail: { source: "no_table", machine_count: 0 } };
   }
 
-  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const timezone = resolveTimezone();
   const isPrevious = options.role === "previous";
 
   const result = await db.query(
@@ -550,7 +551,7 @@ async function calculateAccuracyMachine(bounds) {
 // FALLBACK path: used only for business_dates with no roster rows (e.g. before the roster
 // backfill start). Population = operators who LOGGED a completed shift (not attendance-based).
 async function calculateAdoptionLabourFromLogs(bounds) {
-  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const timezone = resolveTimezone();
   const result = await db.query(
     `
     WITH params AS (
@@ -669,7 +670,7 @@ async function calculateAdoptionLabourFromLogs(bounds) {
 // (LEAVE/SICK/PERMIT/OFF) are excluded from the denominator. Completed-only; whole shift by
 // business_date. Operators not in the rotation roster remain invisible (roster completeness).
 async function calculateAdoptionLabourFromRoster(bounds) {
-  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const timezone = resolveTimezone();
   const result = await db.query(
     `
     WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
@@ -789,7 +790,7 @@ async function calculateAdoptionLabourFromRoster(bounds) {
 // Dispatcher: use the roster (attendance-based) when the target business_date has roster rows;
 // otherwise fall back to the log-based computation (pre-roster dates).
 async function calculateAdoptionLabour(bounds) {
-  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const timezone = resolveTimezone();
   if (!(await tableExists("ews", "shift_roster"))) {
     return calculateAdoptionLabourFromLogs(bounds);
   }
@@ -1341,7 +1342,7 @@ function withComparison(currentKpis, previousKpis) {
 // the historical daily snapshot instead so the comparison is meaningful.
 async function getYesterdayAdoption() {
   if (!(await tableExists("ews", "kpi_snapshot"))) return null;
-  const timezone = process.env.TIMEZONE || "Asia/Makassar";
+  const timezone = resolveTimezone();
   const result = await db.query(
     `
     SELECT adoption_pct::float AS value

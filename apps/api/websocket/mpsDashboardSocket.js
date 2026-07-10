@@ -1,5 +1,12 @@
 const { WebSocket } = require("ws");
 const pool = global.pool;
+const { resolveTimezone } = require("../config/timezone");
+
+// Timezone comes from the root .env (TIMEZONE). Never hardcode it here: the daily buckets
+// below compare against CURRENT_DATE, which follows the Postgres session timezone, so a
+// mismatched literal silently shifts rows into the wrong calendar day.
+const TZ = resolveTimezone();
+
 
 function paramsFromUrl(url) {
   const searchParams = new URL(url, "http://localhost").searchParams;
@@ -37,14 +44,14 @@ async function fetchDashboardSnapshot() {
           COALESCE(SUM(duration), 0) AS actual_hours,
           COALESCE(SUM(planhours), 0) AS plan_hours
         FROM timesheet_transaction
-        WHERE DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta')) = CURRENT_DATE
+        WHERE DATE((longdate_checkin AT TIME ZONE '${TZ}')) = CURRENT_DATE
           AND state_flag != 5 AND activitytype IS NULL
       ),
       quality_today AS (
         SELECT COUNT(*)::int AS total,
           COUNT(*) FILTER (WHERE validation_status IS NOT NULL AND validation_status != '')::int AS validated
         FROM processcontroldata
-        WHERE (createddate AT TIME ZONE 'Asia/Jakarta')::date = CURRENT_DATE
+        WHERE (createddate AT TIME ZONE '${TZ}')::date = CURRENT_DATE
       ),
       orders_active AS (
         SELECT COUNT(DISTINCT order_no)::int AS active_orders,
@@ -63,14 +70,14 @@ async function fetchDashboardSnapshot() {
       FROM labor_today l CROSS JOIN orders_active o CROSS JOIN quality_today q
     `),
     pool.query(`
-      SELECT DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta'))::text AS day,
+      SELECT DATE((longdate_checkin AT TIME ZONE '${TZ}'))::text AS day,
         ROUND(COALESCE(SUM(duration),0),2)::float AS actual_hours,
         ROUND(COALESCE(SUM(planhours),0),2)::float AS plan_hours,
         ROUND(COALESCE(SUM(duration),0) / NULLIF(COALESCE(SUM(planhours),0),0) * 100, 1)::float AS availability_pct
       FROM timesheet_transaction
       WHERE longdate_checkin >= CURRENT_DATE - INTERVAL '14 days'
         AND state_flag != 5 AND activitytype IS NULL
-      GROUP BY DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta'))
+      GROUP BY DATE((longdate_checkin AT TIME ZONE '${TZ}'))
       ORDER BY 1
     `),
     pool.query(`
@@ -78,7 +85,7 @@ async function fetchDashboardSnapshot() {
         SELECT COALESCE(SUM(duration),0) AS actual_hours,
           COALESCE(SUM(planhours),0) AS plan_hours
         FROM timesheet_transaction
-        WHERE DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta')) = CURRENT_DATE
+        WHERE DATE((longdate_checkin AT TIME ZONE '${TZ}')) = CURRENT_DATE
           AND state_flag != 5 AND activitytype IS NULL
       )
       SELECT

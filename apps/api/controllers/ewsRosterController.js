@@ -1,8 +1,9 @@
 const db = global.pool || require("../db");
 const { generateRoster } = require("../services/rosterGenerator");
+const { resolveTimezone } = require("../config/timezone");
 
 const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT"]);
-const TZ = process.env.TIMEZONE || "Asia/Makassar";
+const TZ = resolveTimezone();
 
 function assertIsoDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) throw new Error("Invalid date. Use YYYY-MM-DD.");

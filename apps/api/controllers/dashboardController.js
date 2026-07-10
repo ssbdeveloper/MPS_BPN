@@ -1,4 +1,11 @@
 const pool = global.pool || require("../db");
+const { resolveTimezone } = require("../config/timezone");
+
+// Timezone comes from the root .env (TIMEZONE). Never hardcode it here: the daily buckets
+// below compare against CURRENT_DATE, which follows the Postgres session timezone, so a
+// mismatched literal silently shifts rows into the wrong calendar day.
+const TZ = resolveTimezone();
+
 
 const meta = () => ({ generated_at: new Date().toISOString() });
 let operationsHubCache = null;
@@ -101,7 +108,7 @@ async function getOperationTimesheetHistory(req, res) {
     const result = await pool.query(
       `SELECT
          serialnumber, full_name,
-         DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta'))::text AS work_date,
+         DATE((longdate_checkin AT TIME ZONE '${TZ}'))::text AS work_date,
          ROUND(SUM(duration)::numeric, 2) AS total_hours,
          COUNT(*)::int AS entry_count
        FROM timesheet_transaction
@@ -109,7 +116,7 @@ async function getOperationTimesheetHistory(req, res) {
          AND operation_no::integer = $2::integer
          AND state_flag != 5
          AND duration IS NOT NULL
-       GROUP BY serialnumber, full_name, DATE((longdate_checkin AT TIME ZONE 'Asia/Jakarta'))
+       GROUP BY serialnumber, full_name, DATE((longdate_checkin AT TIME ZONE '${TZ}'))
        ORDER BY work_date ASC, serialnumber ASC`,
       [orderNo, operationNo]
     );
@@ -154,7 +161,7 @@ async function getOperationsHub(req, res) {
           JOIN latest_machine_day d ON p.startdatetime::date = d.day
         ),
         latest_labor_day AS (
-          SELECT MAX((longdate_checkin AT TIME ZONE 'Asia/Makassar')::date) AS day
+          SELECT MAX((longdate_checkin AT TIME ZONE '${TZ}')::date) AS day
           FROM public.timesheet_transaction
           WHERE state_flag != 5
         ),
@@ -188,7 +195,7 @@ async function getOperationsHub(req, res) {
           COALESCE((
             SELECT ROUND(SUM(duration), 2)::float
             FROM public.timesheet_transaction t
-            JOIN latest_labor_day d ON (t.longdate_checkin AT TIME ZONE 'Asia/Makassar')::date = d.day
+            JOIN latest_labor_day d ON (t.longdate_checkin AT TIME ZONE '${TZ}')::date = d.day
             WHERE t.state_flag != 5
           ), 0) AS latest_labor_hours,
           COALESCE((
@@ -466,7 +473,7 @@ async function getKpi(req, res) {
         pool.query(`
           SELECT COALESCE(SUM(duration), 0)::numeric(10,2) AS total_hours
           FROM timesheet_transaction
-          WHERE DATE(longdate_checkin AT TIME ZONE 'Asia/Makassar') = CURRENT_DATE
+          WHERE DATE(longdate_checkin AT TIME ZONE '${TZ}') = CURRENT_DATE
             AND state_flag != 5
         `),
         pool.query(`
@@ -539,7 +546,7 @@ async function getDailyHours(req, res) {
     const result = await pool.query(
       `
       SELECT
-        DATE(longdate_checkin AT TIME ZONE 'Asia/Makassar')::text AS day,
+        DATE(longdate_checkin AT TIME ZONE '${TZ}')::text AS day,
         ROUND(SUM(duration), 2)::float AS total_hours
       FROM timesheet_transaction
       WHERE longdate_checkin >= NOW() - ($2 || ' days')::interval
@@ -693,7 +700,7 @@ async function getOperatorHeatmap(req, res) {
       `
       SELECT
         full_name,
-        EXTRACT(hour FROM longdate_checkin AT TIME ZONE 'Asia/Makassar')::int AS hour,
+        EXTRACT(hour FROM longdate_checkin AT TIME ZONE '${TZ}')::int AS hour,
         COUNT(*)::int AS activity_count
       FROM timesheet_transaction
       WHERE longdate_checkin >= NOW() - ($1 || ' days')::interval

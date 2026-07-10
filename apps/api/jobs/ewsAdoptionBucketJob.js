@@ -1,5 +1,6 @@
 const { Pool, types } = require("pg");
 require("../config/loadEnv");
+const { resolveTimezone } = require("../config/timezone");
 
 types.setTypeParser(1082, (str) => str);
 types.setTypeParser(1114, (str) => str);
@@ -29,7 +30,7 @@ const pool = new Pool({
   statement_timeout: STATEMENT_TIMEOUT_MS,
   application_name: process.env.EWS_ADOPTION_JOB_APPLICATION_NAME || "mps2-ews-adoption-bucket-job",
   options: [
-    `-c timezone=${process.env.TIMEZONE || "Asia/Makassar"}`,
+    `-c timezone=${resolveTimezone()}`,
     `-c statement_timeout=${STATEMENT_TIMEOUT_MS}`,
   ].join(" "),
 });
@@ -52,7 +53,7 @@ async function getTodayBounds(client) {
   // Shift-aware business day (matches ewsCalculator): rolls over at EWS_DAY_START_HOUR
   // (shift 1, default 07:00), not calendar midnight. So from midnight to shift-1 the
   // adoption buckets still reflect last night's operational day instead of resetting.
-  const tz = process.env.TIMEZONE || "Asia/Makassar";
+  const tz = resolveTimezone();
   const dayStartHour = Number(process.env.EWS_DAY_START_HOUR || 7);
   const result = await client.query(`
     WITH biz AS (

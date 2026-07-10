@@ -1,5 +1,6 @@
 const { Pool, types } = require("pg");
 require("../config/loadEnv");
+const { resolveTimezone } = require("../config/timezone");
 
 types.setTypeParser(1082, (str) => str);
 types.setTypeParser(1114, (str) => str);
@@ -11,7 +12,7 @@ types.setTypeParser(1184, (str) => str);
 const FORWARD_DAYS = Number.parseInt(process.env.EWS_ROSTER_FORWARD_DAYS || "14", 10);
 const INTERVAL_MS = Number.parseInt(process.env.EWS_ROSTER_JOB_INTERVAL_MS || String(24 * 60 * 60 * 1000), 10);
 const RUN_ONCE = process.env.EWS_ROSTER_JOB_RUN_ONCE === "1";
-const TZ = process.env.TIMEZONE || "Asia/Makassar";
+const TZ = resolveTimezone();
 
 const pool = new Pool({
   host: process.env.DB_HOST,

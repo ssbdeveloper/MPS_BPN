@@ -543,14 +543,15 @@ function buildOeeWaterfallChartData(sourceDetail = {}) {
   });
 }
 
+// NoJob is excluded: the 100% mix is over ACTUAL machine time (VA + NNVA + NVA). NoJob would
+// otherwise dominate the bar and hide the mix that matters. It has its own ranking card.
 function buildOeeDistributionChartData(sourceDetail = {}) {
   const rows = Array.isArray(sourceDetail.distribution_by_machine) ? sourceDetail.distribution_by_machine : [];
   return rows.slice(0, 12).map((row) => {
     const va = numeric(row.va_hours, 0);
     const nnva = numeric(row.nnva_hours, 0);
     const nva = numeric(row.nva_hours, 0);
-    const nojob = numeric(row.nojob_hours, 0);
-    const total = Math.max(va + nnva + nva + nojob, 0);
+    const total = Math.max(va + nnva + nva, 0);
     const pct = (value) => (total > 0 ? Number(((value / total) * 100).toFixed(2)) : 0);
     const name = row.machinename || row.machineid || 'UNKNOWN';
     return {
@@ -559,11 +560,9 @@ function buildOeeDistributionChartData(sourceDetail = {}) {
       vaHours: va,
       nnvaHours: nnva,
       nvaHours: nva,
-      nojobHours: nojob,
       VA: pct(va),
       NNVA: pct(nnva),
       NVA: pct(nva),
-      NoJob: pct(nojob),
     };
   });
 }
@@ -1086,6 +1085,7 @@ function OeeBreakdown({ kpi }) {
   const distribution = buildOeeDistributionChartData(sd);
   const byLoss = (sd.by_loss_type || []).map((l) => ({ name: l.loss_type, hours: numeric(l.hours), events: numeric(l.event_count) }));
   const byMachine = (sd.by_machine || []).slice(0, 10);
+  const byNoJob = sd.nojob_by_machine || [];
   return (
     <div className="space-y-4">
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -1112,7 +1112,6 @@ function OeeBreakdown({ kpi }) {
                           <div className="mt-1 font-semibold text-slate-600">VA: {formatFixedPercent(row.VA)} ({formatFixed2(row.vaHours)}h)</div>
                           <div className="font-semibold text-slate-600">NNVA: {formatFixedPercent(row.NNVA)} ({formatFixed2(row.nnvaHours)}h)</div>
                           <div className="font-semibold text-slate-600">NVA: {formatFixedPercent(row.NVA)} ({formatFixed2(row.nvaHours)}h)</div>
-                          <div className="font-semibold text-slate-600">NoJob: {formatFixedPercent(row.NoJob)} ({formatFixed2(row.nojobHours)}h)</div>
                         </div>
                       );
                     }}
@@ -1121,13 +1120,15 @@ function OeeBreakdown({ kpi }) {
                   <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
                   <Bar dataKey="VA" stackId="mix" fill={machineMixColors.VA} />
                   <Bar dataKey="NNVA" stackId="mix" fill={machineMixColors.NNVA} />
-                  <Bar dataKey="NVA" stackId="mix" fill={machineMixColors.NVA} />
-                  <Bar dataKey="NoJob" stackId="mix" fill={machineMixColors.NoJob} radius={[0, 6, 6, 0]} />
+                  <Bar dataKey="NVA" stackId="mix" fill={machineMixColors.NVA} radius={[0, 6, 6, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
               <EmptyChart text="Tidak ada distribusi per-mesin pada window ini." />
             )}
+            <p className="mt-2 text-[10px] font-semibold text-slate-400">
+              NoJob dikeluarkan — mix dihitung atas waktu mesin aktual (VA + NNVA + NVA).
+            </p>
           </div>
         </PageCard>
       </section>
@@ -1139,9 +1140,13 @@ function OeeBreakdown({ kpi }) {
               items={byMachine}
               valueOf={(m) => numeric(m.oee_time_pct)}
               labelOf={(m) => m.machinename || m.machineid || 'UNKNOWN'}
-              valueFmt={(m) => `${formatNumber(m.oee_time_pct)}%`}
+              // oee_time_pct is null when the machine had zero counted time (all NoJob/PM/breakdown).
+              // Show it as n/a + grey (status 'no_data'), never as a green 0%.
+              valueFmt={(m) => (m.oee_time_pct === null || m.oee_time_pct === undefined ? 'n/a' : `${formatNumber(m.oee_time_pct)}%`)}
               colorOf={(m) => severityColorForStatusStr(m.status)}
-              subOf={(m) => `run ${formatHours(m.running_hours)} / ${formatHours(m.total_hours)} · loss ${formatHours(m.loss_hours)}`}
+              subOf={(m) => (m.oee_time_pct === null || m.oee_time_pct === undefined
+                ? `tidak ada waktu terhitung · ${formatHours(m.total_hours)} NoJob/PM/breakdown`
+                : `run ${formatHours(m.running_hours)} / ${formatHours(m.total_hours)} · loss ${formatHours(m.loss_hours)}`)}
               emptyText="Tidak ada data mesin."
             />
           </div>
@@ -1158,9 +1163,30 @@ function OeeBreakdown({ kpi }) {
               subOf={(l) => `${formatNumber(l.events)} event`}
               emptyText="Tidak ada loss tercatat."
             />
+            <p className="mt-2 text-[10px] font-semibold text-slate-400">
+              NoJob tidak dihitung sebagai loss — lihat kartu NoJob per Mesin.
+            </p>
           </div>
         </PageCard>
       </section>
+      <PageCard>
+        <CardHead icon={Clock3} title="NoJob per Mesin (tertinggi)" tag={`${byNoJob.length} mesin`} />
+        <div className="p-4">
+          <RankedList
+            items={byNoJob}
+            valueOf={(m) => numeric(m.nojob_hours)}
+            labelOf={(m) => m.machinename || m.machineid || 'UNKNOWN'}
+            valueFmt={(m) => formatHours(m.nojob_hours)}
+            colorOf={() => machineMixColors.NoJob}
+            subOf={(m) => `${formatNumber(m.nojob_pct)}% dari ${formatHours(m.total_hours)} waktu mesin`}
+            emptyText="Tidak ada waktu NoJob pada window ini."
+            initialCount={10}
+          />
+          <p className="mt-2 text-[10px] font-semibold text-slate-400">
+            NoJob = tidak ada pekerjaan terjadwal (statusid 4 / status &quot;No Job&quot; atau &quot;Off&quot;). Ini masalah penjadwalan, bukan performa mesin.
+          </p>
+        </div>
+      </PageCard>
     </div>
   );
 }
@@ -1596,9 +1622,11 @@ function DetailSkeleton() {
  * ------------------------------------------------------------------ */
 // Backend-generated issue log (ews.issue_log) for the current KPI category. Presentational:
 // the parent owns the rows + fetch and passes an onResolve(id) that PUTs /ews/issue-log/:id/resolve.
-function AutoIssueLogCard({ rows, loading, onResolve }) {
+function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHistory }) {
   const [page, setPage] = useState(1);
   const [resolvingId, setResolvingId] = useState(null);
+
+  useEffect(() => { setPage(1); }, [showHistory]);
 
   const resolve = useCallback(async (id) => {
     setResolvingId(id);
@@ -1618,8 +1646,19 @@ function AutoIssueLogCard({ rows, loading, onResolve }) {
       <CardHead
         icon={AlertTriangle}
         title="Issue Log & Action"
-        tag="auto-generated"
-        right={<span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{loading && rows.length === 0 ? '…' : `${openCount} OPEN`}</span>}
+        tag={showHistory ? 'riwayat' : 'hari ini'}
+        right={(
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleHistory}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 transition hover:bg-slate-50 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+            >
+              {showHistory ? 'Hari ini' : 'Riwayat'}
+            </button>
+            <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 font-mono text-[11px] font-black text-slate-700">{loading && rows.length === 0 ? '…' : `${openCount} OPEN`}</span>
+          </div>
+        )}
       />
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left text-sm">
@@ -1637,7 +1676,11 @@ function AutoIssueLogCard({ rows, loading, onResolve }) {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={6} className={`px-3 py-6 text-center text-xs font-bold ${loading ? 'text-slate-400' : 'text-emerald-600'}`}>
-                  {loading ? 'Memuat issue log…' : '✓ Tidak ada issue untuk KPI ini.'}
+                  {loading
+                    ? 'Memuat issue log…'
+                    : showHistory
+                      ? '✓ Belum ada issue tercatat untuk KPI ini.'
+                      : '✓ Tidak ada issue hari ini untuk KPI ini.'}
                 </td>
               </tr>
             )}
@@ -1694,6 +1737,7 @@ function EwsDetailPage() {
   const [actionPage, setActionPage] = useState(1);
   const [autoIssues, setAutoIssues] = useState([]);
   const [autoIssuesLoading, setAutoIssuesLoading] = useState(true);
+  const [showIssueHistory, setShowIssueHistory] = useState(false);
 
   const manualDate = searchParams.get('date') || '';
   const usesManualDate = searchParams.get('basis') === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(manualDate);
@@ -1702,17 +1746,21 @@ function EwsDetailPage() {
 
   // Backend-generated issue log (ews.issue_log) for this KPI category — replaces the legacy
   // action_table sync. Runs on its own effect (by kpiType), off the critical detail render path.
+  // Default view is the CURRENT business day only: an EWS issue is a one-day snapshot, and the
+  // generator re-raises it under today's key if the problem persists. `showIssueHistory` drops
+  // the date filter to show past days (which the generator auto-resolves once the day rolls).
   const loadAutoIssues = useCallback(async () => {
     setAutoIssuesLoading(true);
     try {
-      const payload = await fetchJson(`${API_BASE}/ews/issue-log?category=${encodeURIComponent(kpiType)}&status=all`);
+      const dateFilter = showIssueHistory ? '' : '&business_date=today';
+      const payload = await fetchJson(`${API_BASE}/ews/issue-log?category=${encodeURIComponent(kpiType)}&status=all${dateFilter}`);
       setAutoIssues(Array.isArray(payload?.data) ? payload.data : []);
     } catch {
       setAutoIssues([]);
     } finally {
       setAutoIssuesLoading(false);
     }
-  }, [kpiType]);
+  }, [kpiType, showIssueHistory]);
 
   useEffect(() => { loadAutoIssues(); }, [loadAutoIssues]);
 
@@ -1945,7 +1993,13 @@ function EwsDetailPage() {
 
             {/* Issue log + Data-to-fix */}
             <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              <AutoIssueLogCard rows={autoIssues} loading={autoIssuesLoading} onResolve={resolveAutoIssue} />
+              <AutoIssueLogCard
+                rows={autoIssues}
+                loading={autoIssuesLoading}
+                onResolve={resolveAutoIssue}
+                showHistory={showIssueHistory}
+                onToggleHistory={() => setShowIssueHistory((v) => !v)}
+              />
 
               <PageCard className="overflow-hidden">
                 <CardHead

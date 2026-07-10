@@ -1,5 +1,6 @@
 const { Pool, types } = require("pg");
 require("../config/loadEnv");
+const { resolveTimezone } = require("../config/timezone");
 
 types.setTypeParser(1082, (str) => str);
 types.setTypeParser(1114, (str) => str);
@@ -30,7 +31,7 @@ const pool = new Pool({
   statement_timeout: STATEMENT_TIMEOUT_MS,
   application_name: process.env.EWS_JOB_APPLICATION_NAME || "mps2-ews-snapshot-job",
   options: [
-    `-c timezone=${process.env.TIMEZONE || "Asia/Makassar"}`,
+    `-c timezone=${resolveTimezone()}`,
     `-c statement_timeout=${STATEMENT_TIMEOUT_MS}`,
   ].join(" "),
 });

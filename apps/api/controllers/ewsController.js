@@ -2,7 +2,12 @@ const ewsCalculator = require("../services/ewsCalculator");
 const ewsRealtimeHub = require("../services/ewsRealtimeHub");
 const ewsTtsNotifier = require("../services/ewsTtsNotifier");
 const ewsIssueGenerator = require("../services/ewsIssueGenerator");
+const { resolveTimezone } = require("../config/timezone");
 const db = global.pool || require("../db");
+
+// Business day rolls at shift-1 start, not calendar midnight. Must match ewsIssueGenerator
+// and ewsCalculator, otherwise the "today" issue-log filter disagrees with what was generated.
+const EWS_DAY_START_HOUR = Number(process.env.EWS_DAY_START_HOUR || 7);
 
 const summaryCache = new Map();
 const SUMMARY_TTL_MS = 60 * 1000;
@@ -113,27 +118,54 @@ async function getSummary(req, res) {
   }
 }
 
+// The 8 KPI keys the control tower renders. Their per-day values come from the snapshot's
+// detail_json.kpis payload — kpi_snapshot only has 5 legacy *_pct columns, which is why the
+// sparklines used to appear for oee/ole only (the two keys whose names happened to survive
+// the 5 -> 8 KPI split).
+const TREND_KPI_KEYS = [
+  "uptime_tablet",
+  "accuracy_labour",
+  "adoption_labour",
+  "ole",
+  "uptime_hmi",
+  "accuracy_machine",
+  "adoption_machine",
+  "oee",
+];
+
+// Fallback for snapshots written BEFORE the split (their detail_json still uses the old keys).
+// accuracy_pct is deliberately absent: it is a combined labour+machine ratio, so it equals
+// neither accuracy_labour nor accuracy_machine and must not be shown as either.
+const TREND_LEGACY_COLUMN = {
+  uptime_hmi: "uptime_pct",
+  adoption_machine: "adoption_pct",
+  oee: "oee_pct",
+  ole: "ole_pct",
+};
+
 async function getTrend(req, res) {
   try {
     const days = clampLimit(req.query.days, 7);
+    const timezone = resolveTimezone();
     const pool = getPool();
     const result = await pool.query(
       `
       WITH latest_daily AS (
-        SELECT DISTINCT ON ((window_end AT TIME ZONE 'Asia/Jakarta')::date)
+        SELECT DISTINCT ON ((window_end AT TIME ZONE $2)::date)
           id,
-          (window_end AT TIME ZONE 'Asia/Jakarta')::date AS business_date,
+          (window_end AT TIME ZONE $2)::date AS business_date,
           window_end,
           uptime_pct,
           accuracy_pct,
           adoption_pct,
           oee_pct,
-          ole_pct
+          ole_pct,
+          detail_json -> 'kpis' AS kpis
         FROM ews.kpi_snapshot
         WHERE scope_type = 'system'
           AND scope_key = 'ALL'
           AND window_end >= (now() - ($1::int * interval '1 day'))
-        ORDER BY (window_end AT TIME ZONE 'Asia/Jakarta')::date DESC, window_end DESC, id DESC
+        ORDER BY (window_end AT TIME ZONE $2)::date DESC, window_end DESC, id DESC
       )
       , limited AS (
         SELECT *
@@ -145,16 +177,12 @@ async function getTrend(req, res) {
       FROM limited
       ORDER BY business_date ASC
       `,
-      [days],
+      [days, timezone],
     );
 
-    const trend = {
-      uptime: [],
-      accuracy: [],
-      adoption: [],
-      oee: [],
-      ole: [],
-    };
+    const trend = {};
+    // Legacy aliases stay populated so any older consumer of /ews/trend keeps working.
+    for (const key of [...TREND_KPI_KEYS, "uptime", "accuracy", "adoption"]) trend[key] = [];
 
     for (const row of result.rows) {
       const point = {
@@ -162,17 +190,36 @@ async function getTrend(req, res) {
         date: row.business_date,
         window_end: row.window_end,
       };
+
+      const byKey = {};
+      if (Array.isArray(row.kpis)) {
+        for (const kpi of row.kpis) {
+          if (kpi && typeof kpi.key === "string") {
+            byKey[kpi.key] = kpi.value === null || kpi.value === undefined ? null : num(kpi.value, null);
+          }
+        }
+      }
+
+      for (const key of TREND_KPI_KEYS) {
+        let value = byKey[key] ?? null;
+        if (value === null) {
+          const column = TREND_LEGACY_COLUMN[key];
+          const legacy = column ? row[column] : null;
+          if (legacy !== null && legacy !== undefined) value = num(legacy, null);
+        }
+        trend[key].push({ ...point, value });
+      }
+
       trend.uptime.push({ ...point, value: row.uptime_pct === null ? null : num(row.uptime_pct, null) });
       trend.accuracy.push({ ...point, value: row.accuracy_pct === null ? null : num(row.accuracy_pct, null) });
       trend.adoption.push({ ...point, value: row.adoption_pct === null ? null : num(row.adoption_pct, null) });
-      trend.oee.push({ ...point, value: row.oee_pct === null ? null : num(row.oee_pct, null) });
-      trend.ole.push({ ...point, value: row.ole_pct === null ? null : num(row.ole_pct, null) });
     }
 
     res.json({
       data: trend,
       meta: {
         days,
+        timezone,
         generated_at: new Date().toISOString(),
       },
     });
@@ -360,7 +407,7 @@ async function buildUptimeSourceDetail(windowStart, windowEnd) {
       ) AS hourly
     FROM per_machine
     `,
-    [windowStart, windowEnd, process.env.TIMEZONE || "Asia/Makassar"],
+    [windowStart, windowEnd, resolveTimezone()],
   );
 
   const row = result.rows[0] || {};
@@ -675,16 +722,19 @@ async function buildOeeSourceDetail(windowStart, windowEnd) {
       FROM base
     ),
     waterfall AS (
+      -- NoJob is deliberately EXCLUDED: it is the absence of work, not an actionable loss, and it
+      -- dwarfs the real losses. It gets its own ranking (nojob_by_machine). Starting the walk at
+      -- (total - nojob) keeps the arithmetic exact, because
+      --   total = va + nnva + nva + missing + nojob  =>  (total - nojob) - missing - nnva - nva = va
       SELECT *
       FROM totals t
       CROSS JOIN LATERAL (
         VALUES
-          (1, 'Total Time', 'total', 0::float, t.total_hours, t.total_hours),
-          (2, 'Missing', 'loss', t.total_hours, t.total_hours - t.missing_hours, -t.missing_hours),
-          (3, 'NNVA', 'segment', t.total_hours - t.missing_hours, t.total_hours - t.missing_hours - t.nnva_hours, -t.nnva_hours),
-          (4, 'NoJob', 'loss', t.total_hours - t.missing_hours - t.nnva_hours, t.total_hours - t.missing_hours - t.nnva_hours - t.nojob_hours, -t.nojob_hours),
-          (5, 'NVA', 'loss', t.total_hours - t.missing_hours - t.nnva_hours - t.nojob_hours, t.total_hours - t.missing_hours - t.nnva_hours - t.nojob_hours - t.nva_hours, -t.nva_hours),
-          (6, 'VA', 'final', 0::float, t.va_hours, t.va_hours)
+          (1, 'Total (ex NoJob)', 'total', 0::float, t.total_hours - t.nojob_hours, t.total_hours - t.nojob_hours),
+          (2, 'Missing', 'loss', t.total_hours - t.nojob_hours, t.total_hours - t.nojob_hours - t.missing_hours, -t.missing_hours),
+          (3, 'NNVA', 'segment', t.total_hours - t.nojob_hours - t.missing_hours, t.total_hours - t.nojob_hours - t.missing_hours - t.nnva_hours, -t.nnva_hours),
+          (4, 'NVA', 'loss', t.total_hours - t.nojob_hours - t.missing_hours - t.nnva_hours, t.total_hours - t.nojob_hours - t.missing_hours - t.nnva_hours - t.nva_hours, -t.nva_hours),
+          (5, 'VA', 'final', 0::float, t.va_hours, t.va_hours)
       ) AS w(sort_order, label, step_type, start_hours, end_hours, delta_hours)
     ),
     per_machine AS (
@@ -717,33 +767,59 @@ async function buildOeeSourceDetail(windowStart, windowEnd) {
            ABS(delta_hours)::float AS hours
          FROM waterfall
        ) x) AS waterfall,
-      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY oee_time_pct ASC NULLS LAST, loss_hours DESC), '[]'::jsonb)
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.oee_time_pct ASC NULLS LAST, x.loss_hours DESC), '[]'::jsonb)
        FROM (
          SELECT
            *,
            GREATEST(0, total_hours - running_hours)::float AS loss_hours,
            CASE
-           WHEN oee_time_pct < 65 THEN 'critical'
-           WHEN oee_time_pct < 80 THEN 'watch'
-           ELSE 'normal'
+             -- A machine whose whole window is NoJob/Off/PM/Breakdown has denominator_hours = 0,
+             -- so oee_time_pct is NULL. NULL is NOT "normal": without this branch every comparison
+             -- below yields NULL, execution falls through to ELSE, and the machine renders GREEN
+             -- despite having produced nothing.
+             WHEN oee_time_pct IS NULL THEN 'no_data'
+             WHEN oee_time_pct < 65 THEN 'critical'
+             WHEN oee_time_pct < 80 THEN 'watch'
+             ELSE 'normal'
            END AS status
          FROM per_machine
+         -- ORDER BY must sit INSIDE the LIMIT. Without it the 20 kept rows are arbitrary and the
+         -- "lowest OEE" card can silently omit the actual worst machines.
+         ORDER BY oee_time_pct ASC NULLS LAST, GREATEST(0, total_hours - running_hours) DESC
          LIMIT 20
        ) x) AS by_machine,
-      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY total_hours DESC), '[]'::jsonb)
+      -- Time mix excludes NoJob (see waterfall): the 100% bar is over ACTUAL machine time.
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.working_hours DESC), '[]'::jsonb)
        FROM (
          SELECT
            machineid,
            machinename,
-           total_hours,
+           (va_hours + nnva_hours + nva_hours)::float AS working_hours,
            va_hours,
            nnva_hours,
-           nva_hours,
-           nojob_hours
+           nva_hours
          FROM per_machine
-         WHERE total_hours > 0
+         WHERE (va_hours + nnva_hours + nva_hours) > 0
+         ORDER BY (va_hours + nnva_hours + nva_hours) DESC
          LIMIT 20
        ) x) AS distribution_by_machine,
+      -- NoJob gets its own ranking so it never distorts the loss analysis.
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.nojob_hours DESC), '[]'::jsonb)
+       FROM (
+         SELECT
+           machineid,
+           machinename,
+           nojob_hours,
+           total_hours,
+           CASE WHEN total_hours > 0
+             THEN ROUND(((nojob_hours / total_hours) * 100)::numeric, 1)::float
+             ELSE NULL
+           END AS nojob_pct
+         FROM per_machine
+         WHERE nojob_hours > 0
+         ORDER BY nojob_hours DESC
+         LIMIT 20
+       ) x) AS nojob_by_machine,
       (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY hours DESC), '[]'::jsonb)
        FROM (
          SELECT
@@ -751,7 +827,7 @@ async function buildOeeSourceDetail(windowStart, windowEnd) {
            SUM(duration_hours)::float AS hours,
            COUNT(*)::int AS event_count
          FROM base
-         WHERE activity_bucket <> 'VA'
+         WHERE activity_bucket NOT IN ('VA', 'NoJob')
          GROUP BY activity_bucket
        ) x) AS by_loss_type,
       (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY startdatetime DESC), '[]'::jsonb)
@@ -802,6 +878,7 @@ async function buildOeeSourceDetail(windowStart, windowEnd) {
     waterfall: row.waterfall || [],
     by_machine: row.by_machine || [],
     distribution_by_machine: row.distribution_by_machine || [],
+    nojob_by_machine: row.nojob_by_machine || [],
     by_loss_type: row.by_loss_type || [],
     sample_rows: row.sample_rows || [],
   };
@@ -1336,14 +1413,26 @@ async function markTtsNotificationPlayed(req, res) {
 }
 
 // ── ews.issue_log (backend-generated issue log, filtered by KPI category) ────
+// business_date=today  -> only the CURRENT business day (shift-aware, rolls at EWS_DAY_START_HOUR).
+//                         This is the default view: an EWS issue is a snapshot of one business day.
+// business_date=<date> -> an explicit YYYY-MM-DD.
+// business_date absent -> no date filter (history view).
 async function getIssueLog(req, res) {
   const category = String(req.query.category || "").toLowerCase();
   const status = String(req.query.status || "open").toLowerCase();
+  const businessDate = String(req.query.business_date || "").trim();
   try {
     const params = [];
     const filters = ["1=1"];
     if (category) { params.push(category); filters.push(`category = $${params.length}`); }
     if (status && status !== "all") { params.push(status); filters.push(`status = $${params.length}`); }
+    if (businessDate === "today" || businessDate === "current") {
+      params.push(EWS_DAY_START_HOUR);
+      filters.push(`business_date = date_trunc('day', now() - make_interval(hours => $${params.length}::int))::date`);
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
+      params.push(businessDate);
+      filters.push(`business_date = $${params.length}::date`);
+    }
     const result = await db.query(
       `
       SELECT id, issue_key, category, business_date, scope_type, entity_id, entity_name,

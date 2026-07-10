@@ -159,7 +159,12 @@ Per-writer idempotency verdicts (all **READ**, direct or delegated):
 **A-R3 — Retire API-side SAP posting; make the Python queue the only path.** `postToSap` should do nothing but `INSERT` rows into `sap_timesheet_staging` (idempotent, transactional, instant response) and let `post_sap_staging.py` post them. You keep one SAP client implementation, gain retry/audit for free, and the HTTP request path stops depending on SAP latency. If operations require synchronous posting, at minimum wrap each row's state change + audit log in a transaction and move the loop to a background job. **Confirm with §8 B1 first.**
 
 **A-R4 — EWS payroll-adjacent fixes (small, surgical):**
-- Replace the hardcoded `'Asia/Jakarta'` in `getTrend` with `process.env.TIMEZONE` (one-line ×2).
+- ~~Replace the hardcoded `'Asia/Jakarta'` in `getTrend` with `process.env.TIMEZONE`.~~ **DONE.** Went
+  further: added `apps/api/config/timezone.js` (`resolveTimezone()`) as the single source of truth and
+  removed every hardcoded literal from `mpsDashboardController` (17), `mpsDashboardSocket` (5),
+  `dashboardController` (2), `getTrend` (2), plus the divergent `|| "Asia/Jakarta"` defaults in
+  `sowScheduleController` and `jobs/sap_staging/sap_staging_common.py`. Timezone now comes only from
+  the root `.env` (`TIMEZONE=Asia/Makassar`).
 - Evaluate KPI status on the unrounded value; round only for display.
 - Tag carried-forward snapshots (`carried_forward: true` already exists — ensure any consumer that matters filters it; document that `ews.kpi_snapshot` is *not* a payroll source of record).
 - Replace per-request `tableExists` probes with a startup check (once the migration ledger guarantees schema).
@@ -324,7 +329,7 @@ Deliberately **not** recommended (over-engineering for one maintainer): TypeScri
 
 **H6 — Rounding flips KPI status at threshold. → NO EVIDENCE YET (not refuted).** `ews.kpi_snapshot` history only starts 2026-07-01 (~85 rows); no adoption values currently sit in the 94.5–95.5 band. The rounding mechanism in code is unchanged, so keep the A-R4 fix — it's one line and removes the class of problem.
 
-**H7 — `getTrend` tz mis-bucketing. → NO OCCURRENCE YET.** 0 snapshots whose calendar day differs between WITA and WIB — but with 6 days of history and few midnight-adjacent windows this is weak evidence, not absolution. The hardcoded `'Asia/Jakarta'` in `getTrend` is still wrong; fix per A-R4.
+**H7 — `getTrend` tz mis-bucketing. → FIXED (see A-R4).** 0 snapshots whose calendar day differs between WITA and WIB — but with 6 days of history and few midnight-adjacent windows that was weak evidence, not absolution. The literal has since been removed everywhere (see A-R4).
 
 ### 8.5 New findings from production data (not visible from code)
 

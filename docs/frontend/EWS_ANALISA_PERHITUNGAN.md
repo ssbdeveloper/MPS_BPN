@@ -259,7 +259,7 @@ Tombol resolve → `PUT /api/ews/actions/:id/resolve` (`resolveAction`, [:1033](
 ## 8. Trend 7 Hari (sparkline)
 
 `GET /api/ews/trend?days=7` → `getTrend` ([ewsController.js:114](../../apps/api/controllers/ewsController.js#L114)):
-- Ambil snapshot **terakhir per hari bisnis** (`DISTINCT ON ((window_end AT TIME ZONE 'Asia/Jakarta')::date)`) dari `ews.kpi_snapshot`.
+- Ambil snapshot **terakhir per hari bisnis** (`DISTINCT ON ((window_end AT TIME ZONE $tz)::date)`, `$tz` dari env `TIMEZONE`) dari `ews.kpi_snapshot`.
 - Kembalikan array nilai per KPI → dirender jadi mini sparkline di tiap kartu Control Tower (warna mengikuti status).
 
 ---
@@ -267,7 +267,7 @@ Tombol resolve → `PUT /api/ews/actions/:id/resolve` (`resolveAction`, [:1033](
 ## 9. Temuan / Catatan untuk Diperhatikan
 
 1. **Target tidak konsisten** antara backend (`KPI_DEFS`), fallback SSE, dan konstanta frontend (Accuracy 98 vs 97). Sebaiknya satu sumber kebenaran (idealnya tabel `ews.kpi_threshold`).
-2. **Timezone default berbeda**: banyak query fallback ke `Asia/Makassar` (`process.env.TIMEZONE || "Asia/Makassar"`), padahal standar project `Asia/Jakarta`. Aman selama env `TIMEZONE` terisi, tapi default kode berisiko bila env kosong.
+2. **Timezone**: satu-satunya sumber kebenaran adalah env `TIMEZONE` di root `.env` (saat ini `Asia/Makassar`). Express membacanya lewat `apps/api/config/timezone.js` (`resolveTimezone()`), script Python lewat `app_timezone()`. Tidak boleh ada literal timezone di kode: literal `Asia/Jakarta` yang dulu tersebar di dashboard/getTrend menggeser batas hari 1 jam terhadap session Postgres yang WITA. Sudah diperbaiki.
 3. **Adoption produksi memakai jalur `machine`** (durasi `mch_productiondata`, gap = status 5 / status 2 >5mnt), **bukan** jalur bucket 5-menit yang ada di `calculateAdoption()`. Dua definisi hidup berdampingan — pastikan yang mana yang jadi acuan resmi.
 4. **OEE adalah proxy waktu**, bukan OEE klasik. Perlu disampaikan ke user bisnis agar tidak dibandingkan 1:1 dengan OEE standar.
 5. **Uptime**: status di kartu (threshold backend) dan status di halaman detail (band hardcode `uptimeStatusKey`) dihitung dengan aturan berbeda — bisa terlihat tidak sinkron di kasus batas.

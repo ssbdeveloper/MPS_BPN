@@ -1,5 +1,6 @@
 const { Pool, types } = require("pg");
 require("./config/loadEnv");
+const { resolveTimezone } = require("./config/timezone");
 
 types.setTypeParser(1082, (str) => str);
 types.setTypeParser(1114, (str) => str);
@@ -10,7 +11,7 @@ const dbPort = process.env.DB_PORT;
 const usesPgbouncer = String(dbHost || "").toLowerCase().includes("pgbouncer") || String(dbPort || "") === "6432";
 const statementTimeoutMs = parseInt(process.env.DB_STATEMENT_TIMEOUT_MS || "45000", 10);
 const idleInTransactionTimeoutMs = parseInt(process.env.DB_IDLE_IN_TX_TIMEOUT_MS || "30000", 10);
-const startupOptions = [`-c timezone=${process.env.TIMEZONE || "Asia/Makassar"}`];
+const startupOptions = [`-c timezone=${resolveTimezone()}`];
 
 if (!usesPgbouncer) {
   startupOptions.push(

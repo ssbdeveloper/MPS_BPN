@@ -921,7 +921,7 @@ MPS2/
 | `/production-operations` | 3 | List all, lookup, get by ID |
 
 ### Important Backend Details
-- **PostgreSQL pool:** `.env` loaded from root `D:\website\MPS2\.env`, pool max 20 connections, `timezone=Asia/Jakarta`
+- **PostgreSQL pool:** `.env` loaded from root `D:\website\MPS2\.env`, pool max 20 connections, `timezone` selalu dari env `TIMEZONE` di root `.env` (saat ini `Asia/Makassar`)
 - **Timestamp handling:** OID 1114/1184 forced to string (no JS Date conversion)
 - **WebSocket:** At `/machine-hours-sqlserver/ws` for real-time machine data streaming
 - **File uploads:** multer middleware, stored in `apps/api/uploads/` (sow-pdf/, consumable/)
@@ -991,6 +991,6 @@ MPS2/
 
 9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
 
-10. **Environment variables key names:** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER` (postgres), `DB_PASSWORD`, `DB_PORT` (5432), `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (Asia/Jakarta)
+10. **Environment variables key names:** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER` (postgres), `DB_PASSWORD`, `DB_PORT` (5432), `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (**Asia/Makassar** — satu-satunya sumber timezone; jangan hardcode di kode)
  
  

@@ -95,8 +95,9 @@ Sistem ini menggunakan **4 Docker containers** yang bekerja bersama:
    PLANT_SSB=5071
    CORS_ORIGIN=*
 
-   # Timezone
-   TIMEZONE=Asia/Jakarta
+   # Timezone - satu-satunya sumber kebenaran timezone aplikasi.
+   # Dibaca oleh Express (apps/api/config/timezone.js), job EWS, dan script Python.
+   TIMEZONE=Asia/Makassar
    ```
 
 3. **Pastikan SSL certificates ada**

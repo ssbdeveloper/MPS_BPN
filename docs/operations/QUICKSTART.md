@@ -18,8 +18,8 @@ NODE_ENV=production
 PLANT_SSB=5071
 CORS_ORIGIN=*
 
-# Timezone
-TIMEZONE=Asia/Jakarta
+# Timezone - satu-satunya sumber kebenaran timezone aplikasi (jangan hardcode di kode).
+TIMEZONE=Asia/Makassar
 ```
 
 ### 2. SSL Certificate (Development)

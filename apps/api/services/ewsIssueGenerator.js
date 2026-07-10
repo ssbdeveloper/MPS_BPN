@@ -1,4 +1,5 @@
 "use strict";
+const { resolveTimezone } = require("../config/timezone");
 
 // EWS issue generator — records issues from KPI calculations into ews.issue_log.
 // Runs backend-side (autonomously in the snapshot job) so issues exist even when
@@ -29,7 +30,7 @@ function ph3OrderTable() {
   return /^[a-z_][a-z0-9_]*$/i.test(raw) ? raw : "ph3_order";
 }
 
-const TIMEZONE = process.env.TIMEZONE || "Asia/Makassar";
+const TIMEZONE = resolveTimezone();
 // adoption_machine: a machine is an issue when it ran with an operator/timesheet gap of at
 // least this many minutes for the day (5-min buckets; 3 buckets = 15 min by default).
 const ADOPTION_MACHINE_MIN_GAP_MIN = Number(process.env.EWS_ADOPTION_MACHINE_MIN_GAP_MIN || 15);
@@ -114,6 +115,28 @@ ON CONFLICT (issue_key) DO UPDATE SET
   updated_at   = now()
 WHERE ews.issue_log.status = 'open'
 `;
+
+// An EWS issue is a snapshot of ONE business day, not a ticket that carries across days: if the
+// problem still holds today, the generators re-raise it under today's key. So any issue left
+// open from an earlier business day is stale by definition — close it instead of letting the log
+// silently accumulate. `auto_resolved` in detail keeps these distinguishable from a human ✓.
+async function autoResolveStale(exec, bounds) {
+  const result = await exec.query(
+    `
+    UPDATE ews.issue_log
+    SET status      = 'resolved',
+        resolved_at = COALESCE(resolved_at, now()),
+        updated_at  = now(),
+        detail      = COALESCE(detail, '{}'::jsonb)
+                      || jsonb_build_object('auto_resolved', true,
+                                            'auto_resolved_reason', 'business day rolled over')
+    WHERE status = 'open'
+      AND business_date < $1::date
+    `,
+    [bounds.business_date],
+  );
+  return result.rowCount || 0;
+}
 
 // accuracy_machine — mch_transaction rows with status_record = false (incomplete job/
 // operator data), per machine. Reuses the exact status_record predicate from the KPI.
@@ -472,8 +495,11 @@ async function generateUptimeHmi(exec, bounds) {
 }
 
 // Run every category generator for the current business day. Add more as they land.
+// Stale issues from previous business days are closed first, so the log always reflects
+// "what is wrong today" rather than an ever-growing pile.
 async function generateAll(exec) {
   const bounds = await getBizBounds(exec);
+  const autoResolved = await autoResolveStale(exec, bounds);
   const counts = {
     accuracy_machine: await generateAccuracyMachine(exec, bounds),
     accuracy_labour: await generateAccuracyLabour(exec, bounds),
@@ -483,11 +509,12 @@ async function generateAll(exec) {
     ole: await generateOle(exec, bounds),
     uptime_hmi: await generateUptimeHmi(exec, bounds),
   };
-  return { business_date: bounds.business_date, counts };
+  return { business_date: bounds.business_date, auto_resolved: autoResolved, counts };
 }
 
 module.exports = {
   generateAll,
+  autoResolveStale,
   generateAccuracyMachine,
   generateAccuracyLabour,
   generateAdoptionMachine,
