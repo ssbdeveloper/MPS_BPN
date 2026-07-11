@@ -4,14 +4,14 @@ Koneksi SQL Server:
 - Host: 10.169.2.76
 - Port: 61142
 - Username: tag
-- Password: @dminta9
+- Password: <DB_PASSWORD — lihat .env, jangan commit password asli>
 - Database: SSB_OEE
 
 Koneksi PostgreSQL:
 - Host: 10.169.1.12
 - Port: 5433
 - Username: tag
-- Password: @dminta9
+- Password: <DB_PASSWORD — lihat .env, jangan commit password asli>
 - Database: ptssb
 
 Requirement:

@@ -39,16 +39,26 @@ PROJECT_ROOT = next(
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _require_env(*names: str) -> str:
+    for name in names:
+        val = os.getenv(name)
+        if val not in (None, ""):
+            return val
+    raise SystemExit(
+        f"Missing required env var {names[0]} — set it in the environment or the repo root .env"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Config
-# Edit these dictionaries or override with environment variables.
+# Passwords have no in-source default (S-R1) — they must come from env/.env.
 # ---------------------------------------------------------------------------
 SQLSERVER_CONFIG = {
     "server": os.getenv("SQLSERVER_HOST", "10.169.13.13"),
     "port": int(os.getenv("SQLSERVER_PORT", "57970")),
     "database": os.getenv("SQLSERVER_DATABASE", "SSB_OEE"),
     "username": os.getenv("SQLSERVER_USER", "bsa"),
-    "password": os.getenv("SQLSERVER_PASSWORD", "@dminbsa"),
+    "password": _require_env("SQLSERVER_PASSWORD"),
     "driver": os.getenv("SQLSERVER_DRIVER", "ODBC Driver 17 for SQL Server"),
 }
 
@@ -56,8 +66,8 @@ POSTGRES_CONFIG = {
     "host": os.getenv("PG_HOST", "10.169.1.12"),
     "port": int(os.getenv("PG_PORT", "5433")),
     "dbname": os.getenv("PG_DBNAME", "ptssb"),
-    "user": os.getenv("PG_USER", "tag"),
-    "password": os.getenv("PG_PASSWORD", "@dminta9"),
+    "user": os.getenv("PG_USER") or os.getenv("DB_USER") or "tag",
+    "password": _require_env("PG_PASSWORD", "DB_PASSWORD"),
 }
 
 DEFAULT_DAYS = 7

@@ -87,3 +87,9 @@ apps/tts-worker/test_output.mp3
 # Model & arsip binari besar (download ulang)
 *.onnx
 *.zip
+jobs/.pycache_legacy/
+jobs/.venv/
+
+# Obsidian vault config (docs/ dibuka sebagai vault)
+docs/.obsidian/
+**/tailscale_reference.md

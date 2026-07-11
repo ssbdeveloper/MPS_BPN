@@ -31,9 +31,9 @@ Sistem ini menggunakan **4 Docker containers** yang bekerja bersama:
 - **Container**: `timesheet-db`
 - **Port**: 5433 → 5432 (internal)
 - **Volume**: `postgres_data` (persistent storage)
-- **Init Scripts**:
-  - `database/init_database.sql`
-  - `database/migrate_sow_to_parts.sql`
+- **Init Scripts**: tidak ada auto-init — DB baru di-restore dari backup atau
+  dibangun dari `database/schema/schema_prod.sql` (dump kanonik) lalu migrasi via
+  `node database/migrate.js`. (Catatan 2026-07-11: `init_database.sql` lama sudah dihapus.)
 
 ### 2. **API (Node.js Express)**
 - **Container**: `timesheet-apps/api`
@@ -307,8 +307,9 @@ MPS2/
 │       └── server.key
 │
 ├── database/
-│   ├── init_database.sql      # DB initialization
-│   └── migrate_sow_to_parts.sql
+│   ├── schema/schema_prod.sql # dump kanonik (regenerate dari prod)
+│   ├── migrations/api/        # migration files (ledger: schema_migrations)
+│   └── migrate.js             # migration runner
 │
 └── backups/                   # Database backups
 ```

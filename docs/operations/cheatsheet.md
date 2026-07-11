@@ -25,10 +25,10 @@ sudo docker compose up -d --build
 notepad nginx/nginx.conf
 
 # 2. Test
-docker-compose exec nginx nginx -t
+sudo docker compose exec nginx nginx -t
 
 # 3. Apply
-docker-compose exec nginx nginx -s reload
+sudo docker compose exec nginx nginx -s reload
 
 # 4. Check
 docker-compose logs nginx

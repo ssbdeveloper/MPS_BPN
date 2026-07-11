@@ -5,7 +5,13 @@ services:
       dockerfile: Dockerfile.heartbeat
     container_name: machine-heartbeat-sync
     restart: unless-stopped
-    # Credentials are hardcoded in sync_machine_heartbeat.py, so no env_file is needed.
+    # Credentials come from the repo root .env (S-R1 — no secrets in source).
+    # Required keys: OEE_SQLSERVER_PASSWORD, DB_PASSWORD (or PG_PASSWORD).
+    # NOTE: the script only reads credential keys from this file, never DB_HOST —
+    # topology defaults (10.169.2.76 / 10.169.1.12) live in the script and can be
+    # overridden with OEE_SQLSERVER_HOST / PG_HOST if this deployment differs.
+    env_file:
+      - ../../.env
     # SQL Server (10.169.2.76) and Postgres (10.169.1.12) are on the LAN and reachable
     # via the host's default bridge network — no extra network config required.
     # If the host can only reach them on its own network namespace, uncomment:

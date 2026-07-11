@@ -2,7 +2,7 @@
 
 Status: Planning  
 Tanggal analisis: 2026-06-29  
-Scope: `EwsControlTower.jsx` dan kebutuhan 5 KPI di `docs/timesheet/EARLY_WARNING_SYSTEM_PLAN.md`
+Scope: `EwsControlTower.jsx` dan kebutuhan 5 KPI di EARLY_WARNING_SYSTEM_PLAN (dihapus 2026-07-11 — superseded oleh EWS_DETAIL.md; lihat git history)
 
 ## Ringkasan Keputusan
 

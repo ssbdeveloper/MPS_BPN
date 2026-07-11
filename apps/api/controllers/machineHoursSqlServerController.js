@@ -30,12 +30,19 @@ async function _bulkLookupOperationText(jobids) {
   }
 }
 
+// Credentials env-only (S-R1) — no in-source defaults. Topology keeps defaults.
+if (!process.env.SQLSERVER_PASSWORD) {
+  console.error(
+    "[machineHoursSqlServer] SQLSERVER_PASSWORD is not set — SQL Server queries will fail. " +
+    "Set SQLSERVER_USER/SQLSERVER_PASSWORD in the root .env (compose already forwards them)."
+  );
+}
 const sqlServerConfig = {
   server: process.env.SQLSERVER_HOST || "10.169.13.13",
   port: parseInt(process.env.SQLSERVER_PORT || "57970", 10),
   database: process.env.SQLSERVER_DATABASE || "SSB_OEE",
-  user: process.env.SQLSERVER_USER || "bsa",
-  password: process.env.SQLSERVER_PASSWORD || "@dminbsa",
+  user: process.env.SQLSERVER_USER,
+  password: process.env.SQLSERVER_PASSWORD,
   pool: {
     max: 10,
     min: 0,

@@ -17,13 +17,6 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: backup; Type: SCHEMA; Schema: -; Owner: -
---
-
-CREATE SCHEMA backup;
-
-
---
 -- Name: ews; Type: SCHEMA; Schema: -; Owner: -
 --
 
@@ -255,226 +248,6 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
--- Name: mch_user_backup_20260609_141244; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.mch_user_backup_20260609_141244 (
-    operatorid character varying(100),
-    full_name text,
-    sn_employee text
-);
-
-
---
--- Name: mch_user_backup_20260609_141752; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.mch_user_backup_20260609_141752 (
-    operatorid character varying(100),
-    full_name text,
-    sn_employee text
-);
-
-
---
--- Name: sow_general_service_fix_20260703_revision_history_backup; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.sow_general_service_fix_20260703_revision_history_backup (
-    backed_up_at timestamp with time zone,
-    backup_reason text,
-    id bigint,
-    order_no text,
-    revision_no integer,
-    action text,
-    before_data jsonb,
-    after_data jsonb,
-    changed_by text,
-    created_at timestamp with time zone
-);
-
-
---
--- Name: sow_general_service_fix_20260703_sow_backup; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.sow_general_service_fix_20260703_sow_backup (
-    backed_up_at timestamp with time zone,
-    backup_reason text,
-    idsow integer,
-    order_no text,
-    operation_no integer,
-    ssbr_id text,
-    part_number text,
-    part_name text,
-    model text,
-    customer text,
-    location text,
-    wct_group text,
-    workcenter text,
-    operation_text text,
-    workcenterdescription text,
-    planhours numeric(10,2),
-    systemstatus text,
-    confirmation text,
-    status text,
-    finish_date date,
-    codenumber text,
-    weight numeric(5,2),
-    created_by text,
-    type text,
-    "group" text,
-    category text,
-    remark text,
-    sync text,
-    plan_start date,
-    plan_finish date,
-    actual_start date,
-    actual_finish date,
-    actual_progress numeric(5,2),
-    actual_hours numeric(10,2),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone,
-    progress integer,
-    revision_no integer,
-    source_op_id bigint
-);
-
-
---
--- Name: sow_general_service_fix_20260703_timesheet_backup; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.sow_general_service_fix_20260703_timesheet_backup (
-    backed_up_at timestamp with time zone,
-    backup_reason text,
-    tsnumber integer,
-    activitytype text,
-    operation_text text,
-    confirmationnumber text,
-    ssbr_id text,
-    date_checkin text,
-    date_checkout text,
-    full_name text,
-    hour_checkin text,
-    hour_checkout text,
-    longdate_checkin timestamp with time zone,
-    longdate_checkout timestamp with time zone,
-    note text,
-    part_name text,
-    planhours numeric(10,2),
-    plant text,
-    serialnumber text,
-    state_flag smallint,
-    std_foreman_hours numeric(10,2),
-    validation_date timestamp with time zone,
-    workcentercode text,
-    workcenterdescription text,
-    duration numeric,
-    operation_no integer,
-    order_no text,
-    modified_at timestamp without time zone
-);
-
-
---
--- Name: sow_info_fill_20260703_backup; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.sow_info_fill_20260703_backup (
-    idsow integer,
-    order_no text,
-    operation_no integer,
-    ssbr_id text,
-    part_number text,
-    part_name text,
-    model text,
-    customer text,
-    location text,
-    wct_group text,
-    workcenter text,
-    operation_text text,
-    workcenterdescription text,
-    planhours numeric(10,2),
-    systemstatus text,
-    confirmation text,
-    status text,
-    finish_date date,
-    codenumber text,
-    weight numeric(5,2),
-    created_by text,
-    type text,
-    "group" text,
-    category text,
-    remark text,
-    sync text,
-    plan_start date,
-    plan_finish date,
-    actual_start date,
-    actual_finish date,
-    actual_progress numeric(5,2),
-    actual_hours numeric(10,2),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone,
-    progress integer,
-    revision_no integer,
-    source_op_id bigint,
-    canonical_customer text,
-    canonical_part_number text,
-    canonical_part_name text,
-    canonical_model text,
-    backed_up_at timestamp with time zone
-);
-
-
---
--- Name: sow_wct_group_fill_20260703_backup; Type: TABLE; Schema: backup; Owner: -
---
-
-CREATE TABLE backup.sow_wct_group_fill_20260703_backup (
-    backed_up_at timestamp with time zone,
-    backup_reason text,
-    idsow integer,
-    order_no text,
-    operation_no integer,
-    ssbr_id text,
-    part_number text,
-    part_name text,
-    model text,
-    customer text,
-    location text,
-    wct_group text,
-    workcenter text,
-    operation_text text,
-    workcenterdescription text,
-    planhours numeric(10,2),
-    systemstatus text,
-    confirmation text,
-    status text,
-    finish_date date,
-    codenumber text,
-    weight numeric(5,2),
-    created_by text,
-    type text,
-    "group" text,
-    category text,
-    remark text,
-    sync text,
-    plan_start date,
-    plan_finish date,
-    actual_start date,
-    actual_finish date,
-    actual_progress numeric(5,2),
-    actual_hours numeric(10,2),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone,
-    progress integer,
-    revision_no integer,
-    source_op_id bigint
-);
-
-
---
 -- Name: action_history; Type: TABLE; Schema: ews; Owner: -
 --
 
@@ -673,6 +446,75 @@ ALTER SEQUENCE ews.alert_log_id_seq OWNED BY ews.alert_log.id;
 
 
 --
+-- Name: issue_log; Type: TABLE; Schema: ews; Owner: -
+--
+
+CREATE TABLE ews.issue_log (
+    id bigint NOT NULL,
+    issue_key text NOT NULL,
+    category text NOT NULL,
+    business_date date NOT NULL,
+    scope_type text,
+    entity_id text,
+    entity_name text,
+    severity text DEFAULT 'warning'::text NOT NULL,
+    title text,
+    description text,
+    metric_value numeric,
+    detail jsonb,
+    status text DEFAULT 'open'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    resolved_at timestamp with time zone,
+    resolution_note text,
+    resolved_by text,
+    CONSTRAINT issue_log_resolution_note_required CHECK (((status <> 'resolved'::text) OR (NULLIF(btrim(resolution_note), ''::text) IS NOT NULL))),
+    CONSTRAINT issue_log_severity_check CHECK ((severity = ANY (ARRAY['warning'::text, 'critical'::text]))),
+    CONSTRAINT issue_log_status_check CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text])))
+);
+
+
+--
+-- Name: TABLE issue_log; Type: COMMENT; Schema: ews; Owner: -
+--
+
+COMMENT ON TABLE ews.issue_log IS 'Central EWS issue log across all KPI categories. Generated backend-side; dedup by issue_key per (category, business_date, entity).';
+
+
+--
+-- Name: COLUMN issue_log.resolution_note; Type: COMMENT; Schema: ews; Owner: -
+--
+
+COMMENT ON COLUMN ews.issue_log.resolution_note IS 'Free-text justification / corrective action. Mandatory for any resolved row (see CHECK).';
+
+
+--
+-- Name: COLUMN issue_log.resolved_by; Type: COMMENT; Schema: ews; Owner: -
+--
+
+COMMENT ON COLUMN ews.issue_log.resolved_by IS 'Who closed it: a user id, or ''system'' when the business day rolled over.';
+
+
+--
+-- Name: issue_log_id_seq; Type: SEQUENCE; Schema: ews; Owner: -
+--
+
+CREATE SEQUENCE ews.issue_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: issue_log_id_seq; Type: SEQUENCE OWNED BY; Schema: ews; Owner: -
+--
+
+ALTER SEQUENCE ews.issue_log_id_seq OWNED BY ews.issue_log.id;
+
+
+--
 -- Name: kpi_snapshot; Type: TABLE; Schema: ews; Owner: -
 --
 
@@ -725,6 +567,21 @@ CREATE TABLE ews.kpi_threshold (
     warning_min numeric(10,4),
     critical_below numeric(10,4),
     owner text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: machine_heartbeat_daily; Type: TABLE; Schema: ews; Owner: -
+--
+
+CREATE TABLE ews.machine_heartbeat_daily (
+    work_date date NOT NULL,
+    machineno integer NOT NULL,
+    pings bigint DEFAULT 0 NOT NULL,
+    up_pings bigint DEFAULT 0 NOT NULL,
+    uptime_pct numeric(6,2),
+    avg_heartbeat numeric,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1153,18 +1010,6 @@ ALTER TABLE public.log_timesheet_sap ALTER COLUMN id ADD GENERATED ALWAYS AS IDE
 
 
 --
--- Name: machine_heartbeat; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.machine_heartbeat (
-    id integer NOT NULL,
-    createddate timestamp without time zone,
-    machineno integer,
-    heartbeat integer
-);
-
-
---
 -- Name: mch_machine_ping_log; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1306,8 +1151,16 @@ CREATE TABLE public.mch_transaction (
     tsnumber integer,
     checkin timestamp with time zone,
     refreshed_at timestamp with time zone,
-    finish_job boolean
+    finish_job boolean,
+    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR ((NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)))) STORED
 );
+
+
+--
+-- Name: COLUMN mch_transaction.status_record; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.mch_transaction.status_record IS 'TRUE = record OK (statusid 0/3/4 Off/Downtime/NoJob, OR order_no+operation_no+sn_employee+confirmation_number all present). FALSE = incomplete. Basis for EWS accuracy_machine.';
 
 
 --
@@ -3175,9 +3028,17 @@ CREATE TABLE public.sap_timesheet_staging (
     posted_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    pernr_origin text DEFAULT ''::text NOT NULL,
     CONSTRAINT sap_timesheet_staging_source_system_ck CHECK ((source_system = ANY (ARRAY['TIMESHEET'::text, 'MCH_HOURS'::text]))),
     CONSTRAINT sap_timesheet_staging_status_ck CHECK ((status = ANY (ARRAY['PENDING'::text, 'POSTING'::text, 'POSTED'::text, 'FAILED'::text, 'SKIPPED'::text])))
 );
+
+
+--
+-- Name: COLUMN sap_timesheet_staging.pernr_origin; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sap_timesheet_staging.pernr_origin IS 'SN karyawan asli sebelum substitusi Outsource (pernr dipaksa 11009413 untuk Outsource). Audit-only, tidak dikirim ke SAP.';
 
 
 --
@@ -3926,7 +3787,7 @@ CREATE TABLE public.usernfc (
     idrow integer NOT NULL,
     nfcid text,
     full_name text,
-    snssb text,
+    snssb text NOT NULL,
     machineid text,
     machinename text,
     workcenter text,
@@ -5520,6 +5381,13 @@ ALTER TABLE ONLY ews.alert_log ALTER COLUMN id SET DEFAULT nextval('ews.alert_lo
 
 
 --
+-- Name: issue_log id; Type: DEFAULT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.issue_log ALTER COLUMN id SET DEFAULT nextval('ews.issue_log_id_seq'::regclass);
+
+
+--
 -- Name: kpi_snapshot id; Type: DEFAULT; Schema: ews; Owner: -
 --
 
@@ -5709,6 +5577,22 @@ ALTER TABLE ONLY ews.alert_log
 
 
 --
+-- Name: issue_log issue_log_issue_key_key; Type: CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.issue_log
+    ADD CONSTRAINT issue_log_issue_key_key UNIQUE (issue_key);
+
+
+--
+-- Name: issue_log issue_log_pkey; Type: CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.issue_log
+    ADD CONSTRAINT issue_log_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: kpi_snapshot kpi_snapshot_date_key; Type: CONSTRAINT; Schema: ews; Owner: -
 --
 
@@ -5730,6 +5614,14 @@ ALTER TABLE ONLY ews.kpi_snapshot
 
 ALTER TABLE ONLY ews.kpi_threshold
     ADD CONSTRAINT kpi_threshold_pkey PRIMARY KEY (kpi_type);
+
+
+--
+-- Name: machine_heartbeat_daily machine_heartbeat_daily_pkey; Type: CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.machine_heartbeat_daily
+    ADD CONSTRAINT machine_heartbeat_daily_pkey PRIMARY KEY (work_date, machineno);
 
 
 --
@@ -5882,14 +5774,6 @@ ALTER TABLE ONLY public.customers
 
 ALTER TABLE ONLY public.log_timesheet_sap
     ADD CONSTRAINT log_timesheet_sap_pkey PRIMARY KEY (id);
-
-
---
--- Name: machine_heartbeat machine_heartbeat_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.machine_heartbeat
-    ADD CONSTRAINT machine_heartbeat_pkey PRIMARY KEY (id);
 
 
 --
@@ -6715,6 +6599,20 @@ CREATE INDEX idx_ews_alert_scope ON ews.alert_log USING btree (scope_type, scope
 
 
 --
+-- Name: idx_ews_issue_log_category_status; Type: INDEX; Schema: ews; Owner: -
+--
+
+CREATE INDEX idx_ews_issue_log_category_status ON ews.issue_log USING btree (category, status, business_date DESC);
+
+
+--
+-- Name: idx_ews_issue_log_created; Type: INDEX; Schema: ews; Owner: -
+--
+
+CREATE INDEX idx_ews_issue_log_created ON ews.issue_log USING btree (created_at DESC);
+
+
+--
 -- Name: idx_ews_kpi_snapshot_latest; Type: INDEX; Schema: ews; Owner: -
 --
 
@@ -6754,6 +6652,13 @@ CREATE INDEX idx_ews_tts_ready_unplayed ON ews.tts_notification USING btree (pla
 --
 
 CREATE INDEX idx_ews_tts_status_created ON ews.tts_notification USING btree (generation_status, created_at);
+
+
+--
+-- Name: idx_machine_heartbeat_daily_machineno; Type: INDEX; Schema: ews; Owner: -
+--
+
+CREATE INDEX idx_machine_heartbeat_daily_machineno ON ews.machine_heartbeat_daily USING btree (machineno);
 
 
 --
@@ -6890,20 +6795,6 @@ CREATE INDEX idx_customers_site ON public.customers USING btree (site_name);
 
 
 --
--- Name: idx_machine_heartbeat_createddate; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_machine_heartbeat_createddate ON public.machine_heartbeat USING btree (createddate);
-
-
---
--- Name: idx_machine_heartbeat_machineno; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_machine_heartbeat_machineno ON public.machine_heartbeat USING btree (machineno);
-
-
---
 -- Name: idx_mch_machine_ping_log_checked_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6943,6 +6834,13 @@ CREATE INDEX idx_mch_productiondata_startdatetime ON public.mch_productiondata U
 --
 
 CREATE INDEX idx_mch_transaction_sap_window ON public.mch_transaction USING btree (startdatetime, enddatetime) WHERE ((confirmation_number IS NOT NULL) AND ((confirmation_number)::text <> ''::text) AND (order_no IS NOT NULL) AND ((order_no)::text <> ''::text) AND (operation_no IS NOT NULL) AND ((operation_no)::text <> ''::text));
+
+
+--
+-- Name: idx_mch_transaction_status_record_false; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mch_transaction_status_record_false ON public.mch_transaction USING btree (machineno) WHERE (status_record = false);
 
 
 --
@@ -7013,34 +6911,6 @@ CREATE INDEX idx_ms_resource_search ON public.ms_resource USING btree (resource_
 --
 
 CREATE INDEX idx_ms_resource_workcenter ON public.ms_resource USING btree (workcenter_code) WHERE (workcenter_code IS NOT NULL);
-
-
---
--- Name: idx_mv_kanban_order_board_aging; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_mv_kanban_order_board_aging ON public.mv_kanban_order_board USING btree (aging_band);
-
-
---
--- Name: idx_mv_kanban_order_board_location; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_mv_kanban_order_board_location ON public.mv_kanban_order_board USING btree (current_location);
-
-
---
--- Name: idx_mv_kanban_order_board_source; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_mv_kanban_order_board_source ON public.mv_kanban_order_board USING btree (current_source);
-
-
---
--- Name: idx_mv_kanban_order_board_state_entered_at; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_mv_kanban_order_board_state_entered_at ON public.mv_kanban_order_board USING btree (state_entered_at DESC);
 
 
 --
@@ -7345,13 +7215,6 @@ CREATE INDEX idx_sow_machine_capacity_lookup ON public.sow_machine_capacity USIN
 
 
 --
--- Name: idx_sow_model; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_sow_model ON public.sow USING btree (model);
-
-
---
 -- Name: idx_sow_operation_status_date; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7419,20 +7282,6 @@ CREATE INDEX idx_sow_overtime_sow ON public.sow_overtime_request USING btree (so
 --
 
 CREATE INDEX idx_sow_overtime_status ON public.sow_overtime_request USING btree (request_status, overtime_date, shift_id, machine_code);
-
-
---
--- Name: idx_sow_part_name_trgm; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_sow_part_name_trgm ON public.sow USING gin (part_name public.gin_trgm_ops);
-
-
---
--- Name: idx_sow_part_number; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_sow_part_number ON public.sow USING btree (part_number);
 
 
 --
@@ -7513,13 +7362,6 @@ CREATE INDEX idx_sow_std_attach_standard_id ON public.sow_standard_attachments U
 
 
 --
--- Name: idx_sow_sync_modified; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_sow_sync_modified ON public.sow USING btree (order_no, operation_no) WHERE (sync = 'modified'::text);
-
-
---
 -- Name: idx_sow_templates_component_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7597,13 +7439,6 @@ CREATE INDEX idx_timesheet_lookup ON public.timesheet_transaction USING btree (o
 
 
 --
--- Name: idx_timesheet_modified; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_timesheet_modified ON public.timesheet_transaction USING btree (modified_at);
-
-
---
 -- Name: idx_timesheet_transaction_order_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7625,13 +7460,6 @@ CREATE INDEX idx_timesheet_transaction_order_key_operation_checkin ON public.tim
 
 
 --
--- Name: idx_timesheet_transaction_order_operation_checkin; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_timesheet_transaction_order_operation_checkin ON public.timesheet_transaction USING btree (order_no, operation_no, longdate_checkin);
-
-
---
 -- Name: idx_timesheet_transaction_workcenter_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7639,24 +7467,10 @@ CREATE INDEX idx_timesheet_transaction_workcenter_active ON public.timesheet_tra
 
 
 --
--- Name: idx_ts_component_tracking_active; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_ts_component_tracking_active ON public.timesheet_transaction USING btree (workcentercode, longdate_checkout, longdate_checkin DESC) WHERE (longdate_checkin IS NOT NULL);
-
-
---
 -- Name: idx_ts_component_tracking_productive; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ts_component_tracking_productive ON public.timesheet_transaction USING btree (workcentercode, order_no, operation_no, longdate_checkin) WHERE ((activitytype IS NULL) AND (longdate_checkin IS NOT NULL));
-
-
---
--- Name: idx_ts_full_name_trgm; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_ts_full_name_trgm ON public.timesheet_transaction USING gin (full_name public.gin_trgm_ops);
 
 
 --
@@ -7695,13 +7509,6 @@ CREATE INDEX idx_ts_order_no_trgm ON public.timesheet_transaction USING gin (ord
 
 
 --
--- Name: idx_ts_order_wc; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_ts_order_wc ON public.timesheet_transaction USING btree (order_no, workcentercode);
-
-
---
 -- Name: idx_ts_serial_checkin; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7716,31 +7523,10 @@ CREATE INDEX idx_ts_serialnumber ON public.timesheet_transaction USING btree (se
 
 
 --
--- Name: idx_ts_serialnumber_trgm; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_ts_serialnumber_trgm ON public.timesheet_transaction USING gin (serialnumber public.gin_trgm_ops);
-
-
---
--- Name: idx_ts_state_flag; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_ts_state_flag ON public.timesheet_transaction USING btree (state_flag);
-
-
---
 -- Name: idx_ts_validation_date; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ts_validation_date ON public.timesheet_transaction USING btree (validation_date);
-
-
---
--- Name: idx_ts_workcentercode; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_ts_workcentercode ON public.timesheet_transaction USING btree (workcentercode);
 
 
 --
@@ -7923,6 +7709,13 @@ CREATE UNIQUE INDEX uq_shift_definition_effective_date_code ON public.shift_defi
 --
 
 CREATE UNIQUE INDEX uq_sow_documentno_default ON public.sow_documentno USING btree ("default") WHERE ("default" = true);
+
+
+--
+-- Name: uq_sow_standard_component_operation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_sow_standard_component_operation ON public.sow_standard USING btree (component_id, operation_no);
 
 
 --
@@ -8537,7 +8330,7 @@ ALTER TABLE ONLY public.progress_update_history
 --
 
 ALTER TABLE ONLY public.timesheet_transaction
-    ADD CONSTRAINT fk_timesheet_user FOREIGN KEY (serialnumber) REFERENCES public.usernfc(snssb) ON UPDATE CASCADE ON DELETE RESTRICT NOT VALID;
+    ADD CONSTRAINT fk_timesheet_user FOREIGN KEY (serialnumber) REFERENCES public.usernfc(snssb) ON UPDATE CASCADE ON DELETE RESTRICT;
 
 
 --

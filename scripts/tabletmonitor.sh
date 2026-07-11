@@ -3,12 +3,17 @@
 set -euo pipefail
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# ENV DB (biar gak blank di watch)
-export PGHOST=127.0.0.1
-export PGPORT=5433
-export PGUSER=tag
-export PGPASSWORD='@dminta9'
-export PGDATABASE=ptssb
+# ENV DB (biar gak blank di watch) — password dari env atau repo .env (S-R1, no hardcode)
+export PGHOST="${PGHOST:-127.0.0.1}"
+export PGPORT="${PGPORT:-5433}"
+export PGUSER="${PGUSER:-tag}"
+export PGDATABASE="${PGDATABASE:-ptssb}"
+if [[ -z "${PGPASSWORD:-}" ]]; then
+  ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env"
+  [[ -f "$ENV_FILE" ]] && PGPASSWORD="$(grep -m1 '^DB_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
+fi
+[[ -n "${PGPASSWORD:-}" ]] || { echo "PGPASSWORD tidak di-set (export PGPASSWORD atau isi DB_PASSWORD di repo .env)" >&2; exit 1; }
+export PGPASSWORD
 
 PSQL=/usr/bin/psql  # sesuaikan kalau beda: which psql
 

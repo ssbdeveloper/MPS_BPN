@@ -7,7 +7,7 @@ import {
 import { toast } from 'sonner';
 import { useCan } from '../../rbac';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const GROUP_LIMIT = 20;
 const fileUrl = (filePath) => {
   if (!filePath) return '#';

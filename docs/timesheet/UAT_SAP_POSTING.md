@@ -1,8 +1,14 @@
-# UAT Scenarios — TimesheetValidationPageV2: SAP Posting
+---
+status: approved
+tags: [uat, timesheet, sap]
+---
 
-  
+# UAT Scenarios — Timesheet Validation: SAP Posting
 
-**Module:** Timesheet Validation (V2) — SAP Inbound Post
+> Diselamatkan dari arsip 2026-07-11 (file lama `Untitled.md`; referensi halaman "V2"
+> diperbaiki — halaman aktif: `TimesheetValidationPage.jsx`).
+
+**Module:** Timesheet Validation — SAP Inbound Post
 
 **Feature:** `POST /timesheet/post-to-sap`
 

@@ -17,14 +17,29 @@ untuk koneksi dengan postgres gunakan
 - **State/Cache:** useState/useCallback + fetch native (TIDAK ada React Query / state library eksternal)
 - **Notifications:** sonner (toast)
 - **PWA:** vite-plugin-pwa + Workbox
- 
+
+---
+
+## Dokumentasi & Second Brain
+
+`docs/` adalah vault Obsidian (second brain proyek). **Baca `docs/KONVENSI.md` sebelum
+menulis dokumen apa pun.** Aturan inti:
+
+- **Sebelum mendesain/menjawab soal sistem:** cek `docs/concepts/` (pengetahuan menetap)
+  dan `docs/log/` (keputusan per sesi) — jangan litigasi ulang keputusan yang sudah tercatat.
+- **Setelah sesi kerja signifikan:** tulis `docs/log/YYYY-MM-DD-topik.md`, update baris di
+  `docs/PLANNING.md`, dan update note `docs/concepts/` yang tersentuh.
+- Papan kerja: `docs/PLANNING.md` · Peta dokumen: `docs/00-INDEX.md`.
+
 ---
  
 ## Corporate Color System
  
 > Status: **APPROVED & ACTIVE** (ditetapkan 2026-03-19)
-> Referensi implementasi: `src/pages/TIMESHEET/TimesheetValidationPage.jsx`
-> (catatan: file `TimesheetValidationPageV2.jsx` sudah tidak ada; jangan mencarinya)
+> Referensi implementasi (struktur/layout): `src/pages/TIMESHEET/TimesheetValidationPage.jsx`
+> (catatan: file `TimesheetValidationPageV2.jsx` sudah tidak ada; jangan mencarinya.
+> Warna tombol primary di file referensi masih standar lama `#0096c7` —
+> standar yang berlaku sekarang `#0077b6`, lihat Accessibility Rules di bawah)
  
 Palette ini adalah **standard corporate color** untuk seluruh UI aplikasi MPS Timesheet.
 Setiap komponen baru atau halaman baru HARUS mengikuti aturan ini.
@@ -36,9 +51,9 @@ Setiap komponen baru atau halaman baru HARUS mengikuti aturan ini.
 | Token Name         | CSS Variable             | HEX Value   | Keterangan                        |
 |--------------------|--------------------------|-------------|-----------------------------------|
 | `deep-twilight`    | `--deep-twilight`        | `#03045e`   | Terdalam — text kontras tinggi, border aktif |
-| `french-blue`      | `--french-blue`          | `#023e8a`   | Warna brand utama (employee group header) |
-| `bright-teal-blue` | `--bright-teal-blue`     | `#0077b6`   | Hover state button primary        |
-| `blue-green`       | `--blue-green`           | `#0096c7`   | **Primary action color** (button, link) |
+| `french-blue`      | `--french-blue`          | `#023e8a`   | Warna brand utama (employee group header, hover button primary) |
+| `bright-teal-blue` | `--bright-teal-blue`     | `#0077b6`   | **Primary action color** (bg button, link) — AA di atas putih (4.9:1) |
+| `blue-green`       | `--blue-green`           | `#0096c7`   | Accent besar, ikon, border aktif, teks besar — BUKAN teks kecil / bg tombol (3.4:1 vs putih, gagal AA) |
 | `turquoise-surf`   | `--turquoise-surf`       | `#00b4d8`   | Focus ring, spinner, highlight    |
 | `sky-aqua`         | `--sky-aqua`             | `#48cae4`   | Subtle accent, icon accent        |
 | `frosted-blue`     | `--frosted-blue`         | `#90e0ef`   | Border ringan, divider            |
@@ -110,7 +125,7 @@ Rasio penggunaan warna:
 | Hint / secondary          | `text-slate-500`        |
 | Placeholder input         | `placeholder-slate-400` |
 | Teks di atas biru gelap   | `text-white`            |
-| Teks accent / link        | `text-[#0096c7]`        |
+| Teks accent / link        | `text-[#0077b6]` — jangan `#0096c7` (3.4:1, gagal AA) |
 | Error text                | `text-red-600`          |
 | Success text              | `text-emerald-600`      |
 | Warning text              | `text-amber-600`        |
@@ -119,13 +134,15 @@ Rasio penggunaan warna:
  
 | Tipe              | Class                                                                 |
 |-------------------|-----------------------------------------------------------------------|
-| **Primary**       | `bg-[#0096c7] hover:bg-[#0077b6] text-white rounded-lg`              |
+| **Primary**       | `bg-[#0077b6] hover:bg-[#023e8a] text-white rounded-lg`              |
 | **Outline**       | `bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 rounded-lg` |
 | **Danger**        | `bg-red-600 hover:bg-red-500 text-white rounded-lg`                  |
 | **Success**       | `bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg`          |
 | **Ghost (di atas biru)** | `bg-white/20 hover:bg-white/35 text-white rounded-full`       |
 | **Disabled**      | Tambahkan `disabled:opacity-50 disabled:cursor-not-allowed`          |
 | **Active press**  | Tambahkan `active:scale-95 transition-all duration-150`              |
+| **Tinggi minimum** | Tambahkan `min-h-[44px]` — touch target WAJIB di layar sentuh (lihat Touch Target Rules) |
+| **Focus**         | Tambahkan `focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:outline-none` |
  
 #### Input & Form
  
@@ -147,16 +164,16 @@ className="bg-white border border-slate-200 text-slate-800 placeholder-slate-400
  
 ```jsx
 // Pending
-"px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200"
+"px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 border border-amber-200"
  
 // Validated
-"px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200"
+"px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200"
  
 // Deleted
-"px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200"
+"px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-700 border border-red-200"
  
 // SAP Reject
-"px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-700 border border-purple-200"
+"px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-700 border border-purple-200"
 ```
  
 ---
@@ -165,17 +182,26 @@ className="bg-white border border-slate-200 text-slate-800 placeholder-slate-400
  
 1. **Kontras minimum WCAG AA:**
    - Teks normal: rasio kontras ≥ 4.5:1 terhadap background
-   - Teks besar (≥ 18px / bold ≥ 14px): rasio ≥ 3:1
-   - `text-slate-800` di atas `bg-white` → ✅ memenuhi WCAG AA
-   - `text-white` di atas `#0096c7` → ✅ memenuhi WCAG AA
-   - **HINDARI** teks `#48cae4` (sky-aqua) di atas `bg-white` → kontras terlalu rendah
+   - Teks besar (≥ 24px, atau bold ≥ 18.66px): rasio ≥ 3:1
+   - `text-slate-800` di atas `bg-white` → ✅ ~14:1 (AA pass)
+   - `text-white` di atas `#0077b6` → ✅ 4.9:1 (AA pass) — **standar bg tombol primary**
+   - `text-white` di atas `#0096c7` → ❌ **3.4:1 — GAGAL AA untuk teks normal.**
+     Kombinasi ini hanya untuk teks besar/ikon — BUKAN untuk tombol `text-xs`
+   - `#0096c7` sebagai teks/link di atas putih → ❌ 3.4:1 — gunakan `#0077b6`
+   - Teks `#48cae4` (sky-aqua) di atas `bg-white` → ❌ jauh di bawah AA
  
-2. **Focus state wajib terlihat** — Semua elemen interaktif harus memiliki
-   `focus:ring-2 focus:ring-[#00b4d8]` atau setara. Jangan `focus:outline-none`
-   tanpa pengganti visual.
+2. **Focus state wajib terlihat** — Button/link/elemen interaktif:
+   `focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:outline-none`
+   (ring hanya muncul saat navigasi keyboard, tidak menyala saat tap).
+   Input/select tetap `focus:ring-2 focus:ring-[#00b4d8]`.
+   Jangan `outline-none` tanpa pengganti visual.
  
 3. **Jangan mengandalkan warna saja** — Status (pending/validated/deleted) harus
    ditunjukkan dengan label teks + warna, bukan warna saja.
+ 
+4. **Ukuran teks minimum 12px (`text-xs`)** untuk teks yang dibaca.
+   `text-[11px]` hanya untuk label uppercase kecil (badge/eyebrow).
+   `text-[10px]` ke bawah dilarang.
  
 ---
  
@@ -194,8 +220,8 @@ theme: {
       brand: {
         'deep-twilight':    '#03045e',
         'french-blue':      '#023e8a',
-        'bright-teal-blue': '#0077b6',
-        'blue-green':       '#0096c7',  // ← primary action
+        'bright-teal-blue': '#0077b6',  // ← primary action
+        'blue-green':       '#0096c7',
         'turquoise-surf':   '#00b4d8',  // ← focus ring
         'sky-aqua':         '#48cae4',
         'frosted-blue':     '#90e0ef',
@@ -209,12 +235,16 @@ theme: {
  
 Setelah ditambahkan, bisa digunakan sebagai:
 ```jsx
-<button className="bg-brand-blue-green hover:bg-brand-bright-teal-blue text-white">
+<button className="bg-brand-bright-teal-blue hover:bg-brand-french-blue text-white">
   Primary Action
 </button>
 ```
  
-> **Catatan:** Selama belum ditambahkan ke config, gunakan inline `bg-[#0096c7]` — ini valid di Tailwind v3.
+> **Catatan:** Selama belum ditambahkan ke config, gunakan inline `bg-[#0077b6]` — ini valid di Tailwind v3.
+> Saat menambahkan palet ini ke config, sekaligus rencanakan deprecation token legacy
+> `primary (#007bff)/success/danger/warning/secondary` dan `boxShadow 3d-*` yang masih ada
+> di `tailwind.config.js` dan dipakai komponen lama (`ui/Button`, `forms/Input`, `ui/Switch`,
+> `tables/Table`) — jangan pakai token legacy itu untuk UI baru.
  
 ---
  
@@ -232,7 +262,7 @@ Setelah ditambahkan, bisa digunakan sebagai:
       Back
     </button>
     <h1 className="text-base font-extrabold text-slate-800">Page Title</h1>
-    <button className="bg-[#0096c7] hover:bg-[#0077b6] text-white
+    <button className="bg-[#0077b6] hover:bg-[#023e8a] text-white
                        px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95">
       Action
     </button>
@@ -264,23 +294,23 @@ Setelah ditambahkan, bisa digunakan sebagai:
 // Pending (amber)
 <div className="rounded-xl px-2 py-3 text-center border shadow-sm
                 bg-amber-50 border-amber-200">
-  <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-600">Pending</div>
+  <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">Pending</div>
   <div className="text-base font-extrabold text-amber-700">12 Act</div>
-  <div className="text-[10px] text-gray-500">45.5 hrs</div>
+  <div className="text-[11px] text-gray-500">45.5 hrs</div>
 </div>
  
 // Validated (emerald)
 <div className="rounded-xl px-2 py-3 text-center border shadow-sm
                 bg-emerald-50 border-emerald-200">
-  <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600">Validated</div>
+  <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">Validated</div>
   <div className="text-base font-extrabold text-emerald-700">30 Act</div>
 </div>
  
 // Info (brand blue)
 <div className="rounded-xl px-2 py-3 text-center border shadow-sm"
      style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
-  <div className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#0077b6' }}>Total Hrs</div>
-  <div className="text-base font-extrabold" style={{ color: '#0077b6' }}>120.5</div>
+  <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: '#023e8a' }}>Total Hrs</div>
+  <div className="text-base font-extrabold" style={{ color: '#023e8a' }}>120.5</div>
 </div>
 ```
  
@@ -295,27 +325,10 @@ Setelah ditambahkan, bisa digunakan sebagai:
  
 ---
  
-### 7. Anti-Patterns (JANGAN DILAKUKAN)
- 
-```jsx
-// ❌ Background halaman dengan warna gelap
-<div style={{ background: 'linear-gradient(160deg, #03045e 0%, #0077b6 100%)' }}>
- 
-// ❌ Header gelap dengan text putih
-<header className="bg-blue-900 text-white">
- 
-// ❌ Filter panel gelap / semi-transparan di atas background gelap
-<div style={{ background: 'rgba(3,4,94,0.55)', backdropFilter: 'blur(8px)' }}>
- 
-// ❌ Input dengan background gelap
-<input className="bg-white/10 text-white placeholder-white/50">
- 
-// ❌ Teks berwarna terang di atas background putih (kontras rendah)
-<span className="text-[#48cae4]">Label di atas bg-white</span>
- 
-// ❌ Menggunakan deep-twilight / french-blue sebagai background besar
-<div className="bg-[#03045e]"> {/* seluruh halaman */}
-```
+### 7. Anti-Patterns
+
+> Lihat section **"Anti-Patterns → Perbaikan"** di bawah — versi berpasangan ❌/✅
+> (setiap larangan ada padanan yang benar). Jangan duplikasi daftarnya di sini.
  
 ---
  
@@ -323,6 +336,8 @@ Setelah ditambahkan, bisa digunakan sebagai:
  
 > Tambahkan ke `src/index.css` atau file CSS global sebelum Tailwind directives.
 > Wajib ada agar `var(--...)` bisa digunakan di inline style.
+> **Status: BELUM ada di `index.css`** (diverifikasi 2026-07-11) — tambahkan blok ini
+> saat pertama kali menyentuh `index.css` atau saat butuh `var(--...)`.
  
 ```css
 /* src/index.css */
@@ -334,8 +349,8 @@ Setelah ditambahkan, bisa digunakan sebagai:
   /* Corporate Blue Palette */
   --deep-twilight:    #03045e;
   --french-blue:      #023e8a;
-  --bright-teal-blue: #0077b6;
-  --blue-green:       #0096c7;   /* ← primary action */
+  --bright-teal-blue: #0077b6;   /* ← primary action */
+  --blue-green:       #0096c7;
   --turquoise-surf:   #00b4d8;   /* ← focus ring */
   --sky-aqua:         #48cae4;
   --frosted-blue:     #90e0ef;
@@ -471,11 +486,12 @@ Setelah ditambahkan, bisa digunakan sebagai:
 ### Teks accent / link
  
 ```jsx
-// ❌ Sky-aqua di atas putih — kontras terlalu rendah (WCAG FAIL)
+// ❌ Sky-aqua ATAU blue-green sebagai teks di atas putih — dua-duanya gagal AA
 <span className="text-[#48cae4]">Label di atas bg-white</span>
+<span className="text-[#0096c7]">Link di atas bg-white (3.4:1 — FAIL)</span>
  
-// ✅ Gunakan blue-green minimum untuk teks di atas putih
-<span className="text-[#0096c7]">Label di atas bg-white</span>
+// ✅ Gunakan bright-teal-blue untuk teks/link di atas putih (4.9:1 — AA pass)
+<span className="text-[#0077b6]">Label di atas bg-white</span>
 ```
  
 ### Deep-twilight / french-blue sebagai background besar
@@ -550,7 +566,7 @@ Setelah ditambahkan, bisa digunakan sebagai:
     </button>
     <h1 className="text-sm md:text-base font-extrabold text-slate-800">Page Title</h1>
     <button className="min-h-[44px] flex items-center
-                       bg-[#0096c7] hover:bg-[#0077b6] text-white
+                       bg-[#0077b6] hover:bg-[#023e8a] text-white
                        px-3 md:px-4 py-1.5 rounded-lg text-xs font-semibold
                        transition-all active:scale-95">
       Action
@@ -668,7 +684,7 @@ Setelah ditambahkan, bisa digunakan sebagai:
                          transition-all active:scale-95">
         Batal
       </button>
-      <button className="bg-[#0096c7] hover:bg-[#0077b6] text-white
+      <button className="bg-[#0077b6] hover:bg-[#023e8a] text-white
                          px-4 py-2 rounded-lg text-sm font-semibold
                          transition-all active:scale-95">
         Simpan
@@ -696,7 +712,7 @@ Setelah ditambahkan, bisa digunakan sebagai:
 <p className="text-xs md:text-sm text-slate-700">
  
 // Hint / secondary
-<span className="text-[10px] md:text-xs text-slate-500">
+<span className="text-[11px] md:text-xs text-slate-500">
  
 // Mono / kode (no. TS, kode operasi)
 <span className="font-mono text-xs text-slate-600">
@@ -748,8 +764,170 @@ function useOrientation() {
 const isLandscape = useOrientation();
 // Tapi UTAMAKAN CSS Tailwind (md:) — gunakan hook ini hanya untuk logic JS
 ```
- 
- 
+
+---
+
+## UI Engineering Standards (Professional Grade)
+
+> Corporate Color System mengatur *tampilan*; section ini mengatur *perilaku dan
+> cara membangun* UI. Berlaku untuk semua halaman/komponen baru, dan setiap kali
+> halaman lama disentuh.
+
+### 1. Component-First (WAJIB — anti-boilerplate)
+
+Jangan menulis ulang string className panjang di tiap halaman. Urutan kerja SELALU:
+
+1. **Cek dulu `apps/web/src/components/`** — kalau komponennya sudah ada, pakai/extend.
+2. Kalau belum ada dan polanya dipakai (atau akan dipakai) di ≥2 tempat →
+   **buat komponennya dulu** di `components/ui/` (atau `forms/`, `tables/`, `layout/`),
+   baru pakai di halaman.
+3. Saat melihat markup duplikat ≥2× ketika mengedit halaman, **rekomendasikan
+   ekstraksi komponen** secara eksplisit — jangan menambah salinan ketiga.
+
+Aturan API komponen:
+- Varian lewat props (`variant="primary|outline|danger|success|ghost"`, `size`),
+  BUKAN lewat className bebas dari pemanggil.
+- `className` dari luar hanya untuk layout (margin, width, grid placement) —
+  bukan override warna/radius/shadow, supaya sistem tetap konsisten.
+- Komponen UI murni presentasional; logic/fetch tetap di halaman (Critical Rule #3).
+
+**Inventaris komponen saat ini (status per 2026-07-11):**
+
+| Komponen | Status |
+|---|---|
+| `ui/Button.jsx`, `forms/Input.jsx`, `ui/Switch.jsx`, `tables/Table.jsx` | ⚠️ Ada, tapi masih gaya LAMA (`shadow-3d`, `primary #007bff`) — JANGAN dijadikan acuan visual; migrasikan ke standar ini saat disentuh |
+| `ui/Modal.jsx`, `ui/ConfirmationModal.jsx`, `ui/Card.jsx`, `layout/PageContainer.jsx` | ✅ Ada — pakai ini; jangan bikin modal/card inline baru |
+| `dashboard/KpiCard.jsx`, `dashboard/ChartErrorBoundary.jsx`, `dashboard/*Chart.jsx` | ✅ Ada — chart baru ikut pola ini + aturan Dataviz (§8) |
+
+**Komponen target — buat saat pertama kali dibutuhkan, jangan tulis inline:**
+`Badge`/`StatusPill`, `EmptyState`, `Skeleton`, `Spinner`/`LoadingButton`,
+`PageHeader` (back + title + action standar), `SearchInput`, `Select`,
+`StatCard`, `FilterBar`, `OfflineIndicator`.
+
+### 2. Offline-First — Larangan Aset Eksternal (WAJIB)
+
+Aplikasi berjalan di jaringan pabrik yang bisa terputus dari internet. Semua aset
+HARUS berasal dari bundle sendiri (npm → Vite) atau origin sendiri.
+
+- ❌ Dilarang: `<link>`/`<script>`/`@import` ke CDN apapun (unpkg, jsdelivr,
+  cdnjs, dll.), Google Fonts, ikon/gambar hotlink dari URL eksternal.
+- ✅ Library selalu via npm dan di-bundle Vite: `lucide-react` untuk ikon,
+  `echarts`/`recharts` untuk chart, dst.
+- ✅ Font: **system font stack** (nol network, render instan — lihat §3). Kalau
+  suatu saat butuh font brand → self-host via package `@fontsource/*` (ikut
+  bundle), BUKAN link CDN.
+- Entry `google-fonts-cache` di `vite.config.js` (workbox) adalah sisa konfigurasi
+  lama — tidak ada referensi Google Fonts di aplikasi; hapus saat menyentuh file itu.
+
+### 3. Typography & Angka
+
+- Font stack standar (ganti `Arial` di `index.css` saat menyentuh file itu):
+  ```css
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  ```
+- **Kolom angka WAJIB `tabular-nums`** (class Tailwind) — jam, qty, durasi,
+  no. order. Tanpa ini digit tidak sejajar antar-baris dan kolom sulit di-scan.
+- Ukuran minimum: 12px (`text-xs`) untuk teks yang dibaca; `text-[11px]` hanya
+  label uppercase kecil (badge/eyebrow); `text-[10px]` ke bawah dilarang.
+
+### 4. State Standar: Loading / Empty / Error (WAJIB di setiap halaman fetch)
+
+| State | Pola |
+|---|---|
+| Loading konten | Skeleton (`animate-pulse`, blok abu-abu seukuran konten) — bukan spinner satu layar |
+| Loading aksi | Spinner kecil DI DALAM tombol + `disabled` — jangan blok seluruh layar |
+| Empty | Ikon + 1 kalimat penjelasan + aksi utama ("Belum ada timesheet hari ini" + tombol buat) — jangan tabel/area kosong tanpa keterangan |
+| Error fetch | Pesan inline di area konten + tombol "Coba lagi" — JANGAN hanya toast (toast hilang, halaman tetap kosong) |
+| Error form | Inline di bawah field (`border-red-400` + `text-red-600 text-xs`); fokus pindah ke field pertama yang error |
+
+Aturan toast (sonner):
+- Toast hanya untuk HASIL aksi async: "Timesheet tersimpan", "Gagal posting SAP: <sebab>".
+- Toast error menyebut penyebab + apa yang bisa dilakukan user; jangan generik "Error!".
+- JANGAN toast untuk validasi form (inline) atau error fetch halaman (inline + retry).
+- Copy konsisten dengan label tombol: tombol "Simpan" → toast "Tersimpan"
+  (bukan "Submit berhasil"); kata kerja aktif, sentence case.
+
+### 5. Motion
+
+- Durasi: hover/press **150ms**; dropdown/panel **200ms**; modal/drawer **250–300ms**.
+  Masuk `ease-out`, keluar `ease-in`.
+- framer-motion hanya untuk transisi bermakna (modal, reorder list, page
+  transition). Untuk hover/press cukup Tailwind `transition-*`.
+- **WAJIB hormati `prefers-reduced-motion`**: `motion-reduce:transition-none
+  motion-reduce:transform-none` (Tailwind) atau `useReducedMotion()` (framer-motion).
+- Animasi berjalan terus (pulse/spin) hanya untuk status loading yang nyata.
+
+### 6. Focus & Keyboard
+
+- Button/link: `focus-visible:ring-2 focus-visible:ring-[#00b4d8]
+  focus-visible:outline-none` (ring hanya saat keyboard). Input: tetap `focus:ring-2`.
+- Modal WAJIB pakai `ui/Modal.jsx` (jangan modal inline): fokus pindah ke modal
+  saat buka, `Escape` menutup, fokus kembali ke tombol pemicu saat tutup,
+  `role="dialog" aria-modal="true"`.
+- Elemen klik-able = `<button>`, bukan `<div onClick>`. Kalau terpaksa div:
+  `role="button" tabIndex={0}` + handler Enter/Space.
+
+### 7. Z-Index Scale
+
+| Layer | Class |
+|---|---|
+| Dropdown / popover | `z-30` |
+| Sticky header / toolbar | `z-40` |
+| Modal overlay + modal | `z-50` |
+| Toast (sonner) | default sonner (di atas modal) — jangan diubah |
+
+Jangan pakai nilai arbitrary (`z-[999]`). Butuh layer baru → tambahkan ke tabel ini.
+
+### 8. Chart & Dataviz (ECharts + Recharts)
+
+Palet kategorikal standar — **urutan TETAP, sudah tervalidasi colorblind-safe
+(ΔE CVD ≥ 19) dan kontras ≥ 3:1 di atas putih**. Seri ke-1 selalu warna ke-1, dst:
+
+| Urutan | Hex | Nama |
+|---|---|---|
+| 1 | `#0077b6` | biru brand |
+| 2 | `#b45309` | amber tua |
+| 3 | `#7c3aed` | violet |
+| 4 | `#0d9488` | teal |
+| 5 | `#be185d` | magenta |
+| 6 | `#4d7c0f` | olive |
+
+- **> 6 seri** → gabungkan sisanya jadi "Lainnya" (`#94a3b8`) atau pecah jadi
+  small multiples. Jangan generate hue baru.
+- **Warna mengikuti entitas, bukan urutan render** — filter yang mengubah jumlah
+  seri tidak boleh mengecat ulang seri yang tersisa.
+- Sequential (magnitude/heatmap): satu hue biru, terang→gelap:
+  `#caf0f8 → #90e0ef → #00b4d8 → #0077b6 → #023e8a`. Jangan rainbow.
+- Diverging (di atas/bawah target): `#0077b6` ↔ `#b45309`, titik tengah netral
+  `#e2e8f0`.
+- Warna status (emerald/amber/red) HANYA untuk makna status — jangan dipakai
+  sebagai warna seri biasa.
+- **Satu sumbu Y per chart** — dilarang dual-axis. Dua ukuran beda skala →
+  dua chart bertumpuk / small multiples.
+- ≥ 2 seri wajib legend; jangan tempel angka di setiap titik (label selektif
+  saja); teks label/axis pakai warna teks slate — bukan warna seri; grid tipis
+  `#e2e8f0`.
+- Tooltip/hover wajib aktif di semua chart (ECharts `tooltip`, Recharts `<Tooltip>`).
+
+### 9. PWA / Offline UX
+
+- Sediakan indikator offline global (komponen `OfflineIndicator`, listen event
+  `online`/`offline`) — user harus tahu sedang offline SEBELUM kehilangan input.
+- Data yang tampil dari cache (NetworkFirst) saat offline diberi tanda:
+  "Data tersimpan — terakhir diperbarui HH:mm".
+- Aksi tulis saat offline: tolak langsung dengan pesan jelas ("Tidak ada koneksi —
+  perubahan belum disimpan"), kecuali fitur antrian offline memang dibangun.
+
+### 10. Status Implementasi Design System (per 2026-07-11 — JANGAN berasumsi)
+
+| Item | Standar (dokumen ini) | Kondisi kode nyata |
+|---|---|---|
+| CSS vars `:root` | blok di atas | ❌ Belum ada di `index.css` — tambahkan saat menyentuh file itu |
+| Palet brand di `tailwind.config.js` | §5 Corporate Color | ❌ Belum — config masih token legacy `primary #007bff` + `shadow-3d` (jangan dipakai UI baru) |
+| `ui/Button`, `forms/Input`, `ui/Switch`, `tables/Table` | Component-First §1 | ⚠️ Ada tapi gaya lama — migrasikan saat disentuh |
+| Font | system stack (§3) | ❌ `index.css` masih `Arial` |
+| Warna primary button | `#0077b6` (AA 4.9:1) | ⚠️ ±363 pemakaian `#0096c7` di 58 file (standar lama). Migrasi bertahap: saat mengedit sebuah halaman, samakan SELURUH tombol primary halaman itu ke `#0077b6` — jangan campur dua warna primary dalam satu halaman |
+
 ---
 
 ## Tech Stack
@@ -762,7 +940,7 @@ const isLandscape = useOrientation();
 | Router | React Router v7.13 | `createBrowserRouter` |
 | State Management | useState + useCallback | No Redux/Zustand/MobX — logic stays in components |
 | Notifications | sonner v2 | `Toaster` in `App.jsx` with `richColors` |
-| PWA | vite-plugin-pwa + Workbox v7 | Runtime caching: Google Fonts (CacheFirst), /api/* (NetworkFirst 5min) |
+| PWA | vite-plugin-pwa + Workbox v7 | Runtime caching /api/* (NetworkFirst 5min). Entry `google-fonts-cache` di vite.config = sisa lama — app TIDAK memakai Google Fonts (offline-first), boleh dihapus saat menyentuh vite.config.js |
 | Charts | ECharts v6 + Recharts v3 | Both used across dashboard |
 | Drag & Drop | @dnd-kit (core, sortable, modifiers) | |
 | Icons | lucide-react v1 | |
@@ -771,7 +949,7 @@ const isLandscape = useOrientation();
 | Backend Python | FastAPI (Python 3.11, uvicorn) | In `apps/fastapi-msproject/main.py` — SOW plan-sync + antrian TTS (MS Project .mpp sync sebenarnya di Express `/ms-project`) |
 | Database | PostgreSQL 15 | + Microsoft SQL Server (SSB_OEE for machine hours) |
 | Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, HTTP→HTTPS redirect, routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/`, SPA fallback |
-| Containerization | Docker Compose | 12 services — lihat tabel "Docker Compose Services" di bawah |
+| Containerization | Docker Compose | 13 services — lihat tabel "Docker Compose Services" di bawah |
 | API Client | fetch (native) | No Axios |
 | Dev port (frontend) | 5173 | Proxied `/api` → `http://localhost:3001` |
 | API port | 3001 | |
@@ -826,7 +1004,7 @@ MPS2/
 +- database/
 �  +- migrations/                   # api/ (timestamped) + legacy/ (tidak berurut)
 �  +- seeds/                        # Seed data and seed helpers
-�  +- schema/                       # Schema dumps (schema.sql, local_schema.sql, dll — saling drift, hati-hati)
+�  +- schema/                       # schema_prod.sql = SATU-SATUNYA dump kanonik (regenerate dari prod tiap batch migrasi)
 �  +- machinehours/                 # CSV data + import scripts machine hours
 �  +- toolsmanagement/              # SQL domain tools management
 �  +- paket_kumplit/, query_use/    # SQL/data pendukung
@@ -974,7 +1152,6 @@ MPS2/
 | `order` | Materialized view aggregating SOW by order_no |
 | `usernfc` | NFC user master data |
 | `workcenter` | Workcenter definitions |
-| `mst_job` | Job/master data (order_no, workcenter, status, progress) |
 | `parts` | Part master data |
 | `operations` | Operation definitions |
 | `components` | Component definitions |
@@ -1000,7 +1177,7 @@ MPS2/
 
 - **Trigram indexes** on `full_name`, `order_no`, `serialnumber`, `part_name` (pg_trgm extension)
 - **Foreign keys:** process control → timesheet, SOW ↔ parts/operations; FK `timesheet_transaction.serialnumber → usernfc.snssb` berstatus `NOT VALID`
-- **PERINGATAN:** `database/schema/schema.sql` (20 tabel) dan `local_schema.sql` (38 tabel) saling drift; tidak ada migration runner/ledger — migrasi di `database/migrations/api/` diterapkan manual.
+- **Schema kanonik:** `database/schema/schema_prod.sql` (regenerate dari prod setelah tiap batch migrasi). Migration ledger: tabel `schema_migrations` + `node database/migrate.js` (per 2026-07-11); dump lama yang saling drift sudah dihapus.
 
 ---
 
@@ -1028,7 +1205,7 @@ MPS2/
 
 ## Critical Rules
 
-1. **Ikuti Corporate Color System** — Semua halaman dan komponen baru HARUS menggunakan aturan warna di atas. Referensi: `TimesheetValidationPage.jsx`.
+1. **Ikuti Corporate Color System + UI Engineering Standards** — Semua halaman dan komponen baru HARUS mengikuti keduanya. Referensi struktur/layout: `TimesheetValidationPage.jsx` (warna tombol primary di file itu masih standar lama `#0096c7`; standar berlaku `#0077b6`).
 
 2. **Light theme only** — Jangan gunakan dark background sebagai surface utama.
 
@@ -1047,5 +1224,11 @@ MPS2/
 9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
 
 10. **Environment variables (kunci utama):** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER`, `DB_PASSWORD`, `DB_PORT`, `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (**Asia/Makassar**). Selain itu `.env` root juga berisi kelompok: `SAP_INBOUND_*`, `SAP_STAGING_DB_*`, `SAP_STAGE_*`, `SQLSERVER_*`, `SRC_*`/`TGT_*` (+ varian per-plant `_BALIKPAPAN/_CIKUPA/_KUALA_KENCANA/_SEBAMBAN`), `EWS_*`, `AWS_PG*`, `VITE_API_URL`, `VITE_API_PROXY_TARGET`, `VITE_APP_VARIANT`, `VITE_TTS_PROXY_TARGET`, `CORS_ORIGIN`, `DRAWINGS_PATH`, `clientid_ph3/qh3`, `clientsecret_ph3/qh3`, `tokenurl`, `url_ph3/qh3`.
+
+11. **Component-first (anti-boilerplate)** — Sebelum menulis UI, cek `apps/web/src/components/`. Pakai/extend komponen yang ada; kalau pola akan dipakai ≥2 tempat, buat komponennya dulu di `components/`. Saat melihat markup duplikat ≥2×, WAJIB merekomendasikan ekstraksi komponen — jangan menambah salinan baru. Detail: "UI Engineering Standards §1".
+
+12. **Offline-first — dilarang aset eksternal** — Tidak boleh ada CDN, Google Fonts, atau URL aset eksternal apapun di frontend. Semua library via npm (di-bundle Vite); font = system stack. Detail: "UI Engineering Standards §2".
+
+13. **Aksesibilitas terukur** — Bg tombol primary & warna link di atas putih: `#0077b6` (4.9:1, AA). `#0096c7` GAGAL AA untuk teks kecil (3.4:1) — hanya untuk ikon/teks besar/border. Teks minimum 12px. `focus-visible:` untuk button/link, `focus:` untuk input. Touch target ≥ 44px.
  
  

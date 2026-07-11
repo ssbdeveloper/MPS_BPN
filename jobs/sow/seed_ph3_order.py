@@ -5,6 +5,7 @@ Data mulai dari row 3 (row 1 = header kolom, row 2 = nama field SAP).
 Optimized untuk data besar (300k+ rows) menggunakan bulk insert.
 """
 
+import os
 import sys
 from pathlib import Path
 import openpyxl
@@ -12,7 +13,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 # ---------------------------------------------------------------------------
-# Config
+# Config — env-driven (S-R1): password must come from env or the root .env.
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = next(
@@ -22,12 +23,24 @@ PROJECT_ROOT = next(
 EXCEL_FILE = str(PROJECT_ROOT / "samples" / "excel" / "List Final Order.xlsx")
 DATA_START_ROW = 3  # row 1 = header, row 2 = SAP field names, row 3 = data
 
+_env_file = PROJECT_ROOT / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+_password = os.environ.get("PG_PASSWORD") or os.environ.get("DB_PASSWORD")
+if not _password:
+    raise SystemExit("Missing required env var PG_PASSWORD/DB_PASSWORD — set it in the environment or the repo root .env")
+
 DB_CONFIG = {
-    "host":     "100.86.231.55",
-    "port":     5433,
-    "dbname":   "ptssb",
-    "user":     "tag",
-    "password": "@dminta9",
+    "host":     os.environ.get("PG_HOST", "100.86.231.55"),
+    "port":     int(os.environ.get("PG_PORT", "5433")),
+    "dbname":   os.environ.get("PG_DBNAME", "ptssb"),
+    "user":     os.environ.get("PG_USER") or os.environ.get("DB_USER") or "tag",
+    "password": _password,
 }
 
 TARGET_TABLE = "ph3_order"

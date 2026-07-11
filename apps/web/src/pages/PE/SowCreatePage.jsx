@@ -19,7 +19,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
 // Set VITE_ENABLE_EXISTING_SOW_HISTORY_LINK=true to restore the SOW History shortcut.
 const ENABLE_EXISTING_SOW_HISTORY_LINK = import.meta.env.VITE_ENABLE_EXISTING_SOW_HISTORY_LINK === 'false';
 export const normalizeProductionOrder = (value) => String(value ?? '').trim().replace(/-/g, '000');

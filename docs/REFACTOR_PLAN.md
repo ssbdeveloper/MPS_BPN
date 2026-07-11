@@ -1,3 +1,10 @@
+---
+status: executing
+tags: [plan, refactor]
+created: 2026-07-07
+updated: 2026-07-11
+---
+
   # MPS2 Large-Scale Refactor Plan
 
 **Date:** 2026-07-07 · **Scope:** database, API, scripts (Python/VBA/shell), frontend
@@ -287,20 +294,20 @@ Per-writer idempotency verdicts (all **READ**, direct or delegated):
 **Phase 0 — Verify before touching: ✅ DONE 2026-07-07.** All §8 queries ran against prod (verdicts inline there); B1 answered by data; B2–B6 still need your answer. Remaining gates below reflect this.
 
 **Phase 1 — Stop the bleeding (2–4 days):**
-1. S-R1 rotate + env-ify secrets (gate: none).
-2. A-R4 EWS timezone/rounding fixes (gate: none — two of these are one-liners).
-3. S-R5 double-post guard (gate: B4) + dispose of the 431 stale PENDING staging rows (§8.5 N1) before any poster is scheduled.
-4. F-R1 fix the four `localhost:3001` pages + literal-`/api` files.
-5. **NEW (from prod data):** `REINDEX` `mv_kanban_order_board` (§8.5 N2, reclaims ~440 MB) and fix the one blank `usernfc.snssb` row.
+1. S-R1 rotate + env-ify secrets (gate: none). **ENV-IFY DONE 2026-07-11** — hardcoded creds removed from `sync_machine_heartbeat.py`, `etl_machine_conf.py`(+ver1), `etl_machinehours.py`, `seed_ph3_order.py`, `tabletmonitor.sh`, `updatescript.sh`, `machineHoursSqlServerController.js`; doc/example passwords replaced with placeholders; tracked `.pyc` with embedded creds untracked+deleted; `jobs/.pycache_legacy`+`.venv` gitignored. Pattern: passwords required from env/root-`.env` (fail-fast), non-secret topology keeps in-code defaults; `OEE_SQLSERVER_PASSWORD` added to gitignored `.env`; heartbeat compose now uses `env_file`. **ROTATION still pending (user action)** — old passwords remain in git history until rotated.
+2. A-R4 EWS timezone/rounding fixes (gate: none — two of these are one-liners). **ROUNDING FIX DONE 2026-07-11** — `buildKpi` now evaluates status on the unrounded value (tz part was already done 07-07).
+3. S-R5 double-post guard (gate: B4) + ~~dispose of the 431 stale PENDING staging rows (§8.5 N1)~~ **backlog already gone 2026-07-11** (table empty — cleared by unknown actor, confirm via B3) before any poster is scheduled.
+4. F-R1 fix the four `localhost:3001` pages + literal-`/api` files. **DONE 2026-07-11** — the 4 PE pages now fall back to `'/api'`; literal-`/api` dashboard files left as-is (they match `VITE_API_URL=/api`, not broken).
+5. **NEW (from prod data):** ~~`REINDEX` `mv_kanban_order_board` (§8.5 N2, reclaims ~440 MB)~~ **DONE 2026-07-11** (445 MB → 2.2 MB, + 12 unused indexes dropped on timesheet/sow — see `docs/operations/INDEX_AUDIT_2026-07-11.md`) and fix the one blank `usernfc.snssb` row (still open).
 
 **Phase 2 — Auth + payroll path consolidation (1–2 weeks):**
 6. A-R1 token auth, bcrypt, `RBAC_ENFORCE=1`, CORS.
 7. A-R3 single SAP posting path (B1 answered: API path is live today; migrate deliberately — backlog first, poster scheduled, then retire `postToSap`).
-8. D-R3 payroll constraints — **ungated**: H2/H4/H5 all came back clean, so `VALIDATE CONSTRAINT fk_timesheet_user`, the `sow_standard` unique index, and `snssb` NOT NULL (after the 1-row fix) can be applied now.
+8. ~~D-R3 payroll constraints~~ **DONE 2026-07-11** (preconditions re-verified same day: 0 orphans, 0 dupes): `fk_timesheet_user` VALIDATED; `uq_sow_standard_component_operation` created CONCURRENTLY; junk `usernfc` row idrow=180 deleted (backed up) and `snssb SET NOT NULL`. Remaining from D-R3: deprecate `text` date columns (deferred — needs a writer sweep).
 9. S-R3 explicit scheduling (gate: B3).
 
 **Phase 3 — Foundations (1 week):**
-10. D-R1 migration ledger (now justified by a real incident — §8.5 N3); D-R2 canonical schema (seeded: `schema_prod_20260707.sql`, 92 tables); A-R2 pool unification; A-R5 hygiene batch; D-R4 retention for `machine_heartbeat` (confirmed ~11 GB/yr growth); resolve `production_operations` (§8.5 N4) and set a `backup`-schema policy (§8.5 N5).
+10. ~~D-R1 migration ledger~~ **DONE 2026-07-11**: `public.schema_migrations` created + backfilled (46 rows; `20260513_...cache.sql` marked SKIPPED per N3) + runner `database/migrate.js` (`--dry-run` verified: 0 pending); ~~D-R2 canonical schema~~ **DONE 2026-07-11**: regenerated as stable-named `database/schema/schema_prod.sql` (86 tables, backup-schema excluded, post-cleanup state) and the 7 drifted dumps (`schema.sql`, `local_schema.sql`, `bpn_schema.sql`, `init_database.sql`, `BEGIN;.sql`, `db.sql`, dated `schema_prod_20260707.sql`) deleted — CLAUDE.md + DEPLOYMENT.md updated; A-R2 pool unification; A-R5 hygiene batch; D-R4 retention for `machine_heartbeat` (confirmed ~11 GB/yr growth); resolve `production_operations` (§8.5 N4) and set a `backup`-schema policy (§8.5 N5).
 
 **Phase 4 — Debt paydown (ongoing, opportunistic):**
 10. S-R2 ETL version pruning; F-R3/F-R4/F-R5; S-R6 VBA relocation; D-R5 conventions.
@@ -322,6 +329,7 @@ Deliberately **not** recommended (over-engineering for one maintainer): TypeScri
 **H2 — `text` date columns disagree with `longdate_*`. → REFUTED.** 116,598 rows carry `date_checkin` (`DD/MM/YYYY`) and **0 mismatches** vs `longdate_checkin AT TIME ZONE 'Asia/Makassar'`. The text columns are redundant but consistent → deprecating them (D-R3) is safe, and this also confirms Makassar as the de-facto stored timezone.
 
 **H3 — Unbounded table growth. → CONFIRMED for `machine_heartbeat`.** 1.92M rows / **190 MB accumulated in 6 days** (oldest row 2026-07-01) ≈ ~11 GB/year at current machine count. `mch_machine_ping_log` is fine (81 MB, retention working). `ews.adoption_bucket_snapshot` tiny (216 kB). D-R4 retention is now a confirmed need, not a precaution.
+  **→ RESOLVED DIFFERENTLY 2026-07-11:** `sync_machine_heartbeat.py` had already been rewritten (post-plan) to aggregate ON SQL Server into `ews.machine_heartbeat_daily` (1 row/machine/day) — all code readers (ewsCalculator, ewsController) already point at the daily table. The raw mirror `public.machine_heartbeat` (2.71M rows / 268 MB, last write 2026-07-10 10:57, zero code/view/FK dependents — verified) was **DROPPED** with user approval. Retention job no longer needed. **⚠️ Operational flag:** `ews.machine_heartbeat_daily` last updated 2026-07-10 00:40 — the daily sync daemon appears to be **not running**; uptime_hmi reads stale data until `docker compose -f jobs/etl/docker-compose.heartbeat.yml up -d --build` is run on its host (after S-R1, the rebuild needs `OEE_SQLSERVER_PASSWORD` + `DB_PASSWORD` in that host's root `.env`).
 
 **H4 — Orphan operators / identity mismatches. → REFUTED (clean).** 0 orphan `serialnumber` in `timesheet_transaction`; 0 `mch_transaction.sn_employee` without a `usernfc` match; `usernfc.snssb` has 0 NULLs and exactly **1 blank-string row** (fix that one row, then add the constraint). **Consequence: `VALIDATE CONSTRAINT fk_timesheet_user` can run today — D-R3 is ungated.**
 
@@ -334,8 +342,10 @@ Deliberately **not** recommended (over-engineering for one maintainer): TypeScri
 ### 8.5 New findings from production data (not visible from code)
 
 **N1 — The SAP staging queue has never posted (payroll-operational).** All 431 staging rows are PENDING with the **same `created_at` (2026-07-06 16:45)** — one staging run yesterday, and `post_sap_staging.py` has never run against it. Meanwhile `log_timesheet_sap` has 394 rows → **the API `postToSap` path is the operationally live one; the queue is built but idle.** This answers §9 B1. Action: decide the 431 rows' fate (post them or mark SKIPPED) before enabling any scheduler, otherwise a 2-day-old backlog posts to SAP unannounced the moment S-R3 lands.
+  **→ UPDATE 2026-07-11:** `sap_timesheet_staging` is now **empty (0 rows)** — the 431 PENDING rows were removed by someone/something between 07-07 and 07-11 (not by this refactor work). The stale-backlog risk is moot, but **who cleared it is unknown** — worth confirming before scheduling any poster (fold into B3).
 
 **N2 — `mv_kanban_order_board` is pathologically bloated:** 3,194 rows = **2 MB of heap but 443 MB of index+TOAST** (445 MB total, the single largest relation in the DB). Almost certainly repeated `REFRESH MATERIALIZED VIEW CONCURRENTLY` bloating the unique index/TOAST. Fix: `REINDEX MATERIALIZED VIEW` (or drop/recreate) once, then either refresh non-concurrently off-hours or add a periodic reindex. Cheap, reclaims ~440 MB.
+  **→ RESOLVED 2026-07-11:** dropped the MV's 4 never-used secondary indexes (lifetime `idx_scan=0`; DDL backed up) and `REINDEX INDEX CONCURRENTLY` on the unique index. **445 MB → 2.2 MB.** Follow-up in the same session: `VACUUM (ANALYZE) mch_productiondata` (75k dead tuples → 0) and dropped **12 more lifetime-unused indexes** on `timesheet_transaction`/`sow` (~66 MB), two of which were literal duplicates of the hottest indexes (`idx_timesheet_lookup`, `idx_timesheet_transaction_workcenter_active`). Full evidence + EXPLAIN verdicts: `docs/operations/INDEX_AUDIT_2026-07-11.md`. **Remaining from N2's advice:** periodic reindex/refresh policy not yet scheduled — fold into S-R3.
 
 **N3 — Migration drift proven by example:** `mch_productiondata_detail` (the cache table from `20260513_create_mch_productiondata_detail_cache.sql`) **does not exist in prod**, while the MV it was meant to replace (`mv_mch_productiondata_detail`, 209 MB) is still live. At least one repo migration was never applied. This upgrades D-R1 (migration ledger) from "good practice" to "known incident".
 

@@ -913,11 +913,11 @@ function getAlertColor(kpis) {
 ```
 Implement EWS Detail per KPI di D:\website\MPS2.
 Baca spesifikasi di:
-  - D:\website\MPS2\docs\timesheet\EARLY_WARNING_SYSTEM_PLAN.md (arsitektur)
+  - (EARLY_WARNING_SYSTEM_PLAN.md dihapus 2026-07-11 — superseded oleh file ini; ada di git history)
   - D:\website\MPS2\docs\timesheet\EWS_DETAIL.md                   (file ini, detail per KPI)
 
 Database: PostgreSQL di 100.86.231.55:5433, database ptssb
-  user: tag, pass: @dminta9
+  user: tag, pass: <DB_PASSWORD — lihat .env, jangan commit password asli>
 
 Gunakan tunnel:
   python C:\Users\tee.san\tools\tailscale\tunnel.py 100.86.231.55 5433 5434

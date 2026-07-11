@@ -13,7 +13,7 @@ Cara 1: SOCKS5 Proxy Global (paling simpel)
        - Port: 5433
        - Database: ptssb
        - User: tag
-       - Password: @dmintag
+       - Password: <password — jangan commit password asli>
 
  Cara 2: SSH Tunnel (kalau server ada SSH)
 

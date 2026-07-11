@@ -25,33 +25,68 @@ Modes:
     python sync_machine_heartbeat.py --from 2026-01-01 --to 2026-07-09   # backfill a date range, then exit
     python sync_machine_heartbeat.py --days 3        # trailing window = last 3 days (default 2 = today+yesterday)
 
-Credentials are hardcoded per request.
+Credentials come from the environment (or the repo root .env). Required:
+    OEE_SQLSERVER_PASSWORD  — SQL Server SSB_OEE ("tag" family, 10.169.2.76)
+    DB_PASSWORD or PG_PASSWORD — PostgreSQL ptssb
+Optional overrides: OEE_SQLSERVER_HOST/DATABASE/USER, PG_HOST/PG_PORT/PG_DBNAME/PG_USER.
 """
 import argparse
 import logging
+import os
 import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
 import pymssql
 
 # ---------------------------------------------------------------------------
-# Hardcoded credentials
+# Config — env-driven (S-R1). Non-secret topology keeps in-code defaults;
+# passwords have NO default and fail fast. A dependency-free .env loader keeps
+# manual runs working on any machine that has the repo root .env.
 # ---------------------------------------------------------------------------
+def _load_root_env():
+    base = Path(__file__).resolve().parent
+    for path in [base, *base.parents]:
+        env_file = path / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+            return
+
+_load_root_env()
+
+def _env(*names, default=None, required=False):
+    for name in names:
+        val = os.environ.get(name)
+        if val not in (None, ""):
+            return val
+    if default is not None:
+        return default
+    if required:
+        raise SystemExit(
+            f"Missing required env var {names[0]} — set it in the environment or the repo root .env"
+        )
+    return None
+
 SQLSERVER_CONFIG = {
-    "server":   "10.169.2.76,61878",
-    "database": "SSB_OEE",
-    "username": "tag",
-    "password": "@dminta9",
+    "server":   _env("OEE_SQLSERVER_HOST", default="10.169.2.76,61878"),
+    "database": _env("OEE_SQLSERVER_DATABASE", default="SSB_OEE"),
+    "username": _env("OEE_SQLSERVER_USER", default="tag"),
+    "password": _env("OEE_SQLSERVER_PASSWORD", required=True),
 }
 
 POSTGRES_CONFIG = {
-    "host":     "10.169.1.12",
-    "port":     5433,
-    "dbname":   "ptssb",
-    "user":     "tag",
-    "password": "@dminta9",
+    "host":     _env("PG_HOST", default="10.169.1.12"),
+    "port":     int(_env("PG_PORT", default="5433")),
+    "dbname":   _env("PG_DBNAME", default="ptssb"),
+    "user":     _env("PG_USER", "DB_USER", default="tag"),
+    "password": _env("PG_PASSWORD", "DB_PASSWORD", required=True),
 }
 
 SOURCE_TABLE = "dbo.MachineHeartbeat"

@@ -14,30 +14,61 @@ Usage:
 """
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
 import pyodbc
 
 # ---------------------------------------------------------------------------
-# Credentials - hardcoded per task_etl.md
+# Config — env-driven (S-R1). Passwords have NO default and fail fast;
+# non-secret topology keeps in-code defaults. Reads repo root .env when present.
 # ---------------------------------------------------------------------------
+def _load_root_env():
+    base = Path(__file__).resolve().parent
+    for path in [base, *base.parents]:
+        env_file = path / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+            return
+
+_load_root_env()
+
+def _env(*names, default=None, required=False):
+    for name in names:
+        val = os.environ.get(name)
+        if val not in (None, ""):
+            return val
+    if default is not None:
+        return default
+    if required:
+        raise SystemExit(
+            f"Missing required env var {names[0]} — set it in the environment or the repo root .env"
+        )
+    return None
+
 SQLSERVER_CONFIG = {
-    "server":   "10.169.2.76,61878",
-    "database": "SSB_OEE",
-    "username": "tag",
-    "password": "@dminta9",
-    "driver":   "ODBC Driver 17 for SQL Server",
+    "server":   _env("OEE_SQLSERVER_HOST", default="10.169.2.76,61878"),
+    "database": _env("OEE_SQLSERVER_DATABASE", default="SSB_OEE"),
+    "username": _env("OEE_SQLSERVER_USER", default="tag"),
+    "password": _env("OEE_SQLSERVER_PASSWORD", required=True),
+    "driver":   _env("SQLSERVER_DRIVER", default="ODBC Driver 17 for SQL Server"),
 }
 
 POSTGRES_CONFIG = {
-    "host":     "100.86.231.55",
-    "port":     5433,
-    "dbname":   "ptssb",
-    "user":     "tag",
-    "password": "@dminta9",
+    "host":     _env("PG_HOST", default="100.86.231.55"),
+    "port":     int(_env("PG_PORT", default="5433")),
+    "dbname":   _env("PG_DBNAME", default="ptssb"),
+    "user":     _env("PG_USER", "DB_USER", default="tag"),
+    "password": _env("PG_PASSWORD", "DB_PASSWORD", required=True),
 }
 
 BATCH_SIZE = 5000

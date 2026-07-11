@@ -1352,7 +1352,9 @@ function buildKpi(key, calculation, thresholds) {
     owner: thresholds[key]?.owner || def.owner,
     group: def.group,
     dimension: def.dimension,
-    status: statusForValue(key, value, thresholds),
+    // Status dievaluasi pada nilai UNROUNDED (A-R4): 94.95 harus "watch" meski
+    // tampil 95.0 — round1 hanya untuk display.
+    status: statusForValue(key, raw === undefined ? null : raw, thresholds),
     helper: calculation.helper,
     detail: calculation.detail,
   };
