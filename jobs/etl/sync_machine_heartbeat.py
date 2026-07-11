@@ -177,7 +177,7 @@ def ensure_target_table(pg_conn, machineno_type: str) -> None:
 # ---------------------------------------------------------------------------
 UPSERT_SQL = f"""
 INSERT INTO {TARGET_TABLE}
-    (work_date, machineno, pings, up_pings, uptime_pct, avg_heartbeat, updated_at)
+    (work_date, machineno, pings, up_pings, uptime_pct, avg_heartbeat)
 VALUES %s
 ON CONFLICT (work_date, machineno) DO UPDATE SET
     pings         = EXCLUDED.pings,
