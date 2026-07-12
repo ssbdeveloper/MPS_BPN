@@ -2,6 +2,7 @@ const ewsCalculator = require("../services/ewsCalculator");
 const ewsRealtimeHub = require("../services/ewsRealtimeHub");
 const ewsTtsNotifier = require("../services/ewsTtsNotifier");
 const ewsIssueGenerator = require("../services/ewsIssueGenerator");
+const ewsIssueDrill = require("../services/ewsIssueDrill");
 const { resolveTimezone } = require("../config/timezone");
 const db = global.pool || require("../db");
 
@@ -1609,6 +1610,22 @@ async function resolveIssueLog(req, res) {
   }
 }
 
+// Phase 6 — drill-through: culprit records di balik satu issue (READ-ONLY).
+// Logika di services/ewsIssueDrill.js; predikat reuse persis kalkulasi KPI-nya.
+async function getIssueRecords(req, res) {
+  try {
+    const result = await ewsIssueDrill.getIssueRecords(getPool(), req.params.issueKey, {
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    if (result.notFound) return res.status(404).json({ error: "issue tidak ditemukan" });
+    res.json(result);
+  } catch (err) {
+    console.error("ews issue drill error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // Manual/on-demand generation (the snapshot job also runs this autonomously).
 async function generateIssueLog(_req, res) {
   const client = await getPool().connect();
@@ -1633,6 +1650,7 @@ module.exports = {
   getIssueLog,
   resolveIssueLog,
   generateIssueLog,
+  getIssueRecords,
   getActions,
   syncActions,
   resolveAction,

@@ -12,6 +12,8 @@ router.get("/issues", controller.getIssues);
 router.get("/issue-log", controller.getIssueLog);
 router.put("/issue-log/:id/resolve", controller.resolveIssueLog);
 router.post("/issue-log/generate", controller.generateIssueLog);
+// Phase 6 — drill-through ke culprit records (read-only; issueKey di-URL-encode oleh FE)
+router.get("/issue/:issueKey/records", controller.getIssueRecords);
 router.get("/actions", controller.getActions);
 router.post("/actions/sync", controller.syncActions);
 router.put("/actions/:id/resolve", controller.resolveAction);

@@ -14,6 +14,7 @@ import {
   Minus,
   Moon,
   RefreshCw,
+  Search,
   ShieldCheck,
   Sun,
   TrendingDown,
@@ -1820,6 +1821,7 @@ const RESOLUTION_NOTE_MIN = 5;
 // /ews/issue-log/:id/resolve. Closing always goes through the dialog — a justification is
 // mandatory in the API and enforced by a CHECK constraint, so a bare click cannot succeed.
 function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHistory }) {
+  const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [pending, setPending] = useState(null); // the issue awaiting a justification
   const [note, setNote] = useState('');
@@ -1892,13 +1894,14 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
               <th className="px-3 py-2 text-right">Value</th>
               <th className="px-3 py-2 text-center">Sev</th>
               <th className="px-3 py-2">Status</th>
+              <th className="px-3 py-2 text-center">Detail</th>
               <th className="px-3 py-2 text-center">Resolve</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className={`px-3 py-6 text-center text-xs font-bold ${loading ? 'text-slate-400' : 'text-emerald-600'}`}>
+                <td colSpan={7} className={`px-3 py-6 text-center text-xs font-bold ${loading ? 'text-slate-400' : 'text-emerald-600'}`}>
                   {loading
                     ? 'Loading issue log…'
                     : showHistory
@@ -1928,6 +1931,18 @@ function AutoIssueLogCard({ rows, loading, onResolve, showHistory, onToggleHisto
                   </td>
                   <td className="px-3 py-2 text-center"><SeverityDot severity={row.severity} /></td>
                   <td className="px-3 py-2"><StatusBadge status={resolved ? 'Closed' : 'Open'} /></td>
+                  <td className="px-3 py-2 text-center">
+                    {/* Phase 6 — drill-through ke culprit records */}
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/ews/issue/${encodeURIComponent(row.issue_key)}`)}
+                      className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-[#caf0f8]/60 hover:text-[#0077b6] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                      title="Lihat record penyebab"
+                      aria-label="Lihat record penyebab"
+                    >
+                      <Search size={16} />
+                    </button>
+                  </td>
                   <td className="px-3 py-2 text-center">
                     <button
                       type="button"

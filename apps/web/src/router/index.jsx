@@ -64,6 +64,11 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/EwsDetailPage')),
   },
   {
+    // Phase 6 — drill-through issue log ke culprit records (read-only)
+    path: '/ews/issue/:issueKey',
+    lazy: page(() => import('../pages/EwsIssueDrillPage')),
+  },
+  {
     path: '/ews/notifications',
     lazy: page(() => import('../pages/EwsNotificationsPage')),
   },
