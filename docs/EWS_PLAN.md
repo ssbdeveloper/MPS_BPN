@@ -150,8 +150,16 @@ operator · OEE↓+OLE normal → masalah mesin/material · OLE↓+Adoption norm
 
 ## 7. 🔜 To-do (urutan disarankan)
 
-### 7.1 Phase 6 — Drill-through ke culprit records ← **SEDANG BERJALAN**
+### 7.1 Phase 6 — Drill-through ke culprit records ← ✅ **SELESAI 2026-07-12**
 Dari issue di log → klik → lihat baris sumber SPESIFIK penyebabnya.
+**Semua 6 kategori ber-kalkulasi hidup & teruji rekonsiliasi vs prod** (uptime_* sengaja
+tanpa drill — empty-state anggun). Tambahan 2026-07-12 malam:
+- **adoption_machine ✅** — segmen mch_productiondata statusid 5 / statusid 2 >5mnt
+  (persis upsertMachineSummary): mesin 74 gap 34.3 → SUM 34.5 mnt (rounding 0.1/baris).
+- **oee ✅** — baris LOSS (denominator ∧ ¬running, persis calculateOee): M5051CR1
+  loss 7.19 → SUM 7.18 jam; kolom operator ikut tampil (siapa yang idle).
+- **ole ✅** — baris non-produktif (duration>0 ∧ ¬(produktif+order), persis calculateOle):
+  operator 11003499 NVA 2.22 → SUM 2.22 jam PERSIS.
 
 > **Progres 2026-07-12:** fondasi + KPI pertama SELESAI & teruji live —
 > `services/ewsIssueDrill.js` (registry builder per kategori), endpoint
@@ -174,8 +182,7 @@ Dari issue di log → klik → lihat baris sumber SPESIFIK penyebabnya.
 > **Keputusan:** window TIDAK disimpan di issue_log — diturunkan deterministik dari
 > `business_date` (rumus sama `getBizBounds`; catatan: window mulai 00:00 tanggal bisnis,
 > `EWS_DAY_START_HOUR` hanya menentukan tanggal) → tanpa migration.
-> **Sisa:** builder untuk adoption_machine · oee · ole
-> (tambahkan ke `BUILDERS` di ewsIssueDrill.js, satu per commit, uji rekonsiliasi tiap kali).
+> **Sisa: tidak ada** — drill uptime_* menunggu KPI-nya sendiri hidup (§7.2).
 
 - **READ-ONLY** — tidak membuat/mengubah issue.
 - **Predikat culprit = REUSE PERSIS predikat kalkulasi KPI** di ewsCalculator/generator —

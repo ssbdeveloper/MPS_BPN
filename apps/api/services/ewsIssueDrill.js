@@ -304,11 +304,180 @@ async function buildAdoptionLabourRecords(exec, issue, _bounds, limit, offset) {
   };
 }
 
+// ── adoption_machine ──────────────────────────────────────────────────────────
+// Predikat = persis upsertMachineSummary (ewsAdoptionBucketJob, model duration default):
+// segmen mch_productiondata dengan statusid=5 (unidentified) ATAU statusid=2 idle >300 dtk,
+// window [bd, bd+1), machine_key = machineno::text. Rekonsiliasi: SUM(menit) ≈ gap_minutes.
+async function buildAdoptionMachineRecords(exec, issue, bounds, limit, offset) {
+  const { rows } = await exec.query(
+    `
+    SELECT
+      pd.proddataid,
+      to_char(pd.startdatetime, 'DD Mon HH24:MI') AS mulai,
+      to_char(pd.enddatetime,  'DD Mon HH24:MI') AS selesai,
+      ROUND((GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0) / 60.0)::numeric, 1)::float8 AS menit,
+      pd.statusid,
+      CASE
+        WHEN pd.statusid = 5 THEN 'UNIDENTIFIED'
+        ELSE 'IDLE_LONG'
+      END AS error_code,
+      CASE
+        WHEN pd.statusid = 5 THEN 'Mesin jalan tanpa operator teridentifikasi — minta operator tap login di HMI'
+        ELSE 'Idle panjang (>5 menit) tanpa aktivitas tercatat — cek kenapa mesin menganggur'
+      END AS reason,
+      COUNT(*) OVER ()::int AS total
+    FROM public.mch_productiondata pd
+    WHERE pd.startdatetime >= $1
+      AND pd.startdatetime < $2
+      AND pd.enddatetime IS NOT NULL
+      AND pd.enddatetime > pd.startdatetime
+      AND COALESCE(NULLIF(BTRIM(pd.machineno::text), ''), 'UNKNOWN') = $3
+      AND (
+        pd.statusid = 5
+        OR (pd.statusid = 2
+            AND GREATEST(EXTRACT(EPOCH FROM (pd.enddatetime - pd.startdatetime)), 0) > 300)
+      )
+    ORDER BY pd.startdatetime
+    LIMIT $4 OFFSET $5
+    `,
+    [bounds.window_start, bounds.window_end, issue.entity_id, limit, offset]
+  );
+
+  const total = rows.length ? rows[0].total : 0;
+  for (const r of rows) delete r.total;
+  const d = issue.detail || {};
+  return {
+    columns: [
+      { key: "proddataid", label: "Prod Data ID" },
+      { key: "mulai", label: "Mulai" },
+      { key: "selesai", label: "Selesai" },
+      { key: "menit", label: "Menit" },
+      { key: "statusid", label: "Status ID" },
+      { key: "reason", label: "Kenapa dihitung gap" },
+    ],
+    rows,
+    total,
+    note: `Gap issue: ${d.gap_minutes ?? "?"} menit (${d.unidentified_minutes ?? 0} menit unidentified) — jumlah kolom "Menit" ≈ gap_minutes.`,
+  };
+}
+
+// ── oee ───────────────────────────────────────────────────────────────────────
+// Culprit = baris LOSS: masuk denominator (bukan no job/off/preventive/breakdown/
+// coffee break / lunch/daily pm) TAPI bukan running (M1/M2/productive) — predikat persis
+// calculateOee. Rekonsiliasi: SUM(jam) ≈ detail.loss_hours issue.
+async function buildOeeRecords(exec, issue, bounds, limit, offset) {
+  const { rows } = await exec.query(
+    `
+    SELECT
+      m.proddataid,
+      to_char(m.startdatetime, 'DD Mon HH24:MI') AS mulai,
+      to_char(m.enddatetime,  'DD Mon HH24:MI') AS selesai,
+      ROUND(m.duration_hours::numeric, 2)::float8 AS jam,
+      m.status_description AS status,
+      COALESCE(NULLIF(BTRIM(m.status_activitytype), ''), '—') AS tipe,
+      COALESCE(NULLIF(BTRIM(m.full_name), ''), NULLIF(BTRIM(m.sn_employee), ''), '—') AS operator,
+      COUNT(*) OVER ()::int AS total
+    FROM public.mch_transaction m
+    WHERE m.startdatetime >= $1
+      AND m.startdatetime < $2
+      AND COALESCE(m.duration_hours, 0) > 0
+      AND COALESCE(NULLIF(BTRIM(m.machineid), ''), NULLIF(BTRIM(m.workcentercode), ''), 'UNKNOWN') = $3
+      -- denominator (persis calculateOee)…
+      AND LOWER(BTRIM(COALESCE(m.status_description, ''))) NOT IN
+        ('no job', 'off', 'preventive', 'breakdown', 'coffee break / lunch', 'daily pm')
+      -- …tapi BUKAN running
+      AND NOT (
+        COALESCE(m.status_activitytype, '') IN ('M1', 'M2')
+        OR LOWER(BTRIM(COALESCE(m.status_description, ''))) = 'productive'
+      )
+    ORDER BY m.duration_hours DESC, m.startdatetime
+    LIMIT $4 OFFSET $5
+    `,
+    [bounds.window_start, bounds.window_end, issue.entity_id, limit, offset]
+  );
+
+  const total = rows.length ? rows[0].total : 0;
+  for (const r of rows) delete r.total;
+  const d = issue.detail || {};
+  return {
+    columns: [
+      { key: "proddataid", label: "Prod Data ID" },
+      { key: "mulai", label: "Mulai" },
+      { key: "selesai", label: "Selesai" },
+      { key: "jam", label: "Jam" },
+      { key: "status", label: "Status" },
+      { key: "tipe", label: "Tipe" },
+      { key: "operator", label: "Operator" },
+    ],
+    rows,
+    total,
+    note: `Loss issue: ${d.loss_hours ?? "?"} jam (OEE ${d.oee_pct ?? issue.metric_value ?? "?"}%) — baris di bawah = waktu mesin non-produktif yang masuk hitungan (jumlah "Jam" ≈ loss_hours). Diurut dari yang terbesar.`,
+  };
+}
+
+// ── ole ───────────────────────────────────────────────────────────────────────
+// Culprit = baris timesheet NON-PRODUKTIF operator: duration>0 TAPI bukan
+// (activitytype NULL DAN order_no terisi) — predikat persis calculateOle.
+// Rekonsiliasi: SUM(jam) ≈ detail.nva_hours issue.
+async function buildOleRecords(exec, issue, bounds, limit, offset) {
+  const { rows } = await exec.query(
+    `
+    SELECT
+      t.tsnumber,
+      to_char(t.longdate_checkin AT TIME ZONE $6, 'DD Mon HH24:MI') AS checkin,
+      ROUND(t.duration::numeric, 2)::float8 AS jam,
+      COALESCE(NULLIF(BTRIM(t.activitytype), ''), '—') AS aktivitas,
+      t.order_no,
+      t.operation_text,
+      CASE
+        WHEN NULLIF(BTRIM(t.activitytype), '') IS NOT NULL THEN 'Aktivitas non-produktif (' || BTRIM(t.activitytype) || ')'
+        ELSE 'Produktif tapi nomor order kosong — tidak dihitung working'
+      END AS reason,
+      COUNT(*) OVER ()::int AS total
+    FROM public.timesheet_transaction t
+    WHERE t.longdate_checkin >= $1
+      AND t.longdate_checkin < $2
+      AND COALESCE(t.state_flag, 1) <> 5
+      AND NULLIF(BTRIM(t.serialnumber), '') = $3
+      AND COALESCE(t.duration, 0) > 0
+      -- BUKAN working (persis calculateOle: working = activitytype NULL & order terisi)
+      AND NOT (
+        t.activitytype IS NULL
+        AND NULLIF(BTRIM(COALESCE(t.order_no, '')), '') IS NOT NULL
+      )
+    ORDER BY t.duration DESC, t.longdate_checkin
+    LIMIT $4 OFFSET $5
+    `,
+    [bounds.window_start, bounds.window_end, issue.entity_id, limit, offset, TIMEZONE]
+  );
+
+  const total = rows.length ? rows[0].total : 0;
+  for (const r of rows) delete r.total;
+  const d = issue.detail || {};
+  return {
+    columns: [
+      { key: "tsnumber", label: "No. TS" },
+      { key: "checkin", label: "Check-in" },
+      { key: "jam", label: "Jam" },
+      { key: "aktivitas", label: "Aktivitas" },
+      { key: "order_no", label: "Order" },
+      { key: "operation_text", label: "Deskripsi" },
+      { key: "reason", label: "Kenapa non-produktif" },
+    ],
+    rows,
+    total,
+    note: `NVA issue: ${d.nva_hours ?? "?"} jam (OLE ${d.ole_pct ?? issue.metric_value ?? "?"}%) — baris di bawah = waktu tercatat yang tidak dihitung working (jumlah "Jam" ≈ nva_hours). Diurut dari yang terbesar.`,
+  };
+}
+
 const BUILDERS = {
   accuracy_labour: buildAccuracyLabourRecords,
   accuracy_machine: buildAccuracyMachineRecords,
   adoption_labour: buildAdoptionLabourRecords,
-  // adoption_machine / oee / ole / uptime_hmi: menyusul (EWS_PLAN §7.1)
+  adoption_machine: buildAdoptionMachineRecords,
+  oee: buildOeeRecords,
+  ole: buildOleRecords,
+  // uptime_hmi / uptime_tablet: sengaja tanpa drill (EWS_PLAN §7.1 — empty-state anggun)
 };
 
 // GET /ews/issue/:issueKey/records
