@@ -11,6 +11,7 @@ updated: 2026-07-11
 
 ## 🏗️ Sedang dikerjakan (executing)
 
+- **EWS Phase 6 drill-through** ([[EWS_PLAN]] §7.1) — fondasi + accuracy_labour ✅ teruji rekonsiliasi; sisa 5 kategori builder
 - [[REFACTOR_PLAN]] — refactor besar DB/API/frontend. Phase 1 ✅ · Phase 2 berikutnya: A-R1 auth, A-R3 satu jalur SAP, D-R1 migration ledger
 
 ## 👀 Menunggu review / keputusan
@@ -19,6 +20,9 @@ updated: 2026-07-11
 - [[salvaging/SALVAGE_FLOW_DESIGN]] — alur salvaging end-to-end. **Blocker: jawaban §10 (rate labour, harga parts, checklist QC, approval quote, breakdown, RBAC)**
 
 ## 🔜 Backlog (belum dimulai)
+
+- Aktifkan KPI `uptime_tablet` ([[EWS_PLAN]] §7.2) — **setelah armada tablet terpasang app heartbeat**, jangan sebelumnya
+- EWS IL-last — pensiunkan legacy `action_table`/`/actions*` ([[EWS_PLAN]] §7.3) — setelah drill-through terbukti
 
 - [[timesheet/PLANHOURS_GUARD_IMPLEMENTATION_PLAN]] — guard planhours (terverifikasi belum ada di kode)
 - [[timesheet/Fitur Block Timesheet Tapping]] — spec block tapping (fitur yang sama, sisi user)

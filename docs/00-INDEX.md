@@ -24,6 +24,7 @@ updated: 2026-07-11
 
 | Dokumen | Status | Ringkas |
 |---|---|---|
+| [[EWS_PLAN]] | executing | **Master plan EWS tunggal** (8 KPI, issue log, drill-through) — 7 dokumen lama dilebur ke sini 2026-07-12 |
 | [[REFACTOR_PLAN]] | executing | Refactor besar DB/API/frontend — progres ditandai inline per item |
 | [[security/AUTH_RBAC_DESIGN]] | review | Token auth + RBAC enforcement (A-R1) — menunggu jawaban §7 + §5b |
 | [[salvaging/SALVAGE_FLOW_DESIGN]] | review | Alur salvaging end-to-end: lifecycle 2 tingkat, QC, Quote — menunggu jawaban §10 |
@@ -42,6 +43,7 @@ updated: 2026-07-11
 
 - [[log/2026-07-11-refactor-phase1]] — eksekusi Phase 1+: index drop, D-R3, S-R1, heartbeat
 - [[log/2026-07-11-md-cleanup]] — audit .md: 28 dihapus, 20 diisolasi
+- [[log/2026-07-12-ews-consolidation]] — 7 dokumen EWS dilebur ke [[EWS_PLAN]]
 
 ## 📚 Operasional
 
