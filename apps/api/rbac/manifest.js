@@ -178,12 +178,13 @@ const MANIFEST = [
 const ALLOWLIST = [
   { m: 'POST', p: '/auth/login' },
   { m: 'POST', p: '/auth/change-password' },   // self-service
-  { m: 'POST', p: '/token/verify-token' },
   // operator / shopfloor (NFC) timesheet flow — do NOT gate:
   { m: 'POST', p: '/timesheet' },
   { m: 'PUT',  p: '/timesheet/checkout' },
   { m: 'PUT',  p: '/timesheet/checkout-unprod' },
   { m: 'PUT',  p: '/timesheet/checkoutid' },
+  // device fleet heartbeat — device anonim, autentikasi via X-Device-Token di controller:
+  { m: 'POST', p: '/device-heartbeat' },
 ];
 
 module.exports = { MANIFEST, ALLOWLIST };

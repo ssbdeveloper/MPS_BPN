@@ -200,6 +200,7 @@ app.use('/tools', require('./routes/tools'));
 app.use('/auth', require('./routes/auth'));
 app.use('/ms-project', require('./routes/msProject'));
 app.use('/ews', require('./routes/ews'));
+app.use('/device-heartbeat', require('./routes/deviceHeartbeat'));
 
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (request, socket, head) => {
