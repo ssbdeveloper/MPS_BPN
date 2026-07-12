@@ -263,7 +263,7 @@ async function buildAdoptionLabourRecords(exec, issue, _bounds, limit, offset) {
       FROM ts_biz r
       UNION ALL
       SELECT
-        'MESIN (kredit)'::text,
+        'MESIN'::text,
         m.proddataid::text,
         m.a,
         to_char(m.a, 'DD Mon HH24:MI'),
@@ -300,7 +300,7 @@ async function buildAdoptionLabourRecords(exec, issue, _bounds, limit, offset) {
     note:
       total === 0
         ? "Operator tidak mencatat satu baris timesheet pun dan tidak ada jam mesin teratribusi pada tanggal ini — gap = seluruh target shift."
-        : `Tercatat ${d.recorded_hours ?? "?"} jam dari target ${d.target_hours ?? d.standard_hours ?? "?"} jam (gap ${d.gap_hours ?? "?"} jam). recorded = jam TIMESHEET + jam MESIN (kredit, di luar interval timesheet) — jumlah kolom "Jam" ≈ recorded.`,
+        : `Tercatat ${d.recorded_hours ?? "?"} jam dari target ${d.target_hours ?? d.standard_hours ?? "?"} jam (gap ${d.gap_hours ?? "?"} jam). Tercatat = jam TIMESHEET + jam MESIN di luar interval timesheet — jumlah kolom "Jam" ≈ tercatat.`,
   };
 }
 

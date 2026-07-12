@@ -7,16 +7,13 @@ router.get("/summary", controller.getSummary);
 router.get("/trend", controller.getTrend);
 router.get("/stream", controller.stream);
 router.get("/health", controller.getHealth);
-router.get("/issues", controller.getIssues);
 // ews.issue_log — backend-generated issue log, filter by KPI category
 router.get("/issue-log", controller.getIssueLog);
 router.put("/issue-log/:id/resolve", controller.resolveIssueLog);
 router.post("/issue-log/generate", controller.generateIssueLog);
 // Phase 6 — drill-through ke culprit records (read-only; issueKey di-URL-encode oleh FE)
 router.get("/issue/:issueKey/records", controller.getIssueRecords);
-router.get("/actions", controller.getActions);
-router.post("/actions/sync", controller.syncActions);
-router.put("/actions/:id/resolve", controller.resolveAction);
+// (legacy /issues + /actions* dipensiunkan 2026-07-12 — IL-last; ganti: /issue-log)
 router.get("/kpi/:type/detail", controller.getKpiDetail);
 
 // TTS notifications (audio pengumuman issue log)

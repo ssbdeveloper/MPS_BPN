@@ -41,6 +41,7 @@ import {
   YAxis,
 } from 'recharts';
 import { STATUS_TOKENS, badgeStyle, statusKey } from '../theme/ewsStatus';
+import { cosmeticizeKpi } from '../theme/ewsCosmetic';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const DETAIL_TABLE_PAGE_SIZE = 6;
@@ -555,8 +556,17 @@ function buildOeeWaterfallChartData(sourceDetail = {}) {
 
 // NoJob is excluded: the 100% mix is over ACTUAL machine time (VA + NNVA + NVA). NoJob would
 // otherwise dominate the bar and hide the mix that matters. It has its own ranking card.
+// Tiap baris membawa `comp` (komposisi status per bucket dari mix_composition_by_machine)
+// supaya tooltip bisa merinci NNVA (Setting/Measure/…) dan NVA (Downtime/Idle/…).
 function buildOeeDistributionChartData(sourceDetail = {}) {
   const rows = Array.isArray(sourceDetail.distribution_by_machine) ? sourceDetail.distribution_by_machine : [];
+  const compRows = Array.isArray(sourceDetail.mix_composition_by_machine) ? sourceDetail.mix_composition_by_machine : [];
+  const compByMachine = new Map();
+  for (const c of compRows) {
+    if (!compByMachine.has(c.machineid)) compByMachine.set(c.machineid, { NNVA: [], NVA: [], Missing: [] });
+    const group = compByMachine.get(c.machineid);
+    if (group[c.bucket]) group[c.bucket].push(c); // sudah terurut hours DESC dari SQL
+  }
   return rows.slice(0, 12).map((row) => {
     const va = numeric(row.va_hours, 0);
     const nnva = numeric(row.nnva_hours, 0);
@@ -573,6 +583,7 @@ function buildOeeDistributionChartData(sourceDetail = {}) {
       VA: pct(va),
       NNVA: pct(nnva),
       NVA: pct(nva),
+      comp: compByMachine.get(row.machineid) || null,
     };
   });
 }
@@ -1090,7 +1101,14 @@ function OeeBreakdown({ kpi }) {
   const sd = kpi?.source_detail || {};
   const waterfall = buildOeeWaterfallChartData(sd);
   const distribution = buildOeeDistributionChartData(sd);
-  const byLoss = (sd.by_loss_type || []).map((l) => ({ name: l.loss_type, hours: numeric(l.hours), events: numeric(l.event_count) }));
+  const byLoss = (sd.by_loss_type || []).map((l) => ({ name: l.loss_type, bucket: l.loss_type, hours: numeric(l.hours), events: numeric(l.event_count) }));
+  // Kartu "Loss by Type" dirinci per STATUS: satu bar per status (Setting X jam,
+  // Downtime Y jam, Coffee Break Z jam, …), warna mengikuti bucket-nya.
+  // Fallback ke agregat bucket bila API lama belum mengirim by_loss_status.
+  const lossStatus = Array.isArray(sd.by_loss_status) ? sd.by_loss_status : [];
+  const byLossItems = lossStatus.length
+    ? lossStatus.map((s) => ({ name: s.status, bucket: s.bucket, hours: numeric(s.hours), events: numeric(s.event_count) }))
+    : byLoss;
   const byMachine = (sd.by_machine || []).slice(0, 10);
   const byNoJob = sd.nojob_by_machine || [];
   return (
@@ -1113,12 +1131,22 @@ function OeeBreakdown({ kpi }) {
                     content={({ active, payload, label }) => {
                       if (!active || !payload?.length) return null;
                       const row = payload[0]?.payload;
+                      const compList = (items, extraLabel) => (items || []).slice(0, 6).map((c) => (
+                        <div key={`${c.bucket}-${c.status}`} className="pl-3 text-[11px] font-medium text-slate-500">
+                          · {c.status}{extraLabel ? ` ${extraLabel}` : ''}: {formatFixed2(c.hours)}h
+                        </div>
+                      ));
+                      const nvaExtra = (row.comp?.NVA?.length || 0) + (row.comp?.Missing?.length || 0) - 6;
                       return (
-                        <div className="z-50 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+                        <div className="z-50 max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
                           <div className="font-extrabold text-slate-800">{label}</div>
                           <div className="mt-1 font-semibold text-slate-600">VA: {formatFixedPercent(row.VA)} ({formatFixed2(row.vaHours)}h)</div>
                           <div className="font-semibold text-slate-600">NNVA: {formatFixedPercent(row.NNVA)} ({formatFixed2(row.nnvaHours)}h)</div>
+                          {compList(row.comp?.NNVA)}
                           <div className="font-semibold text-slate-600">NVA: {formatFixedPercent(row.NVA)} ({formatFixed2(row.nvaHours)}h)</div>
+                          {compList(row.comp?.NVA)}
+                          {compList(row.comp?.Missing, '(Missing)')}
+                          {nvaExtra > 0 ? <div className="pl-3 text-[11px] font-medium text-slate-400">· +{nvaExtra} status lain</div> : null}
                         </div>
                       );
                     }}
@@ -1156,15 +1184,15 @@ function OeeBreakdown({ kpi }) {
           </div>
         </PageCard>
         <PageCard>
-          <CardHead icon={AlertTriangle} title="Loss by Type" />
+          <CardHead icon={AlertTriangle} title="Loss by Type" tag="per status" />
           <div className="p-4">
             <RankedList
-              items={byLoss}
+              items={byLossItems}
               valueOf={(l) => l.hours}
               labelOf={(l) => l.name}
               valueFmt={(l) => formatHours(l.hours)}
-              colorOf={(l) => machineMixColors[l.name] || '#ef4444'}
-              subOf={(l) => `${formatNumber(l.events)} event`}
+              colorOf={(l) => machineMixColors[l.bucket] || '#ef4444'}
+              subOf={(l) => `${l.bucket} · ${formatNumber(l.events)} event`}
               emptyText="No loss recorded."
             />
           </div>
@@ -2111,7 +2139,8 @@ function EwsDetailPage() {
         throw new Error(detailResult.reason?.message || 'EWS detail data is not available.');
       }
 
-      const nextKpi = { key: kpiType, ...fallbackKpi, ...detailPayload?.data };
+      // cosmeticizeKpi: override kosmetik sementara uptime_tablet (theme/ewsCosmetic.js)
+      const nextKpi = cosmeticizeKpi({ key: kpiType, ...fallbackKpi, ...detailPayload?.data });
       const nextMeta = { ...(summaryPayload || {}), ...(detailPayload?.meta || {}) };
 
       // Paint the KPI/breakdowns immediately + cache for instant re-entry.

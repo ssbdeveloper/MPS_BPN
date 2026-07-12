@@ -1,6 +1,5 @@
 const ewsCalculator = require("../services/ewsCalculator");
 const ewsRealtimeHub = require("../services/ewsRealtimeHub");
-const ewsTtsNotifier = require("../services/ewsTtsNotifier");
 const ewsIssueGenerator = require("../services/ewsIssueGenerator");
 const ewsIssueDrill = require("../services/ewsIssueDrill");
 const { resolveTimezone } = require("../config/timezone");
@@ -14,8 +13,6 @@ const summaryCache = new Map();
 const SUMMARY_TTL_MS = 60 * 1000;
 const detailCache = new Map();
 const DETAIL_TTL_MS = 60 * 1000;
-const VALID_KPIS = new Set(["uptime", "accuracy", "adoption", "oee", "ole"]);
-
 function getPool() {
   return db.pool || db;
 }
@@ -24,22 +21,6 @@ function clampLimit(value, fallback = 5) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(parsed, 1), 50);
-}
-
-function normalizeActionStatus(value) {
-  return String(value || "Open").toLowerCase() === "closed" ? "Closed" : "Open";
-}
-
-function normalizeSeverity(value) {
-  const severity = String(value || "Watch").toLowerCase();
-  if (severity === "critical") return "Critical";
-  if (severity === "normal") return "Normal";
-  return "Watch";
-}
-
-function clampText(value, fallback = "", maxLength = 1000) {
-  const text = String(value ?? fallback).trim();
-  return text.length > maxLength ? text.slice(0, maxLength) : text;
 }
 
 function num(value, fallback = 0) {
@@ -54,28 +35,6 @@ function sourceStatus(value, normalMin, criticalBelow) {
   if (parsed < criticalBelow) return "critical";
   if (parsed < normalMin) return "watch";
   return "normal";
-}
-
-function normalizeIssuePayload(issue, kpiType) {
-  const issueKey = clampText(issue.issue_key || issue.id, "", 240);
-  if (!issueKey) return null;
-
-  return {
-    issue_key: issueKey,
-    kpi_type: kpiType,
-    scope_type: clampText(issue.scope_type, "system", 40),
-    scope_key: clampText(issue.scope_key, "ALL", 120),
-    machine_id: issue.machine_id ? clampText(issue.machine_id, "", 120) : null,
-    issue_description: clampText(issue.issue_description || issue.issueDescription, "EWS issue", 1600),
-    error_type: clampText(issue.error_type || issue.errorType, kpiType, 160),
-    pic: clampText(issue.pic, "Supervisor", 160),
-    action_taken: clampText(issue.action_taken || issue.action, "Review EWS issue", 1600),
-    severity: normalizeSeverity(issue.severity),
-    action_status: normalizeActionStatus(issue.status),
-    action_date: issue.created_date || issue.createdDate || new Date().toISOString(),
-    detail_json: issue.detail_json || issue.detailJson || {},
-    updated_by: clampText(issue.updated_by, "ews-detail-page", 120),
-  };
 }
 
 async function getSummary(req, res) {
@@ -230,83 +189,6 @@ async function getTrend(req, res) {
       return;
     }
     console.error("ews trend error:", err);
-    res.status(500).json({ error: err.message });
-  }
-}
-
-async function getIssues(req, res) {
-  try {
-    const limit = clampLimit(req.query.limit, 5);
-    const isManualDate = req.query.basis === "date" && req.query.date;
-    const summary = req.query.live === "1" || isManualDate
-      ? await ewsCalculator.calculateSystemSummary({
-        basis: req.query.basis || "rolling",
-        window: req.query.window,
-        date: req.query.date,
-      })
-      : await ewsRealtimeHub.getLatestSnapshotForQuery(req.query);
-    res.json({
-      data: summary.issues.slice(0, limit),
-      meta: {
-        window_start: summary.window_start,
-        window_end: summary.window_end,
-        generated_at: new Date().toISOString(),
-      },
-    });
-  } catch (err) {
-    console.error("ews issues error:", err);
-    res.status(500).json({ error: err.message });
-  }
-}
-
-async function getActions(req, res) {
-  try {
-    const status = req.query.status || "Open";
-    const kpiType = String(req.query.kpi_type || "").toLowerCase();
-    const result = await db.query(
-      `
-      SELECT
-        action_id,
-        alert_id,
-        kpi_type,
-        scope_type,
-        scope_key,
-        machine_id,
-        issue_key,
-        issue_description,
-        error_type,
-        severity,
-        status_reason,
-        action_taken,
-        pic,
-        action_status,
-        CASE
-          WHEN action_status = 'Closed' THEN 'Closed'
-          WHEN severity = 'Critical' AND action_date < now() - interval '3 hours' THEN 'Plant Manager'
-          WHEN severity = 'Critical' AND action_date < now() - interval '1 hour' THEN 'Supervisor/Foreman'
-          ELSE COALESCE(escalation_level, 'PIC Monitor')
-        END AS escalation_level,
-        due_at,
-        action_date,
-        solved_date,
-        last_updated,
-        updated_by,
-        detail_json
-      FROM ews.action_table
-      WHERE ($1 = 'all' OR action_status = $1)
-        AND ($2 = '' OR kpi_type = $2)
-      ORDER BY due_at ASC NULLS LAST, last_updated DESC
-      LIMIT 100
-      `,
-      [status, kpiType],
-    );
-    res.json({ data: result.rows, meta: { generated_at: new Date().toISOString() } });
-  } catch (err) {
-    if (err.code === "42P01") {
-      res.json({ data: [], meta: { generated_at: new Date().toISOString(), warning: "ews.action_table not created" } });
-      return;
-    }
-    console.error("ews actions error:", err);
     res.status(500).json({ error: err.message });
   }
 }
@@ -831,6 +713,31 @@ async function buildOeeSourceDetail(windowStart, windowEnd) {
          WHERE activity_bucket NOT IN ('VA', 'NoJob')
          GROUP BY activity_bucket
        ) x) AS by_loss_type,
+      -- Komposisi status per bucket (sistem): NNVA = Setting/Measure/Load/Unload dst,
+      -- NVA = Downtime/Idle/Coffee Break dst — supaya bar & kartu loss bisa dirinci.
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.hours DESC), '[]'::jsonb)
+       FROM (
+         SELECT
+           activity_bucket AS bucket,
+           COALESCE(NULLIF(BTRIM(status_description), ''), '(tanpa status)') AS status,
+           SUM(duration_hours)::float AS hours,
+           COUNT(*)::int AS event_count
+         FROM base
+         WHERE activity_bucket NOT IN ('VA', 'NoJob')
+         GROUP BY activity_bucket, 2
+       ) x) AS by_loss_status,
+      -- Komposisi yang sama per MESIN — dipakai tooltip "Machine Time Mix".
+      (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY x.hours DESC), '[]'::jsonb)
+       FROM (
+         SELECT
+           machineid,
+           activity_bucket AS bucket,
+           COALESCE(NULLIF(BTRIM(status_description), ''), '(tanpa status)') AS status,
+           SUM(duration_hours)::float AS hours
+         FROM base
+         WHERE activity_bucket NOT IN ('VA', 'NoJob')
+         GROUP BY machineid, activity_bucket, 3
+       ) x) AS mix_composition_by_machine,
       (SELECT COALESCE(jsonb_agg(row_to_json(x) ORDER BY startdatetime DESC), '[]'::jsonb)
        FROM (
          SELECT
@@ -881,6 +788,8 @@ async function buildOeeSourceDetail(windowStart, windowEnd) {
     distribution_by_machine: row.distribution_by_machine || [],
     nojob_by_machine: row.nojob_by_machine || [],
     by_loss_type: row.by_loss_type || [],
+    by_loss_status: row.by_loss_status || [],
+    mix_composition_by_machine: row.mix_composition_by_machine || [],
     sample_rows: row.sample_rows || [],
   };
 }
@@ -1220,164 +1129,6 @@ async function buildKpiSourceDetail(type, summary) {
   return null;
 }
 
-async function syncActions(req, res) {
-  const client = await getPool().connect();
-  try {
-    const kpiType = String(req.body?.kpi_type || "").toLowerCase();
-    if (!VALID_KPIS.has(kpiType)) {
-      res.status(400).json({ error: "Invalid EWS KPI type" });
-      return;
-    }
-
-    const issues = Array.isArray(req.body?.issues)
-      ? req.body.issues.map((issue) => normalizeIssuePayload(issue, kpiType)).filter(Boolean).slice(0, 50)
-      : [];
-
-    await client.query("BEGIN");
-    const rows = [];
-
-    for (const issue of issues) {
-      const result = await client.query(
-        `
-        INSERT INTO ews.action_table (
-          issue_key,
-          kpi_type,
-          scope_type,
-          scope_key,
-          machine_id,
-          issue_description,
-          status_reason,
-          error_type,
-          action_taken,
-          pic,
-          severity,
-          action_status,
-          action_date,
-          last_updated,
-          updated_by,
-          detail_json
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $11, $12::timestamptz, now(), $13, $14::jsonb
-        )
-        ON CONFLICT (issue_key) WHERE issue_key IS NOT NULL
-        DO UPDATE SET
-          issue_description = EXCLUDED.issue_description,
-          status_reason = EXCLUDED.status_reason,
-          error_type = EXCLUDED.error_type,
-          action_taken = EXCLUDED.action_taken,
-          pic = EXCLUDED.pic,
-          severity = EXCLUDED.severity,
-          scope_type = EXCLUDED.scope_type,
-          scope_key = EXCLUDED.scope_key,
-          machine_id = EXCLUDED.machine_id,
-          detail_json = EXCLUDED.detail_json,
-          last_updated = CASE
-            WHEN ews.action_table.action_status = 'Closed' THEN ews.action_table.last_updated
-            ELSE now()
-          END,
-          updated_by = EXCLUDED.updated_by
-        RETURNING *, (xmax = 0) AS was_inserted
-        `,
-        [
-          issue.issue_key,
-          issue.kpi_type,
-          issue.scope_type,
-          issue.scope_key,
-          issue.machine_id,
-          issue.issue_description,
-          issue.error_type,
-          issue.action_taken,
-          issue.pic,
-          issue.severity,
-          issue.action_status,
-          issue.action_date,
-          issue.updated_by,
-          JSON.stringify(issue.detail_json),
-        ],
-      );
-      const savedRow = result.rows[0];
-      rows.push(savedRow);
-      // Enqueue TTS hanya untuk issue yang BARU dibuat (bukan update berulang),
-      // supaya membuka halaman detail berkali-kali tidak menghasilkan audio ganda.
-      if (savedRow && savedRow.was_inserted) {
-        try {
-          await ewsTtsNotifier.enqueueIssueTts(client, savedRow);
-        } catch (ttsErr) {
-          console.error("EWS TTS enqueue error:", ttsErr.message);
-        }
-      }
-    }
-
-    await client.query("COMMIT");
-    res.json({ data: rows, meta: { generated_at: new Date().toISOString(), synced: rows.length } });
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error("ews action sync error:", err);
-    res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
-  }
-}
-
-async function resolveAction(req, res) {
-  const client = await getPool().connect();
-  try {
-    const actionId = Number.parseInt(req.params.id, 10);
-    if (!Number.isFinite(actionId)) {
-      res.status(400).json({ error: "Invalid action id" });
-      return;
-    }
-
-    const updatedBy = clampText(req.body?.updated_by, "ews-detail-page", 120);
-    await client.query("BEGIN");
-
-    const before = await client.query(
-      "SELECT action_status FROM ews.action_table WHERE action_id = $1 FOR UPDATE",
-      [actionId],
-    );
-    if (!before.rows.length) {
-      await client.query("ROLLBACK");
-      res.status(404).json({ error: "EWS action not found" });
-      return;
-    }
-
-    const oldStatus = before.rows[0].action_status;
-    const result = await client.query(
-      `
-      UPDATE ews.action_table
-      SET action_status = 'Closed',
-          solved_date = COALESCE(solved_date, now()),
-          escalation_level = 'Closed',
-          last_updated = now(),
-          updated_by = $2
-      WHERE action_id = $1
-      RETURNING *
-      `,
-      [actionId, updatedBy],
-    );
-
-    if (oldStatus !== "Closed") {
-      await client.query(
-        `
-        INSERT INTO ews.action_history (action_id, old_status, new_status, changed_by, notes)
-        VALUES ($1, $2, 'Closed', $3, 'Resolved from EWS detail page')
-        `,
-        [actionId, oldStatus, updatedBy],
-      );
-    }
-
-    await client.query("COMMIT");
-    res.json({ data: result.rows[0], meta: { generated_at: new Date().toISOString() } });
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error("ews action resolve error:", err);
-    res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
-  }
-}
-
 async function getKpiDetail(req, res) {
   try {
     const type = String(req.params.type || "").toLowerCase();
@@ -1646,14 +1397,10 @@ async function generateIssueLog(_req, res) {
 module.exports = {
   getSummary,
   getTrend,
-  getIssues,
   getIssueLog,
   resolveIssueLog,
   generateIssueLog,
   getIssueRecords,
-  getActions,
-  syncActions,
-  resolveAction,
   getKpiDetail: getKpiDetailWithSource,
   stream,
   getHealth,

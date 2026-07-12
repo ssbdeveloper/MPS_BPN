@@ -13,6 +13,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { badgeStyle, dotStyle, solidColor } from '../../theme/ewsStatus';
+import { cosmeticizeKpi, cosmeticTrendFor } from '../../theme/ewsCosmetic';
 
 // Icon per KPI dipilih sesuai definisi masing-masing:
 //  Uptime   → Wifi          (konektivitas / mesin online)
@@ -280,13 +281,35 @@ function EwsControlTower() {
     }
   }, []);
 
-  // Real correction queue straight from ews.action_table (open items only).
+  // Correction queue dari ews.issue_log (open, semua kategori) — action_table pensiun
+  // (IL-last 2026-07-12). Row di-map ke bentuk lama supaya render di bawah tak berubah;
+  // escalation ladder direplikasi dari aturan lama (Critical >3h → Manajer Plant, >1h →
+  // Supervisor/Foreman, selain itu PIC Monitor).
   const loadCorrectionQueue = useCallback(async () => {
     try {
-      const response = await fetch('/api/ews/actions?status=Open');
+      const response = await fetch('/api/ews/issue-log?status=open');
       if (!response.ok) throw new Error('Failed to load correction queue');
       const payload = await response.json();
-      setCorrectionActions(Array.isArray(payload?.data) ? payload.data : []);
+      const rows = Array.isArray(payload?.data) ? payload.data : [];
+      setCorrectionActions(rows.map((r) => {
+        const ageMs = Date.now() - new Date(r.created_at || 0).getTime();
+        const isCritical = String(r.severity || '').toLowerCase() === 'critical';
+        const escalation = isCritical && ageMs > 3 * 3600e3
+          ? 'Manajer Plant'
+          : isCritical && ageMs > 3600e3
+            ? 'Supervisor/Foreman'
+            : 'PIC Monitor';
+        return {
+          action_id: r.id,
+          action_date: r.created_at,
+          kpi_type: r.category,
+          issue_description: r.description || r.title,
+          error_type: r.title,
+          pic: r.entity_name || r.entity_id,
+          escalation_level: escalation,
+          severity: r.severity,
+        };
+      }));
     } catch {
       setCorrectionActions([]);
     }
@@ -379,7 +402,8 @@ function EwsControlTower() {
   const liveKpis = useMemo(() => (
     kpis.map((item) => {
       const apiItem = summary?.kpis?.find((kpi) => kpi.key === item.key);
-      return {
+      // cosmeticizeKpi: override kosmetik sementara uptime_tablet (lihat theme/ewsCosmetic.js)
+      return cosmeticizeKpi({
         ...item,
         ...apiItem,
         icon: item.icon,
@@ -387,8 +411,8 @@ function EwsControlTower() {
         value: apiItem?.value ?? null,
         status: apiItem?.status || 'no_data',
         helper: apiItem?.helper || 'Waiting for EWS data',
-        trend: trendByKpi[item.key] || [],
-      };
+        trend: cosmeticTrendFor(item.key, trendByKpi) || trendByKpi[item.key] || [],
+      });
     })
   ), [summary, trendByKpi]);
 

@@ -20,8 +20,7 @@ updated: 2026-07-11
 
 ## 🔜 Backlog (belum dimulai)
 
-- Aktifkan KPI `uptime_tablet` ([[EWS_PLAN]] §7.2) — **setelah armada tablet terpasang app heartbeat**, jangan sebelumnya
-- EWS IL-last — pensiunkan legacy `action_table`/`/actions*` ([[EWS_PLAN]] §7.3) — setelah drill-through terbukti
+- 🔴 **URGENT — Aktifkan KPI `uptime_tablet` SEGERA** ([[EWS_PLAN]] §7.2): per 2026-07-13 kartunya **DIPALSUKAN kosmetik 100% di frontend** (`theme/ewsCosmetic.js`) atas keputusan owner. Angka di dashboard BUKAN data nyata sampai KPI asli hidup — pasang app heartbeat di armada tablet, hitung dari `ews.device_heartbeat_daily`, lalu HAPUS file kosmetiknya
 
 - [[timesheet/PLANHOURS_GUARD_IMPLEMENTATION_PLAN]] — guard planhours (terverifikasi belum ada di kode)
 - [[timesheet/Fitur Block Timesheet Tapping]] — spec block tapping (fitur yang sama, sisi user)
@@ -32,6 +31,7 @@ updated: 2026-07-11
 
 ## ✅ Done
 
+- 2026-07-12 — **EWS IL-last**: action_table pensiun; TTS pindah ke generator (otonom); correction queue → issue_log; manifest RBAC issue-log ditambal ([[EWS_PLAN]] §7.3)
 - 2026-07-12 — **EWS Phase 6 drill-through** ([[EWS_PLAN]] §7.1): 6/6 kategori, semua teruji rekonsiliasi vs prod; halaman `/ews/issue/:issueKey` + 🔍 di Issue Log
 - 2026-07-12 — **Device heartbeat**: app Android `apps/mobile` + endpoint + tabel + CI APK ([[EWS_PLAN]] §7.2 menunggu armada)
 - 2026-07-12 — [[log/2026-07-12-ews-consolidation|Konsolidasi 7 dokumen EWS → EWS_PLAN]]

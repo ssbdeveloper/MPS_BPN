@@ -1209,24 +1209,30 @@ async function calculateOee(bounds) {
       FROM base
     ),
     -- Per-machine OEE breakdown, consumed by the oee issue generator (no re-query).
+    -- running_h WAJIB COALESCE 0: mesin yang full-downtime tidak punya baris running
+    -- sama sekali -> SUM FILTER = NULL -> oee_pct NULL -> generator men-skip justru
+    -- mesin TERPARAH (bug 2026-07-12: 5 mesin downtime 8-19 jam tak pernah masuk
+    -- issue log). NULL hanya untuk denom_h = 0 (murni NoJob/PM — memang no-data).
     by_machine AS (
       SELECT COALESCE(jsonb_agg(jsonb_build_object(
         'machine_key', machine_key,
         'running_hours', ROUND(running_h::numeric, 2),
         'denominator_hours', ROUND(denom_h::numeric, 2),
         'oee_pct', CASE WHEN denom_h > 0 THEN ROUND((running_h / denom_h * 100)::numeric, 1) ELSE NULL END,
-        'loss_hours', ROUND((denom_h - running_h)::numeric, 2)
+        'loss_hours', ROUND((denom_h - running_h)::numeric, 2),
+        'downtime_hours', ROUND(downtime_h::numeric, 2)
       ) ORDER BY (denom_h - running_h) DESC), '[]'::jsonb) AS machines
       FROM (
         SELECT
           b.machine_key,
-          SUM(b.duration_hours) FILTER (
+          COALESCE(SUM(b.duration_hours) FILTER (
             WHERE b.status_activitytype IN ('M1', 'M2') OR b.status_description = 'productive'
-          ) AS running_h,
+          ), 0) AS running_h,
           SUM(b.duration_hours) FILTER (
             WHERE b.status_description NOT IN
               ('no job', 'off', 'preventive', 'breakdown', 'coffee break / lunch', 'daily pm')
-          ) AS denom_h
+          ) AS denom_h,
+          COALESCE(SUM(b.duration_hours) FILTER (WHERE b.status_description = 'downtime'), 0) AS downtime_h
         FROM base b
         GROUP BY b.machine_key
         HAVING SUM(b.duration_hours) FILTER (

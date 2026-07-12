@@ -1,8 +1,9 @@
 // EWS TTS Notifier
 // ============================================================================
-// Meng-enqueue baris audio TTS ke ews.tts_notification saat issue log EWS baru
-// ter-generate. Worker Piper (apps/tts-worker/generate_ews_audio.py) yang mengubah
-// `message` jadi MP3.
+// Meng-enqueue baris audio TTS ke ews.tts_notification saat issue BARU masuk
+// ews.issue_log (dipanggil dari ewsIssueGenerator.upsertIssue — otonom bersama
+// snapshot job sejak IL-last 2026-07-12; dulunya dari syncActions/action_table).
+// Worker Piper (apps/tts-worker/generate_ews_audio.py) yang mengubah `message` jadi MP3.
 //
 // >>> DI SINI TEMPAT MENGUBAH TEKS YANG DIUCAPKAN <<<
 // Lihat fungsi buildIssueSpeech() di bawah.
@@ -35,8 +36,8 @@ const KPI_LABEL_ID = {
 // ----------------------------------------------------------------------------
 // >>> TEKS SUARA — UBAH DI SINI <<<
 // ----------------------------------------------------------------------------
-// buildIssueSpeech menerima satu baris issue (dari ews.action_table) dan
-// mengembalikan { title, message }.
+// buildIssueSpeech menerima satu baris issue (mapping dari ews.issue_log:
+// kpi_type=category, issue_description=description) dan mengembalikan { title, message }.
 //   - title   : teks pendek untuk kartu notifikasi di UI.
 //   - message : kalimat yang akan diucapkan Piper.
 //

@@ -1,5 +1,6 @@
 "use strict";
 const { resolveTimezone } = require("../config/timezone");
+const ewsTtsNotifier = require("./ewsTtsNotifier");
 
 // EWS issue generator — records issues from KPI calculations into ews.issue_log.
 // Runs backend-side (autonomously in the snapshot job) so issues exist even when
@@ -114,7 +115,32 @@ ON CONFLICT (issue_key) DO UPDATE SET
   detail       = EXCLUDED.detail,
   updated_at   = now()
 WHERE ews.issue_log.status = 'open'
+RETURNING *, (xmax = 0) AS was_inserted
 `;
+
+// Upsert satu issue + enqueue TTS untuk issue yang BARU dibuat (was_inserted).
+// TTS dulunya hidup di syncActions (FE-driven — hanya bunyi bila halaman dibuka);
+// sejak IL-last (2026-07-12) di sinilah tempatnya: otonom bersama generator.
+// Kegagalan TTS tidak boleh menggagalkan generation (best-effort).
+async function upsertIssue(exec, values) {
+  const result = await exec.query(UPSERT_SQL, values);
+  const row = result.rows && result.rows[0];
+  if (row && row.was_inserted) {
+    try {
+      await ewsTtsNotifier.enqueueIssueTts(exec, {
+        issue_key: row.issue_key,
+        kpi_type: row.category,
+        // notifier memakai kapitalisasi gaya action_table lama ('Critical')
+        severity: String(row.severity || "").toLowerCase() === "critical" ? "Critical" : "Watch",
+        issue_description: row.description,
+        pic: null,
+      });
+    } catch (ttsErr) {
+      console.error("EWS TTS enqueue error:", ttsErr.message);
+    }
+  }
+  return row;
+}
 
 // An EWS issue is a snapshot of ONE business day, not a ticket that carries across days: if the
 // problem still holds today, the generators re-raise it under today's key. So any issue left
@@ -171,7 +197,7 @@ async function generateAccuracyMachine(exec, bounds) {
     const badPct = total ? Math.round((bad * 1000) / total) / 10 : 0;
     const severity = badPct >= ACC_MACHINE_CRITICAL_PCT ? "critical" : "warning";
     const name = r.machinename || r.machineid || `Machine ${r.machineno}`;
-    await exec.query(UPSERT_SQL, [
+    await upsertIssue(exec, [
       `accuracy_machine:${bizDate}:machine:${r.machineno}`,
       "accuracy_machine",
       bizDate,
@@ -246,7 +272,7 @@ async function generateAccuracyLabour(exec, bounds) {
     const badPct = total ? Math.round((bad * 1000) / total) / 10 : 0;
     const severity = badPct >= ACC_LABOUR_CRITICAL_PCT ? "critical" : "warning";
     const name = r.operator_name || r.operator_key || "Operator";
-    await exec.query(UPSERT_SQL, [
+    await upsertIssue(exec, [
       `accuracy_labour:${bizDate}:operator:${r.operator_key}`,
       "accuracy_labour",
       bizDate,
@@ -306,7 +332,7 @@ async function generateAdoptionMachine(exec, bounds) {
     const severity =
       coverPct !== null && coverPct <= ADOPTION_MACHINE_CRITICAL_COVER_PCT ? "critical" : "warning";
     const unidentNote = unidentMin >= 1 ? ` (termasuk ${Math.round(unidentMin)} menit operator unidentified)` : "";
-    await exec.query(UPSERT_SQL, [
+    await upsertIssue(exec, [
       `adoption_machine:${bizDate}:machine:${key}`,
       "adoption_machine",
       bizDate,
@@ -395,7 +421,7 @@ async function generateAdoptionLabour(exec, bounds) {
     const finished = b.completed === true;
     const targetLabel = finished ? "shift standard" : "expected so far";
 
-    await exec.query(UPSERT_SQL, [
+    await upsertIssue(exec, [
       `adoption_labour:${bizDate}:operator:${key}:s${shiftCode}`,
       "adoption_labour",
       bizDate,
@@ -438,8 +464,12 @@ async function generateOee(exec, bounds) {
     const key = String(m.machine_key || "UNKNOWN");
     const running = Number(m.running_hours) || 0;
     const loss = Number(m.loss_hours) || 0;
+    const downtime = Number(m.downtime_hours) || 0;
     const severity = "critical";
-    await exec.query(UPSERT_SQL, [
+    // Sebut penyebab dominan secara eksplisit: Downtime adalah penyumbang loss terbesar
+    // di lapangan — foreman harus langsung tahu tanpa membuka drill.
+    const downtimeNote = downtime >= 0.5 ? ` Terutama Downtime ${downtime} jam.` : "";
+    await upsertIssue(exec, [
       `oee:${bizDate}:machine:${key}`,
       "oee",
       bizDate,
@@ -448,9 +478,9 @@ async function generateOee(exec, bounds) {
       key,
       severity,
       `OEE rendah: ${key}`,
-      `OEE ${oee}% — running ${running} jam dari ${denom} jam terhitung, loss ${loss} jam. Cek downtime/idle/setup mesin.`,
+      `OEE ${oee}% — running ${running} jam dari ${denom} jam terhitung, loss ${loss} jam.${downtimeNote} Cek downtime/idle/setup mesin.`,
       oee,
-      JSON.stringify({ machine_key: key, oee_pct: oee, running_hours: running, denominator_hours: denom, loss_hours: loss }),
+      JSON.stringify({ machine_key: key, oee_pct: oee, running_hours: running, denominator_hours: denom, loss_hours: loss, downtime_hours: downtime }),
     ]);
     count += 1;
   }
@@ -475,7 +505,7 @@ async function generateOle(exec, bounds) {
     const working = Number(o.working_hours) || 0;
     const nva = Number(o.nva_hours) || 0;
     const severity = "critical";
-    await exec.query(UPSERT_SQL, [
+    await upsertIssue(exec, [
       `ole:${bizDate}:operator:${key}`,
       "ole",
       bizDate,
@@ -511,7 +541,7 @@ async function generateUptimeHmi(exec, bounds) {
     const name = m.machinename || m.machineid || key;
     const severity = uptime < UPTIME_HMI_CRITICAL_PCT ? "critical" : "warning";
     const downNote = uptime === 0 ? "mesin tidak terjangkau jaringan sepanjang hari" : "HMI/jaringan mesin sempat terputus";
-    await exec.query(UPSERT_SQL, [
+    await upsertIssue(exec, [
       `uptime_hmi:${bizDate}:machine:${key}`,
       "uptime_hmi",
       bizDate,

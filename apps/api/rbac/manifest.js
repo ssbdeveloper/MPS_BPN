@@ -156,8 +156,8 @@ const MANIFEST = [
   { m: 'POST',   p: '/dashboard/refresh-order-matviews',      f: 'dashboard', a: W },
 
   // ---- EWS (/ews) ----
-  { m: 'POST',   p: '/ews/actions/sync',                      f: 'ews', a: W },
-  { m: 'PUT',    p: '/ews/actions/:id/resolve',               f: 'ews', a: W },
+  { m: 'PUT',    p: '/ews/issue-log/:id/resolve',             f: 'ews', a: W },
+  { m: 'POST',   p: '/ews/issue-log/generate',                f: 'ews', a: W },
   { m: 'POST',   p: '/ews/notifications/:id/played',          f: 'ews', a: W },
 
   // ---- EWS roster / attendance (/ews/roster) ----

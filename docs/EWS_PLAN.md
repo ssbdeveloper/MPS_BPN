@@ -126,7 +126,8 @@ operator · OEE↓+OLE normal → masalah mesin/material · OLE↓+Adoption norm
   `rotation_config`, `alert_log`, `tts_notification`, `activity_type_ref`,
   `device_heartbeat_daily` (+`public.device_status`) · legacy menunggu pensiun: `action_table`, `action_history`.
 - **Endpoint:** `/ews/summary · /trend · /stream (SSE) · /health · /issue-log (GET/PUT resolve/
-  POST generate) · /kpi/:type/detail · /notifications · /roster*` · legacy: `/issues`, `/actions*` (retire di IL-last).
+  POST generate) · /issue/:issueKey/records (drill) · /kpi/:type/detail · /notifications · /roster*`
+  (legacy `/issues` & `/actions*` DIHAPUS 2026-07-12 — IL-last).
 - **Jobs (compose):** ews-snapshot-job · ews-adoption-job · ews-roster-job · ews-tts-worker
   (Edge TTS id-ID-GadisNeural). Heartbeat HMI: `machine-heartbeat-sync` (compose terpisah).
 - **Frontend:** `EwsControlTower.jsx` (8 kartu 2×4 + sparkline) · `EwsDetailPage.jsx`
@@ -147,6 +148,17 @@ operator · OEE↓+OLE normal → masalah mesin/material · OLE↓+Adoption norm
 5. Timezone single-source; KPI status dievaluasi nilai unrounded (A-R4) — 2026-07-11.
 6. **Infra uptime_tablet**: app Android `apps/mobile` + `POST /device-heartbeat` +
    `device_status` + `ews.device_heartbeat_daily` (endpoint teruji live) — 2026-07-12.
+7. **IL-last**: action_table pensiun; TTS otonom di generator; correction queue → issue_log — 2026-07-12.
+8. **OEE detail — komposisi bucket dirinci**: `by_loss_status` + `mix_composition_by_machine`
+   di source_detail; tooltip Machine Time Mix & kartu Loss by Type menampilkan isi NNVA
+   (Setting/Measure/Load/Unload) dan NVA (Downtime/Idle/Coffee Break/…) per status;
+   rekonsiliasi bucket teruji persis — 2026-07-12.
+9. **BUG FIX: mesin full-downtime tak pernah masuk issue log** — `SUM FILTER (running)`
+   menghasilkan NULL (bukan 0) bila mesin tak punya baris running → `oee_pct NULL` →
+   generator skip justru mesin TERPARAH (5 mesin downtime 8–19 jam invisible, hanya
+   mesin 28.5% yang ter-log). Fix: COALESCE running_h di `calculateOee.by_machine` +
+   kolom `downtime_hours` per mesin + description issue menyebut "Terutama Downtime X jam".
+   Terbukti live: 5 issue critical muncul + TTS ter-enqueue & diproses worker — 2026-07-12.
 
 ## 7. 🔜 To-do (urutan disarankan)
 
@@ -200,14 +212,32 @@ tanpa drill — empty-state anggun). Tambahan 2026-07-12 malam:
   uptime_* → skip, empty-state anggun.
 - **Mulai dari SATU KPI (accuracy_labour), uji rekonsiliasi vs kartu, baru sebar.**
 
-### 7.2 Aktifkan uptime_tablet
-Setelah armada tablet terpasang app heartbeat (jangan sebelumnya — dashboard merah semua).
+### 7.2 Aktifkan uptime_tablet ← 🔴 URGENT (ada kosmetik yang harus dicabut)
+> ⚠️ **Per 2026-07-13 kartu uptime_tablet DIPALSUKAN 100%/normal di frontend**
+> (`apps/web/src/theme/ewsCosmetic.js`, keputusan owner — kosmetik sementara supaya
+> dashboard tampak lengkap). Backend/snapshot tetap jujur `no_data`. Konsekuensi:
+> angka di dashboard BUKAN kenyataan sampai KPI ini selesai — **prioritas naik**.
+> Saat mengaktifkan: hapus `ewsCosmetic.js` + 2 pemakainya (EwsControlTower, EwsDetailPage).
+
+Setelah armada tablet terpasang app heartbeat.
 Kalkulasi ≈ copy `calculateUptimeHmi` → baca `ews.device_heartbeat_daily`
 (`uptime% = beats/(86400/interval_sec)`), lalu tambah generator issue-nya.
 
-### 7.3 IL-last — pensiunkan legacy action_table
-Hapus `syncActions`/`getActions`/route `/actions*`/`/issues`, bersihkan `VALID_KPIS` stale
-(masih daftar 5), FE full pindah ke issue_log. Kerjakan SETELAH drill-through terbukti.
+### 7.3 IL-last — pensiunkan legacy action_table ← ✅ **SELESAI 2026-07-12**
+- Dihapus: `getIssues`/`getActions`/`syncActions`/`resolveAction` + helper-nya +
+  `VALID_KPIS` stale + route `/ews/issues` & `/ews/actions*` + 2 entri manifest RBAC.
+- **TTS dipindah ke `ewsIssueGenerator.upsertIssue`** (enqueue saat issue BARU ter-insert)
+  — pengumuman audio kini OTONOM bersama snapshot job, tidak lagi tergantung halaman
+  detail dibuka (menutup cacat lama untuk selamanya).
+- ControlTower correction queue → `GET /ews/issue-log?status=open` (mapper mempertahankan
+  bentuk lama; escalation ladder Critical>3h/1h direplikasi client-side).
+- **Bonus:** manifest RBAC ditambal — `PUT /ews/issue-log/:id/resolve` & `POST
+  /ews/issue-log/generate` tadinya unmapped (akan 403 saat RBAC_ENFORCE=1).
+- Tabel DB `ews.action_table`/`action_history`/`alert_log` TIDAK di-drop (arsip data) —
+  **karantina: drop setelah ≥ 2026-08-15** bila tidak ada yang mencarinya.
+- Verifikasi: module-load test (17 route valid), vite build bersih, grep nol pemanggil
+  tersisa. Uji live tertunda — server tak terjangkau via Tailscale saat pengerjaan;
+  jalankan `POST /ews/issue-log/generate` + buka Control Tower setelah deploy.
 
 ### 7.4 Register isu kecil yang belum ditutup
 - [ ] Band uptime hardcoded di FE vs threshold backend — satukan ke `ews.kpi_threshold`.
