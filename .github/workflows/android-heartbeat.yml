@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-java@v4
         with:
@@ -19,7 +19,11 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - uses: gradle/actions/setup-gradle@v3
+      # v4: wajib — v3 memakai API cache lama GitHub (mati per 2025 -> error 400).
+      # gradle-version dipin 8.7 (kebutuhan AGP 8.5) agar tak bergantung Gradle bawaan runner.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
 
       - name: Build debug APK
         working-directory: apps/mobile
