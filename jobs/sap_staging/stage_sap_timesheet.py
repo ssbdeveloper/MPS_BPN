@@ -189,8 +189,19 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
           ELSE COALESCE(sn_employee, '')
         END AS pernr,
         COALESCE(confirmation_number, '') AS rueck_raw,
-        COALESCE(order_no, '') AS aufnr_raw,
-        COALESCE(operation_no, '') AS vornr_raw,
+        -- UNPRODUCTIVE (bukan M1/M2): order & operasi TIDAK dikirim ke SAP — posting-nya
+        -- alokasi aktivitas (LSTAR), bukan konfirmasi order. Dikosongkan di KUNCI juga,
+        -- bukan cuma di payload: kalau hanya di payload, dua bundel yang cuma beda order
+        -- akan menghasilkan payload KEMBAR (SAP menerima keduanya). Efek nyata pada data
+        -- 1 Juli: 96 bundel unproductive -> 90.
+        CASE
+          WHEN status_activitytype IN ('M1', 'M2') THEN COALESCE(order_no, '')
+          ELSE ''
+        END AS aufnr_raw,
+        CASE
+          WHEN status_activitytype IN ('M1', 'M2') THEN COALESCE(operation_no, '')
+          ELSE ''
+        END AS vornr_raw,
         COALESCE(sequence_category, '') AS flgat,
         COALESCE(sequence_number, '') AS plnfl,
         COALESCE(branch_operation_no, '') AS vornr_b,
@@ -204,8 +215,10 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
           WHEN status_activitytype IN ('M1', 'M2') THEN ''
           ELSE COALESCE(status_activitytype, '')
         END AS lstar,
+        -- M1 = value-added -> 'VA'. M2 = setup -> teks status apa adanya. Selain itu kosong.
         CASE
           WHEN status_activitytype = 'M2' THEN COALESCE(status_description, '')
+          WHEN status_activitytype = 'M1' THEN 'VA'
           ELSE ''
         END AS zbarcodeid,
         COUNT(*)::integer AS source_row_count,
@@ -228,8 +241,14 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
           ELSE COALESCE(sn_employee, '')
         END,
         COALESCE(confirmation_number, ''),
-        COALESCE(order_no, ''),
-        COALESCE(operation_no, ''),
+        CASE
+          WHEN status_activitytype IN ('M1', 'M2') THEN COALESCE(order_no, '')
+          ELSE ''
+        END,
+        CASE
+          WHEN status_activitytype IN ('M1', 'M2') THEN COALESCE(operation_no, '')
+          ELSE ''
+        END,
         COALESCE(sequence_category, ''),
         COALESCE(sequence_number, ''),
         COALESCE(branch_operation_no, ''),
@@ -245,6 +264,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         END,
         CASE
           WHEN status_activitytype = 'M2' THEN COALESCE(status_description, '')
+          WHEN status_activitytype = 'M1' THEN 'VA'
           ELSE ''
         END
     )
@@ -271,8 +291,10 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
       pernr,
       employee_key AS pernr_origin,
       CASE WHEN zconf_type IN ('M1', 'M2') THEN LPAD(rueck_raw, 10, '0') ELSE '' END AS rueck,
-      LPAD(aufnr_raw, 12, '0') AS aufnr,
-      LPAD(vornr_raw, 4, '0') AS vornr,
+      -- LPAD('', 12, '0') = '000000000000', BUKAN string kosong. Unproductive harus
+      -- mengirim AUFNR/VORNR benar-benar kosong, bukan nol berjajar.
+      CASE WHEN aufnr_raw = '' THEN '' ELSE LPAD(aufnr_raw, 12, '0') END AS aufnr,
+      CASE WHEN vornr_raw = '' THEN '' ELSE LPAD(vornr_raw, 4, '0')  END AS vornr,
       flgat,
       plnfl,
       vornr_b,

@@ -58,7 +58,13 @@ def post_payload(payload: dict[str, Any], timeout: int) -> tuple[int, str]:
         return exc.code, exc.read().decode("utf-8", errors="replace")
 
 
-def claim_rows(limit: int, include_failed: bool, source_system: str | None, plant: str | None) -> list[dict]:
+def claim_rows(
+    limit: int,
+    include_failed: bool,
+    source_system: str | None,
+    plant: str | None,
+    productive: bool | None = None,
+) -> list[dict]:
     statuses = ["PENDING", "FAILED"] if include_failed else ["PENDING"]
     filters = ["status = ANY(%s)"]
     params: list[Any] = [statuses]
@@ -69,6 +75,11 @@ def claim_rows(limit: int, include_failed: bool, source_system: str | None, plan
     if plant:
         filters.append("werks = %s")
         params.append(plant)
+    # is_productive: kolom GENERATED (zconf_type IN M1/M2). Dipakai untuk posting massal
+    # yang produktif dulu, sementara unproductive masih ditolak SAP (butuh cost center).
+    if productive is not None:
+        filters.append("is_productive = %s")
+        params.append(productive)
 
     where_sql = " AND ".join(filters)
     sql = f"""
@@ -298,7 +309,12 @@ def process_rows(args: argparse.Namespace) -> None:
         rows = claim_selected_rows(selected_ids, selected_ztimesheetids, args.allow_posted)
     else:
         plant = None if args.all_plants else (args.plant or plant_code())
-        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant)
+        productive = None
+        if args.productive_only:
+            productive = True
+        elif args.unproductive_only:
+            productive = False
+        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive)
     if not rows:
         log.info("No staging rows to post")
         return
@@ -365,6 +381,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-ms", type=int, default=100)
     parser.add_argument("--retry-failed", action="store_true", help="Also retry rows with status FAILED")
     parser.add_argument("--source-system", choices=["TIMESHEET", "MCH_HOURS"], help="Only post one source system")
+    productive_group = parser.add_mutually_exclusive_group()
+    productive_group.add_argument(
+        "--productive-only", action="store_true",
+        help="Hanya kirim baris PRODUKTIF (zconf_type M1/M2 — konfirmasi order). "
+             "Pakai ini untuk posting massal selagi baris unproductive masih ditolak SAP.",
+    )
+    productive_group.add_argument(
+        "--unproductive-only", action="store_true",
+        help="Hanya kirim baris UNPRODUCTIVE (LSTAR). Jalankan setelah fix cost center di SAP.",
+    )
     parser.add_argument("--plant", help="Only post one plant. Defaults to PLANT_SSB")
     parser.add_argument("--all-plants", action="store_true", help="Ignore plant filter")
     parser.add_argument("--ids", help="Comma-separated staging id list to post for manual testing")
