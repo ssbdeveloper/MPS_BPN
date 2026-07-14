@@ -1,296 +1,274 @@
 # SAP Staging Jobs
 
-Folder ini berisi script untuk menyiapkan payload timesheet/machine-hours ke tabel `sap_timesheet_staging`, lalu mengirimkannya ke SAP.
-
+Menyiapkan payload timesheet & jam mesin ke `sap_timesheet_staging`, lalu mengirimkannya ke SAP.
 Semua script membaca `.env` dari root repo `MPS2/.env`.
 
-## Alur Utama
+> **Ini jalur payroll.** Kesalahan di sini = jam kerja hilang, dobel, atau salah pemilik.
+> Baca bagian **[Pengaman](#pengaman-jangan-dilucuti)** dan **[Batas Berbahaya](#-batas-berbahaya)**
+> sebelum mengubah apa pun. Latar belakang: `docs/concepts/sap-staging-identity.md`.
 
-1. Source lokal dibaca dari PostgreSQL MPS.
-2. Row yang layak masuk SAP dimasukkan ke `sap_timesheet_staging`.
-3. Payload JSON SAP dibuat otomatis di kolom `payload`.
-4. `post_sap_staging.py` mengambil row `PENDING` lalu post ke SAP.
-5. Hasil post mengubah status menjadi `POSTED` atau `FAILED`.
+---
 
-Tabel penting:
+## Alur
 
-- `sap_timesheet_staging`: queue payload SAP.
-- `sap_stage_cursor`: posisi terakhir staging job untuk mode catch-up.
-- `sap_staging_eligibility_audit`: audit kenapa source row sudah/belum layak masuk staging.
+```
+mch_transaction ──(gerbang kelayakan)──> bundling per JAM ──> sap_timesheet_staging (PENDING)
+                                              │                        │
+                                              └──> sap_staging_source   └──> post_sap_staging.py ──> SAP
+                                                   (provenance/segmen)          │
+                                                                                └──> POSTED / FAILED / SKIPPED
+```
 
-## Script Ringkas
+---
+
+## Aturan Kelayakan (mch_transaction → staging)
+
+Sebuah baris hanya di-stage bila **semua** benar:
+
+| Syarat | Kenapa |
+|---|---|
+| `startdatetime`, `enddatetime` ada & `end > start` | durasi valid |
+| `order_no` terisi | SAP butuh AUFNR |
+| `operation_no` terisi | SAP butuh VORNR |
+| `confirmation_number` terisi | SAP butuh RUECK |
+| **`sn_employee` terisi** | tanpa ini PERNR kosong → **jam kerja tanpa pemilik** |
+| `statusid` **bukan** 0, 3, 4 | Off / Downtime / No Job — bukan kerja pada order |
+| bila `statusid` = 5 → durasi **≤ 60 detik** | Unidentified singkat = celah antar aktivitas; yang panjang tidak dikirim |
+
+> ⚠️ **JANGAN pakai kolom `status_record` sebagai gerbang.** Definisinya punya pintu belakang
+> (`statusid IN (0,3,4) OR (...)`), sehingga baris **tanpa operator tetap lolos**.
+> `status_record` = kelengkapan data untuk KPI `accuracy_machine`, **bukan** kelayakan SAP.
+
+### Peta `statusid` (diverifikasi dari data — 3 & 4 mudah tertukar!)
+
+| id | Deskripsi | id | Deskripsi | id | Deskripsi |
+|---|---|---|---|---|---|
+| 0 | Off ❌ | 6 | Load (M2) | 13 | Daily PM |
+| 1 | Productive (M1) | 7 | Setting (M2) | 14 | Tool Preparation |
+| 2 | Idle | 8 | Measure (M2) | 15 | Labour Necessity |
+| **3** | **Downtime** ❌ | 9 | Unload (M2) | 16–21 | Jig/Waiting/Wait… |
+| **4** | **No Job** ❌ | 11 | Breakdown | | |
+| 5 | Unidentified (≤60 dtk saja) | 12 | Coffee Break / Lunch | | |
+
+❌ = tidak masuk staging.
+
+---
+
+## Bentuk Payload
+
+| Jenis | Syarat | ZCONF_TYPE | RUECK | AUFNR/VORNR | LSTAR | ZBARCODEID |
+|---|---|---|---|---|---|---|
+| **Produktif M1** | `status_activitytype = M1` | `M1` | terisi | terisi | — | **`VA`** |
+| **Produktif M2** | `status_activitytype = M2` | `M2` | terisi | terisi | — | teks status (`Setting`, `Measure`, `Load`, `Unload`) |
+| **Idle → M2** | `statusid=2` **∧** `previoustatusid=1` **∧** durasi **≤300 dtk** | `M2` | terisi | terisi | — | **`Idle`** |
+| **Unproductive** | selain di atas | *(kosong)* | *(kosong)* | **kosong** | activity type | *(kosong)* |
+
+**Idle pendek setelah produksi = micro-stop**, bukan waktu terbuang → diperlakukan sebagai setup (M2).
+
+⚠️ AUFNR/VORNR dikosongkan **di KUNCI bundling juga**, bukan cuma di payload. Kalau hanya di
+payload, dua bundel yang cuma beda order akan menghasilkan **payload kembar** dan SAP menerima keduanya.
+
+**Waktu yang dikirim ke SAP bersifat sintetis:** `ISDD/ISDZ` = awal jam bucket, `IEDD/IEDZ` = awal
+jam + total durasi. Yang akurat adalah **durasi**, bukan jendela waktunya. Bucket jam yang mengurung
+fiksi ini agar tak pernah meleset > 1 jam — **jangan hilangkan bucket jam**.
+
+---
+
+## Bundling
+
+Satu baris staging = satu bundel **(jam × operator × order × operasi × mesin × jenis aktivitas)**.
+Baris `mch_transaction` yang melintasi jam **dipotong per jam** (event 09:40→11:20 → 3 segmen).
+
+`source_key = md5(werks | bucket_start | employee | rueck | aufnr | vornr | flgat | plnfl |
+vornr_b | vornr_r | zconf_type | arbpl | lstar | zbarcodeid)`
+
+> 🚨 **Mengubah komposisi md5 ini = SELURUH riwayat berganti kunci.** Lihat [Pengaman](#pengaman-jangan-dilucuti).
+
+---
+
+## Tabel
+
+| Tabel | Isi |
+|---|---|
+| `sap_timesheet_staging` | Antrian payload. `ztimesheetid` = `id::text` (GENERATED). `is_productive` = `zconf_type IN (M1,M2)` (GENERATED) |
+| **`sap_staging_source`** | **Provenance**: bundel ini dari record sumber mana (segmen: `source_row_id` + `bucket_start` + detik). Jangkar semua pengaman |
+| **`sap_source_change_blocked`** | Log percobaan mengubah record yang sudah terkirim ke SAP (ditolak trigger pembekuan) |
+| `sap_stage_cursor` | Posisi terakhir staging job |
+| `sap_staging_eligibility_audit` | Audit kenapa source row belum layak |
+| `log_timesheet_sap` | Audit tiap kiriman ke SAP (dipakai guard "ZTIMESHEETID terbakar") |
+
+---
+
+## Script
 
 | Script | Fungsi |
-|--------|--------|
-| `sap_staging_common.py` | Shared helper: koneksi DB, schema DDL, insert staging, payload builder, cursor, audit eligibility. Tidak dijalankan langsung. |
-| `stage_timesheet_transaction.py` | Job otomatis/cursor untuk memasukkan `timesheet_transaction` yang sudah checkout ke `sap_timesheet_staging`. |
-| `stage_machinehours.py` | Job otomatis/cursor untuk memasukkan bundle `mch_transaction` per jam ke `sap_timesheet_staging`. |
-| `stage_sap_timesheet.py` | Tool manual/utility untuk init schema dan staging ad-hoc by `tsnumber`, date range, atau machine-hour window. |
-| `post_sap_staging.py` | Worker yang post payload dari `sap_timesheet_staging` ke SAP inbound API. |
-| `seed_sap_staging_manual.py` | Tool testing untuk seed satu payload manual ke staging. |
-| `requirements.txt` | Dependency Python untuk folder ini. |
+|---|---|
+| `stage_machinehours.py` | Job rutin jam mesin (cursor) + **catch-up** |
+| `stage_timesheet_transaction.py` | Job rutin timesheet operator (cursor) |
+| `stage_sap_timesheet.py` | Mesin bundling + tool manual (init-db, stage ad-hoc). Berisi SQL bundling — **inti dari semua aturan di atas** |
+| **`rebuild_machinehours.py`** | **Bangun ulang antrian** setelah bentuk payload/aturan berubah |
+| `post_sap_staging.py` | Kirim payload ke SAP (paralel, ber-guard) |
+| `sap_staging_common.py` | Helper: koneksi, DDL, insert staging + provenance, builder payload, cursor |
+| `seed_sap_staging_manual.py` | Seed payload manual untuk testing |
 
-## `sap_staging_common.py`
+---
 
-Ini file pondasi yang dipakai script lain.
+## Perintah
 
-Isi utamanya:
-
-- Load `.env`.
-- Membuat koneksi source DB dan staging DB.
-- Membuat/migrasi tabel staging lewat `ensure_staging_schema`.
-- Insert row ke `sap_timesheet_staging`.
-- Build kolom `payload` SAP dari kolom staging.
-- Simpan cursor job incremental.
-- Simpan audit eligibility ke `sap_staging_eligibility_audit`.
-- Helper SAP credential dan local reject handling.
-
-Script ini tidak punya `main()`, jadi jangan dijalankan langsung.
-
-## `stage_timesheet_transaction.py`
-
-Dipakai untuk job rutin timesheet.
-
-Source:
-
-- `timesheet_transaction`
-- lookup `ph3_order`/`TGT_TABLE`
-- lookup `usernfc`
-
-Default mode:
-
-- Membaca cursor `sap_stage_cursor` untuk `TIMESHEET`.
-- Mengambil row yang sudah checkout.
-- Ada overlap cursor untuk menangkap late update.
-- Insert ke `sap_timesheet_staging`.
-- Update cursor setelah sukses.
-
-Command:
-
-```powershell
+### Staging rutin
+```bash
 cd jobs/sap_staging
-python stage_timesheet_transaction.py
-```
-
-Dry run:
-
-```powershell
-python stage_timesheet_transaction.py --dry-run
-```
-
-Window manual:
-
-```powershell
-python stage_timesheet_transaction.py --from-ts 2026-07-02T08:00:00 --to-ts 2026-07-02T10:00:00
-```
-
-Audit eligibility:
-
-- Row yang berhasil disiapkan dicatat sebagai `STAGED`.
-- Row hari ini yang gagal kriteria dicatat sebagai `BLOCKED`.
-
-Kriteria blocked timesheet saat ini:
-
-- `activitytype` kosong dan `order_no` kosong.
-- `activitytype` kosong dan `operation_no` kosong.
-- `activitytype` kosong, `order_no` + `operation_no` ada, tetapi tidak match ke SOW/`ph3_order`.
-
-## `stage_machinehours.py`
-
-Dipakai untuk job rutin machine-hours.
-
-Source:
-
-- `mch_transaction`
-
-Default mode:
-
-- Mengambil previous completed hour.
-- Membaca cursor `sap_stage_cursor` untuk `MCH_HOURS`.
-- Bundle machine-hour per jam.
-- Insert ke `sap_timesheet_staging`.
-- Update cursor.
-
-Command:
-
-```powershell
-cd jobs/sap_staging
-python stage_machinehours.py
-```
-
-Dry run:
-
-```powershell
+python stage_machinehours.py                 # jam terakhir + catch-up otomatis (14 hari)
 python stage_machinehours.py --dry-run
+python stage_machinehours.py --from-ts 2026-07-01T08:00:00 --to-ts 2026-07-01T09:00:00
 ```
 
-Window manual:
-
-```powershell
-python stage_machinehours.py --from-ts 2026-07-01T08:00:00 --to-ts 2026-07-02T09:00:00
+### Catch-up — record yang diperbaiki user
+```bash
+python stage_machinehours.py --catchup                    # sapu yang tertinggal
+python stage_machinehours.py --catchup --catchup-days 20
 ```
+Mencari record **layak** yang **belum punya provenance** — mustahil melewatkan apa pun.
+Terjadi bila: (a) dulu ditolak gerbang (mis. `sn_employee` kosong) lalu diperbaiki user, sementara
+cursor sudah lewat; (b) bundelnya dihapus trigger invalidasi karena datanya berubah.
 
-Audit eligibility:
+**Lantai otomatis:** catch-up tidak boleh menyentuh tanggal sebelum bucket paling awal di antrian.
+Tanpa lantai ini, dia akan menemukan data lama yang **sudah terkirim ke SAP tanpa provenance** dan
+mengirimnya lagi. Override `--catchup-since` **hanya** kalau kamu paham konsekuensinya.
 
-- Source `mch_productiondata` hari ini yang belum muncul di `mch_transaction` dicatat sebagai `BLOCKED`.
-- Reason saat ini: `missing_mch_transaction`.
-
-Catatan: `mch_transaction` dianggap sudah melalui transformasi yang membuatnya layak masuk jalur SAP staging.
-
-## `stage_sap_timesheet.py`
-
-Ini tool manual/utility, bukan job rutin utama.
-
-Fungsinya:
-
-- Init schema staging.
-- Stage timesheet tertentu by `tsnumber`.
-- Stage timesheet by date range.
-- Stage machine-hour untuk window tertentu.
-
-Init schema:
-
-```powershell
-cd jobs/sap_staging
-python stage_sap_timesheet.py init-db
+### Rebuild — setelah aturan/bentuk payload berubah
+```bash
+python rebuild_machinehours.py --from 2026-07-01 --to 2026-07-15 --dry-run
+python rebuild_machinehours.py --from 2026-07-01 --to 2026-07-15
 ```
+Hapus baris **BELUM terkirim**, stage ulang dengan aturan terbaru. **Baris POSTED + provenance-nya
+tidak pernah disentuh** — itulah ingatan yang mencegah double-post.
 
-Stage timesheet tertentu:
+`--full-reset` menghapus **SELURUH** antrian + reset ID ke 1. **Hanya sah bila SEMUA baris POSTED
+sudah di-STORNO di SAP.**
 
-```powershell
-python stage_sap_timesheet.py timesheet --tsnumbers 97179,97180
-```
+### Posting
+```bash
+# produktif dulu (unproductive masih ditolak SAP — lihat Masalah Terbuka)
+python post_sap_staging.py --productive-only --limit 1200 --workers 5
 
-Stage timesheet by date:
-
-```powershell
-python stage_sap_timesheet.py timesheet --from-date 2026-07-02 --to-date 2026-07-02
-```
-
-Stage machine-hours manual:
-
-```powershell
-python stage_sap_timesheet.py mchours --from-ts 2026-07-02T08:00:00 --to-ts 2026-07-02T09:00:00
-```
-
-Gunakan ini untuk testing, backfill kecil, atau manual recovery. Untuk job rutin gunakan `stage_timesheet_transaction.py` dan `stage_machinehours.py`.
-
-## `post_sap_staging.py`
-
-Mengirim payload `PENDING` dari `sap_timesheet_staging` ke SAP inbound API.
-
-Command umum:
-
-```powershell
-cd jobs/sap_staging
-python post_sap_staging.py --limit 50
-```
-
-Post source tertentu:
-
-```powershell
-python post_sap_staging.py --source-system TIMESHEET --limit 50
-python post_sap_staging.py --source-system MCH_HOURS --limit 50
-```
-
-Retry failed:
-
-```powershell
-python post_sap_staging.py --retry-failed --limit 50
-```
-
-Post id tertentu:
-
-```powershell
+python post_sap_staging.py --unproductive-only --limit 200   # setelah SAP diperbaiki
+python post_sap_staging.py --retry-failed --limit 200
 python post_sap_staging.py --ids 123
 ```
 
-Jika SAP menolak payload timesheet, script dapat menandai local `timesheet_transaction` sebagai reject lewat helper di `sap_staging_common.py`.
+| Flag | Guna |
+|---|---|
+| `--workers N` | Kiriman paralel. **Paralel ANTAR-ORDER, serial DI DALAM order** (SAP mengunci order). Mulai 4–5 |
+| `--productive-only` / `--unproductive-only` | Filter `is_productive` |
+| `--max-retries` (3) | Retry **kegagalan jaringan** & **kunci order**, bukan penolakan bisnis |
+| `--retry-backoff` (2.0) | Jeda dasar antar retry (naik linear) |
+| `--delay-ms` (100) | Throttle per worker — naikkan kalau CPI memutus koneksi |
 
-## `seed_sap_staging_manual.py`
+**Kinerja:** 13,2 dtk/baris → **1,7 dtk/baris** setelah (a) koneksi DB dipakai ulang per thread —
+dulu koneksi baru **tiap baris, dua kali** (2,6 dtk/koneksi lewat tunnel Tailscale), dan (b) paralel
+per-order. **Jalankan di server, bukan dari laptop** — koneksi DB di server ~5 ms, bukan 2.622 ms.
 
-Untuk testing payload manual.
+---
 
-Contoh:
+## Pengaman (jangan dilucuti)
 
-```powershell
-cd jobs/sap_staging
-python seed_sap_staging_manual.py --payload-file ..\..\samples\sap_payloads\manual_payload.json
+### Jebakan yang mendasari semuanya
+
+`ZTIMESHEETID = sap_timesheet_staging.id::text` — **nomor baris, bukan turunan data sumber.**
+SAP memang menolak ZTIMESHEETID ganda, **tapi itu tidak melindungi kita**: begitu `source_key`
+berubah — karena **kode** (resep md5 diubah, `PLANT_SSB` diganti) atau karena **data** (order_no
+salah diperbaiki) — lahir baris staging **baru** → `id` baru → ZTIMESHEETID baru → **SAP
+menerimanya sebagai kiriman baru** → jam masuk **dua kali**.
+
+**Jangkar yang benar = SEGMEN `(proddataid, bucket_start)`** — tidak berubah walau resep md5,
+format, atau plant diubah. Bukan `proddataid` saja: bundling memotong record per jam, jadi satu
+proddataid **sah** muncul di beberapa bundel (contoh nyata: 501272 berjalan 16:45–20:48 → 5 segmen).
+
+### Empat lapis
+
+| # | Pengaman | Letak |
+|---|---|---|
+| 1 | **Unique index parsial** `WHERE posted_at IS NOT NULL` — satu segmen **mustahil** ter-POST dua kali. Database yang menolak, bukan disiplin manusia | `sap_staging_source` |
+| 2 | **Guard poster** — sebelum kirim: segmen sudah ter-POST? `source_key` **sama** → skip (re-run). **Beda** → **KONFLIK** → `SKIPPED` + "butuh storno di SAP" | `post_sap_staging.py` |
+| 3 | **Trigger pembekuan** — field kunci record yang **sudah terkirim** tidak bisa diubah; percobaan dicatat ke `sap_source_change_blocked`. ETL tidak putus (update lain tetap lolos) | `mch_transaction` |
+| 4 | **Trigger invalidasi** — record sumber berubah & bundelnya masih PENDING → bundel usang **dihapus** → catch-up men-stage ulang | `mch_transaction` |
+| + | **Guard ZTIMESHEETID terbakar** — cek `log_timesheet_sap`: ID ini pernah SUCCESS di SAP? → `SKIPPED` | `post_sap_staging.py` |
+
+### Lingkaran perbaikan data
+
+```
+EWS accuracy_machine menunjuk record tak lengkap
+   → user memperbaiki mch_transaction
+   → trigger invalidasi hapus bundel PENDING usang
+   → catch-up men-stage ulang dengan data baru
+   → poster mengirim
 ```
 
-Setelah seed, post dengan:
+---
 
-```powershell
-python post_sap_staging.py --ids <id>
-```
+## ⚠️ Batas Berbahaya
 
-## Urutan Operasional Harian
+1. **JANGAN ubah komposisi md5 `source_key`** tanpa rencana. Semua riwayat berganti kunci →
+   dianggap baru → dikirim ulang ke SAP. (Guard segmen akan menangkapnya, tapi jangan uji nasib.)
+2. **JANGAN reset sequence `id`** tanpa storno semua POSTED di SAP dulu. ZTIMESHEETID yang pernah
+   diterima SAP akan terpakai ulang → penolakan duplikat pada baris yang sah.
+3. **JANGAN rebuild/catch-up tanggal di luar rentang yang dikelola.** Data lama (mis. Juni) sudah
+   terkirim ke SAP **tanpa provenance** — men-stage-nya lagi = jam masuk dua kali.
+4. **JANGAN pertahankan `status_record` sebagai gerbang** (lihat atas).
+5. **Jangan tulis tanda persen (`%`) di komentar SQL** yang dieksekusi psycopg2 — dibaca sebagai
+   placeholder format, seluruh query gagal.
 
-Minimal:
+---
 
-```powershell
-python stage_timesheet_transaction.py
-python stage_machinehours.py
-python post_sap_staging.py --limit 50
-```
+## Masalah Terbuka
 
-Untuk loop/catch-up terbatas:
+- **Unproductive ditolak SAP**: *"Enter activity type only in conjunction with cost center"*.
+  Payload **tidak punya field KOSTL**, dan `cost_center` di `mch_transaction` hanya terisi ~14%.
+  Perbaikan ada **di sisi SAP** (kemungkinan menurunkan KOSTL dari work center/ARBPL).
+  Sementara itu: kirim dengan `--productive-only`.
+- **Tidak ada STORNO**: guard hanya **mendeteksi** konflik; pembatalan kiriman salah di SAP masih manual.
 
-```powershell
-python stage_timesheet_transaction.py --loop 5 --loop-sleep-seconds 1
-python stage_machinehours.py --loop 5 --loop-sleep-seconds 1
-```
+---
 
-## Hubungan Dengan EWS Accuracy
+## Membaca Error SAP
 
-EWS Accuracy sekarang memakai konsep SAP-ready:
+| Pesan | Arti | Aksi |
+|---|---|---|
+| `Order X is already being processed by SAPCI` | Kunci order sementara — dua kiriman untuk order sama bersamaan | Otomatis di-retry. Kalau sering: turunkan `--workers` |
+| `User status TECO is active` | Order sudah *technically complete* — tidak bisa menerima konfirmasi | Keputusan bisnis: buka TECO di SAP, atau relakan |
+| `Enter activity type only in conjunction with cost center` | Baris unproductive (LSTAR tanpa KOSTL) | Tunggu perbaikan sisi SAP |
+| `SSL: UNEXPECTED_EOF` / `read operation timed out` | **Jaringan**, bukan penolakan SAP. Request mungkin sampai, mungkin tidak | Retry **aman** (ID sama → SAP tolak duplikat, tidak dobel) |
 
-- Timesheet ready jika `timesheet_transaction.tsnumber` sudah ada di `sap_timesheet_staging` dengan `source_system = 'TIMESHEET'`.
-- Machine ready jika `mch_productiondata.proddataid` sudah ada di `mch_transaction`.
-- Row yang belum layak bisa dilihat di `sap_staging_eligibility_audit`.
+---
 
-Query audit cepat:
+## Audit Cepat
 
 ```sql
-SELECT source_system, eligibility_status, block_reason, COUNT(*)
-FROM sap_staging_eligibility_audit
-WHERE source_date = CURRENT_DATE
-GROUP BY source_system, eligibility_status, block_reason
-ORDER BY source_system, eligibility_status, block_reason;
+-- Bundel ini dari record mana saja?
+SELECT source_row_id, seconds FROM sap_staging_source WHERE staging_id = 163449;
+
+-- Record ini sudah pernah ke SAP?
+SELECT t.id, t.status, t.posted_at FROM sap_staging_source s
+JOIN sap_timesheet_staging t ON t.id = s.staging_id
+WHERE s.source_row_id = '501523';
+
+-- Perubahan data yang DITOLAK karena sudah terkirim ke SAP
+SELECT * FROM sap_source_change_blocked ORDER BY blocked_at DESC LIMIT 20;
+
+-- Kondisi antrian
+SELECT status, is_productive, count(*) FROM sap_timesheet_staging GROUP BY 1,2 ORDER BY 1,2;
 ```
 
-## Env Yang Dipakai
+---
 
-Utama:
-
-```text
-DB_HOST
-DB_PORT
-DB_NAME
-DB_USER
-DB_PASSWORD
-PLANT_SSB
-TIMEZONE
-TGT_TABLE
-SAP_INBOUND_URL
-SAP_INBOUND_USERNAME
-SAP_INBOUND_PASSWORD
-```
-
-Opsional staging DB terpisah:
+## Env
 
 ```text
-SAP_STAGING_DB_HOST
-SAP_STAGING_DB_PORT
-SAP_STAGING_DB_NAME
-SAP_STAGING_DB_USER
-SAP_STAGING_DB_PASSWORD
-```
+DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD     # source (mch_transaction, timesheet)
+PLANT_SSB TIMEZONE TGT_TABLE
+SAP_INBOUND_URL SAP_INBOUND_USERNAME SAP_INBOUND_PASSWORD
 
-Cursor:
-
-```text
-SAP_STAGE_INITIAL_FROM_TS
-SAP_STAGE_CURSOR_OVERLAP_MINUTES
-SAP_STAGE_SAFETY_DELAY_MINUTES
+SAP_STAGING_DB_HOST SAP_STAGING_DB_PORT ...     # opsional: staging DB terpisah
+SAP_STAGE_INITIAL_FROM_TS SAP_STAGE_CURSOR_OVERLAP_MINUTES SAP_STAGE_SAFETY_DELAY_MINUTES
 ```

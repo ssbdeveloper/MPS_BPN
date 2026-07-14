@@ -137,9 +137,29 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         sequence_number,
         branch_operation_no,
         return_operation_no,
-        status_activitytype,
         machineid,
-        status_description
+        status_description,
+        -- IDLE PENDEK SETELAH PRODUKSI DIANGGAP SETUP (M2) — aturan owner 2026-07-14.
+        -- statusid 2 (Idle) yang datang TEPAT setelah statusid 1 (Productive) dan hanya
+        -- berlangsung <= 300 detik = micro-stop di tengah produksi, bukan waktu terbuang.
+        -- Diperlakukan sebagai M2: RUECK + ZCONF_TYPE terisi, ZBARCODEID = 'Idle'.
+        -- Terukur 1-14 Juli: 1.964 dari 2.315 baris Idle memenuhi syarat ini.
+        CASE
+          WHEN statusid = 2
+           AND previoustatusid = 1
+           AND COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 300
+            THEN 'M2'
+          ELSE COALESCE(status_activitytype, '')
+        END AS status_activitytype,
+        CASE
+          WHEN statusid = 2
+           AND previoustatusid = 1
+           AND COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 300
+            THEN 'Idle'
+          WHEN status_activitytype = 'M2' THEN COALESCE(status_description, '')
+          WHEN status_activitytype = 'M1' THEN 'VA'
+          ELSE ''
+        END AS zbarcode_src
       FROM mch_transaction
       LEFT JOIN LATERAL (
         SELECT employee_category
@@ -168,6 +188,18 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         -- tetap lolos. status_record = kelengkapan data untuk KPI accuracy_machine,
         -- BUKAN kelayakan SAP. Kelayakan SAP = keempat field ini ada, titik.
         AND NULLIF(BTRIM(sn_employee), '') IS NOT NULL
+        -- TIDAK DIKIRIM KE SAP (aturan owner 2026-07-14): bukan waktu kerja pada order.
+        --   0 = Off, 3 = Downtime, 4 = No Job
+        -- (Catatan: 3 dan 4 mudah tertukar. Verifikasi dari data: 3=Downtime, 4=No Job.)
+        AND statusid NOT IN (0, 3, 4)
+        -- statusid 5 (Unidentified) BOLEH masuk, TAPI hanya yang <= 60 detik: celah singkat
+        -- di antara aktivitas, bukan waktu hilang yang sesungguhnya. Terukur 1-14 Juli pada
+        -- baris yang layak SAP: 1.128 dari 1.136 berdurasi <= 60 dtk; yang lebih panjang
+        -- hanya 8 baris (terpanjang 18 menit, total 0,7 jam) dan tidak dikirim.
+        AND (
+          statusid <> 5
+          OR COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 60
+        )
         AND startdatetime < %s
         AND enddatetime > %s
     ),
@@ -226,12 +258,9 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
           WHEN status_activitytype IN ('M1', 'M2') THEN ''
           ELSE COALESCE(status_activitytype, '')
         END AS lstar,
-        -- M1 = value-added -> 'VA'. M2 = setup -> teks status apa adanya. Selain itu kosong.
-        CASE
-          WHEN status_activitytype = 'M2' THEN COALESCE(status_description, '')
-          WHEN status_activitytype = 'M1' THEN 'VA'
-          ELSE ''
-        END AS zbarcodeid,
+        -- Sudah dihitung di source_rows: M1 -> 'VA', M2 -> teks status ('Setting'/'Measure'/
+        -- ...), idle-pendek-setelah-produktif -> 'Idle', selain itu kosong.
+        zbarcode_src AS zbarcodeid,
         COUNT(*)::integer AS source_row_count,
         MIN(segment_start) AS source_min_start,
         MAX(segment_end) AS source_max_end,
@@ -273,11 +302,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
           WHEN status_activitytype IN ('M1', 'M2') THEN ''
           ELSE COALESCE(status_activitytype, '')
         END,
-        CASE
-          WHEN status_activitytype = 'M2' THEN COALESCE(status_description, '')
-          WHEN status_activitytype = 'M1' THEN 'VA'
-          ELSE ''
-        END
+        zbarcode_src
     )
     SELECT
       'MCH_HOURS' AS source_system,
