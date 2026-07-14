@@ -345,8 +345,65 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
         source_keys = [row["source_key"] for row in rows]
         cur.execute(PAYLOAD_UPDATE_SQL, (source_systems, source_keys))
 
+        insert_provenance(cur, rows)
+
     conn.commit()
     return max(inserted, 0)
+
+
+# Provenance (migration 20260714): catat SEGMEN sumber tiap bundel ke
+# sap_staging_source. Jangkar identitasnya (source_row_id, bucket_start) —
+# tidak berubah walau resep source_key (md5) diubah atau data sumber dikoreksi,
+# sehingga guard di post_sap_staging bisa menolak double-post. Baris yang sudah
+# ter-POST tidak disentuh (unique index parsial menjaganya di level DB).
+PROVENANCE_INSERT_SQL = """
+INSERT INTO sap_staging_source (staging_id, source_system, source_row_id, bucket_start, seconds)
+VALUES %s
+ON CONFLICT (staging_id, source_system, source_row_id, bucket_start) DO UPDATE
+  SET seconds = EXCLUDED.seconds
+  WHERE sap_staging_source.posted_at IS NULL
+"""
+
+
+def insert_provenance(cur, rows: list[dict]) -> int:
+    """Tulis segmen sumber untuk baris yang punya `segments` (MCH_HOURS)."""
+    keyed = {
+        (row["source_system"], row["source_key"]): row
+        for row in rows
+        if row.get("segments")
+    }
+    if not keyed:
+        return 0
+
+    # Ambil id staging untuk tiap (source_system, source_key). Dilakukan lewat SELECT
+    # (bukan RETURNING) karena ON CONFLICT ... WHERE status='PENDING' tidak mengembalikan
+    # baris yang sudah POSTED/FAILED — padahal provenance-nya tetap perlu ada.
+    cur.execute(
+        """
+        SELECT id, source_system, source_key, bucket_start
+        FROM sap_timesheet_staging
+        WHERE source_system = ANY(%s) AND source_key = ANY(%s)
+        """,
+        (
+            sorted({sys_ for sys_, _ in keyed}),
+            [key for _, key in keyed],
+        ),
+    )
+    values = []
+    for staging_id, source_system, source_key, bucket_start in cur.fetchall():
+        row = keyed.get((source_system, source_key))
+        if not row:
+            continue
+        for seg in row["segments"]:
+            seconds = int(seg.get("sec") or 0)
+            if seconds <= 0:
+                continue
+            values.append((staging_id, source_system, str(seg["id"]), bucket_start, seconds))
+
+    if not values:
+        return 0
+    psycopg2.extras.execute_values(cur, PROVENANCE_INSERT_SQL, values, page_size=1000)
+    return len(values)
 
 
 def upsert_eligibility_audit(conn, rows: list[dict]) -> int:

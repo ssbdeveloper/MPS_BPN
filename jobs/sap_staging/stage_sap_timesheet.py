@@ -211,7 +211,14 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         COUNT(*)::integer AS source_row_count,
         MIN(segment_start) AS source_min_start,
         MAX(segment_end) AS source_max_end,
-        SUM(segment_seconds)::bigint AS total_seconds
+        SUM(segment_seconds)::bigint AS total_seconds,
+        -- Provenance: segmen sumber pembentuk bundel ini (proddataid + detik).
+        -- Ditulis ke sap_staging_source; jangkar guard anti-double-post — lihat
+        -- migration 20260714_sap_staging_provenance.sql.
+        jsonb_agg(jsonb_build_object(
+          'id', proddataid,
+          'sec', segment_seconds
+        ) ORDER BY proddataid) AS segments
       FROM segments
       GROUP BY
         hour_bucket,
@@ -285,7 +292,8 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
       total_seconds,
       source_row_count,
       source_min_start,
-      source_max_end
+      source_max_end,
+      segments
     FROM bundled
     WHERE total_seconds > 0
     ORDER BY bucket_start, arbpl, aufnr, vornr, zconf_type, lstar, zbarcodeid

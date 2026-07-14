@@ -228,7 +228,9 @@ Per-writer idempotency verdicts (all **READ**, direct or delegated):
 
 **S-R4 — One connection config.** All jobs read the same root `.env` keys (`DB_*`/`TGT_*`); host differences become env per deployment site, not per script.
 
-**S-R5 — Close the double-post window in `post_sap_staging.py`** (payroll): before POSTing, check `log_timesheet_sap` for the same ZTIMESHEETID with success status and skip; and write a local "attempted at" marker before the HTTP call so a crash between SAP-success and status-write is detectable rather than silently replayable. (~30 lines.) Confirm SAP-side idempotency semantics first — §8 B4.
+**S-R5 — ~~Close the double-post window~~ SUPERSEDED & DONE 2026-07-14.** The proposed guard (check `log_timesheet_sap` for the same ZTIMESHEETID) would have been **useless**: `ztimesheetid` is `sap_timesheet_staging.id::text` — a row number, not derived from source data. A re-keyed bundle gets a NEW id → NEW ztimesheetid → SAP accepts it as new. Shipped instead: a guard anchored on the **source segment** `(proddataid, bucket_start)` + a partial unique index making a double-post structurally impossible, + a freeze trigger on `mch_transaction`. See `docs/concepts/sap-staging-identity.md`. B4 answered: SAP *does* dedupe on ZTIMESHEETID — which is exactly why it does not protect us.
+
+**S-R5 (original text, kept for provenance) — Close the double-post window in `post_sap_staging.py`** (payroll): before POSTing, check `log_timesheet_sap` for the same ZTIMESHEETID with success status and skip; and write a local "attempted at" marker before the HTTP call so a crash between SAP-success and status-write is detectable rather than silently replayable. (~30 lines.) Confirm SAP-side idempotency semantics first — §8 B4.
 
 **S-R6 — Relocate live VBA out of `docs/archive/`** to `tools/msproject-vba/` (or similar), move the base URL into a config cell/file, and delete `legacy/*.bas`. Re-enable TLS verification or pin the cert (WinHttp option) — currently MITM-able.
 

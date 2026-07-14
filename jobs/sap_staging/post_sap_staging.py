@@ -227,6 +227,70 @@ def log_timesheet_sap(payload: dict[str, Any], response_text: str) -> None:
         log.warning("Could not write local log_timesheet_sap: %s", exc)
 
 
+# GUARD ANTI-DOUBLE-POST (migration 20260714).
+#
+# ZTIMESHEETID = id::text baris staging, jadi dedup di sisi SAP TIDAK melindungi kita:
+# begitu source_key berubah (resep md5 diubah, ATAU data sumber dikoreksi), lahir baris
+# staging baru -> id baru -> ZTIMESHEETID baru -> SAP menganggapnya kiriman baru dan
+# MENERIMANYA. Jam kerja masuk dua kali.
+#
+# Karena itu guard berjangkar pada identitas SUMBER: segmen (source_row_id, bucket_start).
+# Segmen tidak ikut berubah walau resep/format/plant diubah.
+#
+# Dua hasil yang dibedakan (penting):
+#   • source_key SAMA  -> re-run biasa. Aman, tapi tetap tidak dikirim ulang.
+#   • source_key BEDA  -> KONFLIK: data sumber berubah setelah bundel lama ter-post.
+#     Yang salah SUDAH ada di SAP dan sistem ini tidak punya storno. Jadi jangan kirim —
+#     tandai SKIPPED dan biarkan manusia memutuskan (storno di SAP, lalu post koreksinya).
+def find_posted_conflicts(row_ids: list[int]) -> dict[int, str]:
+    if not row_ids:
+        return {}
+    sql = """
+    SELECT
+      s.staging_id,
+      string_agg(DISTINCT prev.staging_id::text || ':' || prev.source_key, ', ') AS posted_in,
+      bool_or(prev.source_key IS DISTINCT FROM cur.source_key) AS key_changed
+    FROM sap_staging_source s
+    JOIN sap_timesheet_staging cur ON cur.id = s.staging_id
+    JOIN sap_staging_source prev
+      ON  prev.source_system = s.source_system
+      AND prev.source_row_id = s.source_row_id
+      AND prev.bucket_start  = s.bucket_start
+      AND prev.posted_at IS NOT NULL
+      AND prev.staging_id <> s.staging_id
+    JOIN sap_timesheet_staging prev_t ON prev_t.id = prev.staging_id
+    WHERE s.staging_id = ANY(%s::bigint[])
+    GROUP BY s.staging_id
+    """
+    # prev.source_key tidak ada di tabel provenance -> ambil dari staging-nya.
+    sql = sql.replace("prev.source_key", "prev_t.source_key")
+    with connect_staging() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (row_ids,))
+            return {
+                int(staging_id): (
+                    f"Segmen sumber sudah ter-POST di bundel {posted_in}"
+                    + (" dengan source_key BERBEDA (data sumber berubah — butuh storno di SAP"
+                       " sebelum koreksi ini dikirim)" if key_changed else " (duplikat)")
+                )
+                for staging_id, posted_in, key_changed in cur.fetchall()
+            }
+
+
+def mark_skipped(row_id: int, reason: str) -> None:
+    with connect_staging() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sap_timesheet_staging
+                SET status = 'SKIPPED', sap_error = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (reason, row_id),
+            )
+        conn.commit()
+
+
 def process_rows(args: argparse.Namespace) -> None:
     selected_ids = parse_csv_values(args.ids)
     selected_ztimesheetids = parse_csv_values(args.ztimesheetids)
@@ -239,10 +303,22 @@ def process_rows(args: argparse.Namespace) -> None:
         log.info("No staging rows to post")
         return
 
+    conflicts = find_posted_conflicts([row["id"] for row in rows])
+    if conflicts:
+        log.warning("Guard: %s bundel dilewati karena segmennya sudah ter-POST", len(conflicts))
+
     success_count = 0
     fail_count = 0
+    skipped_count = 0
 
     for row in rows:
+        conflict = conflicts.get(row["id"])
+        if conflict:
+            mark_skipped(row["id"], conflict)
+            skipped_count += 1
+            log.warning("SKIPPED id=%s — %s", row["id"], conflict)
+            continue
+
         payload = row["payload"] or {}
         if not payload:
             message = "empty payload"
@@ -276,7 +352,10 @@ def process_rows(args: argparse.Namespace) -> None:
         if args.delay_ms > 0:
             time.sleep(args.delay_ms / 1000)
 
-    log.info("SAP posting done success=%s failed=%s", success_count, fail_count)
+    log.info(
+        "SAP posting done success=%s failed=%s skipped=%s",
+        success_count, fail_count, skipped_count,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

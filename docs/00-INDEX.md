@@ -17,6 +17,7 @@ updated: 2026-07-11
 ## 🧠 Konsep (memori semantik — pengetahuan yang menetap)
 
 - [[concepts/payroll-data-path]] — jalur data jam kerja → gaji (yang tidak boleh rusak)
+- [[concepts/sap-staging-identity]] — kenapa `source_key` rapuh, ZTIMESHEETID menipu, dan segmen adalah jangkar yang benar
 - [[concepts/order-no-spine]] — tulang punggung order_no + ssbr_ident, struktur 2 tingkat
 - [[concepts/ukur-dulu-baru-refactor]] — pelajaran: diagnosis performa pakai data, bukan asumsi
 

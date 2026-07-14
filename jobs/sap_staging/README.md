@@ -127,7 +127,7 @@ python stage_machinehours.py --dry-run
 Window manual:
 
 ```powershell
-python stage_machinehours.py --from-ts 2026-07-02T08:00:00 --to-ts 2026-07-02T09:00:00
+python stage_machinehours.py --from-ts 2026-07-01T08:00:00 --to-ts 2026-07-02T09:00:00
 ```
 
 Audit eligibility:
