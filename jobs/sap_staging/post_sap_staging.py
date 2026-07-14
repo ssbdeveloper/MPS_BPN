@@ -288,6 +288,39 @@ def find_posted_conflicts(row_ids: list[int]) -> dict[int, str]:
             }
 
 
+# Sequence ID di-reset ke 1 (2026-07-14, keputusan owner), sementara SAP sudah pernah
+# menerima ZTIMESHEETID di rentang 151.320-163.469 (225 kiriman, 68 sukses — kerja Juni
+# 15/29/30 + 2 Juli yang sudah distorno). ztimesheetid = id::text, jadi suatu saat
+# sequence akan menyentuh angka-angka itu lagi dan SAP menolaknya sebagai duplikat.
+#
+# Guard ini mengubah kegagalan misterius di masa depan menjadi SKIPPED yang menjelaskan
+# dirinya sendiri. Juga melindungi kalau ada yang me-rebuild tanggal Juni (provenance
+# baris-baris itu sudah tidak ada — log_timesheet_sap adalah satu-satunya ingatan).
+def find_burned_ztimesheetids(ztimesheetids: list[str]) -> dict[str, str]:
+    if not ztimesheetids:
+        return {}
+    with connect_source() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ztimesheetid, min(created_at)::date, min(start_date)
+                FROM log_timesheet_sap
+                WHERE ztimesheetid = ANY(%s)
+                  AND sap_response LIKE 'SUCCESS%%'
+                GROUP BY ztimesheetid
+                """,
+                (ztimesheetids,),
+            )
+            return {
+                str(zid): (
+                    f"ZTIMESHEETID {zid} SUDAH pernah diterima SAP (dikirim {sent}, "
+                    f"jam kerja {work_date}). Sequence ID di-reset ke 1 pada 2026-07-14, "
+                    "jadi nomor ini terpakai ulang. Storno di SAP dulu, atau geser sequence."
+                )
+                for zid, sent, work_date in cur.fetchall()
+            }
+
+
 def mark_skipped(row_id: int, reason: str) -> None:
     with connect_staging() as conn:
         with conn.cursor() as cur:
@@ -322,6 +355,14 @@ def process_rows(args: argparse.Namespace) -> None:
     conflicts = find_posted_conflicts([row["id"] for row in rows])
     if conflicts:
         log.warning("Guard: %s bundel dilewati karena segmennya sudah ter-POST", len(conflicts))
+
+    burned = find_burned_ztimesheetids([str(row["id"]) for row in rows])
+    if burned:
+        log.warning("Guard: %s bundel dilewati — ZTIMESHEETID-nya sudah dipakai di SAP", len(burned))
+    for row in rows:
+        reason = burned.get(str(row["id"]))
+        if reason and row["id"] not in conflicts:
+            conflicts[row["id"]] = reason
 
     success_count = 0
     fail_count = 0

@@ -80,25 +80,62 @@ def purge_unposted(from_ts: datetime, to_ts: datetime, dry_run: bool) -> int:
 
 
 def restage(from_ts: datetime, to_ts: datetime, dry_run: bool) -> int:
-    """Stage ulang jam demi jam dengan bundling terbaru."""
+    """Stage ulang dengan bundling terbaru, sehari sekali jalan.
+
+    fetch_machine_hour_rows() SUDAH memecah per jam di dalam SQL-nya (generate_series
+    atas hour_bucket), jadi tidak perlu loop per jam dari Python — cukup per hari
+    supaya query-nya sedikit tapi tetap tidak kebesaran.
+    """
     total = 0
     cursor = from_ts
     while cursor < to_ts:
-        hour_end = min(cursor + timedelta(hours=1), to_ts)
-        rows = fetch_machine_hour_rows(cursor, hour_end)
+        day_end = min(cursor + timedelta(days=1), to_ts)
+        rows = fetch_machine_hour_rows(cursor, day_end)
         if rows:
             staged = stage_rows(rows, dry_run)
             total += len(rows)
-            log.info("%s -> %s bundel (%s ditulis)", cursor, len(rows), staged)
-        cursor = hour_end
+            log.info("%s -> %s bundel (%s ditulis)", cursor.date(), len(rows), staged)
+        else:
+            log.info("%s -> tidak ada data", cursor.date())
+        cursor = day_end
     return total
+
+
+def full_reset(dry_run: bool) -> None:
+    """HAPUS SELURUH antrian MCH_HOURS + reset sequence ID ke 1.
+
+    HANYA sah bila SEMUA baris POSTED sudah di-STORNO di SAP — kalau tidak, ingatan
+    'segmen ini sudah di SAP' ikut terhapus dan jam bisa terkirim dua kali.
+    Jaring pengaman terakhir tetap ada: guard poster mengecek log_timesheet_sap
+    (find_burned_ztimesheetids) sebelum mengirim.
+    """
+    with connect_staging() as conn:
+        ensure_staging_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*), count(*) FILTER (WHERE status='POSTED') FROM sap_timesheet_staging")
+            total, posted = cur.fetchone()
+            log.warning("FULL RESET: %s baris dihapus (%s di antaranya POSTED — pastikan sudah distorno di SAP)",
+                        total, posted)
+            if dry_run:
+                log.info("(dry-run: sequence akan di-reset ke 1)")
+                return
+            # CASCADE ke sap_staging_source; RESTART IDENTITY mengembalikan id ke 1.
+            cur.execute("TRUNCATE TABLE sap_timesheet_staging RESTART IDENTITY CASCADE")
+            cur.execute("DELETE FROM sap_stage_cursor WHERE source_system = 'MCH_HOURS'")
+        conn.commit()
+    log.warning("Antrian dikosongkan, sequence ID kembali ke 1")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--from", dest="from_date", required=True, help="Tanggal mulai, mis. 2026-07-01")
-    parser.add_argument("--to", dest="to_date", required=True, help="Tanggal akhir (eksklusif), mis. 2026-07-14")
+    parser.add_argument("--to", dest="to_date", required=True, help="Tanggal akhir (eksklusif), mis. 2026-07-15")
     parser.add_argument("--dry-run", action="store_true", help="Tampilkan rencana, jangan ubah apa pun")
+    parser.add_argument(
+        "--full-reset", action="store_true",
+        help="HAPUS SELURUH antrian (termasuk POSTED) + reset ID ke 1. "
+             "Hanya sah bila semua POSTED sudah distorno di SAP.",
+    )
     args = parser.parse_args()
 
     from_ts = parse_date(args.from_date)
@@ -106,8 +143,12 @@ def main() -> None:
     if from_ts >= to_ts:
         raise SystemExit("--from harus lebih awal dari --to")
 
-    deleted = purge_unposted(from_ts, to_ts, args.dry_run)
-    if not args.dry_run:
+    if args.full_reset:
+        full_reset(args.dry_run)
+        deleted = 0
+    else:
+        deleted = purge_unposted(from_ts, to_ts, args.dry_run)
+    if not args.dry_run and not args.full_reset:
         log.info("%s baris belum-terkirim dihapus", deleted)
 
     prepared = restage(from_ts, to_ts, args.dry_run)
