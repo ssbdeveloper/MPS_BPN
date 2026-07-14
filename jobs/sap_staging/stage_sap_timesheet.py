@@ -157,6 +157,17 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         AND order_no <> ''
         AND operation_no IS NOT NULL
         AND operation_no <> ''
+        -- GERBANG OPERATOR (2026-07-14). Tanpa ini, baris tanpa sn_employee di-stage dan
+        -- dikirim ke SAP dengan PERNR KOSONG — jam kerja tanpa pemilik. Terukur pada
+        -- 1-14 Juli: 1.490 baris (554 bundel, seperlima antrian) akan bocor.
+        -- (Jangan tulis tanda persen di komentar SQL ini: psycopg2 membacanya sebagai
+        --  placeholder format dan seluruh query gagal.)
+        --
+        -- CATATAN: JANGAN pakai kolom status_record sebagai gerbang. Definisinya punya
+        -- pintu belakang `statusid IN (0,3,4) OR (...)`, sehingga 11 baris tanpa operator
+        -- tetap lolos. status_record = kelengkapan data untuk KPI accuracy_machine,
+        -- BUKAN kelayakan SAP. Kelayakan SAP = keempat field ini ada, titik.
+        AND NULLIF(BTRIM(sn_employee), '') IS NOT NULL
         AND startdatetime < %s
         AND enddatetime > %s
     ),

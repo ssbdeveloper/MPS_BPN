@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from stage_sap_timesheet import fetch_machine_hour_rows, parse_dt, previous_completed_hour, stage_rows
 from sap_staging_common import (
@@ -91,6 +91,87 @@ def fetch_blocked_today_production_rows() -> list[dict]:
     ]
 
 
+def managed_floor():
+    """Tanggal paling awal yang BOLEH disentuh catch-up.
+
+    LANTAI PENGAMAN — jangan hapus. Tanpa ini, catch-up menemukan SEMUA record layak
+    yang tak punya provenance, termasuk data JUNI: 13.535 record dari 24-30 Juni, periode
+    di mana 66 konfirmasi sudah SUKSES masuk SAP lewat batch lama yang baris staging-nya
+    (dan provenance-nya) sudah lama terhapus. Men-stage & mengirimnya = jam kerja masuk
+    SAP DUA KALI.
+
+    Lantainya = bucket paling awal yang MEMANG kita kelola (hasil rebuild = 1 Juli).
+    Kalau antrian kosong, catch-up tidak melakukan apa-apa — itu benar: tidak ada rentang
+    yang dikelola, tidak ada yang boleh disapu.
+    """
+    with connect_staging() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT min(bucket_start)::date FROM sap_timesheet_staging WHERE source_system = 'MCH_HOURS'"
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+
+
+def find_catchup_days(days: int, floor) -> list:
+    """Hari-hari yang punya record LAYAK SAP tapi BELUM ter-bundle.
+
+    Dua sebab record layak tapi belum ter-bundle:
+      1. Dulu tidak layak (mis. sn_employee kosong) -> ditolak gerbang; user lalu
+         memperbaikinya, TAPI cursor sudah lewat -> tak akan pernah di-stage lagi.
+      2. Bundelnya dihapus trigger invalidasi karena data sumbernya berubah.
+
+    Tabel provenance (sap_staging_source) membuat deteksinya sepele: cari record layak
+    yang tidak punya baris provenance sama sekali. Tidak mungkin ada yang terlewat.
+    """
+    sql = """
+    SELECT DISTINCT m.startdatetime::date AS hari,
+           count(*) OVER (PARTITION BY m.startdatetime::date) AS n
+    FROM mch_transaction m
+    WHERE m.startdatetime >= GREATEST((now() - make_interval(days => %s))::date, %s::date)
+      AND m.enddatetime IS NOT NULL
+      AND m.enddatetime > m.startdatetime
+      AND COALESCE(m.confirmation_number, '') <> ''
+      AND COALESCE(m.order_no, '') <> ''
+      AND COALESCE(m.operation_no, '') <> ''
+      AND NULLIF(BTRIM(m.sn_employee), '') IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM sap_staging_source s
+        WHERE s.source_system = 'MCH_HOURS'
+          AND s.source_row_id = m.proddataid::text
+      )
+    ORDER BY 1
+    """
+    with connect_source() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (days, floor))
+            return cur.fetchall()
+
+
+def run_catchup(args: argparse.Namespace) -> None:
+    """Stage ulang hari-hari yang punya record layak-tapi-belum-ter-bundle."""
+    floor = args.catchup_since or managed_floor()
+    if floor is None:
+        log.info("Catch-up dilewati: antrian kosong, belum ada rentang yang dikelola")
+        return
+
+    days = find_catchup_days(args.catchup_days, floor)
+    if not days:
+        log.info("Catch-up: tidak ada record layak yang tertinggal (sejak %s, %s hari terakhir)",
+                 floor, args.catchup_days)
+        return
+
+    total_rows = sum(n for _, n in days)
+    log.info("Catch-up sejak %s: %s record layak belum ter-bundle, tersebar di %s hari",
+             floor, total_rows, len(days))
+    for day, n in days:
+        from_ts = datetime(day.year, day.month, day.day)
+        to_ts = from_ts + timedelta(days=1)
+        rows = fetch_machine_hour_rows(from_ts, to_ts)
+        staged = stage_rows(rows, args.dry_run)
+        log.info("  %s: %s record tertinggal -> %s bundel (%s ditulis)", day, n, len(rows), staged)
+
+
 def run_once(args: argparse.Namespace) -> bool:
     cursor_mode = not (args.from_ts or args.to_ts)
 
@@ -146,8 +227,16 @@ def run_once(args: argparse.Namespace) -> bool:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.catchup:
+        run_catchup(args)
+        return
+
     if not args.loop:
         run_once(args)
+        # Setiap run normal juga menyapu yang tertinggal, supaya record yang baru
+        # diperbaiki user tidak menganggur menunggu ada yang ingat menjalankan catch-up.
+        if args.catchup_days > 0:
+            run_catchup(args)
         return
 
     if args.from_ts or args.to_ts:
@@ -171,6 +260,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--to-ts", help="End timestamp, e.g. 2026-06-12T15:00:00")
     parser.add_argument("--overlap-minutes", type=int, default=cursor_overlap_minutes(30), help="Cursor overlap to catch cross-hour updates")
     parser.add_argument("--max-hours", type=int, default=6, help="Maximum catch-up window per run in cursor mode")
+    parser.add_argument(
+        "--catchup", action="store_true",
+        help="HANYA jalankan catch-up: stage record yang LAYAK tapi belum ter-bundle "
+             "(mis. sn_employee dulu kosong lalu diperbaiki user, sementara cursor sudah lewat).",
+    )
+    parser.add_argument(
+        "--catchup-days", type=int, default=14,
+        help="Berapa hari ke belakang yang disapu catch-up (default 14). 0 = matikan.",
+    )
+    parser.add_argument(
+        "--catchup-since",
+        help="Lantai tanggal catch-up (YYYY-MM-DD). Default: bucket paling awal di antrian. "
+             "JANGAN turunkan ke bawah rentang yang dikelola — data lama sudah terkirim ke SAP "
+             "tanpa provenance, dan men-stage-nya lagi = jam kerja masuk SAP dua kali.",
+    )
     parser.add_argument("--loop", type=int, default=0, help="Test/catch-up mode: run cursor batches repeatedly N times")
     parser.add_argument("--loop-sleep-seconds", type=float, default=0.0, help="Sleep between loop iterations")
     parser.add_argument("--no-fast-forward-empty", dest="fast_forward_empty", action="store_false", help="Do not jump over empty cursor windows")

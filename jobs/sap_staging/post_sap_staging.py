@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import psycopg2.extras
@@ -22,6 +24,43 @@ from sap_staging_common import (
 )
 
 log = setup_logging("post_sap_staging")
+
+
+# ── Koneksi DB per-thread, dipakai ulang ─────────────────────────────────────
+# Kode lama memanggil `with connect_staging() as conn:` DI DALAM tiap update_result()
+# dan log_timesheet_sap() — artinya SATU KONEKSI BARU PER BARIS, dua kali. Diukur lewat
+# tunnel Tailscale (relay Singapura): 2.622 ms hanya untuk membuka koneksi. Jadi ~6 detik
+# per baris terbuang sebelum SAP disentuh sama sekali.
+#
+# (Catatan: `with conn` di psycopg2 meng-commit TRANSAKSI, bukan menutup koneksi — jadi
+#  koneksi-koneksi itu menumpuk sampai dibersihkan GC.)
+#
+# Sekarang: satu koneksi per thread, dibuka sekali, dipakai ulang seumur batch.
+_tl = threading.local()
+
+
+def _conn(kind: str):
+    conn = getattr(_tl, kind, None)
+    if conn is None or conn.closed:
+        conn = connect_staging() if kind == "staging" else connect_source()
+        setattr(_tl, kind, conn)
+    return conn
+
+
+def _reset_conn(kind: str) -> None:
+    """Koneksi rusak (jaringan putus) -> buang, biar dibuat ulang."""
+    conn = getattr(_tl, kind, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        setattr(_tl, kind, None)
+
+
+def _close_thread_conns() -> None:
+    for kind in ("staging", "source"):
+        _reset_conn(kind)
 
 
 def parse_sap_status(response_text: str) -> tuple[str, str]:
@@ -166,7 +205,8 @@ def update_result(row_id: int, ok: bool, status_code: int, response_text: str, m
     except json.JSONDecodeError:
         parsed_response = None
 
-    with connect_staging() as conn:
+    try:
+        conn = _conn("staging")
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -189,13 +229,37 @@ def update_result(row_id: int, ok: bool, status_code: int, response_text: str, m
                 ),
             )
         conn.commit()
+    except Exception:
+        # Koneksi kemungkinan rusak -> buang, lalu coba sekali lagi dgn koneksi baru.
+        # Kalau ini pun gagal, biarkan meledak: status baris HARUS tercatat.
+        _reset_conn("staging")
+        conn = _conn("staging")
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sap_timesheet_staging
+                SET status = %s, sap_response = %s, sap_response_text = %s, sap_error = %s,
+                    posted_at = CASE WHEN %s THEN now() ELSE posted_at END, updated_at = now()
+                WHERE id = %s
+                """,
+                (
+                    "POSTED" if ok else "FAILED",
+                    psycopg2.extras.Json(as_json(parsed_response)),
+                    response_text,
+                    None if ok else f"HTTP {status_code}: {message}",
+                    ok,
+                    row_id,
+                ),
+            )
+        conn.commit()
 
 
 def log_timesheet_sap(payload: dict[str, Any], response_text: str) -> None:
     try:
         status, message = parse_sap_status(response_text)
         sap_response = f"{'SUCCESS' if status == 'S' else 'ERROR'} : {message}" if status else response_text
-        with connect_source() as conn:
+        conn = _conn("source")
+        if True:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -235,6 +299,7 @@ def log_timesheet_sap(payload: dict[str, Any], response_text: str) -> None:
                 )
             conn.commit()
     except Exception as exc:
+        _reset_conn("source")
         log.warning("Could not write local log_timesheet_sap: %s", exc)
 
 
@@ -335,6 +400,88 @@ def mark_skipped(row_id: int, reason: str) -> None:
         conn.commit()
 
 
+def post_one(row: dict, args: argparse.Namespace) -> str:
+    """Kirim SATU baris ke SAP. Dipanggil paralel oleh ThreadPoolExecutor.
+
+    Retry hanya untuk kegagalan JARINGAN (mis. SSL UNEXPECTED_EOF — CPI memutus koneksi),
+    BUKAN untuk penolakan SAP. Retry aman karena ID-nya sama: kalau ternyata SAP sudah
+    menerima kiriman pertama, retry ditolak sebagai ZTIMESHEETID duplikat (terlihat),
+    bukan dihitung dua kali.
+    """
+    row_id = row["id"]
+    zid = (row["payload"] or {}).get("ZTIMESHEETID")
+    payload = row["payload"] or {}
+    if not payload:
+        update_result(row_id, False, 0, "empty payload", "empty payload")
+        return "failed"
+
+    last_error = None
+    last_message = None
+    for attempt in range(1, args.max_retries + 1):
+        try:
+            status_code, response_text = post_payload(payload, args.timeout)
+        except Exception as exc:  # jaringan/TLS — transient
+            last_error = str(exc)
+            if attempt < args.max_retries:
+                backoff = args.retry_backoff * attempt
+                log.warning("Jaringan gagal id=%s (percobaan %s/%s), ulang dalam %.1fs: %s",
+                            row_id, attempt, args.max_retries, backoff, exc)
+                time.sleep(backoff)
+                continue
+            update_result(row_id, False, 0, last_error, last_error)
+            log.warning("SAP ERROR id=%s ztimesheetid=%s error=%s", row_id, zid, last_error)
+            if row["source_system"] == "TIMESHEET" and row.get("source_ref_id"):
+                mark_local_timesheet_rejected([row["source_ref_id"]], last_error)
+            return "failed"
+
+        sap_status, sap_message = parse_sap_status(response_text)
+        ok = sap_status == "S"
+
+        # "Order X is already being processed by SAPCI" = kunci SEMENTARA di SAP, bukan
+        # penolakan bisnis. Terjadi bila order yang sama sedang dikonfirmasi proses lain.
+        # Pengelompokan per-order sudah mencegah kita menabrak diri sendiri, tapi proses
+        # LAIN (atau sisa kunci) masih bisa memicunya -> tunggu, coba lagi.
+        if not ok and "already being processed" in sap_message.lower() and attempt < args.max_retries:
+            backoff = args.retry_backoff * attempt
+            log.warning("Order terkunci id=%s (percobaan %s/%s), ulang dalam %.1fs: %s",
+                        row_id, attempt, args.max_retries, backoff, sap_message)
+            last_message = sap_message
+            time.sleep(backoff)
+            continue
+
+        update_result(row_id, ok, status_code, response_text, sap_message)
+        log_timesheet_sap(payload, response_text)
+
+        # Throttle per worker — naikkan kalau CPI mulai memutus koneksi (rate-limit).
+        if args.delay_ms > 0:
+            time.sleep(args.delay_ms / 1000)
+
+        if ok:
+            log.info("SAP OK id=%s ztimesheetid=%s", row_id, zid)
+            return "success"
+
+        log.warning("SAP FAILED id=%s ztimesheetid=%s message=%s", row_id, zid, sap_message)
+        if row["source_system"] == "TIMESHEET" and row.get("source_ref_id"):
+            mark_local_timesheet_rejected([row["source_ref_id"]], sap_message)
+        return "failed"
+
+    msg = last_message or last_error or "gagal setelah retry"
+    update_result(row_id, False, 0, msg, msg)
+    return "failed"
+
+
+def post_order_group(rows: list[dict], args: argparse.Namespace) -> list[str]:
+    """Kirim semua baris untuk SATU order — SERIAL.
+
+    SAP CPI MENGUNCI sebuah order selama memproses konfirmasinya: dua kiriman untuk
+    order yang sama secara bersamaan -> yang kedua ditolak
+    ("Order X is already being processed by SAPCI"). Terbukti live: paralel acak 5 worker
+    membuat 6 dari 10 baris gagal, 4 di antaranya menabrak order yang sama.
+    Jadi paralelismenya ADA DI ANTAR-ORDER, bukan di dalam satu order.
+    """
+    return [post_one(row, args) for row in rows]
+
+
 def process_rows(args: argparse.Namespace) -> None:
     selected_ids = parse_csv_values(args.ids)
     selected_ztimesheetids = parse_csv_values(args.ztimesheetids)
@@ -368,46 +515,48 @@ def process_rows(args: argparse.Namespace) -> None:
     fail_count = 0
     skipped_count = 0
 
+    # Baris konflik ditangani serial dulu (jumlahnya kecil, tidak menyentuh SAP).
+    postable = []
     for row in rows:
         conflict = conflicts.get(row["id"])
         if conflict:
             mark_skipped(row["id"], conflict)
             skipped_count += 1
             log.warning("SKIPPED id=%s — %s", row["id"], conflict)
-            continue
+        else:
+            postable.append(row)
 
-        payload = row["payload"] or {}
-        if not payload:
-            message = "empty payload"
-            update_result(row["id"], False, 0, message, message)
+    # Kelompokkan per ORDER (AUFNR). Baris tanpa order (unproductive: AUFNR kosong) tidak
+    # mengunci order apa pun -> tiap baris jadi grup sendiri, boleh paralel penuh.
+    groups: dict[str, list[dict]] = {}
+    for row in postable:
+        aufnr = (row["payload"] or {}).get("AUFNR") or ""
+        key = aufnr if aufnr else f"__free_{row['id']}"
+        groups.setdefault(key, []).append(row)
+
+    started = time.perf_counter()
+    results: list[str] = []
+    if args.workers > 1 and len(groups) > 1:
+        log.info("Mengirim %s baris / %s order dengan %s worker (paralel antar-order, serial di dalam order)",
+                 len(postable), len(groups), args.workers)
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            futures = [pool.submit(post_order_group, grp, args) for grp in groups.values()]
+            for fut in as_completed(futures):
+                results.extend(fut.result())
+    else:
+        for grp in groups.values():
+            results.extend(post_order_group(grp, args))
+    _close_thread_conns()
+
+    for outcome in results:
+        if outcome == "success":
+            success_count += 1
+        else:
             fail_count += 1
-            continue
 
-        try:
-            status_code, response_text = post_payload(payload, args.timeout)
-            sap_status, sap_message = parse_sap_status(response_text)
-            ok = sap_status == "S"
-            update_result(row["id"], ok, status_code, response_text, sap_message)
-            log_timesheet_sap(payload, response_text)
-
-            if ok:
-                success_count += 1
-                log.info("SAP OK id=%s ztimesheetid=%s", row["id"], payload.get("ZTIMESHEETID"))
-            else:
-                fail_count += 1
-                log.warning("SAP FAILED id=%s ztimesheetid=%s message=%s", row["id"], payload.get("ZTIMESHEETID"), sap_message)
-                if row["source_system"] == "TIMESHEET" and row.get("source_ref_id"):
-                    mark_local_timesheet_rejected([row["source_ref_id"]], sap_message)
-        except Exception as exc:
-            fail_count += 1
-            response_text = str(exc)
-            update_result(row["id"], False, 0, response_text, response_text)
-            log.warning("SAP ERROR id=%s ztimesheetid=%s error=%s", row["id"], payload.get("ZTIMESHEETID"), exc)
-            if row["source_system"] == "TIMESHEET" and row.get("source_ref_id"):
-                mark_local_timesheet_rejected([row["source_ref_id"]], str(exc))
-
-        if args.delay_ms > 0:
-            time.sleep(args.delay_ms / 1000)
+    elapsed = time.perf_counter() - started
+    if postable:
+        log.info("Selesai dalam %.1f dtk (%.1f dtk/baris)", elapsed, elapsed / len(postable))
 
     log.info(
         "SAP posting done success=%s failed=%s skipped=%s",
@@ -422,6 +571,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-ms", type=int, default=100)
     parser.add_argument("--retry-failed", action="store_true", help="Also retry rows with status FAILED")
     parser.add_argument("--source-system", choices=["TIMESHEET", "MCH_HOURS"], help="Only post one source system")
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Jumlah kiriman paralel ke SAP (default 1 = serial). SAP ~7 dtk/kiriman, "
+             "jadi paralel adalah satu-satunya cara mempercepat batch besar. Mulai dari 4-5; "
+             "kalau error jaringan/TLS mulai sering, TURUNKAN (tanda rate-limit CPI).",
+    )
+    parser.add_argument(
+        "--max-retries", type=int, default=3,
+        help="Percobaan ulang untuk kegagalan JARINGAN saja (bukan penolakan SAP). "
+             "Aman: ID sama -> SAP menolak duplikat, tidak dobel.",
+    )
+    parser.add_argument("--retry-backoff", type=float, default=2.0, help="Detik jeda dasar antar retry (naik linear)")
     productive_group = parser.add_mutually_exclusive_group()
     productive_group.add_argument(
         "--productive-only", action="store_true",
