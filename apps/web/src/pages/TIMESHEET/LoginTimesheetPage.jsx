@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import ssbLogo from '../../assets/ssb.png';
+import { normalizeNfcId } from '../../utils/nfcId';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const UNPROD_QUICK_MODES = {
@@ -165,7 +166,16 @@ const LoginTimesheetPage = () => {
   // ── API calls ────────────────────────────────────────────────────────────────
   const getUserByNfc = async (nfcid) => {
     try {
-      const res  = await fetch(`${API_BASE}/usernfc/nfcid/${nfcid}`);
+      // encodeURIComponent: kalau normalisasi tidak mengenali bentuknya (mis. nilai
+      // non-UID lama), ':' bisa lolos ke path URL — itu harus di-escape.
+      const res  = await fetch(`${API_BASE}/usernfc/nfcid/${encodeURIComponent(normalizeNfcId(nfcid))}`);
+      if (res.status === 409) {
+        // Satu kartu terdaftar atas >1 orang. JANGAN tebak — jam kerja bisa masuk
+        // ke orang yang salah. Backend sudah menolak; tampilkan supaya admin tahu.
+        const dup = await res.json().catch(() => null);
+        toast.error(dup?.message || 'Kartu ini terdaftar atas lebih dari satu orang. Hubungi admin.');
+        return null;
+      }
       if (!res.ok) return null;
       const data = await res.json().catch(() => null);
       return data && Object.keys(data).length ? data : null;
@@ -261,12 +271,15 @@ const LoginTimesheetPage = () => {
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const showSuccessToast = (message) => toast.success(message);
 
+  // Web NFC memberi serialNumber sebagai hex titik-dua little-endian ("52:ee:d9:69"),
+  // sementara reader eksternal memberi desimal ("1775890002") untuk kartu YANG SAMA.
+  // Normalisasi di sini supaya kedua mode menghasilkan ID identik.
   const extractNfcId = (event) => {
-    if (event.serialNumber?.trim()) return event.serialNumber.trim();
+    if (event.serialNumber?.trim()) return normalizeNfcId(event.serialNumber);
     for (const record of event.message?.records || []) {
       if (record.recordType === 'text') {
         try {
-          return new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim();
+          return normalizeNfcId(new TextDecoder(record.encoding || 'utf-8').decode(record.data));
         } catch (e) {
           console.error('Error decoding NFC record:', e);
         }
@@ -472,7 +485,9 @@ const LoginTimesheetPage = () => {
   const handleScannerInput = async (e) => {
     if (e.key !== 'Enter' || mode !== 'external') return;
 
-    const id = scanInput.trim();
+    // Reader eksternal biasanya sudah desimal, tapi ada model yang mengetikkan hex.
+    // Normalisasi sama seperti mode internal supaya sumber ID mana pun setara.
+    const id = normalizeNfcId(scanInput);
     setScanInput('');
     setTimeout(() => inputRef.current?.focus(), 0);
     if (!id) return;

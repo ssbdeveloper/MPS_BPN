@@ -17,6 +17,7 @@ updated: 2026-07-11
 
 - [[security/AUTH_RBAC_DESIGN]] — token auth + RBAC enforce. **Blocker: jawaban §7 (expiry, library, cutoff, CORS) + §5b (3 write shopfloor)**
 - [[salvaging/SALVAGE_FLOW_DESIGN]] — alur salvaging end-to-end. **Blocker: jawaban §10 (rate labour, harga parts, checklist QC, approval quote, breakdown, RBAC)**
+- [[prd/manufacturing-variant]] — PRD varian manufacturing (beda vs salvaging). **Blocker: jawaban §7 (D1–D11: plant/WERKS, ZCONF_TYPE, sumber jam standar insentif, dll.)**
 
 ## 🔜 Backlog (belum dimulai)
 

@@ -32,7 +32,9 @@ updated: 2026-07-11
 
 ## 📋 PRD
 
-*(belum ada — PRD fitur baru masuk `prd/`)*
+| Dokumen | Status | Ringkas |
+|---|---|---|
+| [[prd/manufacturing-variant]] | draft | Varian manufacturing: peta beda vs salvaging, FR-0..8, keputusan terbuka D1–D11 |
 
 ## 🗄️ Migration & Database
 
@@ -45,6 +47,7 @@ updated: 2026-07-11
 - [[log/2026-07-11-refactor-phase1]] — eksekusi Phase 1+: index drop, D-R3, S-R1, heartbeat
 - [[log/2026-07-11-md-cleanup]] — audit .md: 28 dihapus, 20 diisolasi
 - [[log/2026-07-12-ews-consolidation]] — 7 dokumen EWS dilebur ke [[EWS_PLAN]]
+- [[log/2026-07-14-prd-manufacturing-variant]] — scan 3 lapisan → PRD varian manufacturing
 
 ## 📚 Operasional
 

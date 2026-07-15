@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { goBackOrFallback } from '../../utils/navigation';
 import { toast } from 'sonner';
+import { normalizeNfcId } from '../../utils/nfcId';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -74,7 +75,9 @@ const SelectMachinePage = () => {
       });
       if (!response.ok) throw new Error('Gagal update mesin');
 
-      const res = await fetch(`${API_BASE}/usernfc/nfcid/${datakaryawan.nfcid}`);
+      // nfcid berasal dari record DB — bisa berbentuk hex titik-dua (data lama).
+      // Normalisasi + encode supaya ':' tidak bocor mentah ke path URL.
+      const res = await fetch(`${API_BASE}/usernfc/nfcid/${encodeURIComponent(normalizeNfcId(datakaryawan.nfcid))}`);
       if (res.ok) sessionStorage.setItem('datakaryawan', JSON.stringify(await res.json()));
 
       navigate('/timesheet-mainmenu');

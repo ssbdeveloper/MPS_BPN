@@ -154,6 +154,7 @@ python post_sap_staging.py --productive-only --limit 1200 --workers 5
 
 python post_sap_staging.py --unproductive-only --limit 200   # setelah SAP diperbaiki
 python post_sap_staging.py --retry-failed --limit 200
+python post_sap_staging.py --productive-only --retry-failed --limit 1200 --workers 5
 python post_sap_staging.py --ids 123
 ```
 

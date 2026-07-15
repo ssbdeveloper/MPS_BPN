@@ -1,4 +1,5 @@
 const db = global.pool || require("../db");
+const { normalizeNfcId, nfcIdVariants } = require("../utils/nfcId");
 
 // GET all
 exports.getAll = async (req, res) => {
@@ -10,17 +11,42 @@ exports.getAll = async (req, res) => {
   }
 };
 
-// GET by ID
-exports.getdatausernfc = async (req, res) => { 
+// GET by NFC ID — pencocokan TOLERAN.
+//
+// Tablet (Web NFC) mengirim hex titik-dua "52:ee:d9:69"; reader eksternal mengirim
+// desimal "1775890002". ITU KARTU YANG SAMA (little-endian — diverifikasi dgn kartu
+// fisik). Data lama pun tersimpan dalam beberapa bentuk. Kalau di sini hanya
+// `nfcid = $1`, operator gagal absen begitu reader-nya berbeda dari saat mendaftar.
+//
+// Karena itu: cocokkan terhadap SEMUA bentuk setara. Duplikat kartu (satu kartu, dua
+// orang) akan mengembalikan >1 baris — itu BUG DATA dan harus berteriak, bukan diam
+// mengambil baris pertama secara acak.
+exports.getdatausernfc = async (req, res) => {
   try {
-    const { nfcid } = req.params; 
-    const result = await db.query('SELECT * FROM usernfc WHERE nfcid = $1', [nfcid]); 
-    
-    // PENTING: Kalau tidak ada data, HARUS return 404
-    if (result.rows.length === 0 || !result.rows[0]) {
-      return res.status(404).json({ message: 'Data tidak ditemukan' });
+    const { nfcid } = req.params;
+    const variants = nfcIdVariants(nfcid);
+    if (!variants.length) {
+      return res.status(400).json({ message: "NFC ID kosong" });
     }
-    
+
+    const result = await db.query(
+      "SELECT * FROM usernfc WHERE nfcid = ANY($1::text[])",
+      [variants],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Data tidak ditemukan" });
+    }
+
+    if (result.rows.length > 1) {
+      const owners = result.rows.map((r) => `${r.full_name} (${r.snssb})`).join(", ");
+      console.error(`[usernfc] KARTU GANDA: '${nfcid}' terdaftar atas ${result.rows.length} orang: ${owners}`);
+      return res.status(409).json({
+        message: `Kartu ini terdaftar atas ${result.rows.length} orang: ${owners}. Hubungi admin — jam kerja bisa masuk ke orang yang salah.`,
+        duplicates: result.rows.map((r) => ({ idrow: r.idrow, nfcid: r.nfcid, snssb: r.snssb, full_name: r.full_name })),
+      });
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -56,9 +82,9 @@ exports.getname= async (req, res) => {
 // CREATE - insert nfcid, full_name, snssb
 exports.create = async (req, res) => {
   try {
-    const { 
-      nfcid, 
-      full_name, 
+    const {
+      nfcid,
+      full_name,
       snssb,
       machineid,
       machinename,
@@ -66,12 +92,31 @@ exports.create = async (req, res) => {
       roles
     } = req.body;
 
+    // Simpan dalam bentuk KANONIK (desimal little-endian), apa pun reader yang dipakai
+    // saat mendaftar. Ini yang mencegah dialek baru masuk ke tabel.
+    const canonical = normalizeNfcId(nfcid);
+
+    // Kartu yang sama TIDAK BOLEH terdaftar atas dua orang — jam kerjanya bisa masuk
+    // ke orang yang salah, dan pencocokan toleran akan menemukan dua-duanya.
+    if (canonical) {
+      const clash = await db.query(
+        "SELECT full_name, snssb FROM usernfc WHERE nfcid = ANY($1::text[])",
+        [nfcIdVariants(canonical)],
+      );
+      if (clash.rows.length > 0) {
+        const owner = clash.rows[0];
+        return res.status(409).json({
+          error: `Kartu ini sudah terdaftar atas ${owner.full_name} (${owner.snssb}).`,
+        });
+      }
+    }
+
     const result = await db.query(
-      `INSERT INTO usernfc 
+      `INSERT INTO usernfc
         (nfcid, full_name, snssb, machineid, machinename, workcenter, roles)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [nfcid, full_name, snssb, machineid, machinename, workcenter, roles]
+      [canonical, full_name, snssb, machineid, machinename, workcenter, roles]
     );
 
     res.json(result.rows[0]);
@@ -87,9 +132,24 @@ exports.update = async (req, res) => {
   try {
     const { snssb } = req.params; // snssb sebagai parameter
     const { nfcid, full_name } = req.body;
+    const canonical = normalizeNfcId(nfcid);
+
+    if (canonical) {
+      const clash = await db.query(
+        "SELECT full_name, snssb FROM usernfc WHERE nfcid = ANY($1::text[]) AND snssb <> $2",
+        [nfcIdVariants(canonical), snssb],
+      );
+      if (clash.rows.length > 0) {
+        const owner = clash.rows[0];
+        return res.status(409).json({
+          error: `Kartu ini sudah terdaftar atas ${owner.full_name} (${owner.snssb}).`,
+        });
+      }
+    }
+
     const result = await db.query(
       "UPDATE usernfc SET nfcid = $1, full_name = $2 WHERE snssb = $3 RETURNING *",
-      [nfcid, full_name, snssb]
+      [canonical, full_name, snssb]
     );
     res.json(result.rows);
   } catch (err) {
@@ -147,7 +207,12 @@ exports.updatemesin = async (req, res) => {
 exports.remove = async (req, res) => {
   try {
     const { nfcid } = req.params;
-    const result = await db.query("DELETE FROM usernfc WHERE nfcid = $1 RETURNING *", [nfcid]);
+    // Toleran: UI sudah mengirim bentuk kanonik, sedangkan record lama bisa
+    // tersimpan sebagai hex titik-dua. Tanpa ini, record lama mustahil dihapus.
+    const result = await db.query(
+      "DELETE FROM usernfc WHERE nfcid = ANY($1::text[]) RETURNING *",
+      [nfcIdVariants(nfcid)],
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: "Data tidak ditemukan" });
@@ -173,20 +238,32 @@ exports.updatenfc = async (req, res) => {
 
     console.log("[USERNFC UPDATE]", originalNfcId, "→", newNfcId, JSON.stringify(req.body));
 
-    // Jika nfcid berubah, cek duplikat (aman dari FK — constraint bukan di nfcid)
-    if (newNfcId && newNfcId !== originalNfcId) {
-      const exists = await db.query('SELECT 1 FROM usernfc WHERE nfcid = $1', [newNfcId]);
+    const originalVariants = nfcIdVariants(originalNfcId);
+    // Nilai baru selalu disimpan kanonik. Kalau body tidak membawa nfcid, kartu lama
+    // dipertahankan — TAPI dalam bentuk kanonik, jadi edit apa pun ikut membersihkannya.
+    const canonical = normalizeNfcId(newNfcId || originalNfcId);
+
+    // Cek duplikat lintas-bentuk: "52:ee:d9:69" dan "1775890002" adalah kartu yang SAMA.
+    // Perbandingan string mentah (kode lama) tidak akan melihatnya.
+    if (canonical && !originalVariants.includes(canonical)) {
+      const exists = await db.query(
+        "SELECT full_name, snssb FROM usernfc WHERE nfcid = ANY($1::text[])",
+        [nfcIdVariants(canonical)],
+      );
       if (exists.rows.length > 0) {
-        return res.status(409).json({ error: `NFC ID "${newNfcId}" sudah digunakan oleh user lain.` });
+        const owner = exists.rows[0];
+        return res.status(409).json({
+          error: `Kartu ini sudah digunakan oleh ${owner.full_name} (${owner.snssb}).`,
+        });
       }
     }
 
     const result = await db.query(
       `UPDATE usernfc
        SET nfcid = $1, full_name = $2, snssb = $3, machineid = $4, machinename = $5, workcenter = $6, roles = $7
-       WHERE nfcid = $8
+       WHERE nfcid = ANY($8::text[])
        RETURNING *`,
-      [newNfcId || originalNfcId, full_name, snssb, machineid, machinename, workcenter, roles, originalNfcId]
+      [canonical, full_name, snssb, machineid, machinename, workcenter, roles, originalVariants]
     );
 
     if (result.rows.length === 0) {

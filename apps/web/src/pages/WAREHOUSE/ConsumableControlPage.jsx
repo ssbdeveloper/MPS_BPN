@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { normalizeNfcId } from '../../utils/nfcId';
 import {
   ArrowLeft,
   Camera,
@@ -93,12 +94,14 @@ function canManageItem(role, ticketStatus, itemStatus) {
   return normalizeStatus(itemStatus || 'active') !== 'rejected';
 }
 
+// Sama seperti di LoginTimesheetPage: tablet mengeluarkan hex titik-dua, reader
+// eksternal mengeluarkan desimal — kartu yang sama. Normalisasi supaya sama-sama cocok.
 function extractNfcId(event) {
-  if (event.serialNumber?.trim()) return event.serialNumber.trim();
+  if (event.serialNumber?.trim()) return normalizeNfcId(event.serialNumber);
   for (const record of event.message?.records || []) {
     if (record.recordType === 'text') {
       try {
-        return new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim();
+        return normalizeNfcId(new TextDecoder(record.encoding || 'utf-8').decode(record.data));
       } catch {
         return '';
       }
@@ -327,7 +330,7 @@ function PickupPanel({ ticket, role, authUser, onClose, onSuccess }) {
   }, []);
 
   const loadUserByNfc = useCallback(async (id) => {
-    const response = await fetch(`${API_BASE}/usernfc/nfcid/${encodeURIComponent(id)}`);
+    const response = await fetch(`${API_BASE}/usernfc/nfcid/${encodeURIComponent(normalizeNfcId(id))}`);
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw new Error(payload?.error || payload?.message || 'User tidak ditemukan');
     return payload;

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { goBackOrFallback } from '../../utils/navigation';
 import { Smartphone, Shuffle, User, Factory, Save, CreditCard } from 'lucide-react';
 import PasswordPrompt from '../../components/auth/PasswordPrompt';
+import { normalizeNfcId } from '../../utils/nfcId';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -123,12 +124,15 @@ const CreateEditNfcPage = () => {
     setNfcid(id);
   };
 
+  // Tablet memberi hex titik-dua ("52:ee:d9:69"), reader eksternal memberi desimal
+  // ("1775890002") — kartu yang SAMA. Daftarkan selalu dalam bentuk kanonik supaya
+  // operator bisa absen lewat reader mana pun.
   const extractNfcId = (event) => {
-    if (event.serialNumber?.trim()) return event.serialNumber.trim();
+    if (event.serialNumber?.trim()) return normalizeNfcId(event.serialNumber);
     for (const record of (event.message?.records || [])) {
       if (record.recordType === 'text') {
         try {
-          return new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim();
+          return normalizeNfcId(new TextDecoder(record.encoding || 'utf-8').decode(record.data));
         } catch (err) {
           console.error('Error decoding NFC record:', err);
         }
@@ -192,7 +196,8 @@ const CreateEditNfcPage = () => {
     setIsSaving(true);
     try {
       const payload = {
-        nfcid:      nfcid.trim(),
+        // Kanonik juga untuk ID yang DIKETIK manual — bukan hanya hasil tap kartu.
+        nfcid:      normalizeNfcId(nfcid),
         full_name:  formData.full_name.trim(),
         snssb:      formData.snssb.trim(),
         machineid:  formData.machineid.trim(),
