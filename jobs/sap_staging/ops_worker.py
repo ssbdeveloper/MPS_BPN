@@ -151,6 +151,38 @@ def drain() -> int:
     return processed
 
 
+def startup_diagnostics() -> None:
+    """Cetak DB target + bereskan RUNNING yatim dari instance yang mati.
+
+    Kalau tombol UI 'nyangkut' (QUEUED tak pernah diproses), penyebab paling umum adalah
+    worker konek ke DB yang BEDA dari yang ditulis aplikasi. Log host/port/db di bawah
+    memudahkan verifikasi: harus SAMA dengan DB yang dipakai `api`.
+    """
+    from sap_staging_common import staging_db_config
+    cfg = staging_db_config()
+    log.info("ops_worker target DB: host=%s port=%s db=%s user=%s "
+             "(HARUS sama dengan DB yang dipakai service api)",
+             cfg.get("host"), cfg.get("port"), cfg.get("dbname"), cfg.get("user"))
+    try:
+        with connect_staging() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE public.sap_ops_request SET status='ERROR', finished_at=now(), "
+                    "error='worker restart — RUNNING yatim direset' "
+                    "WHERE status='RUNNING' AND started_at < now() - interval '5 minutes'"
+                )
+                n = cur.rowcount
+                cur.execute("SELECT count(*) FROM public.sap_ops_request WHERE status='QUEUED'")
+                q = cur.fetchone()[0]
+            conn.commit()
+        if n:
+            log.warning("Reset %s RUNNING yatim.", n)
+        log.info("Antrian: %s QUEUED menunggu.", q)
+    except Exception:
+        log.exception("GAGAL konek ke DB saat startup — cek DB_HOST/DB_PORT di .env yang "
+                      "dipakai container ini. Worker tidak akan bisa memproses antrian.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Worker antrian operasi SAP staging (sap_ops_request).")
     parser.add_argument("--once", action="store_true", help="Proses semua QUEUED lalu keluar.")
@@ -160,6 +192,8 @@ def main() -> None:
 
     if not args.once and not args.loop:
         args.once = True  # default aman
+
+    startup_diagnostics()
 
     if args.once:
         n = drain()

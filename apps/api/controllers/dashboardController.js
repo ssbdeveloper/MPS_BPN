@@ -937,6 +937,15 @@ async function enqueueSapOps(req, res) {
     }
     const requestedBy = req.header("x-user-id") || null;
 
+    // Self-heal: buang QUEUED basi (>15 mnt tak diproses = worker tak konsumsi antrian)
+    // supaya tombol tak 409 selamanya kalau ops_worker mati/salah DB. RUNNING tidak
+    // disentuh di sini (hindari double-run); ops_worker sendiri mereset RUNNING yatim.
+    await pool.query(
+      `DELETE FROM public.sap_ops_request
+       WHERE action = $1 AND status = 'QUEUED' AND requested_at < now() - interval '15 minutes'`,
+      [action]
+    );
+
     // Unique index parsial menolak kalau sudah ada QUEUED/RUNNING untuk aksi yang sama.
     let result;
     try {
@@ -948,7 +957,7 @@ async function enqueueSapOps(req, res) {
       );
     } catch (err) {
       if (err.code === "23505") {
-        return res.status(409).json({ error: "A similar request is still running. Please wait until it finishes." });
+        return res.status(409).json({ error: "A similar request is still running (or the ops-worker is not consuming the queue). Wait, or check the sap-ops-worker service." });
       }
       throw err;
     }
@@ -1000,6 +1009,11 @@ async function postCorrections(req, res) {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((n) => parseInt(n, 10)).filter(Number.isFinite) : [];
     if (!ids.length) return res.status(400).json({ error: "No correction bundles selected" });
     const requestedBy = req.header("x-user-id") || null;
+    // Self-heal QUEUED basi (lihat enqueueSapOps).
+    await pool.query(
+      `DELETE FROM public.sap_ops_request
+       WHERE action = 'post_corrections' AND status = 'QUEUED' AND requested_at < now() - interval '15 minutes'`
+    );
     let result;
     try {
       result = await pool.query(
@@ -1009,7 +1023,7 @@ async function postCorrections(req, res) {
         [JSON.stringify({ ids }), requestedBy]
       );
     } catch (err) {
-      if (err.code === "23505") return res.status(409).json({ error: "A correction-post request is still running. Please wait until it finishes." });
+      if (err.code === "23505") return res.status(409).json({ error: "A correction-post request is still running (or the ops-worker is not consuming the queue). Wait, or check the sap-ops-worker service." });
       throw err;
     }
     res.status(202).json({ data: result.rows[0], meta: meta() });
