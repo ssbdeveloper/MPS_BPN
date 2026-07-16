@@ -724,7 +724,9 @@ async function getMachineHoursRecords(req, res) {
 async function getPh3Jobs(req, res) {
   try {
     const search = String(req.query.search || "").trim();
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 30));
+    // Naikkan limit: satu order bisa punya banyak operasi. Limit lama (30/50) + urutan
+    // TEKS memotong operasi ber-nomor besar (mis. op '70' kalah dari '1600' secara teks).
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
     const params = [];
     let filter = "COALESCE(order_no,'') <> '' AND COALESCE(operation_no,'') <> ''";
     if (search) {
@@ -734,14 +736,23 @@ async function getPh3Jobs(req, res) {
     }
     params.push(limit);
 
+    // DISTINCT ON dedup (operasi terbaru per order+op), lalu urutkan operation_no ASCENDING
+    // secara NUMERIK (bukan teks) — 10 < 70 < 150 < 1600, bukan 10 < 150 < 1600 < 70.
     const result = await pool.query(
       `
-      SELECT DISTINCT ON (order_no, operation_no)
-        order_no, operation_no, confirmation_number,
+      SELECT order_no, operation_no, confirmation_number,
         operation_short_text, order_description, work_center, cost_center
-      FROM public.ph3_order
-      WHERE ${filter}
-      ORDER BY order_no, operation_no, id DESC
+      FROM (
+        SELECT DISTINCT ON (order_no, operation_no)
+          order_no, operation_no, confirmation_number,
+          operation_short_text, order_description, work_center, cost_center
+        FROM public.ph3_order
+        WHERE ${filter}
+        ORDER BY order_no, operation_no, id DESC
+      ) x
+      ORDER BY order_no,
+        (CASE WHEN operation_no ~ '^[0-9]+$' THEN operation_no::bigint ELSE 9999999999 END),
+        operation_no
       LIMIT $${params.length}
       `,
       params

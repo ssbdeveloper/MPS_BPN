@@ -176,7 +176,7 @@ function EditPanel({ record, onDone, onCancel }) {
             {label}
           </button>
         ))}
-        <button type="button" onClick={onCancel} aria-label="Tutup"
+        <button type="button" onClick={onCancel} aria-label="Close"
           className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
           <X size={15} />
         </button>
@@ -222,22 +222,28 @@ function EditPanel({ record, onDone, onCancel }) {
 }
 
 // ── drill panel ───────────────────────────────────────────────────────────────
+const DRILL_PAGE = 40; // render bertahap — sel bisa punya ratusan record, jangan render sekaligus
+const BUCKETS = [['all', 'All'], ['eligible', 'Eligible'], ['ineligible', 'Not eligible'], ['posted', 'Posted']];
+
 function DrillPanel({ sel, cell, onClose, onChanged }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null); // proddataid sedang diedit
+  const [bucket, setBucket] = useState('all');
+  const [visible, setVisible] = useState(DRILL_PAGE);
 
   const load = useCallback((signal) => {
     if (!sel) return;
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setVisible(DRILL_PAGE);
     const params = new URLSearchParams({ operator: sel.operator_key, day: sel.day });
+    if (bucket !== 'all') params.set('bucket', bucket);
     fetch(`${API_BASE}/dashboard/machine-hours-records?${params}`, { signal })
       .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.error || 'Failed to load records'); return j; }))
       .then((j) => setRows(j.data || []))
       .catch((e) => { if (e.name !== 'AbortError') setError(e.message); })
       .finally(() => setLoading(false));
-  }, [sel]);
+  }, [sel, bucket]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -266,7 +272,7 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
             <p className="text-xs font-medium text-slate-500">{wd}, {dm}</p>
           </div>
           <button
-            type="button" onClick={onClose} aria-label="Tutup"
+            type="button" onClick={onClose} aria-label="Close"
             className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
@@ -283,6 +289,19 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
           </div>
         )}
 
+        {/* status filter */}
+        <div className="flex flex-shrink-0 flex-wrap gap-1 border-b border-slate-100 px-4 py-2">
+          {BUCKETS.map(([k, label]) => (
+            <button key={k} type="button" onClick={() => setBucket(k)}
+              className={`min-h-[30px] rounded-md px-2.5 text-[11px] font-semibold transition-colors
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
+                ${bucket === k ? 'bg-[#0077b6] text-white' : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>
+              {label}
+            </button>
+          ))}
+          {!loading && <span className="ml-auto self-center text-[11px] text-slate-400 tabular-nums">{rows.length} record(s)</span>}
+        </div>
+
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500">
@@ -296,7 +315,7 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
             <div className="py-12 text-center text-sm text-slate-400">No records</div>
           ) : (
             <ul className="divide-y divide-slate-100">
-              {rows.map((r) => (
+              {rows.slice(0, visible).map((r) => (
                 <li key={r.proddataid} className="px-4 py-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
@@ -345,6 +364,15 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
                   )}
                 </li>
               ))}
+              {rows.length > visible && (
+                <li className="px-4 py-3">
+                  <button type="button" onClick={() => setVisible((v) => v + DRILL_PAGE)}
+                    className="flex w-full min-h-[40px] items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-600 hover:bg-slate-50
+                      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
+                    <ChevronRight className="h-4 w-4 rotate-90" /> Load more ({rows.length - visible} left)
+                  </button>
+                </li>
+              )}
             </ul>
           )}
         </div>
