@@ -97,6 +97,13 @@ def restage(from_ts: datetime, to_ts: datetime, dry_run: bool) -> int:
             log.info("%s -> %s bundel (%s ditulis)", cursor.date(), len(rows), staged)
         else:
             log.info("%s -> tidak ada data", cursor.date())
+        # Pass KOREKSI: segmen yang datang setelah harinya ter-post -> bundel koreksi
+        # terpisah (is_correction), di-post MANUAL dari UI. Biasanya kosong.
+        corr = fetch_machine_hour_rows(cursor, day_end, mode="correction")
+        if corr:
+            stage_rows(corr, dry_run)
+            total += len(corr)
+            log.info("%s -> %s bundel KOREKSI", cursor.date(), len(corr))
         cursor = day_end
     return total
 

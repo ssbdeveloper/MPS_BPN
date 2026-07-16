@@ -117,7 +117,11 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
             return [dict(row) for row in cur.fetchall()]
 
 
-def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
+def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "normal") -> list[dict]:
+    """mode='normal': bundel biasa untuk kunci yang BELUM ter-post (segmen ter-post
+    dikecualikan). mode='correction': bundel KOREKSI untuk segmen yang datang setelah
+    kunci-harinya ter-post — hanya segmen yang BELUM ter-bundle sama sekali, kunci diberi
+    penanda 'KOREKSI' agar tak menabrak bundel POSTED. Aditif di SAP -> menambah jam."""
     werks = plant_code()
     if not werks:
         raise ValueError("PLANT_SSB is required for machine-hour staging")
@@ -223,6 +227,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         )
         AND startdatetime < %s
         AND enddatetime > %s
+        __SEGMENT_PROVENANCE_FILTER__
     ),
     -- BUNDLING PER HARI (aturan owner 2026-07-16): dulu per JAM, tapi pemecahan per jam
     -- melahirkan pecahan sub-menit di batas jam yang ditolak SAP (< 1 menit) dan terbuang.
@@ -333,61 +338,77 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
     )
     SELECT
       'MCH_HOURS' AS source_system,
-      md5(concat_ws('|',
-        %s,
-        bucket_start::text,
-        employee_key,
-        rueck_raw,
-        aufnr_raw,
-        vornr_raw,
-        flgat,
-        plnfl,
-        vornr_b,
-        vornr_r,
-        zconf_type,
-        arbpl,
-        lstar,
-        zbarcodeid
-      )) AS source_key,
+      -- MODE: normal -> norm_key. correction -> md5(norm_key|KOREKSI|seg_hash) supaya bundel
+      -- koreksi TIDAK menabrak bundel POSTED yang kuncinya sama (segmen datang belakangan).
+      __SOURCE_KEY_EXPR__ AS source_key,
+      __IS_CORRECTION_EXPR__ AS is_correction,
       NULL::text AS source_ref_id,
-      %s AS werks,
-      pernr,
-      employee_key AS pernr_origin,
-      CASE WHEN zconf_type IN ('M1', 'M2') THEN LPAD(rueck_raw, 10, '0') ELSE '' END AS rueck,
-      -- LPAD('', 12, '0') = '000000000000', BUKAN string kosong. Unproductive harus
-      -- mengirim AUFNR/VORNR benar-benar kosong, bukan nol berjajar.
-      CASE WHEN aufnr_raw = '' THEN '' ELSE LPAD(aufnr_raw, 12, '0') END AS aufnr,
-      CASE WHEN vornr_raw = '' THEN '' ELSE LPAD(vornr_raw, 4, '0')  END AS vornr,
-      flgat,
-      plnfl,
-      vornr_b,
-      vornr_r,
-      zconf_type,
-      arbpl,
-      lstar,
-      -- Waktu di-anchor ke aktivitas PERTAMA hari itu (source_min_start), bukan tengah
-      -- malam — lebih realistis. IEDD/IEDZ = + total durasi (bukan source_max_end), supaya
-      -- durasi konfirmasi = jam kerja nyata, tanpa ikut menghitung jeda.
-      TO_CHAR(source_min_start, 'YYYYMMDD') AS isdd,
-      TO_CHAR(source_min_start, 'HH24MISS') AS isdz,
-      TO_CHAR(source_min_start + (total_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
-      TO_CHAR(source_min_start + (total_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
-      '' AS aueru,
-      zbarcodeid,
-      bucket_start,
-      source_min_start AS synthetic_start,
-      source_min_start + (total_seconds || ' seconds')::interval AS synthetic_end,
-      total_seconds,
-      source_row_count,
-      source_min_start,
-      source_max_end,
-      segments
-    FROM bundled
-    -- SAP menolak konfirmasi < 1 menit. Per hari, sub-menit nyaris nol (hanya aktivitas
-    -- yang benar-benar < 60 dtk & sendirian sepanjang hari) — jaring pengaman tetap ada.
-    WHERE total_seconds >= 60
-    ORDER BY bucket_start, arbpl, aufnr, vornr, zconf_type, lstar, zbarcodeid
+      f.werks, f.pernr, f.pernr_origin, f.rueck, f.aufnr, f.vornr,
+      f.flgat, f.plnfl, f.vornr_b, f.vornr_r, f.zconf_type, f.arbpl, f.lstar,
+      f.isdd, f.isdz, f.iedd, f.iedz, f.aueru, f.zbarcodeid,
+      f.bucket_start, f.synthetic_start, f.synthetic_end,
+      f.total_seconds, f.source_row_count, f.source_min_start, f.source_max_end, f.segments
+    FROM (
+      SELECT
+        md5(concat_ws('|',
+          %s, bucket_start::text, employee_key, rueck_raw, aufnr_raw, vornr_raw,
+          flgat, plnfl, vornr_b, vornr_r, zconf_type, arbpl, lstar, zbarcodeid
+        )) AS norm_key,
+        -- hash himpunan proddataid -> kunci koreksi stabil per himpunan, anti-tabrak antar ronde
+        md5(COALESCE((SELECT string_agg((e->>'id'), ',' ORDER BY (e->>'id')::bigint)
+                      FROM jsonb_array_elements(segments) e), '')) AS seg_hash,
+        %s AS werks,
+        pernr,
+        employee_key AS pernr_origin,
+        CASE WHEN zconf_type IN ('M1', 'M2') THEN LPAD(rueck_raw, 10, '0') ELSE '' END AS rueck,
+        -- LPAD('', 12, '0') = '000000000000', BUKAN string kosong. Unproductive harus
+        -- mengirim AUFNR/VORNR benar-benar kosong, bukan nol berjajar.
+        CASE WHEN aufnr_raw = '' THEN '' ELSE LPAD(aufnr_raw, 12, '0') END AS aufnr,
+        CASE WHEN vornr_raw = '' THEN '' ELSE LPAD(vornr_raw, 4, '0')  END AS vornr,
+        flgat, plnfl, vornr_b, vornr_r, zconf_type, arbpl, lstar,
+        -- Waktu di-anchor ke aktivitas PERTAMA hari itu (source_min_start). IEDD/IEDZ =
+        -- + total durasi, supaya durasi konfirmasi = jam kerja nyata tanpa menghitung jeda.
+        TO_CHAR(source_min_start, 'YYYYMMDD') AS isdd,
+        TO_CHAR(source_min_start, 'HH24MISS') AS isdz,
+        TO_CHAR(source_min_start + (total_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
+        TO_CHAR(source_min_start + (total_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
+        '' AS aueru,
+        zbarcodeid,
+        bucket_start,
+        source_min_start AS synthetic_start,
+        source_min_start + (total_seconds || ' seconds')::interval AS synthetic_end,
+        total_seconds, source_row_count, source_min_start, source_max_end, segments
+      FROM bundled
+      -- SAP menolak konfirmasi < 1 menit. Per hari, sub-menit nyaris nol.
+      WHERE total_seconds >= 60
+    ) f
+    -- MODE: normal -> HANYA kunci yang BELUM ter-post (yang sudah ter-post dilewati supaya
+    -- tidak menabrak+nyangkut). correction -> HANYA kunci yang SUDAH ter-post (segmen baru).
+    WHERE __POSTED_KEY_FILTER__
+    ORDER BY f.bucket_start, f.arbpl, f.aufnr, f.vornr, f.zconf_type, f.lstar, f.zbarcodeid
     """
+
+    if mode == "correction":
+        seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
+                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = mch_transaction.proddataid::text)")
+        source_key_expr = "md5(f.norm_key || '|KOREKSI|' || f.seg_hash)"
+        is_correction_expr = "true"
+        posted_key_filter = ("EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
+                             "WHERE p.source_key = f.norm_key AND p.status = 'POSTED')")
+    else:  # normal
+        seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
+                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = mch_transaction.proddataid::text "
+                      "AND ss.posted_at IS NOT NULL)")
+        source_key_expr = "f.norm_key"
+        is_correction_expr = "false"
+        posted_key_filter = ("NOT EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
+                             "WHERE p.source_key = f.norm_key AND p.status = 'POSTED')")
+
+    sql = (sql
+           .replace("__SEGMENT_PROVENANCE_FILTER__", seg_filter)
+           .replace("__SOURCE_KEY_EXPR__", source_key_expr)
+           .replace("__IS_CORRECTION_EXPR__", is_correction_expr)
+           .replace("__POSTED_KEY_FILTER__", posted_key_filter))
 
     with connect_source() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

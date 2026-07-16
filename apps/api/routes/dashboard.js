@@ -18,6 +18,8 @@ router.get("/sap-timesheet-staging-log", controller.getSapTimesheetStagingLog);
 router.get("/sap-timesheet-staging-summary", controller.getSapTimesheetStagingSummary);
 router.post("/sap-ops/enqueue", controller.enqueueSapOps);
 router.get("/sap-ops/requests", controller.getSapOpsRequests);
+router.get("/sap-corrections", controller.getSapCorrections);
+router.post("/sap-ops/post-corrections", controller.postCorrections);
 router.get("/machine-hours-matrix", controller.getMachineHoursMatrix);
 router.get("/machine-hours-records", controller.getMachineHoursRecords);
 router.get("/ph3-jobs", controller.getPh3Jobs);

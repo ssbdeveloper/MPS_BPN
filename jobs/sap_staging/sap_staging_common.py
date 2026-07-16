@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS sap_timesheet_staging (
 
   source_system text NOT NULL,
   source_key text NOT NULL,
+  is_correction boolean NOT NULL DEFAULT false,
   source_ref_id text,
 
   werks text NOT NULL DEFAULT '',
@@ -196,6 +197,7 @@ CREATE INDEX IF NOT EXISTS sap_staging_eligibility_audit_date_idx
 STAGING_COLUMNS = [
     "source_system",
     "source_key",
+    "is_correction",
     "source_ref_id",
     "werks",
     "pernr",

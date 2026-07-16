@@ -13,6 +13,7 @@ from typing import Any
 import psycopg2.extras
 
 from sap_staging_common import (
+    app_timezone,
     as_json,
     connect_source,
     connect_staging,
@@ -104,6 +105,7 @@ def claim_rows(
     plant: str | None,
     productive: bool | None = None,
     failed_only: bool = False,
+    include_today: bool = False,
 ) -> list[dict]:
     # failed_only: HANYA baris FAILED (untuk tombol "kirim ulang gagal" di UI — supaya
     # tidak ikut mem-blast ribuan PENDING). Menang atas include_failed.
@@ -113,8 +115,22 @@ def claim_rows(
         statuses = ["PENDING", "FAILED"]
     else:
         statuses = ["PENDING"]
-    filters = ["status = ANY(%s)"]
+    filters = ["status = ANY(%s)", "is_correction = false"]
     params: list[Any] = [statuses]
+    # Auto-poster TIDAK PERNAH mengirim bundel koreksi (is_correction=true). Koreksi =
+    # jam yang datang setelah harinya ter-post; harus di-review admin & di-post MANUAL
+    # dari UI (lewat --ids, claim_selected_rows yang tidak memfilter is_correction).
+
+    # GERBANG HARI-SELESAI (default aktif). Bundel MCH_HOURS = total SATU HARI per kunci;
+    # source_key tidak memuat durasi. Kalau hari BERJALAN di-post, bundel-nya terkunci
+    # (POSTED) dan jam sisa hari itu — yang datang setelah posting — tidak bisa ditambahkan
+    # lagi (ON CONFLICT WHERE status='PENDING' melewati baris POSTED) sehingga HILANG.
+    # Karena itu poster otomatis HANYA mengirim hari yang sudah lewat. --include-today
+    # meng-override (mis. untuk re-post manual hari tertentu yang kamu tahu sudah beres).
+    # Timesheet tidak terpengaruh (source_system <> MCH_HOURS).
+    if not include_today:
+        filters.append("(source_system <> 'MCH_HOURS' OR bucket_start::date < (now() AT TIME ZONE %s)::date)")
+        params.append(app_timezone())
 
     if source_system:
         filters.append("source_system = %s")
@@ -502,7 +518,7 @@ def process_rows(args: argparse.Namespace) -> None:
             productive = True
         elif args.unproductive_only:
             productive = False
-        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive, args.failed_only)
+        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive, args.failed_only, args.include_today)
     if not rows:
         log.info("No staging rows to post")
         return
@@ -579,6 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-ms", type=int, default=100)
     parser.add_argument("--retry-failed", action="store_true", help="Also retry rows with status FAILED")
     parser.add_argument("--failed-only", action="store_true", help="HANYA baris FAILED (dipakai tombol 'kirim ulang gagal' di UI — tidak menyentuh PENDING)")
+    parser.add_argument("--include-today", action="store_true", help="Ikutkan bundel MCH_HOURS hari BERJALAN (default: hanya hari selesai). Hati-hati: mengunci hari yang masih tumbuh.")
     parser.add_argument("--source-system", choices=["TIMESHEET", "MCH_HOURS"], help="Only post one source system")
     parser.add_argument(
         "--workers", type=int, default=1,

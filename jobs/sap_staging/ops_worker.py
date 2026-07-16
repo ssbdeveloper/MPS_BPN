@@ -40,13 +40,30 @@ BASE_DIR = Path(__file__).resolve().parent
 COMMANDS = {
     "stage_catchup": [sys.executable, "stage_machinehours.py", "--catchup"],
     "retry_failed":  [sys.executable, "post_sap_staging.py", "--failed-only"],
+    # post_corrections: perintah dilengkapi --ids dari params saat runtime (build_command).
+    "post_corrections": [sys.executable, "post_sap_staging.py"],
 }
 
 # Batas waktu per aksi (detik). Posting ke SAP bisa lambat (~2 dtk/baris + retry).
 TIMEOUTS = {
     "stage_catchup": 900,
     "retry_failed": 1800,
+    "post_corrections": 1800,
 }
+
+
+def build_command(action: str, params: dict) -> list | None:
+    """Perintah untuk sebuah aksi. post_corrections butuh --ids dari params."""
+    base = COMMANDS.get(action)
+    if base is None:
+        return None
+    if action == "post_corrections":
+        ids = [str(int(i)) for i in (params or {}).get("ids", []) if str(i).strip()]
+        if not ids:
+            return None
+        # --allow-posted TIDAK dipakai: koreksi masih PENDING. Guard poster tetap jalan.
+        return base + ["--ids", ",".join(ids), "--workers", "3"]
+    return base
 
 
 def claim_one() -> dict | None:
@@ -92,10 +109,10 @@ def finish(request_id: int, ok: bool, result: str, error: str | None) -> None:
 
 def run_request(req: dict) -> None:
     action = req["action"]
-    cmd = COMMANDS.get(action)
+    cmd = build_command(action, req.get("params"))
     if not cmd:
-        finish(req["id"], False, "", f"Aksi tak dikenal: {action}")
-        log.error("Aksi tak dikenal id=%s action=%s", req["id"], action)
+        finish(req["id"], False, "", f"Aksi tak dikenal / params kosong: {action}")
+        log.error("Aksi tak dikenal / params kosong id=%s action=%s", req["id"], action)
         return
 
     log.info("Menjalankan id=%s action=%s: %s", req["id"], action, " ".join(cmd))

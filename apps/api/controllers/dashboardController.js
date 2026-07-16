@@ -949,6 +949,65 @@ async function enqueueSapOps(req, res) {
   }
 }
 
+// GET /dashboard/sap-corrections — daftar bundel koreksi (is_correction=true) untuk UI.
+// Koreksi = jam yang datang setelah harinya ter-post; di-post MANUAL oleh admin.
+async function getSapCorrections(req, res) {
+  try {
+    const status = String(req.query.status || "PENDING").toUpperCase();
+    const search = String(req.query.search || "").trim();
+    const where = ["is_correction = true"];
+    const params = [];
+    if (status !== "ALL") { params.push(status); where.push(`status = $${params.length}`); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "")) { params.push(req.query.from); where.push(`bucket_start::date >= $${params.length}`); }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "")) { params.push(req.query.to); where.push(`bucket_start::date <= $${params.length}`); }
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(aufnr ILIKE $${params.length} OR pernr ILIKE $${params.length} OR arbpl ILIKE $${params.length})`);
+    }
+    const result = await pool.query(
+      `SELECT id, ztimesheetid, status, bucket_start::date AS work_date, is_productive,
+        aufnr, vornr, pernr, arbpl, lstar, zconf_type, total_seconds, source_row_count,
+        sap_error, created_at, updated_at
+       FROM public.sap_timesheet_staging
+       WHERE ${where.join(" AND ")}
+       ORDER BY bucket_start DESC, id DESC
+       LIMIT 500`,
+      params
+    );
+    res.json({ data: result.rows, meta: meta() });
+  } catch (err) {
+    console.error("sap-corrections error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /dashboard/sap-ops/post-corrections — antre kirim manual bundel koreksi (by id).
+// Worker menjalankan post_sap_staging.py --ids <ids> (claim_selected_rows tak memfilter
+// is_correction). SAP aditif -> menambah jam ke order.
+async function postCorrections(req, res) {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((n) => parseInt(n, 10)).filter(Number.isFinite) : [];
+    if (!ids.length) return res.status(400).json({ error: "Tidak ada bundel koreksi dipilih" });
+    const requestedBy = req.header("x-user-id") || null;
+    let result;
+    try {
+      result = await pool.query(
+        `INSERT INTO public.sap_ops_request (action, params, requested_by)
+         VALUES ('post_corrections', $1::jsonb, $2)
+         RETURNING id, action, status, requested_at`,
+        [JSON.stringify({ ids }), requestedBy]
+      );
+    } catch (err) {
+      if (err.code === "23505") return res.status(409).json({ error: "Masih ada permintaan post koreksi berjalan. Tunggu selesai." });
+      throw err;
+    }
+    res.status(202).json({ data: result.rows[0], meta: meta() });
+  } catch (err) {
+    console.error("postCorrections error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // GET /dashboard/sap-ops/requests — status permintaan terbaru (untuk UI polling)
 async function getSapOpsRequests(req, res) {
   try {
@@ -1259,6 +1318,8 @@ module.exports = {
   getSapTimesheetStagingSummary,
   enqueueSapOps,
   getSapOpsRequests,
+  getSapCorrections,
+  postCorrections,
   getMachineHoursMatrix,
   getMachineHoursRecords,
   getPh3Jobs,

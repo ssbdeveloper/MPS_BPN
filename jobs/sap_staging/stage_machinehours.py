@@ -170,6 +170,10 @@ def run_catchup(args: argparse.Namespace) -> None:
         rows = fetch_machine_hour_rows(from_ts, to_ts)
         staged = stage_rows(rows, args.dry_run)
         log.info("  %s: %s record tertinggal -> %s bundel (%s ditulis)", day, n, len(rows), staged)
+        corr = fetch_machine_hour_rows(from_ts, to_ts, mode="correction")
+        if corr:
+            stage_rows(corr, args.dry_run)
+            log.info("  %s: %s bundel KOREKSI (post manual dari UI)", day, len(corr))
 
 
 def run_once(args: argparse.Namespace) -> bool:
@@ -198,6 +202,10 @@ def run_once(args: argparse.Namespace) -> bool:
 
     rows = fetch_machine_hour_rows(from_ts, to_ts)
     inserted = stage_rows(rows, args.dry_run)
+    corr = fetch_machine_hour_rows(from_ts, to_ts, mode="correction")
+    if corr:
+        stage_rows(corr, args.dry_run)
+        log.info("Bundel KOREKSI disiapkan: %s (post manual dari UI)", len(corr))
     audited = 0
     if not args.dry_run:
         with connect_staging() as staging_conn:
