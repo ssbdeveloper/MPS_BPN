@@ -1,0 +1,58 @@
+# SAP staging pipeline — 3 long-running services.
+#
+# Deploy:  docker compose -f jobs/sap_staging/docker-compose.sap.yml up -d --build
+# DB access mirrors jobs/etl: env_file ../../.env. Make sure the server .env DB_* points
+# to the reachable DB and SAP_INBOUND_* are set.
+#
+# Roles (see README "SAP staging pipeline"):
+#   sap-stage-worker  = AUTO bundling. Loops stage_machinehours --catchup (normal +
+#                       correction pass). Produces PENDING bundles + is_correction bundles.
+#   sap-post-worker   = AUTO posting. Loops post_sap_staging (day-complete guard skips
+#                       today; is_correction bundles are NOT posted here — admin-only).
+#   sap-ops-worker    = ON-DEMAND. Consumes sap_ops_request (UI buttons): "Stage edited
+#                       records", "Post selected" corrections, "Retry failed".
+#
+# Tunables via .env (optional): SAP_STAGE_INTERVAL (default 900s), SAP_POST_INTERVAL
+# (1800s), SAP_POST_LIMIT (500), SAP_POST_WORKERS (5), SAP_OPS_INTERVAL (10s).
+
+services:
+  sap-stage-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.sap
+    container_name: sap-stage-worker
+    env_file:
+      - ../../.env
+    volumes:
+      - ./:/app
+    command: >
+      sh -c "while true; do python stage_machinehours.py --catchup || true;
+             sleep ${SAP_STAGE_INTERVAL:-900}; done"
+    restart: unless-stopped
+
+  sap-post-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.sap
+    container_name: sap-post-worker
+    env_file:
+      - ../../.env
+    volumes:
+      - ./:/app
+    command: >
+      sh -c "while true; do
+               python post_sap_staging.py --limit ${SAP_POST_LIMIT:-500} --workers ${SAP_POST_WORKERS:-5} || true;
+               sleep ${SAP_POST_INTERVAL:-1800}; done"
+    restart: unless-stopped
+
+  sap-ops-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.sap
+    container_name: sap-ops-worker
+    env_file:
+      - ../../.env
+    volumes:
+      - ./:/app
+    command: ["python", "ops_worker.py", "--loop", "--interval", "${SAP_OPS_INTERVAL:-10}"]
+    restart: unless-stopped

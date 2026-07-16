@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Default command = ops_worker (queue consumer for UI buttons).
+# docker-compose.sap.yml overrides the command per service.
+CMD ["python", "ops_worker.py", "--loop"]
