@@ -103,8 +103,16 @@ def claim_rows(
     source_system: str | None,
     plant: str | None,
     productive: bool | None = None,
+    failed_only: bool = False,
 ) -> list[dict]:
-    statuses = ["PENDING", "FAILED"] if include_failed else ["PENDING"]
+    # failed_only: HANYA baris FAILED (untuk tombol "kirim ulang gagal" di UI — supaya
+    # tidak ikut mem-blast ribuan PENDING). Menang atas include_failed.
+    if failed_only:
+        statuses = ["FAILED"]
+    elif include_failed:
+        statuses = ["PENDING", "FAILED"]
+    else:
+        statuses = ["PENDING"]
     filters = ["status = ANY(%s)"]
     params: list[Any] = [statuses]
 
@@ -494,7 +502,7 @@ def process_rows(args: argparse.Namespace) -> None:
             productive = True
         elif args.unproductive_only:
             productive = False
-        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive)
+        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive, args.failed_only)
     if not rows:
         log.info("No staging rows to post")
         return
@@ -570,6 +578,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--delay-ms", type=int, default=100)
     parser.add_argument("--retry-failed", action="store_true", help="Also retry rows with status FAILED")
+    parser.add_argument("--failed-only", action="store_true", help="HANYA baris FAILED (dipakai tombol 'kirim ulang gagal' di UI — tidak menyentuh PENDING)")
     parser.add_argument("--source-system", choices=["TIMESHEET", "MCH_HOURS"], help="Only post one source system")
     parser.add_argument(
         "--workers", type=int, default=1,

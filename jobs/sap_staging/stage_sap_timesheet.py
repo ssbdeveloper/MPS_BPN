@@ -171,22 +171,43 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
       WHERE startdatetime IS NOT NULL
         AND enddatetime IS NOT NULL
         AND enddatetime > startdatetime
-        AND confirmation_number IS NOT NULL
-        AND confirmation_number <> ''
-        AND order_no IS NOT NULL
-        AND order_no <> ''
-        AND operation_no IS NOT NULL
-        AND operation_no <> ''
+        -- KELAYAKAN SAP (aturan owner 2026-07-15): productive vs unproductive beda syarat.
+        --   • PRODUCTIVE (M1/M2, termasuk idle pendek yang dipromosikan ke M2): butuh
+        --     order + operasi + confirmation — dibukukan ke order.
+        --   • UNPRODUCTIVE (punya activity type/LSTAR, bukan M1/M2): TANPA confirmation —
+        --     dibukukan ke cost center / activity type.
+        -- status_activitytype di WHERE = kolom MENTAH (alias promosi di SELECT tak terlihat
+        -- di sini). Idle-promotable (statusid 2 + prev 1 + <=300s) diarahkan ke jalur
+        -- productive supaya, kalau tak punya order, TETAP tersaring (tidak lahir bundel M2
+        -- tanpa AUFNR) — persis perilaku lama.
+        AND (
+          (
+            (
+              status_activitytype IN ('M1', 'M2')
+              OR (statusid = 2 AND previoustatusid = 1
+                  AND COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 300)
+            )
+            AND confirmation_number IS NOT NULL AND confirmation_number <> ''
+            AND order_no IS NOT NULL AND order_no <> ''
+            AND operation_no IS NOT NULL AND operation_no <> ''
+          )
+          OR (
+            NULLIF(BTRIM(status_activitytype), '') IS NOT NULL
+            AND status_activitytype NOT IN ('M1', 'M2')
+            AND NOT (statusid = 2 AND previoustatusid = 1
+                     AND COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 300)
+          )
+        )
         -- GERBANG OPERATOR (2026-07-14). Tanpa ini, baris tanpa sn_employee di-stage dan
         -- dikirim ke SAP dengan PERNR KOSONG — jam kerja tanpa pemilik. Terukur pada
         -- 1-14 Juli: 1.490 baris (554 bundel, seperlima antrian) akan bocor.
         -- (Jangan tulis tanda persen di komentar SQL ini: psycopg2 membacanya sebagai
         --  placeholder format dan seluruh query gagal.)
         --
-        -- CATATAN: JANGAN pakai kolom status_record sebagai gerbang. Definisinya punya
-        -- pintu belakang `statusid IN (0,3,4) OR (...)`, sehingga 11 baris tanpa operator
-        -- tetap lolos. status_record = kelengkapan data untuk KPI accuracy_machine,
-        -- BUKAN kelayakan SAP. Kelayakan SAP = keempat field ini ada, titik.
+        -- CATATAN: gerbang ini kini SEJALAN dengan kolom status_record (migration
+        -- 20260715_status_record_unproductive) — logika productive/unproductive yang sama.
+        -- Bedanya hanya: status_record menandai statusid 0/3/4 = TRUE (sah tanpa job) untuk
+        -- accuracy_machine, sementara staging tetap MENGECUALIKAN 0/3/4 di bawah.
         AND NULLIF(BTRIM(sn_employee), '') IS NOT NULL
         -- TIDAK DIKIRIM KE SAP (aturan owner 2026-07-14): bukan waktu kerja pada order.
         --   0 = Off, 3 = Downtime, 4 = No Job
@@ -203,18 +224,24 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         AND startdatetime < %s
         AND enddatetime > %s
     ),
+    -- BUNDLING PER HARI (aturan owner 2026-07-16): dulu per JAM, tapi pemecahan per jam
+    -- melahirkan pecahan sub-menit di batas jam yang ditolak SAP (< 1 menit) dan terbuang.
+    -- Per hari, segmen-segmen itu MENYATU ke total harian -> tidak ada detik terbuang.
+    -- Waktu konfirmasi (ISDD/ISDZ) di-anchor ke aktivitas PERTAMA hari itu (source_min_start),
+    -- IEDD/IEDZ = + total durasi. Sama filosofinya dengan sintetis-per-jam yang sudah
+    -- diterima SAP, cuma jendelanya harian.
     split_rows AS (
       SELECT
         s.*,
-        h.hour_bucket,
-        GREATEST(s.startdatetime, h.hour_bucket, %s::timestamp) AS segment_start,
-        LEAST(s.enddatetime, h.hour_bucket + interval '1 hour', %s::timestamp) AS segment_end
+        h.day_bucket,
+        GREATEST(s.startdatetime, h.day_bucket, %s::timestamp) AS segment_start,
+        LEAST(s.enddatetime, h.day_bucket + interval '1 day', %s::timestamp) AS segment_end
       FROM source_rows s
       CROSS JOIN LATERAL generate_series(
-        date_trunc('hour', GREATEST(s.startdatetime, %s::timestamp)),
-        date_trunc('hour', LEAST(s.enddatetime, %s::timestamp) - interval '1 microsecond'),
-        interval '1 hour'
-      ) AS h(hour_bucket)
+        date_trunc('day', GREATEST(s.startdatetime, %s::timestamp)),
+        date_trunc('day', LEAST(s.enddatetime, %s::timestamp) - interval '1 microsecond'),
+        interval '1 day'
+      ) AS h(day_bucket)
     ),
     segments AS (
       SELECT
@@ -225,7 +252,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
     ),
     bundled AS (
       SELECT
-        hour_bucket AS bucket_start,
+        day_bucket AS bucket_start,
         COALESCE(sn_employee, '') AS employee_key,
         CASE
           WHEN COALESCE(employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
@@ -274,7 +301,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
         ) ORDER BY proddataid) AS segments
       FROM segments
       GROUP BY
-        hour_bucket,
+        day_bucket,
         COALESCE(sn_employee, ''),
         CASE
           WHEN COALESCE(employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
@@ -338,22 +365,27 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime) -> list[dict]:
       zconf_type,
       arbpl,
       lstar,
-      TO_CHAR(bucket_start, 'YYYYMMDD') AS isdd,
-      TO_CHAR(bucket_start, 'HH24MISS') AS isdz,
-      TO_CHAR(bucket_start + (total_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
-      TO_CHAR(bucket_start + (total_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
+      -- Waktu di-anchor ke aktivitas PERTAMA hari itu (source_min_start), bukan tengah
+      -- malam — lebih realistis. IEDD/IEDZ = + total durasi (bukan source_max_end), supaya
+      -- durasi konfirmasi = jam kerja nyata, tanpa ikut menghitung jeda.
+      TO_CHAR(source_min_start, 'YYYYMMDD') AS isdd,
+      TO_CHAR(source_min_start, 'HH24MISS') AS isdz,
+      TO_CHAR(source_min_start + (total_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
+      TO_CHAR(source_min_start + (total_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
       '' AS aueru,
       zbarcodeid,
       bucket_start,
-      bucket_start AS synthetic_start,
-      bucket_start + (total_seconds || ' seconds')::interval AS synthetic_end,
+      source_min_start AS synthetic_start,
+      source_min_start + (total_seconds || ' seconds')::interval AS synthetic_end,
       total_seconds,
       source_row_count,
       source_min_start,
       source_max_end,
       segments
     FROM bundled
-    WHERE total_seconds > 0
+    -- SAP menolak konfirmasi < 1 menit. Per hari, sub-menit nyaris nol (hanya aktivitas
+    -- yang benar-benar < 60 dtk & sendirian sepanjang hari) — jaring pengaman tetap ada.
+    WHERE total_seconds >= 60
     ORDER BY bucket_start, arbpl, aufnr, vornr, zconf_type, lstar, zbarcodeid
     """
 

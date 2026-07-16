@@ -15,6 +15,14 @@ router.get("/operator-heatmap", controller.getOperatorHeatmap);
 router.get("/workcenter-list", controller.getWorkcenterList);
 router.get("/operations-hub", controller.getOperationsHub);
 router.get("/sap-timesheet-staging-log", controller.getSapTimesheetStagingLog);
+router.get("/sap-timesheet-staging-summary", controller.getSapTimesheetStagingSummary);
+router.post("/sap-ops/enqueue", controller.enqueueSapOps);
+router.get("/sap-ops/requests", controller.getSapOpsRequests);
+router.get("/machine-hours-matrix", controller.getMachineHoursMatrix);
+router.get("/machine-hours-records", controller.getMachineHoursRecords);
+router.get("/ph3-jobs", controller.getPh3Jobs);
+router.get("/operators", controller.getOperators);
+router.post("/machine-hours-override", controller.saveMachineHoursOverride);
 
 router.get("/mps-oee-summary", mpsController.getOeeSummary);
 router.get("/mps-oee-trend", mpsController.getOeeTrend);

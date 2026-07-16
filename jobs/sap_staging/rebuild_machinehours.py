@@ -82,9 +82,9 @@ def purge_unposted(from_ts: datetime, to_ts: datetime, dry_run: bool) -> int:
 def restage(from_ts: datetime, to_ts: datetime, dry_run: bool) -> int:
     """Stage ulang dengan bundling terbaru, sehari sekali jalan.
 
-    fetch_machine_hour_rows() SUDAH memecah per jam di dalam SQL-nya (generate_series
-    atas hour_bucket), jadi tidak perlu loop per jam dari Python — cukup per hari
-    supaya query-nya sedikit tapi tetap tidak kebesaran.
+    Bundling sekarang PER HARI (per operator/mesin/order/operasi/status) — lihat
+    stage_sap_timesheet.py. Loop per hari di sini cocok: satu window = satu hari =
+    satu bucket harian, query-nya sedikit dan tidak kebesaran.
     """
     total = 0
     cursor = from_ts

@@ -1,5 +1,6 @@
 const pool = global.pool || require("../db");
 const { resolveTimezone } = require("../config/timezone");
+const { classifySapError } = require("../utils/sapErrorClassifier");
 
 // Timezone comes from the root .env (TIMEZONE). Never hardcode it here: the daily buckets
 // below compare against CURRENT_DATE, which follows the Postgres session timezone, so a
@@ -438,8 +439,20 @@ async function getSapTimesheetStagingLog(req, res) {
     const rows = result.rows.slice(0, limit);
     const extraRow = result.rows[limit];
 
+    // Terjemahkan pesan SAP jadi sebab yang bisa ditindak — di server, supaya label
+    // konsisten dengan pengelompokan di endpoint ringkasan (satu classifier).
+    const enriched = rows.map((row) => {
+      const cause = classifySapError(row.sap_error || row.sap_response_text);
+      return {
+        ...row,
+        cause_key: cause.key,
+        cause_label: cause.label,
+        cause_action: cause.action,
+      };
+    });
+
     res.json({
-      data: rows,
+      data: enriched,
       pagination: {
         limit,
         next_cursor: extraRow ? rows[rows.length - 1]?.id || null : null,
@@ -449,6 +462,505 @@ async function getSapTimesheetStagingLog(req, res) {
     });
   } catch (err) {
     console.error("sap-timesheet-staging-log error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/sap-timesheet-staging-summary
+// Ringkasan antrian: hitungan per status + kegagalan dikelompokkan per SEBAB (bukan per
+// baris) supaya "56 baris gagal karena work center yang sama" terbaca sekali pandang.
+async function getSapTimesheetStagingSummary(req, res) {
+  try {
+    const [byStatus, dateRange, failing] = await Promise.all([
+      pool.query(`
+        SELECT status, COUNT(*)::int AS n
+        FROM public.sap_timesheet_staging
+        GROUP BY status
+      `),
+      pool.query(`
+        SELECT
+          MIN(bucket_start)::date AS oldest,
+          MAX(bucket_start)::date AS newest,
+          COUNT(*) FILTER (WHERE status = 'PENDING' AND bucket_start::date = (now() AT TIME ZONE '${TZ}')::date)::int AS pending_today,
+          COUNT(*) FILTER (WHERE status = 'POSTED'  AND posted_at::date   = (now() AT TIME ZONE '${TZ}')::date)::int AS posted_today
+        FROM public.sap_timesheet_staging
+      `),
+      // Hanya FAILED + SKIPPED perlu triase. Ambil pesan mentah, klasifikasi di JS.
+      pool.query(`
+        SELECT id, status, sap_error, sap_response_text
+        FROM public.sap_timesheet_staging
+        WHERE status IN ('FAILED', 'SKIPPED')
+        ORDER BY id DESC
+      `),
+    ]);
+
+    const statusCounts = { PENDING: 0, POSTING: 0, POSTED: 0, FAILED: 0, SKIPPED: 0 };
+    let total = 0;
+    for (const r of byStatus.rows) {
+      statusCounts[r.status] = r.n;
+      total += r.n;
+    }
+
+    // Kelompokkan kegagalan per sebab.
+    const groups = new Map();
+    for (const r of failing.rows) {
+      const cause = classifySapError(r.sap_error || r.sap_response_text);
+      const g = groups.get(cause.key) || {
+        cause_key: cause.key,
+        label: cause.label,
+        action: cause.action,
+        count: 0,
+        statuses: new Set(),
+        sample_ids: [],
+        sample_message: cause.message,
+      };
+      g.count += 1;
+      g.statuses.add(r.status);
+      if (g.sample_ids.length < 5) g.sample_ids.push(r.id);
+      groups.set(cause.key, g);
+    }
+    const failures = [...groups.values()]
+      .map((g) => ({ ...g, statuses: [...g.statuses] }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      data: {
+        by_status: statusCounts,
+        total,
+        failing_total: failing.rows.length,
+        oldest: dateRange.rows[0]?.oldest || null,
+        newest: dateRange.rows[0]?.newest || null,
+        pending_today: dateRange.rows[0]?.pending_today || 0,
+        posted_today: dateRange.rows[0]?.posted_today || 0,
+        failures,
+      },
+      meta: meta(),
+    });
+  } catch (err) {
+    console.error("sap-timesheet-staging-summary error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// Kelayakan SAP = kolom status_record (satu sumber kebenaran; gerbang staging & kolom
+// pakai logika productive/unproductive yang sama — migration 20260715_status_record_
+// unproductive). Dashboard hanya menampilkan record non-0/3/4 (DISPLAY_EXCLUDE), jadi di
+// antara yang tampil, status_record = TRUE berarti layak SAP.
+const SAP_ELIGIBLE_SQL = "m.status_record";
+
+const POSTED_EXISTS_SQL = `EXISTS (
+  SELECT 1 FROM public.sap_staging_source s
+  WHERE s.source_system = 'MCH_HOURS'
+    AND s.source_row_id = m.proddataid::text
+    AND s.posted_at IS NOT NULL
+)`;
+
+// Alasan sebuah baris TIDAK layak SAP — enumerable, untuk ditampilkan di drill.
+// Label status diambil dari status_description (mch_statustypes) supaya tidak salah
+// hardcode: 0=Off, 3=Downtime, 4=No Job.
+// Alasan sebuah baris TIDAK layak (status_record = false). Hanya bermakna untuk record
+// non-0/3/4 yang tampil di drill. Selaras dengan definisi status_record baru.
+const INELIGIBLE_REASON_SQL = `CASE
+  WHEN m.enddatetime IS NULL THEN 'Belum selesai (enddatetime kosong)'
+  WHEN NULLIF(btrim(m.sn_employee),'') IS NULL THEN 'Operator kosong'
+  WHEN m.status_activitytype IN ('M1','M2')
+       AND (COALESCE(m.order_no,'') = '' OR COALESCE(m.operation_no,'') = '' OR COALESCE(m.confirmation_number,'') = '')
+    THEN 'Order/operasi tak cocok di SAP (tanpa confirmation) — perbaiki job'
+  WHEN NULLIF(btrim(m.status_activitytype),'') IS NULL THEN 'Tanpa activity type'
+  ELSE NULL
+END`;
+
+// Off (0), Downtime (3), No Job (4): bukan jam kerja nyata. Dikeluarkan TOTAL dari
+// heatmap & drill — tidak dihitung sebagai jam, tidak muncul di daftar record.
+const DISPLAY_EXCLUDE_SQL = "m.statusid NOT IN (0, 3, 4)";
+
+function clampDateRange(fromRaw, toRaw, defaultDays = 7, maxDays = 62) {
+  const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  let to = isDate(toRaw) ? new Date(`${toRaw}T00:00:00Z`) : new Date();
+  let from = isDate(fromRaw) ? new Date(`${fromRaw}T00:00:00Z`) : null;
+  const day = 86400000;
+  if (!from) from = new Date(to.getTime() - (defaultDays - 1) * day);
+  if (from > to) [from, to] = [to, from];
+  // batasi rentang supaya tidak men-scan berbulan-bulan sekaligus
+  if ((to - from) / day > maxDays) from = new Date(to.getTime() - maxDays * day);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { from: iso(from), to: iso(to) };
+}
+
+// GET /dashboard/machine-hours-matrix?from=&to=
+// Matriks jam per operator per hari + overlay SAP (total / layak / terkirim).
+async function getMachineHoursMatrix(req, res) {
+  try {
+    const { from, to } = clampDateRange(req.query.from, req.query.to);
+
+    const result = await pool.query(
+      `
+      SELECT
+        COALESCE(NULLIF(btrim(m.sn_employee),''), '__none__') AS operator_key,
+        COALESCE(NULLIF(btrim(m.full_name),''), '(operator kosong)') AS operator_name,
+        (m.startdatetime AT TIME ZONE '${TZ}')::date AS day,
+        ROUND(SUM(COALESCE(m.duration_hours,0))::numeric, 2) AS total_h,
+        ROUND(SUM(COALESCE(m.duration_hours,0)) FILTER (WHERE ${SAP_ELIGIBLE_SQL})::numeric, 2) AS eligible_h,
+        ROUND(SUM(COALESCE(m.duration_hours,0)) FILTER (WHERE ${POSTED_EXISTS_SQL})::numeric, 2) AS posted_h,
+        COUNT(*)::int AS n_records
+      FROM public.mch_transaction m
+      WHERE m.startdatetime >= ($1::date)
+        AND m.startdatetime <  (($2::date) + 1)
+        AND ${DISPLAY_EXCLUDE_SQL}
+      GROUP BY operator_key, operator_name, day
+      HAVING SUM(COALESCE(m.duration_hours,0)) > 0
+      `,
+      [from, to]
+    );
+
+    // Bentuk ke: daftar hari, daftar operator (urut jam desc), sel per (operator,hari).
+    const days = [];
+    const dayCursor = new Date(`${from}T00:00:00Z`);
+    const end = new Date(`${to}T00:00:00Z`);
+    while (dayCursor <= end) {
+      days.push(dayCursor.toISOString().slice(0, 10));
+      dayCursor.setUTCDate(dayCursor.getUTCDate() + 1);
+    }
+
+    const opMap = new Map();
+    const cells = {};
+    for (const r of result.rows) {
+      const dayStr = typeof r.day === "string" ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10);
+      const op = opMap.get(r.operator_key) || {
+        operator_key: r.operator_key, operator_name: r.operator_name,
+        total_h: 0, eligible_h: 0, posted_h: 0, n_records: 0,
+      };
+      op.total_h += Number(r.total_h);
+      op.eligible_h += Number(r.eligible_h || 0);
+      op.posted_h += Number(r.posted_h || 0);
+      op.n_records += r.n_records;
+      opMap.set(r.operator_key, op);
+
+      cells[`${r.operator_key}|${dayStr}`] = {
+        total_h: Number(r.total_h),
+        eligible_h: Number(r.eligible_h || 0),
+        posted_h: Number(r.posted_h || 0),
+        n_records: r.n_records,
+      };
+    }
+
+    const operators = [...opMap.values()].sort((a, b) => b.total_h - a.total_h);
+    const totals = operators.reduce(
+      (acc, o) => {
+        acc.total_h += o.total_h; acc.eligible_h += o.eligible_h;
+        acc.posted_h += o.posted_h; acc.n_records += o.n_records;
+        if (o.operator_key === "__none__") acc.unattributed_h += o.total_h;
+        return acc;
+      },
+      { total_h: 0, eligible_h: 0, posted_h: 0, n_records: 0, unattributed_h: 0 }
+    );
+    for (const k of ["total_h", "eligible_h", "posted_h", "unattributed_h"]) totals[k] = Math.round(totals[k] * 10) / 10;
+
+    res.json({ data: { from, to, days, operators, cells, totals }, meta: meta() });
+  } catch (err) {
+    console.error("machine-hours-matrix error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/machine-hours-records?operator=&day=&bucket=
+// Drill: record mch_transaction untuk satu (operator, hari). bucket opsional:
+// eligible | posted | ineligible.
+async function getMachineHoursRecords(req, res) {
+  try {
+    const operator = String(req.query.operator || "").trim();
+    const day = String(req.query.day || "").trim();
+    const bucket = String(req.query.bucket || "all").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      return res.status(400).json({ error: "Parameter 'day' harus YYYY-MM-DD" });
+    }
+
+    const params = [day];
+    const where = [
+      `(m.startdatetime AT TIME ZONE '${TZ}')::date = $1::date`,
+      DISPLAY_EXCLUDE_SQL, // Off + No Job dikeluarkan dari drill
+    ];
+    if (operator === "__none__") {
+      where.push(`NULLIF(btrim(m.sn_employee),'') IS NULL`);
+    } else if (operator) {
+      params.push(operator);
+      where.push(`m.sn_employee = $${params.length}`);
+    }
+    if (bucket === "eligible") where.push(`${SAP_ELIGIBLE_SQL} AND NOT ${POSTED_EXISTS_SQL}`);
+    else if (bucket === "posted") where.push(POSTED_EXISTS_SQL);
+    else if (bucket === "ineligible") where.push(`NOT ${SAP_ELIGIBLE_SQL}`);
+
+    const result = await pool.query(
+      `
+      SELECT
+        m.proddataid,
+        m.order_no, m.operation_no, m.confirmation_number, m.operation_short_text,
+        m.machineid, m.machinename, m.workcentercode,
+        m.startdatetime, m.enddatetime,
+        ROUND(COALESCE(m.duration_hours,0)::numeric, 2) AS duration_hours,
+        m.statusid, m.status_description, m.status_activitytype,
+        m.full_name, m.sn_employee,
+        ${SAP_ELIGIBLE_SQL} AS eligible,
+        ${POSTED_EXISTS_SQL} AS posted,
+        ${INELIGIBLE_REASON_SQL} AS ineligible_reason
+      FROM public.mch_transaction m
+      WHERE ${where.join(" AND ")}
+      ORDER BY m.startdatetime
+      LIMIT 500
+      `,
+      params
+    );
+
+    res.json({ data: result.rows, meta: meta() });
+  } catch (err) {
+    console.error("machine-hours-records error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/ph3-jobs?search=&limit=
+// Picker job dari ph3_order untuk koreksi manual (edit job). Satu baris per
+// (order_no, operation_no), ambil yang terbaru (id DESC) — konsisten dengan ETL.
+async function getPh3Jobs(req, res) {
+  try {
+    const search = String(req.query.search || "").trim();
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 30));
+    const params = [];
+    let filter = "COALESCE(order_no,'') <> '' AND COALESCE(operation_no,'') <> ''";
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      filter += ` AND (order_no ILIKE $${i} OR operation_short_text ILIKE $${i} OR order_description ILIKE $${i} OR confirmation_number ILIKE $${i})`;
+    }
+    params.push(limit);
+
+    const result = await pool.query(
+      `
+      SELECT DISTINCT ON (order_no, operation_no)
+        order_no, operation_no, confirmation_number,
+        operation_short_text, order_description, work_center, cost_center
+      FROM public.ph3_order
+      WHERE ${filter}
+      ORDER BY order_no, operation_no, id DESC
+      LIMIT $${params.length}
+      `,
+      params
+    );
+    res.json({ data: result.rows, meta: meta() });
+  } catch (err) {
+    console.error("ph3-jobs error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/operators?search=
+// Picker operator dari usernfc untuk koreksi manual (assign operator).
+async function getOperators(req, res) {
+  try {
+    const search = String(req.query.search || "").trim();
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 30));
+    const params = [];
+    let filter = "NULLIF(btrim(snssb),'') IS NOT NULL";
+    if (search) {
+      params.push(`%${search}%`);
+      const i = params.length;
+      filter += ` AND (full_name ILIKE $${i} OR snssb ILIKE $${i})`;
+    }
+    params.push(limit);
+    const result = await pool.query(
+      `SELECT DISTINCT snssb, full_name FROM public.usernfc
+        WHERE ${filter}
+        ORDER BY full_name
+        LIMIT $${params.length}`,
+      params
+    );
+    res.json({ data: result.rows, meta: meta() });
+  } catch (err) {
+    console.error("operators error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /dashboard/machine-hours-override
+// Koreksi manual satu record mch_transaction: assign job (dari ph3_order) dan/atau
+// operator (snssb). Diterapkan LANGSUNG ke mch_transaction + dicatat di
+// mch_transaction_override supaya bertahan re-derivasi ETL (lihat migration).
+async function saveMachineHoursOverride(req, res) {
+  const client = await pool.connect();
+  try {
+    const proddataid = parseInt(req.body?.proddataid, 10);
+    const orderNo = req.body?.order_no ? String(req.body.order_no).trim() : null;
+    const operationNo = req.body?.operation_no ? String(req.body.operation_no).trim() : null;
+    const snEmployee = req.body?.sn_employee ? String(req.body.sn_employee).trim() : null;
+    const note = req.body?.note ? String(req.body.note).trim() : null;
+    const by = req.header("x-user-id") || null;
+
+    if (!Number.isFinite(proddataid)) {
+      return res.status(400).json({ error: "proddataid wajib" });
+    }
+    if (orderNo && !operationNo) {
+      return res.status(400).json({ error: "operation_no wajib bila order_no diisi" });
+    }
+    if (!orderNo && !snEmployee) {
+      return res.status(400).json({ error: "Tidak ada yang diubah (isi job atau operator)" });
+    }
+
+    // Tolak kalau sudah terkirim ke SAP — koreksi butuh storno, bukan edit senyap.
+    const posted = await client.query(
+      `SELECT 1 FROM public.sap_staging_source
+        WHERE source_system='MCH_HOURS' AND source_row_id=$1::text AND posted_at IS NOT NULL LIMIT 1`,
+      [proddataid]
+    );
+    if (posted.rows.length > 0) {
+      return res.status(409).json({ error: "Record sudah terkirim ke SAP. Koreksi butuh storno di SAP dulu." });
+    }
+
+    await client.query("BEGIN");
+
+    if (orderNo) {
+      // Ambil field job dari ph3_order (terbaru) + SOW untuk workcenter/ssbr.
+      const upd = await client.query(
+        `
+        WITH j AS (
+          SELECT * FROM public.ph3_order
+          WHERE order_no = $2 AND operation_no = $3
+          ORDER BY id DESC LIMIT 1
+        ),
+        s AS (
+          SELECT ssbr_id, workcenter FROM public.sow
+          WHERE COALESCE(NULLIF(ltrim(trim(coalesce(order_no,'')),'0'),''),'0') = COALESCE(NULLIF(ltrim(trim($2),'0'),''),'0')
+            AND COALESCE(NULLIF(ltrim(trim(operation_no::text),'0'),''),'0') = COALESCE(NULLIF(ltrim(trim($3),'0'),''),'0')
+          LIMIT 1
+        )
+        UPDATE public.mch_transaction m SET
+          order_no = j.order_no,
+          operation_no = j.operation_no,
+          confirmation_number = j.confirmation_number,
+          operation_short_text = j.operation_short_text,
+          operation_description = j.operation_description,
+          sequence_category = j.sequence_category,
+          sequence_number = j.sequence_number,
+          branch_operation_no = j.branch_operation_no,
+          return_operation_no = j.return_operation_no,
+          cost_center = j.cost_center,
+          material_no = j.material_no,
+          material_description = j.material_description,
+          ssbr_id = COALESCE((SELECT ssbr_id FROM s), m.ssbr_id),
+          workcentercode = COALESCE((SELECT workcenter FROM s), m.workcentercode),
+          refreshed_at = now()
+        FROM j
+        WHERE m.proddataid = $1
+        RETURNING m.proddataid
+        `,
+        [proddataid, orderNo, operationNo]
+      );
+      if (upd.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: `Job ${orderNo}/${operationNo} tidak ada di ph3_order, atau record tidak ditemukan` });
+      }
+    }
+
+    if (snEmployee) {
+      await client.query(
+        `
+        UPDATE public.mch_transaction m SET
+          sn_employee = $2,
+          full_name = COALESCE((SELECT full_name FROM public.usernfc WHERE snssb = $2 LIMIT 1), m.full_name),
+          refreshed_at = now()
+        WHERE m.proddataid = $1
+        `,
+        [proddataid, snEmployee]
+      );
+    }
+
+    // Catat override (bertahan re-derivasi). Merge dengan yang ada.
+    await client.query(
+      `
+      INSERT INTO public.mch_transaction_override (proddataid, order_no, operation_no, sn_employee, note, updated_by, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, now())
+      ON CONFLICT (proddataid) DO UPDATE SET
+        order_no = COALESCE(EXCLUDED.order_no, mch_transaction_override.order_no),
+        operation_no = COALESCE(EXCLUDED.operation_no, mch_transaction_override.operation_no),
+        sn_employee = COALESCE(EXCLUDED.sn_employee, mch_transaction_override.sn_employee),
+        note = COALESCE(EXCLUDED.note, mch_transaction_override.note),
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+      `,
+      [proddataid, orderNo, operationNo, snEmployee, note, by]
+    );
+
+    await client.query("COMMIT");
+
+    // Kembalikan record terbaru + status kelayakan.
+    const fresh = await pool.query(
+      `
+      SELECT m.proddataid, m.order_no, m.operation_no, m.confirmation_number,
+        m.machineid, m.full_name, m.sn_employee,
+        ROUND(COALESCE(m.duration_hours,0)::numeric,2) AS duration_hours,
+        ${SAP_ELIGIBLE_SQL} AS eligible,
+        ${INELIGIBLE_REASON_SQL} AS ineligible_reason
+      FROM public.mch_transaction m WHERE m.proddataid = $1
+      `,
+      [proddataid]
+    );
+    res.json({ data: fresh.rows[0] || null, meta: meta() });
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch { /* ignore */ }
+    console.error("machine-hours-override error:", err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+}
+
+// POST /dashboard/sap-ops/enqueue
+// Titipkan permintaan operasi (stage_catchup / retry_failed) ke antrian sap_ops_request.
+// API TIDAK menjalankan Python — worker (ops_worker.py) yang mengeksekusi. Lihat migration
+// 20260715_sap_ops_request untuk alasannya.
+async function enqueueSapOps(req, res) {
+  const ALLOWED = new Set(["stage_catchup", "retry_failed"]);
+  try {
+    const action = String(req.body?.action || "").trim();
+    if (!ALLOWED.has(action)) {
+      return res.status(400).json({ error: `Aksi tidak dikenal: ${action || "(kosong)"}` });
+    }
+    const requestedBy = req.header("x-user-id") || null;
+
+    // Unique index parsial menolak kalau sudah ada QUEUED/RUNNING untuk aksi yang sama.
+    let result;
+    try {
+      result = await pool.query(
+        `INSERT INTO public.sap_ops_request (action, requested_by)
+         VALUES ($1, $2)
+         RETURNING id, action, status, requested_at`,
+        [action, requestedBy]
+      );
+    } catch (err) {
+      if (err.code === "23505") {
+        return res.status(409).json({ error: "Permintaan serupa masih diproses. Tunggu sampai selesai." });
+      }
+      throw err;
+    }
+
+    res.status(202).json({ data: result.rows[0], meta: meta() });
+  } catch (err) {
+    console.error("enqueueSapOps error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/sap-ops/requests — status permintaan terbaru (untuk UI polling)
+async function getSapOpsRequests(req, res) {
+  try {
+    const result = await pool.query(
+      `SELECT id, action, status, requested_by, requested_at, started_at, finished_at, result, error
+       FROM public.sap_ops_request
+       ORDER BY id DESC
+       LIMIT 20`
+    );
+    res.json({ data: result.rows, meta: meta() });
+  } catch (err) {
+    console.error("getSapOpsRequests error:", err);
     res.status(500).json({ error: err.message });
   }
 }
@@ -744,6 +1256,14 @@ module.exports = {
   getWorkcenterList,
   getOperationsHub,
   getSapTimesheetStagingLog,
+  getSapTimesheetStagingSummary,
+  enqueueSapOps,
+  getSapOpsRequests,
+  getMachineHoursMatrix,
+  getMachineHoursRecords,
+  getPh3Jobs,
+  getOperators,
+  saveMachineHoursOverride,
   getOrderProgress,
   getOrderActivityDetail,
   getOperationTimesheetHistory,

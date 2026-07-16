@@ -661,6 +661,95 @@ def upsert_batch(cursor, values: list[tuple]) -> None:
     )
 
 
+def apply_overrides(pg_conn, dry_run: bool) -> int:
+    """Terapkan koreksi manual (public.mch_transaction_override) DI ATAS hasil derivasi.
+
+    Inilah yang membuat koreksi user (assign job dari ph3, assign operator) bertahan
+    terhadap re-derivasi — baik incremental maupun --full-rebuild. Tanpa langkah ini,
+    edit apa pun ke mch_transaction akan tersapu saat baris-nya diturunkan ulang.
+
+    Baris yang sudah ter-POST ke SAP tidak akan berubah: trigger pembekuan
+    (mch_transaction_freeze_posted) me-revert field identitas-nya.
+    """
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.mch_transaction_override')")
+        if cur.fetchone()[0] is None:
+            return 0  # migration belum diterapkan — lewati dengan aman
+        cur.execute("SELECT count(*) FROM public.mch_transaction_override")
+        n = cur.fetchone()[0]
+    if n == 0:
+        return 0
+    if dry_run:
+        log.info("apply_overrides (DRY RUN): %d koreksi manual akan diterapkan ulang", n)
+        return n
+
+    with pg_conn.cursor() as cur:
+        # JOB: ambil field ph3 terbaru per (order_no, operation_no) + SOW untuk workcenter/ssbr.
+        cur.execute(
+            """
+            WITH ph AS (
+                SELECT DISTINCT ON (order_no, operation_no)
+                    order_no, operation_no, confirmation_number, operation_short_text,
+                    operation_description, sequence_category, sequence_number,
+                    branch_operation_no, return_operation_no, cost_center,
+                    material_no, material_description
+                FROM public.ph3_order
+                ORDER BY order_no, operation_no, id DESC
+            )
+            UPDATE public.mch_transaction m SET
+                order_no = ph.order_no,
+                operation_no = ph.operation_no,
+                confirmation_number = ph.confirmation_number,
+                operation_short_text = ph.operation_short_text,
+                operation_description = ph.operation_description,
+                sequence_category = ph.sequence_category,
+                sequence_number = ph.sequence_number,
+                branch_operation_no = ph.branch_operation_no,
+                return_operation_no = ph.return_operation_no,
+                cost_center = ph.cost_center,
+                material_no = ph.material_no,
+                material_description = ph.material_description,
+                ssbr_id = COALESCE((
+                    SELECT s.ssbr_id FROM public.sow s
+                    WHERE COALESCE(NULLIF(ltrim(trim(coalesce(s.order_no,'')),'0'),''),'0')
+                        = COALESCE(NULLIF(ltrim(trim(o.order_no),'0'),''),'0')
+                      AND COALESCE(NULLIF(ltrim(trim(s.operation_no::text),'0'),''),'0')
+                        = COALESCE(NULLIF(ltrim(trim(o.operation_no),'0'),''),'0')
+                    LIMIT 1), m.ssbr_id),
+                workcentercode = COALESCE((
+                    SELECT s.workcenter FROM public.sow s
+                    WHERE COALESCE(NULLIF(ltrim(trim(coalesce(s.order_no,'')),'0'),''),'0')
+                        = COALESCE(NULLIF(ltrim(trim(o.order_no),'0'),''),'0')
+                      AND COALESCE(NULLIF(ltrim(trim(s.operation_no::text),'0'),''),'0')
+                        = COALESCE(NULLIF(ltrim(trim(o.operation_no),'0'),''),'0')
+                    LIMIT 1), m.workcentercode),
+                refreshed_at = now()
+            FROM public.mch_transaction_override o
+            JOIN ph ON ph.order_no = o.order_no AND ph.operation_no = o.operation_no
+            WHERE m.proddataid = o.proddataid AND o.order_no IS NOT NULL
+            """
+        )
+        job_applied = cur.rowcount
+
+        # OPERATOR: set snssb + nama dari usernfc.
+        cur.execute(
+            """
+            UPDATE public.mch_transaction m SET
+                sn_employee = o.sn_employee,
+                full_name = COALESCE(
+                    (SELECT u.full_name FROM public.usernfc u WHERE u.snssb = o.sn_employee LIMIT 1),
+                    m.full_name),
+                refreshed_at = now()
+            FROM public.mch_transaction_override o
+            WHERE m.proddataid = o.proddataid AND o.sn_employee IS NOT NULL
+            """
+        )
+        op_applied = cur.rowcount
+    pg_conn.commit()
+    log.info("apply_overrides: %d koreksi job + %d koreksi operator diterapkan ulang", job_applied, op_applied)
+    return n
+
+
 def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bool, dry_run: bool) -> int:
     total_upserted = 0
     offset = 0
@@ -798,6 +887,10 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
             log.info("Skipped commit for batch offset=%d because it produced no rows.", offset)
 
         offset += BATCH_SIZE
+
+    # Terapkan koreksi manual DI ATAS hasil derivasi — supaya edit user (job/operator)
+    # bertahan terhadap re-derivasi ini.
+    apply_overrides(pg_conn, dry_run)
 
     return total_upserted
 

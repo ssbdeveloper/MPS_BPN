@@ -1,151 +1,234 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
-  ChevronRight,
+  ChevronDown,
   CircleDashed,
   Database,
-  FileJson,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Search,
+  X,
 } from 'lucide-react';
+import ConfirmationModal from '../components/ui/ConfirmationModal';
+import MachineHoursMatrix from '../components/sap/MachineHoursMatrix';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
-function formatDateTimeLabel(value) {
+// ── helpers ──────────────────────────────────────────────────────────────────
+function formatDateTime(value) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
   return date.toLocaleString('en-GB', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
+    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
   });
 }
 
 function toJsonText(value) {
-  if (value == null || value === '') return '-';
+  if (value == null || value === '') return '';
   if (typeof value === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
   }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
-function findMessageValue(value) {
-  if (!value || typeof value !== 'object') return '';
-  if (Object.prototype.hasOwnProperty.call(value, 'MESSAGE')) return value.MESSAGE;
-  if (Object.prototype.hasOwnProperty.call(value, 'message')) return value.message;
+const STATUS_META = {
+  POSTED:  { label: 'Terkirim', icon: CheckCircle2, badge: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
+  PENDING: { label: 'Menunggu', icon: CircleDashed, badge: 'border-amber-200 bg-amber-50 text-amber-700',   dot: 'bg-amber-500' },
+  POSTING: { label: 'Mengirim', icon: Loader2,      badge: 'border-cyan-200 bg-cyan-50 text-[#0077b6]',      dot: 'bg-[#00b4d8]' },
+  FAILED:  { label: 'Gagal',    icon: AlertCircle,   badge: 'border-red-200 bg-red-50 text-red-700',          dot: 'bg-red-500' },
+  SKIPPED: { label: 'Dilewati', icon: CircleDashed,  badge: 'border-slate-200 bg-slate-100 text-slate-600',   dot: 'bg-slate-400' },
+};
+const statusMeta = (s) => STATUS_META[String(s || 'PENDING').toUpperCase()] || STATUS_META.PENDING;
 
-  for (const child of Object.values(value)) {
-    const found = findMessageValue(child);
-    if (found) return found;
-  }
-  return '';
-}
+const STATUS_OPTIONS = ['all', 'PENDING', 'POSTING', 'POSTED', 'FAILED', 'SKIPPED'];
 
-function extractSapMessage(value) {
-  const text = String(value || '').trim();
-  if (!text) return '-';
-
-  try {
-    const parsed = JSON.parse(text);
-    const found = findMessageValue(parsed);
-    if (found) return String(found).trim() || '-';
-  } catch {
-    // SAP responses are sometimes JSON fragments or plain text.
-  }
-
-  const quotedMatch = text.match(/\bMESSAGE\b["'\s]*[:=]\s*["']([^"'}]*)/i);
-  if (quotedMatch?.[1]) return quotedMatch[1].trim() || '-';
-
-  const looseMatch = text.match(/\bMESSAGE\b[\s:=,-]*(.*)$/is);
-  const cleaned = (looseMatch?.[1] || text)
-    .replace(/^[\s:=,"']+/, '')
-    .replace(/["'\s}]+$/g, '')
-    .trim();
-  return cleaned || '-';
-}
-
-function getSapStatusMeta(status) {
-  const normalized = String(status || 'PENDING').toUpperCase();
-  if (normalized === 'POSTED') {
-    return {
-      label: 'Posted',
-      icon: CheckCircle2,
-      className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    };
-  }
-  if (normalized === 'FAILED') {
-    return {
-      label: 'Failed',
-      icon: AlertCircle,
-      className: 'border-red-200 bg-red-50 text-red-700',
-    };
-  }
-  if (normalized === 'POSTING') {
-    return {
-      label: 'Posting',
-      icon: Loader2,
-      className: 'border-cyan-200 bg-cyan-50 text-[#0077b6]',
-    };
-  }
-  if (normalized === 'SKIPPED') {
-    return {
-      label: 'Skipped',
-      icon: CircleDashed,
-      className: 'border-slate-200 bg-slate-50 text-slate-600',
-    };
-  }
-  return {
-    label: 'Pending',
-    icon: CircleDashed,
-    className: 'border-amber-200 bg-amber-50 text-amber-700',
+// ── stat card ────────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub, tone, active, onClick }) {
+  const tones = {
+    posted:  'bg-emerald-50 border-emerald-200 text-emerald-700',
+    pending: 'bg-amber-50 border-amber-200 text-amber-700',
+    failed:  'bg-red-50 border-red-200 text-red-700',
+    neutral: 'bg-white border-slate-200 text-slate-700',
   };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border px-3 py-3 text-left shadow-sm transition-all active:scale-95
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
+        ${tones[tone] || tones.neutral} ${active ? 'ring-2 ring-[#00b4d8]' : ''}`}
+    >
+      <div className="text-[11px] font-semibold uppercase tracking-wide opacity-80">{label}</div>
+      <div className="mt-0.5 text-2xl font-extrabold tabular-nums">{value}</div>
+      {sub != null && <div className="text-[11px] font-medium opacity-70">{sub}</div>}
+    </button>
+  );
 }
 
-function JsonPreview({ label, value }) {
-  const [expanded, setExpanded] = useState(false);
-  const text = toJsonText(value);
-  const isEmpty = text === '-';
-
-  if (isEmpty) {
-    return <span className="text-xs font-semibold text-slate-400">-</span>;
-  }
+// ── failure triage panel ─────────────────────────────────────────────────────
+function FailureTriage({ failures, onFilterStatus }) {
+  const [open, setOpen] = useState(true);
+  if (!failures?.length) return null;
+  const total = failures.reduce((s, f) => s + f.count, 0);
 
   return (
-    <div className="min-w-0">
+    <section className="rounded-xl border border-red-200 bg-white shadow-sm">
       <button
         type="button"
-        onClick={() => setExpanded((current) => !current)}
-        className="inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded-lg border border-slate-200 bg-white text-[#0077b6] transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-        title={`Toggle ${label}`}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] rounded-xl"
       >
-        <FileJson size={14} className="flex-shrink-0" />
-        <span className="sr-only">{expanded ? `Hide ${label}` : `Show ${label}`}</span>
+        <span className="flex items-center gap-2">
+          <AlertTriangle size={16} className="text-red-500" />
+          <span className="text-sm font-bold text-slate-800">Perlu ditindak — {total} bundel</span>
+        </span>
+        <ChevronDown size={16} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {expanded && (
-        <pre className="mt-2 max-h-72 w-[720px] max-w-[70vw] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">
-          {text}
-        </pre>
+
+      {open && (
+        <ul className="divide-y divide-slate-100 border-t border-slate-100">
+          {failures.map((f) => (
+            <li key={f.cause_key} className="px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800">{f.label}</p>
+                  {f.action && <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{f.action}</p>}
+                </div>
+                <span className="flex-shrink-0 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-extrabold tabular-nums text-red-700">
+                  {f.count}
+                </span>
+              </div>
+              {f.sample_ids?.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onFilterStatus(f.statuses?.[0] || 'FAILED')}
+                  className="mt-2 text-[11px] font-semibold text-[#0077b6] underline-offset-2 hover:underline
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] rounded"
+                >
+                  Lihat record ({f.statuses?.join(' / ') || 'FAILED'})
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
+    </section>
+  );
+}
+
+// ── detail drawer ────────────────────────────────────────────────────────────
+function DetailDrawer({ row, onClose }) {
+  useEffect(() => {
+    if (!row) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = 'unset'; };
+  }, [row, onClose]);
+
+  if (!row) return null;
+  const meta = statusMeta(row.status);
+  const payload = toJsonText(row.payload);
+  const response = toJsonText(row.sap_response || row.sap_response_text);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-[2px]" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Detail bundel ${row.ztimesheetid || row.id}`}
+        className="flex h-full w-full max-w-md flex-col bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3">
+          <div>
+            <p className="font-mono text-xs font-bold text-slate-500">#{row.ztimesheetid || row.id}</p>
+            <span className={`mt-1 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-extrabold ${meta.badge}`}>
+              {meta.label}
+            </span>
+          </div>
+          <button
+            type="button" onClick={onClose} aria-label="Tutup"
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+          {row.cause_label && row.cause_label !== '-' && (
+            <div className={`rounded-lg border p-3 ${row.status === 'FAILED' || row.status === 'SKIPPED' ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-slate-50'}`}>
+              <p className="text-xs font-bold text-slate-800">{row.cause_label}</p>
+              {row.cause_action && <p className="mt-1 text-xs leading-relaxed text-slate-600">{row.cause_action}</p>}
+            </div>
+          )}
+
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+            {[
+              ['Sumber', row.source_system],
+              ['Order', row.aufnr],
+              ['Operasi', row.vornr],
+              ['Pegawai', row.pernr],
+              ['Work center', row.arbpl],
+              ['Durasi (dtk)', row.total_seconds],
+              ['Dibuat', formatDateTime(row.created_at)],
+              ['Terkirim', formatDateTime(row.posted_at)],
+            ].map(([k, v]) => (
+              <div key={k} className="min-w-0">
+                <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{k}</dt>
+                <dd className="mt-0.5 truncate font-mono font-semibold tabular-nums text-slate-700" title={String(v ?? '')}>{v || '-'}</dd>
+              </div>
+            ))}
+          </dl>
+
+          {response && (
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Respons SAP</p>
+              <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{response}</pre>
+            </div>
+          )}
+          {payload && (
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Payload</p>
+              <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{payload}</pre>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
+// ── skeleton ─────────────────────────────────────────────────────────────────
+function SkeletonRows({ n = 6 }) {
+  return (
+    <div className="space-y-2 p-3">
+      {Array.from({ length: n }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <div className="h-6 w-20 animate-pulse rounded-full bg-slate-100" />
+          <div className="h-4 flex-1 animate-pulse rounded bg-slate-100" />
+          <div className="h-4 w-16 animate-pulse rounded bg-slate-100" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── page ─────────────────────────────────────────────────────────────────────
 function SapLogPage() {
   const navigate = useNavigate();
+
+  const [tab, setTab] = useState('staging');
+  const [summary, setSummary] = useState(null);
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('all');
   const [searchInput, setSearchInput] = useState('');
@@ -155,26 +238,32 @@ function SapLogPage() {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
+  const [detailRow, setDetailRow] = useState(null);
+  const [confirmRetry, setConfirmRetry] = useState(false);
+  const [acting, setActing] = useState(false);
+
+  const fetchSummary = useCallback(async (signal) => {
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-timesheet-staging-summary`, { signal });
+      const payload = await res.json().catch(() => ({}));
+      if (res.ok) setSummary(payload.data || null);
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error('summary error', err);
+    }
+  }, []);
 
   const fetchRows = useCallback(async ({ cursor = null, append = false, signal } = {}) => {
     const params = new URLSearchParams({ limit: '30', status });
     if (search) params.set('search', search);
     if (cursor) params.set('cursor', String(cursor));
-
-    if (append) {
-      setLoadingMore(true);
-    } else {
-      setLoading(true);
-    }
+    append ? setLoadingMore(true) : setLoading(true);
     setError(null);
-
     try {
-      const response = await fetch(`${API_BASE}/dashboard/sap-timesheet-staging-log?${params.toString()}`, { signal });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || 'Gagal memuat SAP log');
-
-      const nextRows = payload.data || [];
-      setRows((current) => (append ? [...current, ...nextRows] : nextRows));
+      const res = await fetch(`${API_BASE}/dashboard/sap-timesheet-staging-log?${params.toString()}`, { signal });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'Gagal memuat SAP log');
+      const next = payload.data || [];
+      setRows((cur) => (append ? [...cur, ...next] : next));
       setNextCursor(payload.pagination?.next_cursor || null);
       setHasMore(Boolean(payload.pagination?.has_more));
     } catch (err) {
@@ -191,186 +280,290 @@ function SapLogPage() {
     return () => controller.abort();
   }, [fetchRows]);
 
-  const handleSearchSubmit = (event) => {
-    event.preventDefault();
-    setSearch(searchInput.trim());
-  };
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchSummary(controller.signal);
+    return () => controller.abort();
+  }, [fetchSummary]);
 
-  const statusOptions = ['all', 'PENDING', 'POSTING', 'POSTED', 'FAILED', 'SKIPPED'];
+  const refreshAll = useCallback(() => {
+    fetchRows({ append: false });
+    fetchSummary();
+  }, [fetchRows, fetchSummary]);
+
+  const handleSearchSubmit = (e) => { e.preventDefault(); setSearch(searchInput.trim()); };
+
+  // ── actions ──────────────────────────────────────────────────────────────
+  const enqueue = useCallback(async (action, label) => {
+    setActing(true);
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-ops/enqueue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'Gagal mengirim permintaan');
+      toast.success(`${label} — permintaan dikirim ke worker`, {
+        description: 'Antrian diproses di latar belakang. Refresh untuk lihat perubahan.',
+      });
+    } catch (err) {
+      toast.error(`${label} gagal`, { description: err.message });
+    } finally {
+      setActing(false);
+    }
+  }, []);
+
+  const failedCount = summary?.by_status?.FAILED || 0;
+  const bc = summary?.by_status || {};
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-50 text-slate-800">
-      <header className="flex-shrink-0 border-b border-slate-200 bg-white px-4 py-3 shadow-sm md:px-6">
-        <div className="relative flex min-h-[96px] items-start justify-center">
+      {/* Header */}
+      <header className="flex-shrink-0 border-b border-slate-200 bg-white px-4 py-2.5 shadow-sm md:px-6">
+        <div className="flex items-center justify-between gap-3">
           <button
-            type="button"
-            onClick={() => navigate('/operations-hub')}
-            className="absolute left-0 top-0 inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+            type="button" onClick={() => navigate('/operations-hub')}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
-            <ArrowLeft size={16} />
-            Back
+            <ArrowLeft size={16} /> Back
           </button>
 
-          <div className="min-w-0 text-center">
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-[#e8f7fb] text-[#0077b6]">
-              <Database size={22} />
-            </div>
-            <h1 className="mt-3 text-lg font-extrabold text-slate-900">SAP LOG STATUS</h1>
-            
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#e8f7fb] text-[#0077b6]"><Database size={16} /></span>
+            <h1 className="text-sm font-extrabold text-slate-800 md:text-base">Jam Mesin &amp; SAP</h1>
           </div>
 
-          <button
-            type="button"
-            onClick={() => fetchRows({ append: false })}
-            disabled={loading}
-            className="absolute right-0 top-0 flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:opacity-50"
-            title="Refresh"
-            aria-label="Refresh SAP log"
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          {tab === 'staging' ? (
+            <button
+              type="button" onClick={refreshAll} disabled={loading}
+              title="Refresh" aria-label="Refresh"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          ) : <span className="min-h-[44px] min-w-[44px]" />}
         </div>
 
-        <form onSubmit={handleSearchSubmit} className="mt-4 flex flex-col gap-3 md:flex-row md:items-center">
-          <label className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              placeholder="Search ztimesheet, order, SAP message, JSON..."
-              className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold text-slate-800 placeholder-slate-400 transition focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-            />
-          </label>
-          <select
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-            className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-          >
-            {statusOptions.map((option) => (
-              <option key={option} value={option}>{option === 'all' ? 'All Status' : option}</option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 text-sm font-extrabold text-white transition hover:bg-[#0077b6] active:scale-95"
-          >
-            <Search size={16} />
-            Search
-          </button>
-        </form>
+        {/* Tabs */}
+        <div className="mt-2 flex gap-1" role="tablist" aria-label="Tampilan">
+          {[
+            { key: 'staging', label: 'Status Kirim SAP' },
+            { key: 'hours', label: 'Jam Operator' },
+          ].map((tb) => (
+            <button
+              key={tb.key} role="tab" aria-selected={tab === tb.key}
+              type="button" onClick={() => setTab(tb.key)}
+              className={`min-h-[40px] rounded-lg px-4 text-sm font-semibold transition-all active:scale-95
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
+                ${tab === tb.key ? 'bg-[#0077b6] text-white shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-50 border border-slate-200'}`}
+            >
+              {tb.label}
+            </button>
+          ))}
+        </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-hidden px-4 py-4 md:px-6">
-        <div className="flex h-full min-h-0 flex-col gap-3">
-          <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="h-full overflow-auto">
-              <table className="w-max min-w-full table-auto text-left text-sm">
-              <thead style={{ background: '#caf0f8' }}>
-                <tr className="text-[11px] uppercase tracking-wide text-slate-700">
-                  <th className="min-w-[110px] whitespace-nowrap px-3 py-2 font-extrabold">Status</th>
-                  <th className="min-w-[90px] whitespace-nowrap px-3 py-2 font-extrabold">ID</th>
-                  <th className="min-w-[135px] whitespace-nowrap px-3 py-2 font-extrabold">Created</th>
-                  <th className="min-w-[135px] whitespace-nowrap px-3 py-2 font-extrabold">Posted</th>
-                  <th className="min-w-[120px] whitespace-nowrap px-3 py-2 font-extrabold">Source</th>
-                  <th className="min-w-[145px] whitespace-nowrap px-3 py-2 font-extrabold">Order</th>
-                  <th className="min-w-[80px] whitespace-nowrap px-3 py-2 font-extrabold">Op</th>
-                  <th className="min-w-[120px] whitespace-nowrap px-3 py-2 font-extrabold">Person</th>
-                  <th className="min-w-[120px] whitespace-nowrap px-3 py-2 font-extrabold">WC</th>
-                  <th className="min-w-[430px] whitespace-nowrap px-3 py-2 font-extrabold">SAP Message</th>
-                  <th className="min-w-[90px] whitespace-nowrap px-3 py-2 font-extrabold">Payload</th>
-                  <th className="min-w-[95px] whitespace-nowrap px-3 py-2 font-extrabold">Response</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {loading && rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={12} className="px-3 py-12 text-center text-sm font-bold text-slate-500">
-                      <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-[#0096c7]" />
-                      Loading SAP log...
-                    </td>
-                  </tr>
-                ) : error ? (
-                  <tr>
-                    <td colSpan={12} className="px-3 py-10 text-center text-sm font-bold text-red-600">{error}</td>
-                  </tr>
-                ) : rows.length === 0 ? (
-                  <tr>
-                    <td colSpan={12} className="px-3 py-10 text-center text-sm font-bold text-slate-400">No SAP log data</td>
-                  </tr>
-                ) : rows.map((row) => {
-                  const statusMeta = getSapStatusMeta(row.status);
-                  const StatusIcon = statusMeta.icon;
-                  const message = extractSapMessage(row.sap_error || row.sap_response_text);
-                  return (
-                    <tr key={row.id} className="align-top transition hover:bg-slate-50">
-                      <td className="whitespace-nowrap px-3 py-3">
-                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${statusMeta.className}`}>
-                          <StatusIcon className={`h-3.5 w-3.5 ${row.status === 'POSTING' ? 'animate-spin' : ''}`} />
-                          {statusMeta.label}
-                        </span>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3">
-                        <p className="font-mono text-xs font-extrabold text-slate-700">#{row.ztimesheetid || row.id}</p>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-xs font-semibold text-slate-600">
-                        {formatDateTimeLabel(row.created_at)}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-xs font-semibold text-slate-600">
-                        {formatDateTimeLabel(row.posted_at)}
-                      </td>
-                      <td className="px-3 py-3">
-                        <p className="truncate text-xs font-extrabold text-slate-800">{row.source_system}</p>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3">
-                        <p className="truncate font-mono text-xs font-extrabold text-slate-800" title={row.aufnr}>{row.aufnr || '-'}</p>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3 text-xs font-bold text-slate-600">
-                        {row.vornr || '-'}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3">
-                        <p className="truncate font-mono text-xs font-extrabold text-slate-800" title={row.pernr}>{row.pernr || '-'}</p>
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-3">
-                        <p className="truncate text-xs font-bold text-slate-500" title={row.arbpl}>{row.arbpl || '-'}</p>
-                      </td>
-                      <td className="px-3 py-3">
-                        <p
-                          className={`max-w-[430px] whitespace-normal break-words text-xs font-semibold leading-relaxed ${row.sap_error ? 'text-red-700' : 'text-slate-700'}`}
-                          title={message}
-                        >
-                          {message}
-                        </p>
-                      </td>
-                      <td className="px-3 py-3">
-                        <JsonPreview label="payload" value={row.payload} />
-                      </td>
-                      <td className="px-3 py-3">
-                        <JsonPreview label="SAP response" value={row.sap_response} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            </div>
+      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
+        {tab === 'hours' ? (
+          <div className="mx-auto max-w-6xl"><MachineHoursMatrix /></div>
+        ) : (
+        <div className="mx-auto flex max-w-5xl flex-col gap-4">
+
+          {/* Stat cards */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <StatCard label="Terkirim" value={(bc.POSTED || 0).toLocaleString('id-ID')} sub={summary ? `+${summary.posted_today || 0} hari ini` : ' '} tone="posted"
+              active={status === 'POSTED'} onClick={() => setStatus('POSTED')} />
+            <StatCard label="Menunggu" value={(bc.PENDING || 0).toLocaleString('id-ID')} sub={summary ? `${summary.pending_today || 0} hari ini` : ' '} tone="pending"
+              active={status === 'PENDING'} onClick={() => setStatus('PENDING')} />
+            <StatCard label="Gagal" value={(bc.FAILED || 0).toLocaleString('id-ID')} sub={bc.SKIPPED ? `${bc.SKIPPED} dilewati` : ' '} tone="failed"
+              active={status === 'FAILED'} onClick={() => setStatus('FAILED')} />
+            <StatCard label="Total antrian" value={(summary?.total || 0).toLocaleString('id-ID')}
+              sub={summary?.oldest ? `sejak ${formatDateTime(summary.oldest).slice(0, 6)}` : ' '} tone="neutral"
+              active={status === 'all'} onClick={() => setStatus('all')} />
           </div>
 
-          <div className="flex flex-shrink-0 items-center justify-between gap-3">
-            <p className="text-xs font-bold text-slate-500">{rows.length} row loaded</p>
-            {hasMore && (
-              <button
-                type="button"
-                onClick={() => fetchRows({ cursor: nextCursor, append: true })}
-                disabled={loadingMore}
-                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-extrabold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:opacity-50"
-              >
-                {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4 rotate-90" />}
-                Load More
-              </button>
-            )}
+          {/* Action bar — PENDING di-post server otomatis; di sini hanya retry FAILED */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button" disabled={acting || failedCount === 0}
+              onClick={() => setConfirmRetry(true)}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+            >
+              <RotateCcw size={16} /> Kirim ulang gagal{failedCount ? ` (${failedCount})` : ''}
+            </button>
+            <p className="ml-auto text-[11px] text-slate-400">
+              {failedCount === 0 ? 'Tidak ada yang gagal — PENDING dikirim server otomatis' : 'PENDING dikirim server otomatis'}
+            </p>
           </div>
+
+          {/* Failure triage */}
+          <FailureTriage failures={summary?.failures} onFilterStatus={(s) => setStatus(s)} />
+
+          {/* Records */}
+          <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            {/* filter bar */}
+            <form onSubmit={handleSearchSubmit} className="flex flex-col gap-2 border-b border-slate-100 p-3 md:flex-row md:items-center">
+              <label className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+                  placeholder="Cari order, pegawai, pesan SAP…"
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 transition-all
+                    focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                />
+              </label>
+              <select
+                value={status} onChange={(e) => setStatus(e.target.value)}
+                className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition-all
+                  focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+              >
+                {STATUS_OPTIONS.map((o) => <option key={o} value={o}>{o === 'all' ? 'Semua status' : statusMeta(o).label}</option>)}
+              </select>
+              <button
+                type="submit"
+                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+              >
+                <Search size={16} /> Cari
+              </button>
+            </form>
+
+            {/* body */}
+            {loading && rows.length === 0 ? (
+              <SkeletonRows />
+            ) : error ? (
+              <div className="flex flex-col items-center gap-3 px-4 py-10 text-center">
+                <AlertCircle className="h-8 w-8 text-red-400" />
+                <p className="text-sm font-semibold text-red-600">{error}</p>
+                <button
+                  type="button" onClick={() => fetchRows({ append: false })}
+                  className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                >
+                  <RefreshCw size={16} /> Coba lagi
+                </button>
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
+                <Database className="h-8 w-8 text-slate-300" />
+                <p className="text-sm font-semibold text-slate-500">Tidak ada data untuk filter ini</p>
+              </div>
+            ) : (
+              <>
+                {/* table (md+) */}
+                <div className="hidden overflow-x-auto md:block">
+                  <table className="w-full text-left text-sm">
+                    <thead style={{ background: '#caf0f8' }}>
+                      <tr className="text-[11px] uppercase tracking-wide text-slate-700">
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Status</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">ID</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Order / Op</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Pegawai</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Keterangan</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Dibuat</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {rows.map((row) => {
+                        const meta = statusMeta(row.status);
+                        const isFail = row.status === 'FAILED' || row.status === 'SKIPPED';
+                        return (
+                          <tr
+                            key={row.id} onClick={() => setDetailRow(row)}
+                            className="cursor-pointer align-middle transition-colors hover:bg-slate-50"
+                          >
+                            <td className="whitespace-nowrap px-3 py-2.5">
+                              <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-bold ${meta.badge}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} /> {meta.label}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs font-bold tabular-nums text-slate-600">#{row.ztimesheetid || row.id}</td>
+                            <td className="whitespace-nowrap px-3 py-2.5">
+                              <span className="font-mono text-xs font-bold text-slate-800">{row.aufnr || '-'}</span>
+                              <span className="ml-1 font-mono text-xs text-slate-400">/ {row.vornr || '-'}</span>
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-600">{row.pernr || '-'}</td>
+                            <td className="px-3 py-2.5">
+                              <span className={`text-xs font-medium ${isFail ? 'text-red-600' : 'text-slate-500'}`}>
+                                {row.cause_label && row.cause_label !== '-' ? row.cause_label : (isFail ? 'Gagal' : '—')}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-2.5 text-xs tabular-nums text-slate-500">{formatDateTime(row.created_at)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* cards (mobile) */}
+                <ul className="divide-y divide-slate-100 md:hidden">
+                  {rows.map((row) => {
+                    const meta = statusMeta(row.status);
+                    const isFail = row.status === 'FAILED' || row.status === 'SKIPPED';
+                    return (
+                      <li key={row.id}>
+                        <button
+                          type="button" onClick={() => setDetailRow(row)}
+                          className="flex min-h-[52px] w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-slate-50 active:bg-slate-100
+                            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-bold ${meta.badge}`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} /> {meta.label}
+                            </span>
+                            <span className="font-mono text-[11px] font-bold tabular-nums text-slate-400">#{row.ztimesheetid || row.id}</span>
+                          </div>
+                          <div className="flex items-center gap-2 font-mono text-xs text-slate-700">
+                            <span className="font-bold">{row.aufnr || '-'}</span>
+                            <span className="text-slate-400">/ {row.vornr || '-'}</span>
+                            <span className="text-slate-400">·</span>
+                            <span className="text-slate-500">{row.pernr || '-'}</span>
+                          </div>
+                          {row.cause_label && row.cause_label !== '-' && (
+                            <p className={`text-xs font-medium ${isFail ? 'text-red-600' : 'text-slate-500'}`}>{row.cause_label}</p>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+
+            {/* footer */}
+            <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
+              <p className="text-xs font-medium text-slate-400 tabular-nums">{rows.length} record</p>
+              {hasMore && (
+                <button
+                  type="button" onClick={() => fetchRows({ cursor: nextCursor, append: true })} disabled={loadingMore}
+                  className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                >
+                  {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />} Muat lebih banyak
+                </button>
+              )}
+            </div>
+          </section>
         </div>
+        )}
       </main>
+
+      <DetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
+
+      <ConfirmationModal
+        isOpen={confirmRetry}
+        title={`Kirim ulang ${failedCount} bundel gagal ke SAP?`}
+        message="Ini mengirim jam kerja ke payroll SAP. Guard anti-double-post melindungi dari kiriman ganda, tapi pastikan sebabnya sudah diperbaiki (mis. master data SAP) supaya tidak gagal lagi."
+        confirmLabel="Ya, kirim ulang"
+        cancelLabel="Batal"
+        onCancel={() => setConfirmRetry(false)}
+        onConfirm={() => { setConfirmRetry(false); enqueue('retry_failed', 'Kirim ulang gagal'); }}
+      />
     </div>
   );
 }

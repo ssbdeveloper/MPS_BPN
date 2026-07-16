@@ -21,9 +21,10 @@ updated: 2026-07-11
 
 ## 🔜 Backlog (belum dimulai)
 
-- 🔴 **SAP: mekanisme STORNO** — guard sekarang hanya *mendeteksi* konflik (data sumber dikoreksi setelah ter-post); pembatalan kiriman salah di SAP masih **manual**. Lihat [[concepts/sap-staging-identity]]
-- **SAP: baris non-M1/M2 ditolak** ("activity type only in conjunction with cost center") — perbaikan di sisi SAP (user). Uji: retry staging id 163444
-- **SAP: 153 PENDING data 1 Juli** — cek posting period SAP sebelum posting massal
+- [[operations/sap-staging-reconciliation-page]] — design draft. Fitur 1 (read-only) + edit terpandu SEBAGIAN SUDAH (tab Jam Operator di SAP-log). Sisa: `ops_worker` deploy (Fitur 2), pertimbangkan buang `sap_ops_request`
+- 🔴 **SAP: baris unproductive ditolak "cost center"** — per 2026-07-16 unproductive IKUT di-stage (aturan kelayakan baru). Akan FAILED sampai master data cost center di SAP beres (perbaikan sisi user/SAP). Dashboard triase menampilkannya jelas
+- 🔴 **SAP: mekanisme STORNO** — guard sekarang hanya *mendeteksi* konflik; pembatalan kiriman salah di SAP masih **manual**. Lihat [[concepts/sap-staging-identity]]
+- **Deploy staging script + ETL ke server** — perubahan gerbang unproductive + bundling harian + `apply_overrides` masih lokal/branch 2b, belum di server produksi
 
 - 🔴 **URGENT — Aktifkan KPI `uptime_tablet` SEGERA** ([[EWS_PLAN]] §7.2): per 2026-07-13 kartunya **DIPALSUKAN kosmetik 100% di frontend** (`theme/ewsCosmetic.js`) atas keputusan owner. Angka di dashboard BUKAN data nyata sampai KPI asli hidup — pasang app heartbeat di armada tablet, hitung dari `ews.device_heartbeat_daily`, lalu HAPUS file kosmetiknya
 
@@ -36,6 +37,8 @@ updated: 2026-07-11
 
 ## ✅ Done
 
+- 2026-07-16 — **SAP-log 2 tab + kelayakan unproductive + bundling harian + fresh start** ([[log/2026-07-16-sap-staging-dashboard-unproductive-daily-bundling]]): dashboard Jam Operator (heatmap+drill+edit job/operator), `status_record` redefinisi (unproductive tanpa confirmation), bundling per-hari (4.040→1.659 bundel, sub-menit 0), staging di-reset ID→1 (1.659 PENDING)
+- 2026-07-14 — **Normalisasi NFC endianness** (colon-hex ↔ desimal little-endian): util `nfcId` FE/BE, lookup toleran, migration `20260714_usernfc_normalize_nfcid` (12 kartu + kartu ganda Bagus/Dika), `backfill_operator.py`
 - 2026-07-14 — **SAP staging provenance + guard anti-double-post** ([[log/2026-07-14-sap-staging-provenance]]): `sap_staging_source` (backfill 156/156), unique index parsial (double-post mustahil di level DB), trigger pembekuan `mch_transaction`, guard konflik di poster
 - 2026-07-12 — **EWS IL-last**: action_table pensiun; TTS pindah ke generator (otonom); correction queue → issue_log; manifest RBAC issue-log ditambal ([[EWS_PLAN]] §7.3)
 - 2026-07-12 — **EWS Phase 6 drill-through** ([[EWS_PLAN]] §7.1): 6/6 kategori, semua teruji rekonsiliasi vs prod; halaman `/ews/issue/:issueKey` + 🔍 di Issue Log
