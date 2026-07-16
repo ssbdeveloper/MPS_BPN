@@ -388,13 +388,19 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     ORDER BY f.bucket_start, f.arbpl, f.aufnr, f.vornr, f.zconf_type, f.lstar, f.zbarcodeid
     """
 
+    # DETEKSI DAY-LEVEL (2026-07-16): "hari itu SUDAH ter-post?" bukan "kunci itu sudah
+    # ter-post?". Kalau satu hari sudah punya bundel POSTED = hari itu DITUTUP -> record
+    # baru/edit apa pun untuk hari itu jadi KOREKSI (review manual), bukan normal-auto.
+    # Alasannya: edit yang melengkapi record biasanya melahirkan KUNCI BARU (operator/order
+    # yang belum pernah di-post hari itu). Kalau pakai key-level, kunci baru lolos ke normal
+    # lalu auto-post ke hari yang sudah "ditutup" tanpa review. Day-level menangkap semuanya.
     if mode == "correction":
         seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
                       "WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = mch_transaction.proddataid::text)")
         source_key_expr = "md5(f.norm_key || '|KOREKSI|' || f.seg_hash)"
         is_correction_expr = "true"
         posted_key_filter = ("EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
-                             "WHERE p.source_key = f.norm_key AND p.status = 'POSTED')")
+                             "WHERE p.bucket_start = f.bucket_start AND p.status = 'POSTED')")
     else:  # normal
         seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
                       "WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = mch_transaction.proddataid::text "
@@ -402,7 +408,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         source_key_expr = "f.norm_key"
         is_correction_expr = "false"
         posted_key_filter = ("NOT EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
-                             "WHERE p.source_key = f.norm_key AND p.status = 'POSTED')")
+                             "WHERE p.bucket_start = f.bucket_start AND p.status = 'POSTED')")
 
     sql = (sql
            .replace("__SEGMENT_PROVENANCE_FILTER__", seg_filter)
