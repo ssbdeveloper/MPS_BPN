@@ -561,12 +561,12 @@ const POSTED_EXISTS_SQL = `EXISTS (
 // Alasan sebuah baris TIDAK layak (status_record = false). Hanya bermakna untuk record
 // non-0/3/4 yang tampil di drill. Selaras dengan definisi status_record baru.
 const INELIGIBLE_REASON_SQL = `CASE
-  WHEN m.enddatetime IS NULL THEN 'Belum selesai (enddatetime kosong)'
-  WHEN NULLIF(btrim(m.sn_employee),'') IS NULL THEN 'Operator kosong'
+  WHEN m.enddatetime IS NULL THEN 'Not finished (no end time)'
+  WHEN NULLIF(btrim(m.sn_employee),'') IS NULL THEN 'No operator'
   WHEN m.status_activitytype IN ('M1','M2')
        AND (COALESCE(m.order_no,'') = '' OR COALESCE(m.operation_no,'') = '' OR COALESCE(m.confirmation_number,'') = '')
-    THEN 'Order/operasi tak cocok di SAP (tanpa confirmation) — perbaiki job'
-  WHEN NULLIF(btrim(m.status_activitytype),'') IS NULL THEN 'Tanpa activity type'
+    THEN 'Order/operation not matched in SAP (no confirmation) — fix job'
+  WHEN NULLIF(btrim(m.status_activitytype),'') IS NULL THEN 'No activity type'
   ELSE NULL
 END`;
 
@@ -796,13 +796,13 @@ async function saveMachineHoursOverride(req, res) {
     const by = req.header("x-user-id") || null;
 
     if (!Number.isFinite(proddataid)) {
-      return res.status(400).json({ error: "proddataid wajib" });
+      return res.status(400).json({ error: "proddataid is required" });
     }
     if (orderNo && !operationNo) {
-      return res.status(400).json({ error: "operation_no wajib bila order_no diisi" });
+      return res.status(400).json({ error: "operation_no is required when order_no is set" });
     }
     if (!orderNo && !snEmployee) {
-      return res.status(400).json({ error: "Tidak ada yang diubah (isi job atau operator)" });
+      return res.status(400).json({ error: "Nothing to change (set a job or operator)" });
     }
 
     // Tolak kalau sudah terkirim ke SAP — koreksi butuh storno, bukan edit senyap.
@@ -812,7 +812,7 @@ async function saveMachineHoursOverride(req, res) {
       [proddataid]
     );
     if (posted.rows.length > 0) {
-      return res.status(409).json({ error: "Record sudah terkirim ke SAP. Koreksi butuh storno di SAP dulu." });
+      return res.status(409).json({ error: "Record already sent to SAP. A correction needs a storno in SAP first." });
     }
 
     await client.query("BEGIN");
@@ -856,7 +856,7 @@ async function saveMachineHoursOverride(req, res) {
       );
       if (upd.rows.length === 0) {
         await client.query("ROLLBACK");
-        return res.status(404).json({ error: `Job ${orderNo}/${operationNo} tidak ada di ph3_order, atau record tidak ditemukan` });
+        return res.status(404).json({ error: `Job ${orderNo}/${operationNo} not found in ph3_order, or record not found` });
       }
     }
 
@@ -922,7 +922,7 @@ async function enqueueSapOps(req, res) {
   try {
     const action = String(req.body?.action || "").trim();
     if (!ALLOWED.has(action)) {
-      return res.status(400).json({ error: `Aksi tidak dikenal: ${action || "(kosong)"}` });
+      return res.status(400).json({ error: `Unknown action: ${action || "(empty)"}` });
     }
     const requestedBy = req.header("x-user-id") || null;
 
@@ -937,7 +937,7 @@ async function enqueueSapOps(req, res) {
       );
     } catch (err) {
       if (err.code === "23505") {
-        return res.status(409).json({ error: "Permintaan serupa masih diproses. Tunggu sampai selesai." });
+        return res.status(409).json({ error: "A similar request is still running. Please wait until it finishes." });
       }
       throw err;
     }
@@ -987,7 +987,7 @@ async function getSapCorrections(req, res) {
 async function postCorrections(req, res) {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((n) => parseInt(n, 10)).filter(Number.isFinite) : [];
-    if (!ids.length) return res.status(400).json({ error: "Tidak ada bundel koreksi dipilih" });
+    if (!ids.length) return res.status(400).json({ error: "No correction bundles selected" });
     const requestedBy = req.header("x-user-id") || null;
     let result;
     try {
@@ -998,7 +998,7 @@ async function postCorrections(req, res) {
         [JSON.stringify({ ids }), requestedBy]
       );
     } catch (err) {
-      if (err.code === "23505") return res.status(409).json({ error: "Masih ada permintaan post koreksi berjalan. Tunggu selesai." });
+      if (err.code === "23505") return res.status(409).json({ error: "A correction-post request is still running. Please wait until it finishes." });
       throw err;
     }
     res.status(202).json({ data: result.rows[0], meta: meta() });

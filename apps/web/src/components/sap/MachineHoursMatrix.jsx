@@ -25,8 +25,8 @@ function fmtHours(h) {
 
 function dayLabel(iso) {
   const d = new Date(`${iso}T00:00:00`);
-  const wd = d.toLocaleDateString('id-ID', { weekday: 'short' });
-  return { wd, dm: d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }) };
+  const wd = d.toLocaleDateString('en-GB', { weekday: 'short' });
+  return { wd, dm: d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) };
 }
 
 function fmtTime(v) {
@@ -45,15 +45,15 @@ function SegBar({ total, eligible, posted, height = 'h-2', showLegend = false })
   return (
     <div>
       <div className={`flex w-full overflow-hidden rounded-full bg-slate-100 ${height}`}>
-        <div style={{ width: pct(p), background: SEG.posted }} title={`Terkirim ${fmtHours(p)} jam`} />
-        <div style={{ width: pct(e), background: SEG.eligible }} title={`Layak belum kirim ${fmtHours(e)} jam`} />
-        <div style={{ width: pct(rest), background: SEG.ineligible }} title={`Tak layak ${fmtHours(rest)} jam`} />
+        <div style={{ width: pct(p), background: SEG.posted }} title={`Posted ${fmtHours(p)} h`} />
+        <div style={{ width: pct(e), background: SEG.eligible }} title={`Eligible, not posted ${fmtHours(e)} h`} />
+        <div style={{ width: pct(rest), background: SEG.ineligible }} title={`Not eligible ${fmtHours(rest)} h`} />
       </div>
       {showLegend && (
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-          <Legend color={SEG.posted} label="Terkirim" value={p} />
-          <Legend color={SEG.eligible} label="Layak, belum kirim" value={e} />
-          <Legend color={SEG.ineligible} label="Tak layak SAP" value={rest} />
+          <Legend color={SEG.posted} label="Posted" value={p} />
+          <Legend color={SEG.eligible} label="Eligible, not posted" value={e} />
+          <Legend color={SEG.ineligible} label="Not eligible for SAP" value={rest} />
         </div>
       )}
     </div>
@@ -65,7 +65,7 @@ function Legend({ color, label, value }) {
     <span className="inline-flex items-center gap-1.5 font-medium text-slate-600">
       <span className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
       {label}
-      <span className="font-bold tabular-nums text-slate-800">{fmtHours(value)}j</span>
+      <span className="font-bold tabular-nums text-slate-800">{fmtHours(value)}h</span>
     </span>
   );
 }
@@ -114,11 +114,11 @@ function SearchPicker({ endpoint, placeholder, emptyLabel, buildBody, keyOf, suc
         body: JSON.stringify(buildBody(item)),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || 'Gagal menyimpan');
+      if (!res.ok) throw new Error(j.error || 'Failed to save');
       toast.success(successLabel(item));
       onDone();
     } catch (e) {
-      toast.error('Gagal menyimpan', { description: e.message });
+      toast.error('Failed to save', { description: e.message });
       setSavingKey(null);
     }
   };
@@ -134,7 +134,7 @@ function SearchPicker({ endpoint, placeholder, emptyLabel, buildBody, keyOf, suc
       </div>
       <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-100 bg-white">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 py-6 text-xs text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Mencari…</div>
+          <div className="flex items-center justify-center gap-2 py-6 text-xs text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Searching…</div>
         ) : results.length === 0 ? (
           <div className="py-6 text-center text-xs text-slate-400">{emptyLabel}</div>
         ) : (
@@ -185,11 +185,11 @@ function EditPanel({ record, onDone, onCancel }) {
       {mode === 'job' ? (
         <SearchPicker
           endpoint="/dashboard/ph3-jobs"
-          placeholder="Cari order / operasi / deskripsi…"
-          emptyLabel="Tidak ada job cocok"
+          placeholder="Search order / operation / description…"
+          emptyLabel="No matching job"
           buildBody={(j) => ({ proddataid: record.proddataid, order_no: j.order_no, operation_no: j.operation_no })}
           keyOf={(j) => `${j.order_no}/${j.operation_no}`}
-          successLabel={(j) => `Job ${j.order_no}/${j.operation_no} ditetapkan`}
+          successLabel={(j) => `Job ${j.order_no}/${j.operation_no} assigned`}
           renderItem={(j) => (
             <>
               <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-slate-800">
@@ -203,11 +203,11 @@ function EditPanel({ record, onDone, onCancel }) {
       ) : (
         <SearchPicker
           endpoint="/dashboard/operators"
-          placeholder="Cari nama / SNSSB operator…"
-          emptyLabel="Tidak ada operator cocok"
+          placeholder="Search name / SNSSB…"
+          emptyLabel="No matching operator"
           buildBody={(o) => ({ proddataid: record.proddataid, sn_employee: o.snssb })}
           keyOf={(o) => o.snssb}
-          successLabel={(o) => `Operator ${o.full_name} ditetapkan`}
+          successLabel={(o) => `Operator ${o.full_name} assigned`}
           renderItem={(o) => (
             <>
               <div className="truncate text-xs font-bold text-slate-800">{o.full_name || '—'}</div>
@@ -233,7 +233,7 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
     setLoading(true); setError(null);
     const params = new URLSearchParams({ operator: sel.operator_key, day: sel.day });
     fetch(`${API_BASE}/dashboard/machine-hours-records?${params}`, { signal })
-      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.error || 'Gagal memuat record'); return j; }))
+      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.error || 'Failed to load records'); return j; }))
       .then((j) => setRows(j.data || []))
       .catch((e) => { if (e.name !== 'AbortError') setError(e.message); })
       .finally(() => setLoading(false));
@@ -277,7 +277,7 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
         {cell && (
           <div className="flex-shrink-0 border-b border-slate-100 px-4 py-3">
             <div className="mb-1.5 flex items-baseline justify-between">
-              <span className="text-xs font-semibold text-slate-500">Total {fmtHours(cell.total_h)} jam · {cell.n_records} record</span>
+              <span className="text-xs font-semibold text-slate-500">Total {fmtHours(cell.total_h)} h · {cell.n_records} records</span>
             </div>
             <SegBar total={cell.total_h} eligible={cell.eligible_h} posted={cell.posted_h} height="h-2.5" showLegend />
           </div>
@@ -286,14 +286,14 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" /> Memuat record…
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading records…
             </div>
           ) : error ? (
             <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-red-600">
               <AlertCircle className="h-6 w-6" /> {error}
             </div>
           ) : rows.length === 0 ? (
-            <div className="py-12 text-center text-sm text-slate-400">Tidak ada record</div>
+            <div className="py-12 text-center text-sm text-slate-400">No records</div>
           ) : (
             <ul className="divide-y divide-slate-100">
               {rows.map((r) => (
@@ -301,22 +301,22 @@ function DrillPanel({ sel, cell, onClose, onChanged }) {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
                       {r.posted ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700"><CheckCircle2 size={11} /> Terkirim</span>
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700"><CheckCircle2 size={11} /> Posted</span>
                       ) : r.eligible ? (
-                        <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">Layak</span>
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">Eligible</span>
                       ) : (
-                        <span className="rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">Tak layak</span>
+                        <span className="rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">Not eligible</span>
                       )}
                       <span className="truncate font-mono text-xs font-bold text-slate-800">{r.order_no || '—'}</span>
                       <span className="font-mono text-xs text-slate-400">/ {r.operation_no || '—'}</span>
                     </div>
                     <div className="flex flex-shrink-0 items-center gap-2">
-                      <span className="text-xs font-bold tabular-nums text-slate-700">{fmtHours(r.duration_hours)}j</span>
+                      <span className="text-xs font-bold tabular-nums text-slate-700">{fmtHours(r.duration_hours)}h</span>
                       {!r.posted && (
                         <button
                           type="button"
                           onClick={() => setEditing(editing === r.proddataid ? null : r.proddataid)}
-                          title="Perbaiki job"
+                          title="Fix job"
                           className={`flex h-7 w-7 items-center justify-center rounded-lg border transition-all active:scale-95
                             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
                             ${editing === r.proddataid ? 'border-[#0077b6] bg-[#e8f7fb] text-[#0077b6]' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}
@@ -370,7 +370,7 @@ export default function MachineHoursMatrix() {
       const params = new URLSearchParams({ from, to });
       const res = await fetch(`${API_BASE}/dashboard/machine-hours-matrix?${params}`, { signal });
       const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || 'Gagal memuat matriks');
+      if (!res.ok) throw new Error(payload.error || 'Failed to load matrix');
       setMatrix(payload.data || null);
     } catch (err) {
       if (err.name !== 'AbortError') setError(err.message);
@@ -405,12 +405,12 @@ export default function MachineHoursMatrix() {
       {/* toolbar */}
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Dari</label>
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</label>
           <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)}
             className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Sampai</label>
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</label>
           <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)}
             className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
         </div>
@@ -419,7 +419,7 @@ export default function MachineHoursMatrix() {
             <button key={d} type="button" onClick={() => preset(d)}
               className="min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition-all hover:bg-slate-50 active:scale-95
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
-              {d} hari
+              {d}d
             </button>
           ))}
         </div>
@@ -433,22 +433,22 @@ export default function MachineHoursMatrix() {
       {/* summary */}
       {t && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <SummaryCard icon={Clock} label="Total jam" value={fmtHours(t.total_h)} unit="jam" tone="blue" hint={`${t.n_records} record`} />
-          <SummaryCard icon={CheckCircle2} label="Terkirim SAP" value={fmtHours(t.posted_h)} unit="jam" tone="emerald"
-            hint={t.total_h > 0 ? `${Math.round((t.posted_h / t.total_h) * 100)}% dari total` : ' '} />
-          <SummaryCard icon={ChevronRight} label="Layak, belum kirim" value={fmtHours(Math.max(t.eligible_h - t.posted_h, 0))} unit="jam" tone="amber" hint="bisa di-stage" />
-          <SummaryCard icon={UserX} label="Tanpa operator" value={fmtHours(t.unattributed_h)} unit="jam" tone="red" hint="tak akan ke SAP" />
+          <SummaryCard icon={Clock} label="Total hours" value={fmtHours(t.total_h)} unit="h" tone="blue" hint={`${t.n_records} records`} />
+          <SummaryCard icon={CheckCircle2} label="Posted to SAP" value={fmtHours(t.posted_h)} unit="h" tone="emerald"
+            hint={t.total_h > 0 ? `${Math.round((t.posted_h / t.total_h) * 100)}% of total` : ' '} />
+          <SummaryCard icon={ChevronRight} label="Eligible, not posted" value={fmtHours(Math.max(t.eligible_h - t.posted_h, 0))} unit="h" tone="amber" hint="can be staged" />
+          <SummaryCard icon={UserX} label="No operator" value={fmtHours(t.unattributed_h)} unit="h" tone="red" hint="won’t reach SAP" />
         </div>
       )}
 
       {/* heatmap */}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-bold text-slate-800">Jam per operator per hari</h2>
+          <h2 className="text-sm font-bold text-slate-800">Hours per operator per day</h2>
           <div className="flex items-center gap-3 text-[11px] text-slate-500">
-            <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: SEG.posted }} /> terkirim</span>
-            <span className="hidden items-center gap-1 sm:flex"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: SEG.eligible }} /> layak</span>
-            <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: SEG.ineligible }} /> tak layak</span>
+            <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: SEG.posted }} /> posted</span>
+            <span className="hidden items-center gap-1 sm:flex"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: SEG.eligible }} /> eligible</span>
+            <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: SEG.ineligible }} /> not eligible</span>
           </div>
         </div>
 
@@ -469,7 +469,7 @@ export default function MachineHoursMatrix() {
         ) : !matrix || matrix.operators.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
             <Clock className="h-8 w-8 text-slate-300" />
-            <p className="text-sm font-semibold text-slate-500">Tidak ada jam pada rentang ini</p>
+            <p className="text-sm font-semibold text-slate-500">No hours in this range</p>
           </div>
         ) : (
           <div className="overflow-auto">
@@ -534,7 +534,7 @@ export default function MachineHoursMatrix() {
           </div>
         )}
         <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-400">
-          Angka = total jam · garis hijau di sel = porsi yang sudah terkirim ke SAP · klik sel untuk lihat record
+          Number = total hours · green bar in a cell = share already posted to SAP · click a cell to see records
         </div>
       </div>
 

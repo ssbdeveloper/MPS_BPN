@@ -1,84 +1,84 @@
-// Terjemahkan pesan mentah SAP / SKIPPED jadi sebab yang bisa ditindak.
+// Translate raw SAP / SKIPPED messages into an actionable cause.
 //
-// Satu sumber kebenaran: dipakai endpoint ringkasan (mengelompokkan kegagalan) DAN
-// per-baris log SAP, supaya label + saran aksi konsisten di seluruh UI.
+// Single source of truth: used by the summary endpoint (to group failures) AND per-row
+// in the SAP log, so labels + suggested actions stay consistent across the UI.
 //
-// Pesan FAILED datang dari SAP (Inggris/Jerman); pesan SKIPPED datang dari guard kita
-// sendiri (post_sap_staging.py, sudah Bahasa Indonesia). Urutan pola PENTING —
-// yang lebih spesifik diperiksa duluan.
+// FAILED messages come from SAP (English/German); SKIPPED messages come from our own
+// guards (post_sap_staging.py). Test patterns stay BILINGUAL so historical Indonesian
+// rows already in the DB are still recognized. Rule order matters — most specific first.
 
 const RULES = [
   {
     key: "needs_storno",
-    label: "Perlu storno di SAP dulu",
-    action: "Kiriman lama untuk segmen ini sudah masuk SAP. Storno di SAP sebelum koreksi ini dikirim.",
-    test: (t) => /storno|source_key berbeda|sudah ter-?post/i.test(t),
+    label: "Needs storno in SAP first",
+    action: "The earlier confirmation for this segment is already in SAP. Storno it in SAP before sending this correction.",
+    test: (t) => /storno|source_key (berbeda|differ)|already ?post|sudah ter-?post/i.test(t),
   },
   {
     key: "burned_zid",
-    label: "Nomor ZTIMESHEETID terpakai ulang",
-    action: "Nomor ini sudah pernah diterima SAP (akibat reset sequence). Storno di SAP atau geser sequence.",
-    test: (t) => /sudah pernah diterima sap|terpakai ulang|ztimesheetid \d+ sudah/i.test(t),
+    label: "ZTIMESHEETID reused",
+    action: "This number was already accepted by SAP (sequence reset). Storno in SAP or shift the sequence.",
+    test: (t) => /already (accepted|received) by sap|reused|terpakai ulang|sudah pernah diterima|ztimesheetid \d+ (already|sudah)/i.test(t),
   },
   {
     key: "network",
-    label: "Gangguan jaringan ke SAP",
-    action: "Biasanya transien — coba lagi. Kalau berulang, cek koneksi ke SAP CPI.",
+    label: "Network error to SAP",
+    action: "Usually transient — retry. If it repeats, check connectivity to SAP CPI.",
     test: (t) => /ssl|unexpected_eof|urlopen|timed? ?out|connection (reset|refused|aborted)|max retries|eof occurred|getaddrinfo|handshake/i.test(t),
   },
   {
     key: "order_lock",
-    label: "Order sedang diproses SAP (lock)",
-    action: "SAP mengunci order saat memproses. Coba lagi beberapa saat — posting per-order sudah serial.",
+    label: "Order being processed by SAP (lock)",
+    action: "SAP locks an order while confirming it. Retry shortly — posting is already serial per order.",
     test: (t) => /already being processed|being processed by|is locked|sapci|gesperrt|lock/i.test(t),
   },
   {
     key: "pernr_missing",
-    label: "Nomor pegawai (PERNR) tidak ada di SAP HR",
-    action: "Pegawai belum terdaftar di master HR SAP, atau PERNR salah. Perbaiki di sisi SAP HR (bukan di MPS2).",
+    label: "Personnel number (PERNR) not in SAP HR",
+    action: "The employee is not registered in SAP HR master, or the PERNR is wrong. Fix on the SAP HR side (not MPS2).",
     test: (t) => /personnel master record.*not found|pernr.*not found|personalnummer.*nicht|personnel number.*not/i.test(t),
   },
   {
     key: "order_teco",
-    label: "Order sudah TECO / ditutup di SAP",
-    action: "Order sudah ditutup teknis (TECO) — SAP menolak konfirmasi baru. Buka kembali (revoke TECO) di SAP, atau abaikan bila memang selesai.",
+    label: "Order is TECO / closed in SAP",
+    action: "The order is technically complete (TECO) — SAP rejects new confirmations. Revoke TECO in SAP, or ignore if truly done.",
     test: (t) => /user status teco|status teco|teco is active|technically complete|order.*(closed|clsd)|systemstatus.*(teco|clsd)/i.test(t),
   },
   {
     key: "workcenter_missing",
-    label: "Work center tidak ada di master SAP",
-    action: "Master data SAP: work center belum terdaftar di plant ini. Perbaikan di sisi SAP.",
+    label: "Work center missing in SAP master",
+    action: "SAP master data: this work center is not registered in the plant. Fix on the SAP side.",
     test: (t) => /work ?cent(er|re).*(does not exist|not.*plant|tidak ada)|arbeitsplatz.*nicht/i.test(t),
   },
   {
     key: "cost_center",
-    label: "Cost center / activity type belum di-set",
-    action: "Baris non-M1/M2 butuh cost center di master SAP. Perbaikan di sisi SAP.",
+    label: "Cost center / activity type not set",
+    action: "Non-M1/M2 rows need a cost center in SAP master. Fix on the SAP side.",
     test: (t) => /cost ?cent(er|re)|kostenstelle|activity type only in conjunction/i.test(t),
   },
   {
     key: "period_closed",
-    label: "Periode posting SAP tertutup",
-    action: "Tanggal kerja jatuh di periode yang sudah ditutup SAP. Buka periode atau cek tanggal.",
+    label: "SAP posting period closed",
+    action: "The work date falls in a period SAP has closed. Open the period or check the date.",
     test: (t) => /posting period|period.*not open|buchungsperiode|posting date/i.test(t),
   },
   {
     key: "duplicate",
-    label: "Ditolak SAP sebagai duplikat",
-    action: "SAP menganggap konfirmasi ini sudah ada. Cek apakah sudah masuk; storno kalau mau kirim ulang.",
+    label: "Rejected by SAP as duplicate",
+    action: "SAP considers this confirmation already present. Check whether it posted; storno to resend.",
     test: (t) => /already exist|duplicate|been posted|confirmation.*exist|bereits vorhanden/i.test(t),
   },
 ];
 
 const UNKNOWN = {
   key: "other",
-  label: "Lainnya",
-  action: "Belum dikenali — buka detail untuk lihat pesan SAP lengkap.",
+  label: "Other",
+  action: "Not yet recognized — open the detail to see the full SAP message.",
 };
 
 /**
- * Klasifikasikan sebuah pesan error. Mengembalikan { key, label, action, message }.
- * `message` = baris pertama yang bermakna dari pesan mentah (untuk fallback "Lainnya").
+ * Classify an error message. Returns { key, label, action, message }.
+ * `message` = first meaningful line of the raw text (fallback for "Other").
  */
 function classifySapError(rawText) {
   const text = String(rawText || "").trim();
@@ -93,7 +93,6 @@ function classifySapError(rawText) {
       return { key: rule.key, label: rule.label, action: rule.action, message: firstLine };
     }
   }
-  // "Lainnya": pakai baris pertama sebagai label supaya tetap informatif.
   return { key: UNKNOWN.key, label: firstLine || UNKNOWN.label, action: UNKNOWN.action, message: firstLine };
 }
 

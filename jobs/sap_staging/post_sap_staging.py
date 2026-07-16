@@ -369,9 +369,9 @@ def find_posted_conflicts(row_ids: list[int]) -> dict[int, str]:
             cur.execute(sql, (row_ids,))
             return {
                 int(staging_id): (
-                    f"Segmen sumber sudah ter-POST di bundel {posted_in}"
-                    + (" dengan source_key BERBEDA (data sumber berubah — butuh storno di SAP"
-                       " sebelum koreksi ini dikirim)" if key_changed else " (duplikat)")
+                    f"Source segment already POSTED in bundle {posted_in}"
+                    + (" with a DIFFERENT source_key (source data changed — needs storno in SAP"
+                       " before this correction is sent)" if key_changed else " (duplicate)")
                 )
                 for staging_id, posted_in, key_changed in cur.fetchall()
             }
@@ -402,9 +402,9 @@ def find_burned_ztimesheetids(ztimesheetids: list[str]) -> dict[str, str]:
             )
             return {
                 str(zid): (
-                    f"ZTIMESHEETID {zid} SUDAH pernah diterima SAP (dikirim {sent}, "
-                    f"jam kerja {work_date}). Sequence ID di-reset ke 1 pada 2026-07-14, "
-                    "jadi nomor ini terpakai ulang. Storno di SAP dulu, atau geser sequence."
+                    f"ZTIMESHEETID {zid} was already accepted by SAP (sent {sent}, "
+                    f"work date {work_date}). Sequence ID was reset to 1 on 2026-07-14, "
+                    "so this number is reused. Storno in SAP first, or shift the sequence."
                 )
                 for zid, sent, work_date in cur.fetchall()
             }

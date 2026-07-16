@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import ConfirmationModal from '../components/ui/ConfirmationModal';
 import MachineHoursMatrix from '../components/sap/MachineHoursMatrix';
+import CorrectionsPanel from '../components/sap/CorrectionsPanel';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -39,11 +40,11 @@ function toJsonText(value) {
 }
 
 const STATUS_META = {
-  POSTED:  { label: 'Terkirim', icon: CheckCircle2, badge: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
-  PENDING: { label: 'Menunggu', icon: CircleDashed, badge: 'border-amber-200 bg-amber-50 text-amber-700',   dot: 'bg-amber-500' },
-  POSTING: { label: 'Mengirim', icon: Loader2,      badge: 'border-cyan-200 bg-cyan-50 text-[#0077b6]',      dot: 'bg-[#00b4d8]' },
-  FAILED:  { label: 'Gagal',    icon: AlertCircle,   badge: 'border-red-200 bg-red-50 text-red-700',          dot: 'bg-red-500' },
-  SKIPPED: { label: 'Dilewati', icon: CircleDashed,  badge: 'border-slate-200 bg-slate-100 text-slate-600',   dot: 'bg-slate-400' },
+  POSTED:  { label: 'Posted', icon: CheckCircle2, badge: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
+  PENDING: { label: 'Pending', icon: CircleDashed, badge: 'border-amber-200 bg-amber-50 text-amber-700',   dot: 'bg-amber-500' },
+  POSTING: { label: 'Posting', icon: Loader2,      badge: 'border-cyan-200 bg-cyan-50 text-[#0077b6]',      dot: 'bg-[#00b4d8]' },
+  FAILED:  { label: 'Failed',    icon: AlertCircle,   badge: 'border-red-200 bg-red-50 text-red-700',          dot: 'bg-red-500' },
+  SKIPPED: { label: 'Skipped', icon: CircleDashed,  badge: 'border-slate-200 bg-slate-100 text-slate-600',   dot: 'bg-slate-400' },
 };
 const statusMeta = (s) => STATUS_META[String(s || 'PENDING').toUpperCase()] || STATUS_META.PENDING;
 
@@ -88,7 +89,7 @@ function FailureTriage({ failures, onFilterStatus }) {
       >
         <span className="flex items-center gap-2">
           <AlertTriangle size={16} className="text-red-500" />
-          <span className="text-sm font-bold text-slate-800">Perlu ditindak — {total} bundel</span>
+          <span className="text-sm font-bold text-slate-800">Needs action — {total} bundles</span>
         </span>
         <ChevronDown size={16} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -113,7 +114,7 @@ function FailureTriage({ failures, onFilterStatus }) {
                   className="mt-2 text-[11px] font-semibold text-[#0077b6] underline-offset-2 hover:underline
                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] rounded"
                 >
-                  Lihat record ({f.statuses?.join(' / ') || 'FAILED'})
+                  View records ({f.statuses?.join(' / ') || 'FAILED'})
                 </button>
               )}
             </li>
@@ -144,7 +145,7 @@ function DetailDrawer({ row, onClose }) {
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={`Detail bundel ${row.ztimesheetid || row.id}`}
+        aria-label={`Bundle detail ${row.ztimesheetid || row.id}`}
         className="flex h-full w-full max-w-md flex-col bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -156,7 +157,7 @@ function DetailDrawer({ row, onClose }) {
             </span>
           </div>
           <button
-            type="button" onClick={onClose} aria-label="Tutup"
+            type="button" onClick={onClose} aria-label="Close"
             className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
@@ -174,14 +175,14 @@ function DetailDrawer({ row, onClose }) {
 
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
             {[
-              ['Sumber', row.source_system],
+              ['Source', row.source_system],
               ['Order', row.aufnr],
-              ['Operasi', row.vornr],
-              ['Pegawai', row.pernr],
+              ['Operation', row.vornr],
+              ['Employee', row.pernr],
               ['Work center', row.arbpl],
-              ['Durasi (dtk)', row.total_seconds],
-              ['Dibuat', formatDateTime(row.created_at)],
-              ['Terkirim', formatDateTime(row.posted_at)],
+              ['Duration (s)', row.total_seconds],
+              ['Created', formatDateTime(row.created_at)],
+              ['Posted', formatDateTime(row.posted_at)],
             ].map(([k, v]) => (
               <div key={k} className="min-w-0">
                 <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{k}</dt>
@@ -192,7 +193,7 @@ function DetailDrawer({ row, onClose }) {
 
           {response && (
             <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Respons SAP</p>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">SAP Response</p>
               <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{response}</pre>
             </div>
           )}
@@ -261,7 +262,7 @@ function SapLogPage() {
     try {
       const res = await fetch(`${API_BASE}/dashboard/sap-timesheet-staging-log?${params.toString()}`, { signal });
       const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || 'Gagal memuat SAP log');
+      if (!res.ok) throw new Error(payload.error || 'Failed to load SAP log');
       const next = payload.data || [];
       setRows((cur) => (append ? [...cur, ...next] : next));
       setNextCursor(payload.pagination?.next_cursor || null);
@@ -303,12 +304,12 @@ function SapLogPage() {
         body: JSON.stringify({ action }),
       });
       const payload = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payload.error || 'Gagal mengirim permintaan');
-      toast.success(`${label} — permintaan dikirim ke worker`, {
-        description: 'Antrian diproses di latar belakang. Refresh untuk lihat perubahan.',
+      if (!res.ok) throw new Error(payload.error || 'Failed to send request');
+      toast.success(`${label} — request queued`, {
+        description: 'Queued in the background. Refresh to see changes.',
       });
     } catch (err) {
-      toast.error(`${label} gagal`, { description: err.message });
+      toast.error(`${label} failed`, { description: err.message });
     } finally {
       setActing(false);
     }
@@ -332,7 +333,7 @@ function SapLogPage() {
 
           <div className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#e8f7fb] text-[#0077b6]"><Database size={16} /></span>
-            <h1 className="text-sm font-extrabold text-slate-800 md:text-base">Jam Mesin &amp; SAP</h1>
+            <h1 className="text-sm font-extrabold text-slate-800 md:text-base">Machine Hours &amp; SAP</h1>
           </div>
 
           {tab === 'staging' ? (
@@ -350,8 +351,9 @@ function SapLogPage() {
         {/* Tabs */}
         <div className="mt-2 flex gap-1" role="tablist" aria-label="Tampilan">
           {[
-            { key: 'staging', label: 'Status Kirim SAP' },
-            { key: 'hours', label: 'Jam Operator' },
+            { key: 'staging', label: 'SAP Posting' },
+            { key: 'hours', label: 'Operator Hours' },
+            { key: 'corrections', label: 'Corrections' },
           ].map((tb) => (
             <button
               key={tb.key} role="tab" aria-selected={tab === tb.key}
@@ -369,19 +371,21 @@ function SapLogPage() {
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
         {tab === 'hours' ? (
           <div className="mx-auto max-w-6xl"><MachineHoursMatrix /></div>
+        ) : tab === 'corrections' ? (
+          <div className="mx-auto max-w-6xl"><CorrectionsPanel /></div>
         ) : (
         <div className="mx-auto flex max-w-5xl flex-col gap-4">
 
           {/* Stat cards */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <StatCard label="Terkirim" value={(bc.POSTED || 0).toLocaleString('id-ID')} sub={summary ? `+${summary.posted_today || 0} hari ini` : ' '} tone="posted"
+            <StatCard label="Posted" value={(bc.POSTED || 0).toLocaleString('en-US')} sub={summary ? `+${summary.posted_today || 0} today` : ' '} tone="posted"
               active={status === 'POSTED'} onClick={() => setStatus('POSTED')} />
-            <StatCard label="Menunggu" value={(bc.PENDING || 0).toLocaleString('id-ID')} sub={summary ? `${summary.pending_today || 0} hari ini` : ' '} tone="pending"
+            <StatCard label="Pending" value={(bc.PENDING || 0).toLocaleString('en-US')} sub={summary ? `${summary.pending_today || 0} today` : ' '} tone="pending"
               active={status === 'PENDING'} onClick={() => setStatus('PENDING')} />
-            <StatCard label="Gagal" value={(bc.FAILED || 0).toLocaleString('id-ID')} sub={bc.SKIPPED ? `${bc.SKIPPED} dilewati` : ' '} tone="failed"
+            <StatCard label="Failed" value={(bc.FAILED || 0).toLocaleString('en-US')} sub={bc.SKIPPED ? `${bc.SKIPPED} skipped` : ' '} tone="failed"
               active={status === 'FAILED'} onClick={() => setStatus('FAILED')} />
-            <StatCard label="Total antrian" value={(summary?.total || 0).toLocaleString('id-ID')}
-              sub={summary?.oldest ? `sejak ${formatDateTime(summary.oldest).slice(0, 6)}` : ' '} tone="neutral"
+            <StatCard label="Queue total" value={(summary?.total || 0).toLocaleString('en-US')}
+              sub={summary?.oldest ? `since ${formatDateTime(summary.oldest).slice(0, 6)}` : ' '} tone="neutral"
               active={status === 'all'} onClick={() => setStatus('all')} />
           </div>
 
@@ -393,10 +397,10 @@ function SapLogPage() {
               className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
             >
-              <RotateCcw size={16} /> Kirim ulang gagal{failedCount ? ` (${failedCount})` : ''}
+              <RotateCcw size={16} /> Retry failed{failedCount ? ` (${failedCount})` : ''}
             </button>
             <p className="ml-auto text-[11px] text-slate-400">
-              {failedCount === 0 ? 'Tidak ada yang gagal — PENDING dikirim server otomatis' : 'PENDING dikirim server otomatis'}
+              {failedCount === 0 ? 'Nothing failed — PENDING posted automatically' : 'PENDING posted automatically'}
             </p>
           </div>
 
@@ -411,7 +415,7 @@ function SapLogPage() {
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
                   value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="Cari order, pegawai, pesan SAP…"
+                  placeholder="Search order, employee, SAP message…"
                   className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 transition-all
                     focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
                 />
@@ -421,14 +425,14 @@ function SapLogPage() {
                 className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition-all
                   focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
               >
-                {STATUS_OPTIONS.map((o) => <option key={o} value={o}>{o === 'all' ? 'Semua status' : statusMeta(o).label}</option>)}
+                {STATUS_OPTIONS.map((o) => <option key={o} value={o}>{o === 'all' ? 'All statuses' : statusMeta(o).label}</option>)}
               </select>
               <button
                 type="submit"
                 className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
               >
-                <Search size={16} /> Cari
+                <Search size={16} /> Search
               </button>
             </form>
 
@@ -444,13 +448,13 @@ function SapLogPage() {
                   className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50
                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                 >
-                  <RefreshCw size={16} /> Coba lagi
+                  <RefreshCw size={16} /> Try again
                 </button>
               </div>
             ) : rows.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-4 py-12 text-center">
                 <Database className="h-8 w-8 text-slate-300" />
-                <p className="text-sm font-semibold text-slate-500">Tidak ada data untuk filter ini</p>
+                <p className="text-sm font-semibold text-slate-500">No data for this filter</p>
               </div>
             ) : (
               <>
@@ -462,9 +466,9 @@ function SapLogPage() {
                         <th className="whitespace-nowrap px-3 py-2 font-semibold">Status</th>
                         <th className="whitespace-nowrap px-3 py-2 font-semibold">ID</th>
                         <th className="whitespace-nowrap px-3 py-2 font-semibold">Order / Op</th>
-                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Pegawai</th>
-                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Keterangan</th>
-                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Dibuat</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Employee</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Details</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-semibold">Created</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -489,7 +493,7 @@ function SapLogPage() {
                             <td className="whitespace-nowrap px-3 py-2.5 font-mono text-xs text-slate-600">{row.pernr || '-'}</td>
                             <td className="px-3 py-2.5">
                               <span className={`text-xs font-medium ${isFail ? 'text-red-600' : 'text-slate-500'}`}>
-                                {row.cause_label && row.cause_label !== '-' ? row.cause_label : (isFail ? 'Gagal' : '—')}
+                                {row.cause_label && row.cause_label !== '-' ? row.cause_label : (isFail ? 'Failed' : '—')}
                               </span>
                             </td>
                             <td className="whitespace-nowrap px-3 py-2.5 text-xs tabular-nums text-slate-500">{formatDateTime(row.created_at)}</td>
@@ -537,14 +541,14 @@ function SapLogPage() {
 
             {/* footer */}
             <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
-              <p className="text-xs font-medium text-slate-400 tabular-nums">{rows.length} record</p>
+              <p className="text-xs font-medium text-slate-400 tabular-nums">{rows.length} records</p>
               {hasMore && (
                 <button
                   type="button" onClick={() => fetchRows({ cursor: nextCursor, append: true })} disabled={loadingMore}
                   className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50
                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                 >
-                  {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />} Muat lebih banyak
+                  {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronDown className="h-4 w-4" />} Load more
                 </button>
               )}
             </div>
@@ -557,12 +561,12 @@ function SapLogPage() {
 
       <ConfirmationModal
         isOpen={confirmRetry}
-        title={`Kirim ulang ${failedCount} bundel gagal ke SAP?`}
-        message="Ini mengirim jam kerja ke payroll SAP. Guard anti-double-post melindungi dari kiriman ganda, tapi pastikan sebabnya sudah diperbaiki (mis. master data SAP) supaya tidak gagal lagi."
-        confirmLabel="Ya, kirim ulang"
-        cancelLabel="Batal"
+        title={`Retry ${failedCount} failed bundles to SAP?`}
+        message="This sends work hours to SAP payroll. The anti-double-post guard prevents duplicates, but make sure the cause is fixed (e.g. SAP master data) so it does not fail again."
+        confirmLabel="Yes, retry"
+        cancelLabel="Cancel"
         onCancel={() => setConfirmRetry(false)}
-        onConfirm={() => { setConfirmRetry(false); enqueue('retry_failed', 'Kirim ulang gagal'); }}
+        onConfirm={() => { setConfirmRetry(false); enqueue('retry_failed', 'Retry failed'); }}
       />
     </div>
   );
