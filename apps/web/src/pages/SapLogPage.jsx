@@ -333,7 +333,7 @@ function SapLogPage() {
 
           <div className="flex items-center gap-2">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#e8f7fb] text-[#0077b6]"><Database size={16} /></span>
-            <h1 className="text-sm font-extrabold text-slate-800 md:text-base">Machine Hours &amp; SAP</h1>
+            <h1 className="text-sm font-extrabold text-slate-800 md:text-base">SAP POSTING LOG</h1>
           </div>
 
           {tab === 'staging' ? (

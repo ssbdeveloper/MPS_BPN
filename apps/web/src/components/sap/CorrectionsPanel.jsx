@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { AlertCircle, ArrowDownUp, Loader2, RefreshCw, Search, Send, Wrench } from 'lucide-react';
+import { AlertCircle, ArrowDownUp, Loader2, PlayCircle, RefreshCw, Search, Send, Wrench } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -103,6 +103,24 @@ export default function CorrectionsPanel() {
     }
   };
 
+  const [staging, setStaging] = useState(false);
+  const stageEdits = async () => {
+    setStaging(true);
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-ops/enqueue`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stage_catchup' }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.error || 'Failed to queue');
+      toast.success('Staging queued', { description: 'Building bundles from edited records. Refresh in a moment to see new corrections.' });
+    } catch (err) {
+      toast.error('Failed to stage', { description: err.message });
+    } finally {
+      setStaging(false);
+    }
+  };
+
   const totalHours = useMemo(() => sorted.reduce((s, r) => s + (r.total_seconds || 0), 0) / 3600, [sorted]);
 
   return (
@@ -160,13 +178,18 @@ export default function CorrectionsPanel() {
       </div>
 
       {/* action bar */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" disabled={staging} onClick={stageEdits} title="Build correction bundles from edited records"
+          className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50
+            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
+          {staging ? <Loader2 size={16} className="animate-spin" /> : <PlayCircle size={16} />} Stage edited records
+        </button>
         <button type="button" disabled={posting || selected.size === 0} onClick={postSelected}
           className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
           {posting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />} Post selected{selected.size ? ` (${selected.size})` : ''}
         </button>
-        <p className="text-[11px] text-slate-400 tabular-nums">{sorted.length} correction(s) · {totalHours.toFixed(1)} h</p>
+        <p className="ml-auto text-[11px] text-slate-400 tabular-nums">{sorted.length} correction(s) · {totalHours.toFixed(1)} h</p>
       </div>
 
       {/* list */}
