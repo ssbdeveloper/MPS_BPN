@@ -1,3 +1,24 @@
+# Env bersama untuk service SAP staging (Python). DB lewat pgbouncer di timesheet-network
+# — sama seperti api — supaya ops_worker melihat antrian yang ditulis aplikasi.
+x-sap-env: &sap-env
+  DB_HOST: pgbouncer
+  DB_PORT: 6432
+  DB_NAME: ${DB_NAME}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+  PLANT_SSB: ${PLANT_SSB}
+  TIMEZONE: ${TIMEZONE}
+  TZ: ${TIMEZONE}
+  SAP_INBOUND_URL: ${SAP_INBOUND_URL}
+  SAP_INBOUND_USERNAME: ${SAP_INBOUND_USERNAME}
+  SAP_INBOUND_PASSWORD: ${SAP_INBOUND_PASSWORD}
+  TGT_TABLE: ${TGT_TABLE}
+  SAP_STAGE_INTERVAL: ${SAP_STAGE_INTERVAL:-900}
+  SAP_POST_INTERVAL: ${SAP_POST_INTERVAL:-1800}
+  SAP_POST_LIMIT: ${SAP_POST_LIMIT:-500}
+  SAP_POST_WORKERS: ${SAP_POST_WORKERS:-5}
+  SAP_OPS_INTERVAL: ${SAP_OPS_INTERVAL:-10}
+
 services:
   db:
     image: postgres:15-alpine
@@ -184,6 +205,69 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  # ── SAP staging pipeline (machine hours → SAP) ───────────────────────────────
+  # sap-stage-worker = AUTO bundling (stage_machinehours --catchup loop)
+  # sap-post-worker  = AUTO posting completed days (post_sap_staging loop)
+  # sap-ops-worker   = UI button queue consumer (ops_worker --loop)
+  sap-stage-worker:
+    build:
+      context: ./jobs/sap_staging
+      dockerfile: Dockerfile.sap
+    container_name: sap-stage-worker
+    environment: *sap-env
+    volumes:
+      - ./jobs/sap_staging:/app
+    command: >
+      sh -c "while true; do python stage_machinehours.py --catchup || true;
+             sleep $${SAP_STAGE_INTERVAL}; done"
+    depends_on:
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  sap-post-worker:
+    build:
+      context: ./jobs/sap_staging
+      dockerfile: Dockerfile.sap
+    container_name: sap-post-worker
+    environment: *sap-env
+    volumes:
+      - ./jobs/sap_staging:/app
+    command: >
+      sh -c "while true; do
+               python post_sap_staging.py --limit $${SAP_POST_LIMIT} --workers $${SAP_POST_WORKERS} || true;
+               sleep $${SAP_POST_INTERVAL}; done"
+    depends_on:
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  sap-ops-worker:
+    build:
+      context: ./jobs/sap_staging
+      dockerfile: Dockerfile.sap
+    container_name: sap-ops-worker
+    environment: *sap-env
+    volumes:
+      - ./jobs/sap_staging:/app
+    command: ["python", "ops_worker.py", "--loop"]
+    depends_on:
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
     restart: unless-stopped
     networks:
       - timesheet-network

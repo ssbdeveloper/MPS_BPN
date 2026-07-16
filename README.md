@@ -88,8 +88,17 @@ enqueues a request** (Node API cannot run Python directly).
 
 ### Deploy the pipeline services
 
+Part of the main stack (same `timesheet-network` + `DB_HOST=pgbouncer` as `api`, so the
+worker sees the queue the app writes to):
+
 ```bash
-docker compose -f jobs/sap_staging/docker-compose.sap.yml up -d --build
+docker compose up -d --build sap-stage-worker sap-post-worker sap-ops-worker
+```
+
+Verify the ops-worker is connected to the right DB:
+
+```bash
+docker logs sap-ops-worker --tail 20   # look for "ops_worker target DB: host=pgbouncer ..."
 ```
 
 - `sap-stage-worker` — loops `stage_machinehours.py --catchup` (auto bundling).
