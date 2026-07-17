@@ -75,6 +75,7 @@ apps/tts-worker/models/
 apps/tts-worker/output/
 apps/tts-worker/tools/
 apps/tts-worker/test_output.mp3
+apps/tts-worker/ews_tts_preview/
 
 # Rahasia / catatan pribadi — JANGAN pernah commit
 **/ssh guide*

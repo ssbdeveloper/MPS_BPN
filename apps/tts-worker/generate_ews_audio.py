@@ -26,6 +26,8 @@ import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 
+from speech_normalize import normalize_for_speech
+
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = next(
@@ -205,7 +207,9 @@ def generate_mp3_piper(text: str, output_path: Path) -> dict:
 
 
 def process_job(conn, job: dict) -> None:
-    text = clean_text(job["message"])
+    # Normalkan ke Indonesia penuh SEBELUM disuarakan (issue log boleh campur istilah
+    # Inggris; audio tidak). Lihat speech_normalize.py.
+    text = normalize_for_speech(clean_text(job["message"]))
     if not text:
         with conn.cursor() as cur:
             cur.execute("UPDATE ews.tts_notification SET generation_status='error', error_message='message kosong', updated_at=now() WHERE id=%s", (job["id"],))
