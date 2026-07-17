@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/ewsController");
 const roster = require("../controllers/ewsRosterController");
+const requireAdmin = require("../rbac/requireAdmin");
 
 router.get("/summary", controller.getSummary);
 router.get("/trend", controller.getTrend);
@@ -19,6 +20,8 @@ router.get("/kpi/:type/detail", controller.getKpiDetail);
 // TTS notifications (audio pengumuman issue log)
 router.get("/notifications", controller.getTtsNotifications);
 router.post("/notifications/:id/played", controller.markTtsNotificationPlayed);
+// Admin-only playlist untuk tombol "Putar Pengumuman" di Operations Hub (enforce keras).
+router.get("/tts/playlist", requireAdmin, controller.getTtsPlaylist);
 
 // Roster (R3): foreman roster view + status editing, config, group, generate.
 router.get("/roster", roster.getRoster);

@@ -29,6 +29,18 @@ export function isAuthenticated() {
   return sessionStorage.getItem('isVerified') === 'true';
 }
 
+// Identity headers for API calls that the backend gates by role (x-user-role) or
+// user (x-user-id). Same shape the RBAC guard reads. Empty object when logged out.
+export function authHeaders() {
+  const user = readAuthUser();
+  if (!user) return {};
+  return {
+    'x-user-id': user.id != null ? String(user.id) : '',
+    'x-user-name': user.name || user.username || '',
+    'x-user-role': user.roles || user.role || '',
+  };
+}
+
 export function useAuth() {
   const user = readAuthUser();
   return {

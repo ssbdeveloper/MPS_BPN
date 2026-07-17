@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -18,12 +18,15 @@ import {
   ClipboardList,
   Settings,
   ShieldCheck,
+  Square,
   TimerReset,
   Truck,
   UserCog,
   Users,
+  Volume2,
   X,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   Area,
   CartesianGrid,
@@ -39,7 +42,7 @@ import {
 } from 'recharts';
 import sapLogo from '../assets/sap.svg';
 import EwsControlTower from '../components/ews/EwsControlTower';
-import { usePermissions, routeToFeature } from '../rbac';
+import { usePermissions, routeToFeature, getRole, authHeaders } from '../rbac';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const SAP_LINKS = {
@@ -738,6 +741,11 @@ function OperationsHubPage() {
   const [kpiStatus, setKpiStatus] = useState(() => (
     sessionStorage.getItem('isVerified') === 'true' ? 'loading' : 'idle'
   ));
+  const isAdmin = useMemo(() => getRole() === 'administrator', []);
+  const [announcements, setAnnouncements] = useState([]);
+  const [announcing, setAnnouncing] = useState(false);
+  const ttsAudioRef = useRef(null);
+  const ttsStopRef = useRef(false);
 
   useEffect(() => {
     if (!isVerified) {
@@ -781,6 +789,30 @@ function OperationsHubPage() {
 
     return () => controller.abort();
   }, [isVerified]);
+
+  // Admin-only: prefetch today's ready TTS announcements so the header button can play
+  // them synchronously on click — awaiting a fetch first would break the browser's
+  // autoplay user-gesture requirement. Refreshes each minute as new issues surface.
+  useEffect(() => {
+    if (!isVerified || !isAdmin) return undefined;
+    let alive = true;
+    const load = () => {
+      fetch(`${API_BASE}/ews/tts/playlist`, { headers: authHeaders() })
+        .then((r) => (r.ok ? r.json() : { data: [] }))
+        .then((j) => { if (alive) setAnnouncements(Array.isArray(j.data) ? j.data : []); })
+        .catch(() => { /* keep last list on transient error */ });
+    };
+    load();
+    const t = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [isVerified, isAdmin]);
+
+  // Stop any playing audio on unmount.
+  useEffect(() => () => {
+    ttsStopRef.current = true;
+    const a = ttsAudioRef.current;
+    if (a) { try { a.pause(); } catch { /* ignore */ } }
+  }, []);
 
   const kpi = hubData.kpi;
 
@@ -870,6 +902,42 @@ function OperationsHubPage() {
     setSapEnv((current) => (current === 'PH3' ? 'QH3' : 'PH3'));
   }, []);
 
+  // Play today's EWS issue-log announcements sequentially. play() is called inside the
+  // click gesture (no await before it) so the browser allows autoplay; the ended-chain
+  // continues to the next clip. Admin-only (button is hidden; API also enforces 403).
+  const handleToggleAnnouncements = useCallback(() => {
+    const audio = ttsAudioRef.current;
+    if (!audio) return;
+    if (announcing) {
+      ttsStopRef.current = true;
+      try { audio.pause(); } catch { /* ignore */ }
+      setAnnouncing(false);
+      return;
+    }
+    const list = announcements.filter((x) => x && x.path_mp3);
+    if (list.length === 0) {
+      toast('Tidak ada pengumuman audio untuk hari ini');
+      return;
+    }
+    ttsStopRef.current = false;
+    setAnnouncing(true);
+    toast(`Memutar ${list.length} pengumuman EWS`);
+    const playAt = (idx) => {
+      if (ttsStopRef.current || idx >= list.length) {
+        setAnnouncing(false);
+        return;
+      }
+      audio.src = list[idx].path_mp3;
+      audio.onended = () => playAt(idx + 1);
+      audio.onerror = () => playAt(idx + 1);
+      audio.play().catch(() => {
+        setAnnouncing(false);
+        toast.error('Browser memblokir audio — klik tombol sekali lagi');
+      });
+    };
+    playAt(0);
+  }, [announcing, announcements]);
+
   const statusLabel = kpiStatus === 'ready'
     ? 'Live'
     : kpiStatus === 'error'
@@ -940,6 +1008,22 @@ function OperationsHubPage() {
               }`}>
                 {statusLabel}
               </span>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={handleToggleAnnouncements}
+                  className={`flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
+                    announcing ? 'bg-red-600 hover:bg-red-500' : 'bg-[#0077b6] hover:bg-[#023e8a]'
+                  }`}
+                  title={announcing ? 'Hentikan pengumuman' : 'Putar pengumuman EWS (audio issue log hari ini)'}
+                >
+                  {announcing ? <Square size={15} /> : <Volume2 size={15} />}
+                  {announcing ? 'Hentikan' : 'Pengumuman'}
+                  {!announcing && announcements.length > 0 && (
+                    <span className="rounded-full bg-white/25 px-1.5 text-[10px] tabular-nums">{announcements.length}</span>
+                  )}
+                </button>
+              )}
               <span className="inline-flex min-h-[34px] items-center gap-2 rounded-full border border-slate-200 bg-white px-3 text-xs font-extrabold text-slate-700 shadow-sm">
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#e8f7fb] text-[#0077b6]">
                   <Users size={14} />
@@ -1032,6 +1116,9 @@ function OperationsHubPage() {
             </div>
           </section>
         </div>
+
+        {/* Satu elemen audio dipakai bergantian untuk memutar antrian pengumuman EWS */}
+        <audio ref={ttsAudioRef} preload="none" />
       </main>
     </div>
   );

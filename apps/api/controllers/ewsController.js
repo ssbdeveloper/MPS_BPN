@@ -1267,6 +1267,35 @@ async function markTtsNotificationPlayed(req, res) {
   }
 }
 
+// Admin-only playlist for the Operations Hub "play announcements" button. Returns
+// today's ready TTS audio, CRITICAL only (Watch/warning is shown on screen, not spoken —
+// avoids flooding the floor with announcements), oldest→newest so it plays in order.
+// Route guarded by requireAdmin; kept read-only and does NOT touch `played` so it can
+// be replayed on demand without consuming the notifications-page auto-play queue.
+async function getTtsPlaylist(req, res) {
+  try {
+    const limit = clampLimit(req.query.limit, 100);
+    const result = await db.query(
+      `
+      SELECT id, issue_key, kpi_type, severity, title, message, path_mp3,
+             generation_status, played, created_at, generated_at
+      FROM ews.tts_notification
+      WHERE generation_status = 'ready'
+        AND path_mp3 IS NOT NULL
+        AND lower(severity) = 'critical'
+        AND created_at >= date_trunc('day', now() - make_interval(hours => $1::int))
+      ORDER BY generated_at ASC
+      LIMIT $2
+      `,
+      [EWS_DAY_START_HOUR, limit],
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error("ews tts playlist error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // ── ews.issue_log (backend-generated issue log, filtered by KPI category) ────
 // business_date=today  -> only the CURRENT business day (shift-aware, rolls at EWS_DAY_START_HOUR).
 //                         This is the default view: an EWS issue is a snapshot of one business day.
@@ -1406,4 +1435,5 @@ module.exports = {
   getHealth,
   getTtsNotifications,
   markTtsNotificationPlayed,
+  getTtsPlaylist,
 };
