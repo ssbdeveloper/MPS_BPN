@@ -473,7 +473,7 @@ exports.approveTicket = async (req, res) => {
       ticket: result.rows[0],
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 };
 
@@ -701,8 +701,9 @@ exports.adjustItemQuantity = async (req, res) => {
 
     const availableStock = normalizeNumber(stockResult.rows[0]?.quantity);
     if (quantity > availableStock) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: `Quantity melebihi stock tersedia (${availableStock})` });
+      // Well-formed request that conflicts with current stock state → 409 (same as the
+      // close decrement). The catch below rolls the transaction back.
+      throw businessError(409, `Quantity melebihi stock tersedia (${availableStock})`);
     }
 
     await client.query(
@@ -726,7 +727,8 @@ exports.adjustItemQuantity = async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    res.status(500).json({ error: err.message });
+    // Business errors (400/409) carry their HTTP status; genuine faults stay 500.
+    res.status(err.status || 500).json({ error: err.message });
   } finally {
     client.release();
   }
@@ -817,7 +819,8 @@ exports.rejectItem = async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    res.status(500).json({ error: err.message });
+    // Business errors (400/409) carry their HTTP status; genuine faults stay 500.
+    res.status(err.status || 500).json({ error: err.message });
   } finally {
     client.release();
   }
@@ -899,7 +902,7 @@ exports.createRequest = async (req, res) => {
       const costCenter = normalizeText(item.cost_center || workcenter);
 
       if (!materialCode || !materialDescription || !quantity || quantity <= 0 || !glAccount) {
-        throw new Error("Item consumable tidak lengkap");
+        throw businessError(400, "Item consumable tidak lengkap");
       }
 
       // Resolve the stock row by material_code (unique identity) — never by code_mm (not
@@ -916,7 +919,7 @@ exports.createRequest = async (req, res) => {
 
       const availableStock = normalizeNumber(stockResult.rows[0]?.quantity);
       if ((requestedTotals.get(materialCode) || 0) > availableStock) {
-        throw new Error(`Request ${materialCode} melebihi stock tersedia (${availableStock})`);
+        throw businessError(409, `Request ${materialCode} melebihi stock tersedia (${availableStock})`);
       }
 
       await client.query(
@@ -949,7 +952,8 @@ exports.createRequest = async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    res.status(500).json({ error: err.message });
+    // Business errors (400/409) carry their HTTP status; genuine faults stay 500.
+    res.status(err.status || 500).json({ error: err.message });
   } finally {
     client.release();
   }
