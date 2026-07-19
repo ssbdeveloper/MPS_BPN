@@ -171,6 +171,10 @@ function canManageItems(role) {
 function saveConsumableImage(imageData, cisNo) {
   if (!imageData) return null;
 
+  const raw = String(imageData);
+  // Already a stored path/URL (not a base64 payload) → keep as-is, never re-encode it.
+  if (raw.startsWith("/uploads/") || raw.startsWith("http://") || raw.startsWith("https://")) return raw;
+
   const match = String(imageData).match(/^data:image\/(png|jpe?g|webp);base64,(.+)$/i);
   const extension = match?.[1]?.toLowerCase().replace("jpeg", "jpg") || "jpg";
   const base64 = match?.[2] || String(imageData).replace(/^data:image\/\w+;base64,/, "");
@@ -881,15 +885,20 @@ exports.createRequest = async (req, res) => {
         normalizeText(machineid) || null,
         normalizeText(comment) || null,
         WAITING_LEADER_STATUS,
-        normalizeText(person_image) || null,
+        null,
       ]
     );
     const ticketId = ticketResult.rows[0].id;
     const cisNo = buildTicketNo(ticketId);
 
+    // Write the request photo to disk (same helper/convention as the close photo) and
+    // store ONLY the path — never base64 in the DB. An orphan file on rollback is
+    // acceptable (future cleanup sweep); avoiding base64 in the DB is the priority.
+    const personImagePath = saveConsumableImage(person_image, cisNo);
+
     await client.query(
-      "UPDATE consumable_ticket SET cis_no = $1 WHERE id = $2",
-      [cisNo, ticketId]
+      "UPDATE consumable_ticket SET cis_no = $1, person_image = $2 WHERE id = $3",
+      [cisNo, personImagePath, ticketId]
     );
 
     for (const item of normalizedItems) {
