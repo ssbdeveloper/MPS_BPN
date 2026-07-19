@@ -34,6 +34,14 @@ function normalizeRole(value) {
   return normalizeText(value).toLowerCase();
 }
 
+// Authorization role comes ONLY from the authenticated header the frontend sends
+// (x-user-role, derived from the logged-in user). NEVER from req.body / req.query —
+// a client-supplied field is forgeable and must not drive an auth or workflow-stage
+// decision. This is the single source of the acting role for every gated endpoint.
+function actorRole(req) {
+  return normalizeRole(req.headers["x-user-role"]);
+}
+
 function nextStatusForRole(role) {
   if (role === "foreman") return WAITING_WAREHOUSE_STATUS;
   if (role === "warehouse") return READY_STATUS;
@@ -290,7 +298,7 @@ exports.getControlTickets = async (req, res) => {
 
 exports.approveTicket = async (req, res) => {
   const ticketId = Number(req.params.id);
-  const role = normalizeRole(req.body?.role || req.query.role);
+  const role = actorRole(req);
   const nextStatus = nextStatusForRole(role);
 
   if (!Number.isInteger(ticketId) || ticketId <= 0) {
@@ -334,7 +342,7 @@ exports.approveTicket = async (req, res) => {
 
 exports.closeTicket = async (req, res) => {
   const ticketId = Number(req.params.id);
-  const role = normalizeRole(req.body?.role || req.query.role);
+  const role = actorRole(req);
   const nfcid = normalizeText(req.body?.nfcid);
   const imageData = req.body?.image_data;
 
@@ -449,7 +457,7 @@ exports.closeTicket = async (req, res) => {
 
 exports.adjustItemQuantity = async (req, res) => {
   const itemId = Number(req.params.itemId);
-  const role = normalizeRole(req.body?.role || req.query.role);
+  const role = actorRole(req);
   const quantity = normalizeNumber(req.body?.quantity);
   const updatedBy = normalizeText(req.body?.username) || role;
 
@@ -545,7 +553,7 @@ exports.adjustItemQuantity = async (req, res) => {
 
 exports.rejectItem = async (req, res) => {
   const itemId = Number(req.params.itemId);
-  const role = normalizeRole(req.body?.role || req.query.role);
+  const role = actorRole(req);
   const reason = normalizeText(req.body?.reason);
   const rejectedBy = normalizeText(req.body?.username) || role;
 

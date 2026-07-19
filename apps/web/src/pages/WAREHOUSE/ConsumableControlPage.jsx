@@ -52,6 +52,16 @@ function normalizeStatus(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+// Consumable write calls carry the actor's role in the header the server trusts
+// (x-user-role) — never in the body. Single source of the header shape for this page.
+function writeAuthHeaders(role, username) {
+  return {
+    'Content-Type': 'application/json',
+    'x-user-role': role || '',
+    'x-user-name': username || '',
+  };
+}
+
 function formatNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '0';
@@ -348,7 +358,7 @@ function PickupPanel({ ticket, role, authUser, onClose, onSuccess }) {
       }
       const response = await fetch(`${API_BASE}/consumable/control/${ticket.id}/close`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
           role,
           username: authUser?.username || '',
@@ -654,7 +664,7 @@ export default function ConsumableControlPage() {
     try {
       const response = await fetch(`${API_BASE}/consumable/control/${ticket.id}/approve`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
           role,
           username: authUser?.username || '',
@@ -677,7 +687,7 @@ export default function ConsumableControlPage() {
     try {
       const response = await fetch(`${API_BASE}/consumable/control/items/${item.id}/quantity`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
           role,
           username: authUser?.username || '',
@@ -703,7 +713,7 @@ export default function ConsumableControlPage() {
     try {
       const response = await fetch(`${API_BASE}/consumable/control/items/${item.id}/reject`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
           role,
           username: authUser?.username || '',
