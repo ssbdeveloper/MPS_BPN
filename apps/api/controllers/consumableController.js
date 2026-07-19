@@ -188,6 +188,34 @@ function saveConsumableImage(imageData, cisNo) {
   return `/uploads/consumable/${safeCis}/${filename}`;
 }
 
+// Shared item-aggregation fragment for the three ticket queries (single source of truth).
+// Uses the `i` alias every caller provides via LEFT JOIN consumable_item i. It contains NO
+// ticket/image columns, so the list query (getControlTickets) still excludes person_image /
+// image_person simply by not selecting them — this fragment cannot re-introduce them.
+const ITEMS_AGG_SQL = `COALESCE(
+          json_agg(
+            json_build_object(
+              'id', i.id,
+              'materialcode', i.materialcode,
+              'materialdescription', i.materialdescription,
+              'quanitty', i.quanitty,
+              'uom', i.uom,
+              'created', i.created,
+              'cost_center', i.cost_center,
+              'gl_account', i.gl_account,
+              'code_mm', i.code_mm,
+              'status', i.status,
+              'rejected_by', i.rejected_by,
+              'rejected_reason', i.rejected_reason,
+              'rejected_at', i.rejected_at,
+              'adjusted_by', i.adjusted_by,
+              'adjusted_at', i.adjusted_at
+            )
+            ORDER BY i.id
+          ) FILTER (WHERE i.id IS NOT NULL),
+          '[]'::json
+        ) AS items`;
+
 async function getTicketWithItems(ticketId, client = db) {
   const result = await client.query(
     `
@@ -211,29 +239,7 @@ async function getTicketWithItems(ticketId, client = db) {
         t.picked_by_nfcid,
         t.picked_by_role,
         t.picked_at,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', i.id,
-              'materialcode', i.materialcode,
-              'materialdescription', i.materialdescription,
-              'quanitty', i.quanitty,
-              'uom', i.uom,
-              'created', i.created,
-              'cost_center', i.cost_center,
-              'gl_account', i.gl_account,
-              'code_mm', i.code_mm,
-              'status', i.status,
-              'rejected_by', i.rejected_by,
-              'rejected_reason', i.rejected_reason,
-              'rejected_at', i.rejected_at,
-              'adjusted_by', i.adjusted_by,
-              'adjusted_at', i.adjusted_at
-            )
-            ORDER BY i.id
-          ) FILTER (WHERE i.id IS NOT NULL),
-          '[]'::json
-        ) AS items
+        ${ITEMS_AGG_SQL}
       FROM consumable_ticket t
       LEFT JOIN consumable_item i ON i.cis_no = t.cis_no
       WHERE t.id = $1
@@ -275,29 +281,7 @@ exports.getHistory = async (req, res) => {
           t.picked_by_nfcid,
           t.picked_by_role,
           t.picked_at,
-          COALESCE(
-            json_agg(
-              json_build_object(
-                'id', i.id,
-                'materialcode', i.materialcode,
-                'materialdescription', i.materialdescription,
-                'quanitty', i.quanitty,
-                'uom', i.uom,
-                'created', i.created,
-                'cost_center', i.cost_center,
-                'gl_account', i.gl_account,
-                'code_mm', i.code_mm,
-                'status', i.status,
-                'rejected_by', i.rejected_by,
-                'rejected_reason', i.rejected_reason,
-                'rejected_at', i.rejected_at,
-                'adjusted_by', i.adjusted_by,
-                'adjusted_at', i.adjusted_at
-              )
-              ORDER BY i.id
-            ) FILTER (WHERE i.id IS NOT NULL),
-            '[]'::json
-          ) AS items
+          ${ITEMS_AGG_SQL}
         FROM consumable_ticket t
         LEFT JOIN consumable_item i ON i.cis_no = t.cis_no
         WHERE t.sn_karyawan = $1
@@ -398,29 +382,7 @@ exports.getControlTickets = async (req, res) => {
           t.picked_by_nfcid,
           t.picked_by_role,
           t.picked_at,
-          COALESCE(
-            json_agg(
-              json_build_object(
-                'id', i.id,
-                'materialcode', i.materialcode,
-                'materialdescription', i.materialdescription,
-                'quanitty', i.quanitty,
-                'uom', i.uom,
-                'created', i.created,
-                'cost_center', i.cost_center,
-                'gl_account', i.gl_account,
-                'code_mm', i.code_mm,
-                'status', i.status,
-                'rejected_by', i.rejected_by,
-                'rejected_reason', i.rejected_reason,
-                'rejected_at', i.rejected_at,
-                'adjusted_by', i.adjusted_by,
-                'adjusted_at', i.adjusted_at
-              )
-              ORDER BY i.id
-            ) FILTER (WHERE i.id IS NOT NULL),
-            '[]'::json
-          ) AS items
+          ${ITEMS_AGG_SQL}
         FROM consumable_ticket t
         LEFT JOIN consumable_item i ON i.cis_no = t.cis_no
         ${where}
