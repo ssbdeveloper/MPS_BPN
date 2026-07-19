@@ -158,6 +158,14 @@ function actorRole(req) {
   return normalizeRole(req.headers["x-user-role"]);
 }
 
+// Actor identity for audit columns (adjusted_by / rejected_by): the authenticated
+// username header the frontend sends (same provenance as x-user-role). NULL when absent —
+// never a forgeable role string, because a role is not an actor. Header-based, so trusted
+// only at the interim-RBAC level (not a verified session) — see the requester-identity phase.
+function actorName(req) {
+  return normalizeText(req.headers["x-user-name"]) || null;
+}
+
 function nextStatusForRole(role) {
   if (role === "foreman") return WAITING_WAREHOUSE_STATUS;
   if (role === "warehouse") return READY_STATUS;
@@ -606,7 +614,7 @@ exports.adjustItemQuantity = async (req, res) => {
   const itemId = Number(req.params.itemId);
   const role = actorRole(req);
   const quantity = normalizeNumber(req.body?.quantity);
-  const updatedBy = normalizeText(req.body?.username) || role;
+  const updatedBy = actorName(req);
 
   if (!Number.isInteger(itemId) || itemId <= 0) {
     return res.status(400).json({ error: "ID item tidak valid" });
@@ -704,7 +712,7 @@ exports.rejectItem = async (req, res) => {
   const itemId = Number(req.params.itemId);
   const role = actorRole(req);
   const reason = normalizeText(req.body?.reason);
-  const rejectedBy = normalizeText(req.body?.username) || role;
+  const rejectedBy = actorName(req);
 
   if (!Number.isInteger(itemId) || itemId <= 0) {
     return res.status(400).json({ error: "ID item tidak valid" });
