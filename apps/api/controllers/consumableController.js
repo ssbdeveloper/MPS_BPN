@@ -353,6 +353,26 @@ exports.searchStock = async (req, res) => {
 };
 
 exports.getControlTickets = async (req, res) => {
+  // Bounded LIST query: optional status filter + limit/offset pagination. Offset paging is
+  // used (not keyset) because this is an internal control page with a small per-status set
+  // and low insert concurrency; keyset can replace it if the feed ever grows large/fast.
+  // Heavy image columns (person_image base64, image_person path) are intentionally NOT
+  // selected here — they belong to the detail/pickup view, not the list.
+  const status = normalizeText(req.query.status).toLowerCase();
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+  const params = [];
+  let where = "";
+  if (status) {
+    params.push(status);
+    where = `WHERE LOWER(COALESCE(t.status, '')) = $${params.length}`;
+  }
+  params.push(limit);
+  const limitIdx = params.length;
+  params.push(offset);
+  const offsetIdx = params.length;
+
   try {
     const result = await db.query(
       `
@@ -365,8 +385,6 @@ exports.getControlTickets = async (req, res) => {
           t.machineid,
           t.comment,
           t.status,
-          t.person_image,
-          t.image_person,
           t.closedate,
           t.created,
           t.picked_by_sn,
@@ -401,9 +419,12 @@ exports.getControlTickets = async (req, res) => {
           ) AS items
         FROM consumable_ticket t
         LEFT JOIN consumable_item i ON i.cis_no = t.cis_no
+        ${where}
         GROUP BY t.id
         ORDER BY t.created DESC, t.id DESC
-      `
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      `,
+      params
     );
 
     res.json(result.rows);

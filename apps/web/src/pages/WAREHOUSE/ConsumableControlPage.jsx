@@ -623,11 +623,18 @@ export default function ConsumableControlPage() {
     )));
   }, []);
 
-  const loadTickets = useCallback(() => {
+  const loadTickets = useCallback((opts = {}) => {
     const controller = new AbortController();
     setLoading(true);
 
-    fetch(`${API_BASE}/consumable/control`, { signal: controller.signal })
+    // Backend paginates now; pass a bounded page. status/offset are wired for a future
+    // pagination/tab UI (not built yet — the list currently shows only the first page).
+    const qs = new URLSearchParams();
+    qs.set('limit', String(opts.limit ?? 200));
+    if (opts.offset) qs.set('offset', String(opts.offset));
+    if (opts.status) qs.set('status', opts.status);
+
+    fetch(`${API_BASE}/consumable/control?${qs.toString()}`, { signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error('Gagal load consumable control');
         return response.json();
@@ -763,7 +770,7 @@ export default function ConsumableControlPage() {
           </div>
           <button
             type="button"
-            onClick={loadTickets}
+            onClick={() => loadTickets()}
             disabled={loading}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-extrabold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
