@@ -107,6 +107,126 @@ $$;
 
 
 --
+-- Name: mch_transaction_freeze_posted(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.mch_transaction_freeze_posted() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  posted_ids bigint[];
+BEGIN
+  SELECT array_agg(DISTINCT s.staging_id)
+    INTO posted_ids
+    FROM public.sap_staging_source s
+   WHERE s.source_system = 'MCH_HOURS'
+     AND s.source_row_id = NEW.proddataid::text
+     AND s.posted_at IS NOT NULL;
+
+  IF posted_ids IS NULL THEN
+    RETURN NEW;  -- belum pernah terkirim ke SAP: bebas di-update
+  END IF;
+
+  -- Bekukan field pembentuk identitas bundel, satu per satu, sambil mencatat.
+  IF NEW.order_no IS DISTINCT FROM OLD.order_no THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'order_no', OLD.order_no, NEW.order_no, posted_ids);
+    NEW.order_no := OLD.order_no;
+  END IF;
+
+  IF NEW.operation_no IS DISTINCT FROM OLD.operation_no THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'operation_no', OLD.operation_no, NEW.operation_no, posted_ids);
+    NEW.operation_no := OLD.operation_no;
+  END IF;
+
+  IF NEW.sn_employee IS DISTINCT FROM OLD.sn_employee THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'sn_employee', OLD.sn_employee, NEW.sn_employee, posted_ids);
+    NEW.sn_employee := OLD.sn_employee;
+  END IF;
+
+  IF NEW.confirmation_number IS DISTINCT FROM OLD.confirmation_number THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'confirmation_number', OLD.confirmation_number, NEW.confirmation_number, posted_ids);
+    NEW.confirmation_number := OLD.confirmation_number;
+  END IF;
+
+  IF NEW.machineid IS DISTINCT FROM OLD.machineid THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'machineid', OLD.machineid, NEW.machineid, posted_ids);
+    NEW.machineid := OLD.machineid;
+  END IF;
+
+  IF NEW.status_activitytype IS DISTINCT FROM OLD.status_activitytype THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'status_activitytype', OLD.status_activitytype, NEW.status_activitytype, posted_ids);
+    NEW.status_activitytype := OLD.status_activitytype;
+  END IF;
+
+  -- Waktu = durasi yang sudah dibayarkan. Paling sensitif.
+  IF NEW.startdatetime IS DISTINCT FROM OLD.startdatetime THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'startdatetime', OLD.startdatetime::text, NEW.startdatetime::text, posted_ids);
+    NEW.startdatetime := OLD.startdatetime;
+  END IF;
+
+  IF NEW.enddatetime IS DISTINCT FROM OLD.enddatetime THEN
+    INSERT INTO public.sap_source_change_blocked (source_system, source_row_id, changed_field, old_value, new_value, staging_ids)
+    VALUES ('MCH_HOURS', NEW.proddataid::text, 'enddatetime', OLD.enddatetime::text, NEW.enddatetime::text, posted_ids);
+    NEW.enddatetime := OLD.enddatetime;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: mch_transaction_invalidate_pending_bundles(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.mch_transaction_invalidate_pending_bundles() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  stale_ids bigint[];
+BEGIN
+  -- Hanya bereaksi bila field PEMBENTUK bundel yang berubah.
+  IF (NEW.order_no, NEW.operation_no, NEW.sn_employee, NEW.confirmation_number,
+      NEW.machineid, NEW.status_activitytype, NEW.status_description,
+      NEW.startdatetime, NEW.enddatetime)
+     IS NOT DISTINCT FROM
+     (OLD.order_no, OLD.operation_no, OLD.sn_employee, OLD.confirmation_number,
+      OLD.machineid, OLD.status_activitytype, OLD.status_description,
+      OLD.startdatetime, OLD.enddatetime)
+  THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT array_agg(DISTINCT s.staging_id)
+    INTO stale_ids
+    FROM public.sap_staging_source s
+    JOIN public.sap_timesheet_staging t ON t.id = s.staging_id
+   WHERE s.source_system = 'MCH_HOURS'
+     AND s.source_row_id = NEW.proddataid::text
+     AND s.posted_at IS NULL
+     AND t.status IN ('PENDING', 'FAILED', 'SKIPPED');
+
+  IF stale_ids IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- CASCADE ikut membuang provenance-nya, sehingga SEMUA record sumber di bundel itu
+  -- kembali "belum ter-bundle" dan akan ditangkap catch-up bersama-sama.
+  DELETE FROM public.sap_timesheet_staging WHERE id = ANY(stale_ids);
+
+  RETURN NEW;
+END;
+$$;
+
+
+--
 -- Name: refresh_mv_kanban_order_board(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -127,6 +247,25 @@ BEGIN
   ELSE
     REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_kanban_order_board;
   END IF;
+END;
+$$;
+
+
+--
+-- Name: sap_staging_mark_segments_posted(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sap_staging_mark_segments_posted() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status = 'POSTED' AND OLD.status IS DISTINCT FROM 'POSTED' THEN
+    UPDATE public.sap_staging_source
+       SET posted_at = COALESCE(NEW.posted_at, now())
+     WHERE staging_id = NEW.id
+       AND posted_at IS NULL;
+  END IF;
+  RETURN NEW;
 END;
 $$;
 
@@ -443,6 +582,19 @@ CREATE SEQUENCE ews.alert_log_id_seq
 --
 
 ALTER SEQUENCE ews.alert_log_id_seq OWNED BY ews.alert_log.id;
+
+
+--
+-- Name: device_heartbeat_daily; Type: TABLE; Schema: ews; Owner: -
+--
+
+CREATE TABLE ews.device_heartbeat_daily (
+    work_date date NOT NULL,
+    device_id text NOT NULL,
+    beats bigint DEFAULT 0 NOT NULL,
+    interval_sec integer DEFAULT 60 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
 
 
 --
@@ -866,7 +1018,7 @@ ALTER TABLE public.consumable_item ALTER COLUMN id ADD GENERATED ALWAYS AS IDENT
 --
 
 CREATE TABLE public.consumable_stock (
-    material_code text,
+    material_code text NOT NULL,
     code_mm text,
     material_description text,
     mrp_type text,
@@ -962,6 +1114,25 @@ ALTER TABLE public.customers ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
+);
+
+
+--
+-- Name: device_status; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.device_status (
+    device_id text NOT NULL,
+    device_name text,
+    model text,
+    app_version text,
+    android_version text,
+    battery_pct smallint,
+    charging boolean DEFAULT false NOT NULL,
+    ip text,
+    interval_sec integer DEFAULT 60 NOT NULL,
+    last_seen timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -1152,7 +1323,7 @@ CREATE TABLE public.mch_transaction (
     checkin timestamp with time zone,
     refreshed_at timestamp with time zone,
     finish_job boolean,
-    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR ((NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)))) STORED
+    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR (((status_activitytype)::text = ANY ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)) OR ((NULLIF(btrim((status_activitytype)::text), ''::text) IS NOT NULL) AND ((status_activitytype)::text <> ALL ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL)))) STORED
 );
 
 
@@ -1160,7 +1331,30 @@ CREATE TABLE public.mch_transaction (
 -- Name: COLUMN mch_transaction.status_record; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.mch_transaction.status_record IS 'TRUE = record OK (statusid 0/3/4 Off/Downtime/NoJob, OR order_no+operation_no+sn_employee+confirmation_number all present). FALSE = incomplete. Basis for EWS accuracy_machine.';
+COMMENT ON COLUMN public.mch_transaction.status_record IS 'TRUE = record layak. statusid 0/3/4 (sah tanpa job), ATAU productive (M1/M2) dgn order+operasi+operator+confirmation, ATAU unproductive (activity type) dgn operator (tanpa confirmation). Basis accuracy_machine + kelayakan SAP (kecuali 0/3/4 dikecualikan staging).';
+
+
+--
+-- Name: mch_transaction_override; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mch_transaction_override (
+    proddataid bigint NOT NULL,
+    order_no text,
+    operation_no text,
+    sn_employee text,
+    note text,
+    updated_by text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT mch_transaction_override_something CHECK (((order_no IS NOT NULL) OR (sn_employee IS NOT NULL)))
+);
+
+
+--
+-- Name: TABLE mch_transaction_override; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.mch_transaction_override IS 'Koreksi manual yang bertahan re-derivasi ETL. Diterapkan oleh etl_mch_transaction_v3 (apply_overrides) di atas hasil derivasi. Lihat migration 20260715_mch_transaction_override.';
 
 
 --
@@ -2956,6 +3150,70 @@ ALTER TABLE public.receiving_orders ALTER COLUMN id ADD GENERATED ALWAYS AS IDEN
 
 
 --
+-- Name: sap_ops_request; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sap_ops_request (
+    id bigint NOT NULL,
+    action text NOT NULL,
+    params jsonb DEFAULT '{}'::jsonb NOT NULL,
+    status text DEFAULT 'QUEUED'::text NOT NULL,
+    requested_by text,
+    requested_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    result text,
+    error text,
+    CONSTRAINT sap_ops_request_action_ck CHECK ((action = ANY (ARRAY['stage_catchup'::text, 'retry_failed'::text, 'post_corrections'::text]))),
+    CONSTRAINT sap_ops_request_status_ck CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'DONE'::text, 'ERROR'::text])))
+);
+
+
+--
+-- Name: sap_ops_request_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.sap_ops_request ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sap_ops_request_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: sap_source_change_blocked; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sap_source_change_blocked (
+    id bigint NOT NULL,
+    source_system text NOT NULL,
+    source_row_id text NOT NULL,
+    blocked_at timestamp with time zone DEFAULT now() NOT NULL,
+    changed_field text NOT NULL,
+    old_value text,
+    new_value text,
+    staging_ids bigint[]
+);
+
+
+--
+-- Name: sap_source_change_blocked_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.sap_source_change_blocked ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sap_source_change_blocked_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: sap_stage_cursor; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2982,6 +3240,43 @@ CREATE TABLE public.sap_staging_eligibility_audit (
     block_detail jsonb DEFAULT '{}'::jsonb NOT NULL,
     observed_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: sap_staging_source; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sap_staging_source (
+    id bigint NOT NULL,
+    staging_id bigint NOT NULL,
+    source_system text NOT NULL,
+    source_row_id text NOT NULL,
+    bucket_start timestamp with time zone NOT NULL,
+    seconds bigint DEFAULT 0 NOT NULL,
+    posted_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE sap_staging_source; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sap_staging_source IS 'Provenance: bundel staging mana berasal dari record sumber mana (per segmen jam). Dipakai untuk audit + guard anti-double-post di post_sap_staging.py.';
+
+
+--
+-- Name: sap_staging_source_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.sap_staging_source ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sap_staging_source_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -3029,6 +3324,8 @@ CREATE TABLE public.sap_timesheet_staging (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     pernr_origin text DEFAULT ''::text NOT NULL,
+    is_productive boolean GENERATED ALWAYS AS ((zconf_type = ANY (ARRAY['M1'::text, 'M2'::text]))) STORED,
+    is_correction boolean DEFAULT false NOT NULL,
     CONSTRAINT sap_timesheet_staging_source_system_ck CHECK ((source_system = ANY (ARRAY['TIMESHEET'::text, 'MCH_HOURS'::text]))),
     CONSTRAINT sap_timesheet_staging_status_ck CHECK ((status = ANY (ARRAY['PENDING'::text, 'POSTING'::text, 'POSTED'::text, 'FAILED'::text, 'SKIPPED'::text])))
 );
@@ -3042,6 +3339,20 @@ COMMENT ON COLUMN public.sap_timesheet_staging.pernr_origin IS 'SN karyawan asli
 
 
 --
+-- Name: COLUMN sap_timesheet_staging.is_productive; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sap_timesheet_staging.is_productive IS 'TRUE bila zconf_type M1/M2 (konfirmasi order). FALSE = alokasi aktivitas (LSTAR).';
+
+
+--
+-- Name: COLUMN sap_timesheet_staging.is_correction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sap_timesheet_staging.is_correction IS 'TRUE = bundel koreksi (segmen yang datang setelah hari-kuncinya ter-POST). Di-post MANUAL dari UI, tidak oleh auto-poster. SAP aditif -> menambah jam ke order tanpa storno.';
+
+
+--
 -- Name: sap_timesheet_staging_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3052,6 +3363,17 @@ ALTER TABLE public.sap_timesheet_staging ALTER COLUMN id ADD GENERATED ALWAYS AS
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
+);
+
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.schema_migrations (
+    filename text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL,
+    note text
 );
 
 
@@ -5577,6 +5899,14 @@ ALTER TABLE ONLY ews.alert_log
 
 
 --
+-- Name: device_heartbeat_daily device_heartbeat_daily_pkey; Type: CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.device_heartbeat_daily
+    ADD CONSTRAINT device_heartbeat_daily_pkey PRIMARY KEY (work_date, device_id);
+
+
+--
 -- Name: issue_log issue_log_issue_key_key; Type: CONSTRAINT; Schema: ews; Owner: -
 --
 
@@ -5729,6 +6059,14 @@ ALTER TABLE ONLY public.consumable_item
 
 
 --
+-- Name: consumable_stock consumable_stock_material_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.consumable_stock
+    ADD CONSTRAINT consumable_stock_material_code_key UNIQUE (material_code);
+
+
+--
 -- Name: consumable_stock consumable_stock_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5769,6 +6107,14 @@ ALTER TABLE ONLY public.customers
 
 
 --
+-- Name: device_status device_status_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_status
+    ADD CONSTRAINT device_status_pkey PRIMARY KEY (device_id);
+
+
+--
 -- Name: log_timesheet_sap log_timesheet_sap_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5798,6 +6144,14 @@ ALTER TABLE ONLY public.mch_machines
 
 ALTER TABLE ONLY public.mch_statustypes
     ADD CONSTRAINT mch_statustypes_pkey PRIMARY KEY (statusid);
+
+
+--
+-- Name: mch_transaction_override mch_transaction_override_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mch_transaction_override
+    ADD CONSTRAINT mch_transaction_override_pkey PRIMARY KEY (proddataid);
 
 
 --
@@ -6073,6 +6427,22 @@ ALTER TABLE ONLY public.receiving_orders
 
 
 --
+-- Name: sap_ops_request sap_ops_request_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sap_ops_request
+    ADD CONSTRAINT sap_ops_request_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sap_source_change_blocked sap_source_change_blocked_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sap_source_change_blocked
+    ADD CONSTRAINT sap_source_change_blocked_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: sap_stage_cursor sap_stage_cursor_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6089,6 +6459,14 @@ ALTER TABLE ONLY public.sap_staging_eligibility_audit
 
 
 --
+-- Name: sap_staging_source sap_staging_source_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sap_staging_source
+    ADD CONSTRAINT sap_staging_source_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: sap_timesheet_staging sap_timesheet_staging_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6102,6 +6480,14 @@ ALTER TABLE ONLY public.sap_timesheet_staging
 
 ALTER TABLE ONLY public.sap_timesheet_staging
     ADD CONSTRAINT sap_timesheet_staging_source_uk UNIQUE (source_system, source_key);
+
+
+--
+-- Name: schema_migrations schema_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.schema_migrations
+    ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (filename);
 
 
 --
@@ -6529,6 +6915,13 @@ ALTER TABLE ONLY tools_management.transactions
 
 
 --
+-- Name: idx_device_hb_daily_device; Type: INDEX; Schema: ews; Owner: -
+--
+
+CREATE INDEX idx_device_hb_daily_device ON ews.device_heartbeat_daily USING btree (device_id, work_date DESC);
+
+
+--
 -- Name: idx_ews_action_escalation; Type: INDEX; Schema: ews; Owner: -
 --
 
@@ -6827,6 +7220,13 @@ CREATE INDEX idx_mch_productiondata_machine_start ON public.mch_productiondata U
 --
 
 CREATE INDEX idx_mch_productiondata_startdatetime ON public.mch_productiondata USING btree (startdatetime);
+
+
+--
+-- Name: idx_mch_transaction_sap_eligible; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mch_transaction_sap_eligible ON public.mch_transaction USING btree (startdatetime) WHERE ((enddatetime IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL));
 
 
 --
@@ -7191,6 +7591,41 @@ CREATE INDEX idx_ro_received_date ON public.receiving_orders USING btree (receiv
 --
 
 CREATE INDEX idx_ro_ssbr ON public.receiving_orders USING btree (ssbr_ident);
+
+
+--
+-- Name: idx_sap_ops_request_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sap_ops_request_status ON public.sap_ops_request USING btree (status, id);
+
+
+--
+-- Name: idx_sap_source_change_blocked_row; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sap_source_change_blocked_row ON public.sap_source_change_blocked USING btree (source_system, source_row_id, blocked_at DESC);
+
+
+--
+-- Name: idx_sap_staging_is_correction; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sap_staging_is_correction ON public.sap_timesheet_staging USING btree (is_correction, status, bucket_start);
+
+
+--
+-- Name: idx_sap_staging_productive_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sap_staging_productive_status ON public.sap_timesheet_staging USING btree (is_productive, status);
+
+
+--
+-- Name: idx_sap_staging_source_segment; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sap_staging_source_segment ON public.sap_staging_source USING btree (source_system, source_row_id, bucket_start);
 
 
 --
@@ -7691,6 +8126,27 @@ CREATE UNIQUE INDEX uq_mv_mch_productiondata_detail_proddataid ON public.mv_mch_
 
 
 --
+-- Name: uq_sap_ops_request_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_sap_ops_request_active ON public.sap_ops_request USING btree (action) WHERE (status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text]));
+
+
+--
+-- Name: uq_sap_staging_source_posted_once; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_sap_staging_source_posted_once ON public.sap_staging_source USING btree (source_system, source_row_id, bucket_start) WHERE (posted_at IS NOT NULL);
+
+
+--
+-- Name: uq_sap_staging_source_segment_per_bundle; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_sap_staging_source_segment_per_bundle ON public.sap_staging_source USING btree (staging_id, source_system, source_row_id, bucket_start);
+
+
+--
 -- Name: uq_shift_definition_default_code; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8013,6 +8469,20 @@ CREATE TRIGGER trg_delete_dup_sow AFTER INSERT ON public.sow FOR EACH ROW EXECUT
 
 
 --
+-- Name: mch_transaction trg_mch_transaction_freeze_posted; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_mch_transaction_freeze_posted BEFORE UPDATE ON public.mch_transaction FOR EACH ROW EXECUTE FUNCTION public.mch_transaction_freeze_posted();
+
+
+--
+-- Name: mch_transaction trg_mch_transaction_invalidate_pending; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_mch_transaction_invalidate_pending AFTER UPDATE ON public.mch_transaction FOR EACH ROW EXECUTE FUNCTION public.mch_transaction_invalidate_pending_bundles();
+
+
+--
 -- Name: ms_project_assignment trg_ms_project_assignment_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8073,6 +8543,13 @@ CREATE TRIGGER trg_nnva_standard_updated_at BEFORE UPDATE ON public.sow_nnva_sta
 --
 
 CREATE TRIGGER trg_opcard_updated_at BEFORE UPDATE ON public.sow_operationcard FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+
+--
+-- Name: sap_timesheet_staging trg_sap_staging_mark_segments_posted; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_sap_staging_mark_segments_posted AFTER UPDATE OF status ON public.sap_timesheet_staging FOR EACH ROW EXECUTE FUNCTION public.sap_staging_mark_segments_posted();
 
 
 --
@@ -8427,6 +8904,14 @@ ALTER TABLE ONLY public.receiving_orders
 
 ALTER TABLE ONLY public.receiving_orders
     ADD CONSTRAINT receiving_orders_packing_type_id_fkey FOREIGN KEY (packing_type_id) REFERENCES public.packing_types(id) ON DELETE SET NULL;
+
+
+--
+-- Name: sap_staging_source sap_staging_source_staging_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sap_staging_source
+    ADD CONSTRAINT sap_staging_source_staging_id_fkey FOREIGN KEY (staging_id) REFERENCES public.sap_timesheet_staging(id) ON DELETE CASCADE;
 
 
 --
