@@ -1,22 +1,57 @@
 const crypto = require("crypto");
+const argon2 = require("@node-rs/argon2");
 const db = global.pool || require("../db");
 const { effectiveMap } = require("../rbac/effective");
 const { FEATURE_IDS, FEATURE_ID_SET } = require("../rbac/features");
 const { LEVELS } = require("../rbac/permissionMatrix");
 
+// Password hashing. STORAGE is always argon2id ($argon2id$...) — hashPassword() is the
+// ONLY function that produces a hash for writing. sha256Password() and the plaintext
+// branch survive ONLY inside verifyPassword() to authenticate a legacy row once; login /
+// changePassword then re-hash it to argon2id (lazy upgrade), so no legacy hash is re-stored.
 function sha256Password(password) {
   return `sha256$${crypto.createHash("sha256").update(String(password || "")).digest("hex")}`;
 }
 
-function verifyPassword(password, storedHash) {
+async function hashPassword(password) {
+  return argon2.hash(String(password || ""), { algorithm: argon2.Algorithm.Argon2id });
+}
+
+// Constant-time string compare. timingSafeEqual needs equal-length buffers; on a length
+// mismatch we still run a dummy compare to avoid an early-return timing signal, then fail.
+function timingSafeEqualStr(a, b) {
+  const bufA = Buffer.from(String(a), "utf8");
+  const bufB = Buffer.from(String(b), "utf8");
+  if (bufA.length !== bufB.length) {
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// Verify a password against whatever format the row holds. Async (argon2 verify is async).
+// Never throws; returns a boolean.
+async function verifyPassword(password, storedHash) {
   if (!storedHash) return false;
   const stored = String(storedHash);
+  const pw = String(password || "");
 
-  if (stored.startsWith("sha256$")) {
-    return stored === sha256Password(password);
+  if (stored.startsWith("$argon2")) {
+    try {
+      return await argon2.verify(stored, pw);
+    } catch {
+      return false;
+    }
   }
 
-  return stored === String(password || "");
+  if (stored.startsWith("sha256$")) {
+    // both operands are fixed-length sha256Password() output -> equal length
+    return timingSafeEqualStr(stored, sha256Password(pw));
+  }
+
+  // Legacy plaintext / unrecognised format: one-time verify-then-upgrade SAFETY NET only.
+  // hashPassword() never writes this format, so it can only ever be READ here.
+  return timingSafeEqualStr(stored, pw);
 }
 
 function isAdministratorRequest(req) {
@@ -61,11 +96,25 @@ exports.login = async (req, res) => {
     );
 
     const user = result.rows[0];
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    if (!user || !(await verifyPassword(password, user.password_hash))) {
       return res.status(401).json({
         success: false,
         error: "Username atau password tidak sesuai",
       });
+    }
+
+    // Lazy upgrade: a legacy (non-argon2) hash is re-hashed to argon2id on successful
+    // login. Best-effort — never block login if the upgrade write fails.
+    if (!String(user.password_hash || "").startsWith("$argon2")) {
+      try {
+        const upgraded = await hashPassword(password);
+        await db.query(
+          "UPDATE public.users SET password_hash = $1, updated_at = now() WHERE id = $2",
+          [upgraded, user.id],
+        );
+      } catch (upErr) {
+        console.error("password lazy-upgrade failed for user id", user.id, "-", upErr.message);
+      }
     }
 
     return res.json({
@@ -125,7 +174,7 @@ exports.changePassword = async (req, res) => {
     );
 
     const user = current.rows[0];
-    if (!user || !verifyPassword(oldPassword, user.password_hash)) {
+    if (!user || !(await verifyPassword(oldPassword, user.password_hash))) {
       return res.status(401).json({
         success: false,
         error: "Old password tidak sesuai",
@@ -138,7 +187,7 @@ exports.changePassword = async (req, res) => {
         SET password_hash = $1, updated_at = now()
         WHERE id = $2
       `,
-      [sha256Password(newPassword), user.id]
+      [await hashPassword(newPassword), user.id]
     );
 
     return res.json({
@@ -217,7 +266,7 @@ exports.createUser = async (req, res) => {
         VALUES ($1, $2, $3, $4, $4, now(), now())
         RETURNING id, username, name, roles, created_at, updated_at
       `,
-      [username, sha256Password(password), name, roles]
+      [username, await hashPassword(password), name, roles]
     );
 
     return res.status(201).json({
@@ -271,7 +320,7 @@ exports.updateUser = async (req, res) => {
     }
 
     const params = password
-      ? [username, name, roles, sha256Password(password), id]
+      ? [username, name, roles, await hashPassword(password), id]
       : [username, name, roles, id];
     const sql = password
       ? `
