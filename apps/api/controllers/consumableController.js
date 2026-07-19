@@ -19,6 +19,16 @@ function normalizeNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+// A client-fixable (business) error that carries the HTTP status a handler should
+// return, so it surfaces as e.g. 409 instead of a bare 500. Phase 5 routes the other
+// endpoints' validation/conflict errors through this same marker.
+function businessError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  err.isBusiness = true;
+  return err;
+}
+
 function buildTicketNo(ticketId, now = new Date()) {
   const pad = (value, length = 2) => String(value).padStart(length, "0");
   const datePart = `${pad(now.getDate())}${pad(now.getMonth() + 1)}${String(now.getFullYear()).slice(-2)}`;
@@ -409,6 +419,48 @@ exports.closeTicket = async (req, res) => {
       return res.status(409).json({ error: "Ticket tidak memiliki item aktif untuk diambil" });
     }
 
+    // Decrement physical stock by what is ACTUALLY taken at close: the CURRENT quanitty
+    // of each NON-REJECTED item (adjustments reflected, rejected items excluded) — not
+    // the originally requested qty. Aggregate per material_code (unique stock identity)
+    // so repeated lines of the same material collapse into one locked decrement.
+    const cisNo = ticketResult.rows[0].cis_no;
+    const taken = await client.query(
+      `
+        SELECT materialcode, SUM(quanitty)::numeric AS qty
+        FROM consumable_item
+        WHERE cis_no = $1
+          AND LOWER(COALESCE(status, 'active')) <> $2
+        GROUP BY materialcode
+        ORDER BY materialcode
+      `,
+      [cisNo, REJECTED_STATUS]
+    );
+
+    for (const row of taken.rows) {
+      const materialCode = normalizeText(row.materialcode);
+      const qty = normalizeNumber(row.qty);
+      if (!materialCode || qty <= 0) continue;
+
+      // Lock the stock row FOR UPDATE (by material_code) inside THIS close transaction —
+      // a concurrent close/request on the same material blocks here until we commit, so
+      // two closes can never both pass the sufficiency check.
+      const stock = await client.query(
+        "SELECT quantity FROM consumable_stock WHERE material_code = $1 FOR UPDATE",
+        [materialCode]
+      );
+      if (stock.rowCount === 0) {
+        throw businessError(409, `Belum ada data stok untuk material ${materialCode}`);
+      }
+      const available = normalizeNumber(stock.rows[0].quantity);
+      if (qty > available) {
+        throw businessError(409, `Stok ${materialCode} tidak cukup (tersedia ${available}, diambil ${qty})`);
+      }
+      await client.query(
+        "UPDATE consumable_stock SET quantity = quantity - $1 WHERE material_code = $2",
+        [qty, materialCode]
+      );
+    }
+
     const imagePath = saveConsumableImage(imageData, ticketResult.rows[0].cis_no);
 
     await client.query(
@@ -449,7 +501,9 @@ exports.closeTicket = async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
-    res.status(500).json({ error: err.message });
+    // Business errors (e.g. insufficient stock at decrement) carry their HTTP status;
+    // Phase 5 extends this err.status pattern to the other endpoints.
+    res.status(err.status || 500).json({ error: err.message });
   } finally {
     client.release();
   }
@@ -513,6 +567,7 @@ exports.adjustItemQuantity = async (req, res) => {
         SELECT quantity
         FROM consumable_stock
         WHERE material_code = $1
+        FOR UPDATE
       `,
       [item.materialcode]
     );
@@ -727,6 +782,7 @@ exports.createRequest = async (req, res) => {
           SELECT quantity
           FROM consumable_stock
           WHERE material_code = $1
+          FOR UPDATE
         `,
         [materialCode]
       );
