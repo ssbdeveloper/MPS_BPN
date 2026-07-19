@@ -360,7 +360,6 @@ function PickupPanel({ ticket, role, authUser, onClose, onSuccess }) {
         method: 'PATCH',
         headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
-          role,
           username: authUser?.username || '',
           nfcid: id,
           image_data: imageData,
@@ -673,7 +672,6 @@ export default function ConsumableControlPage() {
         method: 'PATCH',
         headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
-          role,
           username: authUser?.username || '',
         }),
       });
@@ -696,7 +694,6 @@ export default function ConsumableControlPage() {
         method: 'PATCH',
         headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
-          role,
           username: authUser?.username || '',
           quantity,
         }),
@@ -722,7 +719,6 @@ export default function ConsumableControlPage() {
         method: 'PATCH',
         headers: writeAuthHeaders(role, authUser?.username),
         body: JSON.stringify({
-          role,
           username: authUser?.username || '',
           reason,
         }),
