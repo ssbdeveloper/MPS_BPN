@@ -1,6 +1,7 @@
 const db = global.pool || require("../db");
 const fs = require("fs");
 const path = require("path");
+const ExcelJS = require("exceljs");
 
 const WAITING_LEADER_STATUS = "waiting leader";
 const WAITING_WAREHOUSE_STATUS = "waiting warehouse";
@@ -8,6 +9,8 @@ const READY_STATUS = "ready";
 const CLOSE_STATUS = "Close";
 const REJECTED_STATUS = "rejected";
 const MAX_STOCK_RESULTS = 100;
+// plant is server-owned: every stock row is stamped with this, never a value from the file.
+const PLANT_SSB = process.env.PLANT_SSB || "";
 
 function normalizeText(value) {
   if (typeof value !== "string") return "";
@@ -28,6 +31,109 @@ function businessError(status, message) {
   err.isBusiness = true;
   return err;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Excel stock-upload helpers. normalizeMaterialCode() is the SINGLE source of truth
+// for the stock identity key — the same normalization is used to validate, dedup, and
+// store material_code. Exported at the bottom for tests.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Flatten an exceljs cell value (string | number | bool | formula | richText | hyperlink)
+// to plain text.
+function cellToString(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    if (Array.isArray(value.richText)) return value.richText.map((t) => t.text || "").join("");
+    if ("result" in value) return value.result === null || value.result === undefined ? "" : String(value.result);
+    if ("text" in value) return String(value.text);
+    return "";
+  }
+  return String(value);
+}
+
+// material_code identity normalization. Strips non-breaking / zero-width spaces entirely,
+// collapses internal ASCII whitespace runs to a single space, trims the ends. Internal
+// single ASCII spaces are PRESERVED — it is not yet confirmed whether SAP codes can contain
+// them, so every row whose raw value changed is reported (`cleaned`) for the admin to
+// eyeball. To switch to a full-strip policy once confirmed, change ONLY this function.
+function normalizeMaterialCode(raw) {
+  return String(raw ?? "")
+    .replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, "")
+    .replace(/[ \t\r\n]+/g, " ")
+    .trim();
+}
+
+// Parse a quantity cell for the absolute-set upload. Distinguishes blank / non-numeric /
+// negative so validation rejects with a precise reason — never silently coerces to 0.
+function parseUploadQuantity(value) {
+  const s = cellToString(value).trim();
+  if (s === "") return { blank: true };
+  const n = Number(s);
+  if (!Number.isFinite(n)) return { invalid: true };
+  if (n < 0) return { negative: true };
+  return { value: n };
+}
+
+// Parse + validate the WHOLE workbook before any DB write (all-or-nothing). Returns
+// { error } on the first validation failure (naming the Excel row), else
+// { rows, cleaned, skippedBlank }. Header row (row 1) matched case/underscore-insensitively.
+async function parseStockWorkbook(buffer) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buffer);
+  const ws = wb.worksheets[0];
+  if (!ws || ws.rowCount < 2) return { error: "File Excel kosong atau tanpa baris data" };
+
+  const colMap = {};
+  ws.getRow(1).eachCell((cell, colNumber) => {
+    const key = cellToString(cell.value).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (key && !(key in colMap)) colMap[key] = colNumber;
+  });
+  const col = {
+    materialCode: colMap.materialcode || colMap.material,
+    quantity: colMap.quantity || colMap.qty,
+    codeMm: colMap.codemm,
+    description: colMap.materialdescription || colMap.description || colMap.deskripsi,
+    uom: colMap.uom || colMap.satuan,
+  };
+  if (!col.materialCode || !col.quantity) {
+    return { error: "Header wajib tidak ditemukan: kolom 'material_code' dan 'quantity'" };
+  }
+
+  const rows = [];
+  const cleaned = [];
+  const seen = new Set();
+  let skippedBlank = 0;
+
+  for (let r = 2; r <= ws.rowCount; r += 1) {
+    const row = ws.getRow(r);
+    const rawMc = cellToString(row.getCell(col.materialCode).value);
+    const materialCode = normalizeMaterialCode(rawMc);
+    const q = parseUploadQuantity(row.getCell(col.quantity).value);
+
+    if (!materialCode && q.blank) { skippedBlank += 1; continue; } // fully blank row → skip
+    if (!materialCode) return { error: `Baris ${r}: ada data tapi material_code kosong` };
+    if (q.blank) return { error: `Baris ${r}: quantity kosong untuk ${materialCode}` };
+    if (q.invalid) return { error: `Baris ${r}: quantity bukan angka untuk ${materialCode}` };
+    if (q.negative) return { error: `Baris ${r}: quantity negatif untuk ${materialCode}` };
+    if (seen.has(materialCode)) return { error: `Baris ${r}: material_code duplikat dalam file: ${materialCode}` };
+    seen.add(materialCode);
+    if (rawMc !== materialCode) cleaned.push({ row: r, raw: rawMc, normalized: materialCode });
+
+    rows.push({
+      materialCode,
+      quantity: q.value,
+      codeMm: col.codeMm ? normalizeText(cellToString(row.getCell(col.codeMm).value)) : "",
+      description: col.description ? normalizeText(cellToString(row.getCell(col.description).value)) : "",
+      uom: col.uom ? normalizeText(cellToString(row.getCell(col.uom).value)) : "",
+    });
+  }
+
+  if (rows.length === 0) return { error: "Tidak ada baris valid untuk di-upload" };
+  return { rows, cleaned, skippedBlank };
+}
+
+exports.normalizeMaterialCode = normalizeMaterialCode; // exported for tests
+exports.parseStockWorkbook = parseStockWorkbook;       // exported for tests
 
 function buildTicketNo(ticketId, now = new Date()) {
   const pad = (value, length = 2) => String(value).padStart(length, "0");
@@ -823,6 +929,100 @@ exports.createRequest = async (req, res) => {
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+// POST /consumable/stock/upload — ABSOLUTE reset of physical stock from an admin Excel.
+//
+// consumable_stock is NOT SAP-authoritative: close decrements it between uploads; this
+// upload OVERWRITES those decrements with the current physical count (absolute set, not a
+// delta). The whole file is validated first (parseStockWorkbook), then applied in ONE
+// transaction (all-or-nothing); the stock rows it will update are locked FOR UPDATE — the
+// same lock the close decrement takes — so a concurrent close cannot interleave.
+//
+// Template (row 1 = header, matched case/underscore-insensitively):
+//   material_code         REQUIRED  SAP code = identity/conflict key (whitespace-normalized)
+//   quantity              REQUIRED  ABSOLUTE physical stock NOW (number >= 0), NOT a delta
+//   material_description  optional  display name (cosmetic)
+//   code_mm               optional  MM display code (cosmetic; NO role in identity)
+//   uom                   optional  unit of measure (cosmetic)
+//   (a plant column, if present, is IGNORED — plant is set server-side from PLANT_SSB)
+//
+// Response 200: { ok, applied, skipped_blank, created, cleaned, plant }
+//   created = material_codes not previously in stock (eyeball for typos — the ONLY guard
+//             against a non-space typo, since there is no SAP master to validate against)
+//   cleaned = rows whose raw material_code differed from normalized (trailing space, NBSP, …)
+// Validation failure 400: { error: "Baris N: <reason>" } — nothing is written.
+exports.uploadStock = async (req, res) => {
+  const role = actorRole(req);
+  if (role !== "warehouse" && role !== "administrator") {
+    return res.status(403).json({ error: "Hanya warehouse/administrator yang boleh upload stock" });
+  }
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ error: "File Excel wajib di-upload (field 'file')" });
+  }
+
+  let parsed;
+  try {
+    parsed = await parseStockWorkbook(req.file.buffer);
+  } catch (err) {
+    return res.status(400).json({ error: `File Excel tidak bisa dibaca: ${err.message}` });
+  }
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+  const { rows, cleaned, skippedBlank } = parsed;
+  const codes = rows.map((row) => row.materialCode);
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    // Lock existing target rows (same FOR UPDATE the close decrement takes) so a concurrent
+    // close serializes behind this reset — the upload wins, but via the lock, not a race.
+    await client.query(
+      "SELECT 1 FROM consumable_stock WHERE material_code = ANY($1::text[]) ORDER BY material_code FOR UPDATE",
+      [codes]
+    );
+
+    const created = [];
+    for (const row of rows) {
+      const up = await client.query(
+        `
+          INSERT INTO consumable_stock
+            (material_code, code_mm, material_description, uom, quantity, plant)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (material_code) DO UPDATE SET
+            code_mm              = EXCLUDED.code_mm,
+            material_description = EXCLUDED.material_description,
+            uom                  = EXCLUDED.uom,
+            quantity             = EXCLUDED.quantity,
+            plant                = EXCLUDED.plant
+          RETURNING (xmax = 0) AS was_created
+        `,
+        [row.materialCode, row.codeMm || null, row.description || null, row.uom || null, row.quantity, PLANT_SSB || null]
+      );
+      if (up.rows[0].was_created) created.push(row.materialCode);
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      applied: rows.length,
+      skipped_blank: skippedBlank,
+      created,
+      cleaned,
+      plant: PLANT_SSB || null,
+      message:
+        `Stock di-reset absolut: ${rows.length} baris diterapkan` +
+        (created.length ? `, ${created.length} material baru dibuat` : "") +
+        (cleaned.length ? `, ${cleaned.length} baris material_code dibersihkan` : "") +
+        (skippedBlank ? `, ${skippedBlank} baris kosong dilewati` : "") + ".",
+    });
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    return res.status(err.status || 500).json({ error: err.message });
   } finally {
     client.release();
   }

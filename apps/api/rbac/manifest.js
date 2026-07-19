@@ -123,6 +123,7 @@ const MANIFEST = [
   { m: 'PATCH',  p: '/consumable/control/items/:id/quantity', f: 'consumable_control', a: W },
   { m: 'PATCH',  p: '/consumable/control/items/:id/reject',   f: 'consumable_control', a: W },
   { m: 'POST',   p: '/consumable/request',                    f: 'consumable_control', a: W },
+  { m: 'POST',   p: '/consumable/stock/upload',               f: 'consumable_control', a: W },
 
   // ---- Tools management (/tools) ----
   { m: 'POST',   p: '/tools/reservations',                    f: 'tools_management', a: W },
