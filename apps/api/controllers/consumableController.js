@@ -506,16 +506,15 @@ exports.adjustItemQuantity = async (req, res) => {
       return res.status(409).json({ error: "Item rejected tidak bisa di-adjust" });
     }
 
+    // Stock identity = material_code (unique). code_mm is a search/display code, not a
+    // row key — resolving a mutation by it can hit the wrong row.
     const stockResult = await client.query(
       `
         SELECT quantity
         FROM consumable_stock
         WHERE material_code = $1
-          AND COALESCE(code_mm, '') = COALESCE($2, '')
-        ORDER BY quantity DESC
-        LIMIT 1
       `,
-      [item.materialcode, item.code_mm || null]
+      [item.materialcode]
     );
 
     const availableStock = normalizeNumber(stockResult.rows[0]?.quantity);
@@ -674,11 +673,10 @@ exports.createRequest = async (req, res) => {
 
     for (const item of normalizedItems) {
       const materialCode = normalizeText(item.materialcode || item.material_code);
-      const codeMm = normalizeText(item.code_mm);
       const quantity = normalizeNumber(item.quanitty || item.quantity);
-      const stockId = normalizeNumber(item.stock_id);
-      const key = stockId > 0 ? `id:${stockId}` : `code:${materialCode}::${codeMm}`;
-      requestedTotals.set(key, (requestedTotals.get(key) || 0) + quantity);
+      // Aggregate requested qty per stock row by material_code (its unique identity), so
+      // multiple cart lines for the same material sum against the one stock row.
+      requestedTotals.set(materialCode, (requestedTotals.get(materialCode) || 0) + quantity);
     }
 
     const pendingCisNo = buildPendingTicketNo();
@@ -717,37 +715,24 @@ exports.createRequest = async (req, res) => {
       const glAccount = normalizeText(item.gl_account);
       const codeMm = normalizeText(item.code_mm);
       const costCenter = normalizeText(item.cost_center || workcenter);
-      const stockId = normalizeNumber(item.stock_id);
-      const requestKey = stockId > 0 ? `id:${stockId}` : `code:${materialCode}::${codeMm}`;
 
       if (!materialCode || !materialDescription || !quantity || quantity <= 0 || !glAccount) {
         throw new Error("Item consumable tidak lengkap");
       }
 
-      const stockResult = stockId > 0
-        ? await client.query(
-          `
-            SELECT quantity
-            FROM consumable_stock
-            WHERE id = $1
-            LIMIT 1
-          `,
-          [stockId]
-        )
-        : await client.query(
-          `
-            SELECT quantity
-            FROM consumable_stock
-            WHERE material_code = $1
-              AND COALESCE(code_mm, '') = COALESCE($2, '')
-            ORDER BY quantity DESC
-            LIMIT 1
-          `,
-          [materialCode, codeMm || null]
+      // Resolve the stock row by material_code (unique identity) — never by code_mm (not
+      // unique) or a client-sent stock id (can go stale after an Excel absolute-reset).
+      const stockResult = await client.query(
+        `
+          SELECT quantity
+          FROM consumable_stock
+          WHERE material_code = $1
+        `,
+        [materialCode]
       );
 
       const availableStock = normalizeNumber(stockResult.rows[0]?.quantity);
-      if ((requestedTotals.get(requestKey) || 0) > availableStock) {
+      if ((requestedTotals.get(materialCode) || 0) > availableStock) {
         throw new Error(`Request ${materialCode} melebihi stock tersedia (${availableStock})`);
       }
 
