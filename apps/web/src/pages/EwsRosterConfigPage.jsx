@@ -192,6 +192,7 @@ function EwsRosterConfigPage() {
   const rc = config?.rotation_config;
   const groupCounts = Object.fromEntries((config?.group_counts || []).map((g) => [g.rotation_group, g.n]));
   const groupMembers = config?.group_members || [];
+  const operators = config?.operators || [];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
@@ -267,12 +268,16 @@ function EwsRosterConfigPage() {
             <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-extrabold text-slate-600">Grup B: {groupCounts.B ?? 0}</span>
           </div>
           <div className="flex flex-wrap items-end gap-2">
-            <input
+            <select
               value={serial}
               onChange={(e) => setSerial(e.target.value)}
-              placeholder="Serialnumber operator"
-              className="min-w-[200px] flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
-            />
+              className="min-w-[200px] flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
+            >
+              <option value="">Pilih operator…</option>
+              {operators.map((o) => (
+                <option key={o.snssb} value={o.snssb}>{o.full_name || o.snssb} ({o.snssb})</option>
+              ))}
+            </select>
             <select value={group} onChange={(e) => setGroup(e.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
               <option value="A">Grup A</option>
               <option value="B">Grup B</option>
@@ -327,13 +332,17 @@ function EwsRosterConfigPage() {
           <div className="flex flex-wrap items-end gap-2">
             <div className="flex min-w-[200px] flex-1 flex-col gap-1">
               <label htmlFor="lock-serial" className="text-xs font-bold text-slate-600">Operator</label>
-              <input
+              <select
                 id="lock-serial"
                 value={lockForm.serial}
                 onChange={(e) => setLockForm((f) => ({ ...f, serial: e.target.value }))}
-                placeholder="Serialnumber operator"
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
-              />
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
+              >
+                <option value="">Pilih operator (harus sudah bergrup)…</option>
+                {groupMembers.map((m) => (
+                  <option key={m.serialnumber} value={m.serialnumber}>{m.full_name || m.serialnumber} ({m.serialnumber})</option>
+                ))}
+              </select>
             </div>
             <div className="flex flex-col gap-1">
               <label htmlFor="lock-shift" className="text-xs font-bold text-slate-600">Shift</label>

@@ -90,7 +90,7 @@ async function updateStatus(req, res) {
 // GET /ews/roster/config — shift defs, workday rules, active rotation config, group counts.
 async function getConfig(req, res) {
   try {
-    const [shifts, workdays, rotation, groups, members] = await Promise.all([
+    const [shifts, workdays, rotation, groups, members, roster] = await Promise.all([
       db.query(`SELECT shift_code, shift_name, start_time::text, end_time::text, crosses_midnight, standard_hours, is_active FROM ews.operator_shift ORDER BY shift_code`),
       db.query(`SELECT day_of_week, runs_day, runs_night FROM ews.roster_workday_rule ORDER BY day_of_week`),
       db.query(`SELECT id, anchor_week_start::text, anchor_group_a_shift, rotation_period_weeks, week_start_dow, effective_from::text, is_active FROM ews.rotation_config WHERE is_active ORDER BY effective_from DESC, id DESC LIMIT 1`),
@@ -99,6 +99,9 @@ async function getConfig(req, res) {
                 FROM ews.operator_rotation_group g
                 LEFT JOIN usernfc u ON u.snssb = g.serialnumber
                 ORDER BY g.rotation_group, u.full_name NULLS LAST, g.serialnumber`),
+      db.query(`SELECT snssb, full_name FROM usernfc
+                WHERE snssb IS NOT NULL AND btrim(snssb) <> '' AND full_name IS NOT NULL AND btrim(full_name) <> ''
+                ORDER BY lower(full_name), snssb`),
     ]);
     res.json({
       data: {
@@ -107,6 +110,7 @@ async function getConfig(req, res) {
         rotation_config: rotation.rows[0] || null,
         group_counts: groups.rows,
         group_members: members.rows,
+        operators: roster.rows,
       },
     });
   } catch (err) {
