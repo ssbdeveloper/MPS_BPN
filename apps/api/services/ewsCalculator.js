@@ -709,17 +709,17 @@ async function calculateAdoptionLabourFromRoster(bounds) {
       GROUP BY lr.operator_key
     ),
     roster AS (
-      SELECT r.serialnumber, r.scheduled_shift AS shift, r.scheduled_standard_hours AS std,
+      SELECT r.serialnumber, r.eff_shift AS shift, r.eff_std AS std,
              r.status, r.business_date,
              ((r.business_date + os.start_time) AT TIME ZONE $2) AS shift_start_ts,
              (EXTRACT(EPOCH FROM (os.end_time - os.start_time
                 + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END)) / 3600.0) AS clock_hours,
              MAX(NULLIF(BTRIM(u.full_name), '')) AS operator_name
-      FROM ews.shift_roster r
+      FROM ews.roster_effective r
       JOIN params p ON r.business_date = p.target_bd
-      JOIN ews.operator_shift os ON os.shift_code = r.scheduled_shift
+      JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
-      GROUP BY r.serialnumber, r.scheduled_shift, r.scheduled_standard_hours, r.status,
+      GROUP BY r.serialnumber, r.eff_shift, r.eff_std, r.status,
                r.business_date, os.start_time, os.end_time, os.crosses_midnight
     ),
     j AS (
@@ -996,12 +996,12 @@ function applyMachineHoursToAdoptionLabour(base, machine) {
 async function calculateAdoptionLabour(bounds) {
   const timezone = resolveTimezone();
   let base;
-  if (!(await tableExists("ews", "shift_roster"))) {
+  if (!(await tableExists("ews", "roster_effective"))) {
     base = await calculateAdoptionLabourFromLogs(bounds);
   } else {
     const has = await db.query(
       `SELECT EXISTS (
-         SELECT 1 FROM ews.shift_roster WHERE business_date = ($1::timestamptz AT TIME ZONE $2)::date
+         SELECT 1 FROM ews.roster_effective WHERE business_date = ($1::timestamptz AT TIME ZONE $2)::date
        ) AS e`,
       [bounds.window_start, timezone],
     );

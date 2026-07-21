@@ -33,7 +33,7 @@ async function getRoster(req, res) {
                     ELSE (t.longdate_checkin AT TIME ZONE $2)::date END) = $1::date
         GROUP BY 1
       )
-      SELECT r.serialnumber, u.full_name AS operator_name, r.scheduled_shift, r.scheduled_standard_hours,
+      SELECT r.serialnumber, u.full_name AS operator_name, r.eff_shift AS scheduled_shift, r.eff_std AS scheduled_standard_hours,
              r.status, r.source, r.updated_by,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
              ((r.business_date + os.end_time
@@ -42,12 +42,12 @@ async function getRoster(req, res) {
                   WHEN ((r.business_date + os.end_time + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
                   WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT'
                   ELSE 'ABSENT' END AS attendance
-      FROM ews.shift_roster r
-      JOIN ews.operator_shift os ON os.shift_code = r.scheduled_shift
+      FROM ews.roster_effective r
+      JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
       LEFT JOIN logged lg ON lg.op = r.serialnumber
       WHERE r.business_date = $1::date
-      ORDER BY r.scheduled_shift, u.full_name NULLS LAST, r.serialnumber
+      ORDER BY r.eff_shift, u.full_name NULLS LAST, r.serialnumber
       `,
       [date, TZ],
     );
