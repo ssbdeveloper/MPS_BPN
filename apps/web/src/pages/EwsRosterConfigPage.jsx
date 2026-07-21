@@ -236,7 +236,7 @@ function EwsRosterConfigPage() {
                         <button
                           type="button"
                           onClick={() => toggle(r.day_of_week, f)}
-                          className={`inline-flex min-h-[32px] min-w-[64px] items-center justify-center rounded-lg border px-3 text-xs font-extrabold transition active:scale-95 ${
+                          className={`inline-flex min-h-[44px] min-w-[64px] items-center justify-center rounded-lg border px-3 text-xs font-extrabold transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
                             r[f] ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-400'
                           }`}
                         >
