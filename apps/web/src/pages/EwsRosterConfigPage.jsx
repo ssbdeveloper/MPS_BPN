@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, X, Eye } from 'lucide-react';
+import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, X, Eye, Info } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -216,6 +216,14 @@ function EwsRosterConfigPage() {
 
       <main className="mx-auto max-w-4xl space-y-4 px-4 py-4 md:px-6">
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div>}
+
+        <div className="flex items-start gap-2.5 rounded-xl border border-[#90e0ef] bg-[#caf0f8] px-4 py-3 text-xs text-slate-700 md:text-sm">
+          <Info size={18} className="mt-0.5 flex-shrink-0 text-[#0077b6]" />
+          <p>
+            <b>Hari Kerja</b> &amp; <b>Grup</b> berlaku <b>setelah Generate</b> (forward-only — baris roster yang sudah ada tidak berubah).{' '}
+            <b>Shift-Lock</b> jalur terpisah: langsung berlaku <b>tanpa perlu generate</b>.
+          </p>
+        </div>
 
         <Card title="Hari Kerja per Shift" icon={CalendarCog}>
           <div className="overflow-x-auto">
