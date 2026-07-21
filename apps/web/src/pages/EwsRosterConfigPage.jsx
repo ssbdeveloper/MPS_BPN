@@ -299,25 +299,34 @@ function EwsRosterConfigPage() {
 
         <Card title="Shift-Lock (kunci DAY/NIGHT)" icon={Lock}>
           <div className="flex flex-wrap items-end gap-2">
-            <input
-              value={lockForm.serial}
-              onChange={(e) => setLockForm((f) => ({ ...f, serial: e.target.value }))}
-              placeholder="Serialnumber operator"
-              className="min-w-[200px] flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
-            />
-            <select value={lockForm.shift} onChange={(e) => setLockForm((f) => ({ ...f, shift: e.target.value }))}
-              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
-              <option value="DAY">DAY</option>
-              <option value="NIGHT">NIGHT</option>
-            </select>
-            <label className="text-xs font-bold text-slate-600">Mulai
-              <input type="date" value={lockForm.from} min={todayLocalISO()} onChange={(e) => setLockForm((f) => ({ ...f, from: e.target.value }))}
-                className="ml-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
-            </label>
-            <label className="text-xs font-bold text-slate-600">Minggu
-              <input type="number" min={1} value={lockForm.weeks} onChange={(e) => setLockForm((f) => ({ ...f, weeks: e.target.value }))}
-                className="ml-1 w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
-            </label>
+            <div className="flex min-w-[200px] flex-1 flex-col gap-1">
+              <label htmlFor="lock-serial" className="text-xs font-bold text-slate-600">Operator</label>
+              <input
+                id="lock-serial"
+                value={lockForm.serial}
+                onChange={(e) => setLockForm((f) => ({ ...f, serial: e.target.value }))}
+                placeholder="Serialnumber operator"
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="lock-shift" className="text-xs font-bold text-slate-600">Shift</label>
+              <select id="lock-shift" value={lockForm.shift} onChange={(e) => setLockForm((f) => ({ ...f, shift: e.target.value }))}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
+                <option value="DAY">DAY</option>
+                <option value="NIGHT">NIGHT</option>
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="lock-from" className="text-xs font-bold text-slate-600">Mulai</label>
+              <input id="lock-from" type="date" value={lockForm.from} min={todayLocalISO()} onChange={(e) => setLockForm((f) => ({ ...f, from: e.target.value }))}
+                className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label htmlFor="lock-weeks" className="text-xs font-bold text-slate-600">Durasi (minggu)</label>
+              <input id="lock-weeks" type="number" min={1} value={lockForm.weeks} onChange={(e) => setLockForm((f) => ({ ...f, weeks: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
+            </div>
             <button type="button" onClick={saveLock} disabled={lockBusy}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
               <Save size={15} /> {lockBusy ? 'Menyimpan…' : 'Kunci'}
