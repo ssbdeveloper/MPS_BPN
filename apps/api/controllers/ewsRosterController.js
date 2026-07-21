@@ -284,12 +284,13 @@ async function listLocks(req, res) {
     const includeAll = String(req.query.all || "") === "1";
     const result = await db.query(
       `
-      SELECT id, serialnumber, locked_shift, effective_from::text, lock_weeks, lock_end::text,
-             created_by, created_at, cancelled_at,
-             (cancelled_at IS NULL AND lock_end > (now() AT TIME ZONE $1)::date) AS active_now
-      FROM ews.operator_shift_lock
-      WHERE $2::boolean OR cancelled_at IS NULL
-      ORDER BY effective_from DESC, serialnumber
+      SELECT l.id, l.serialnumber, l.locked_shift, l.effective_from::text, l.lock_weeks, l.lock_end::text,
+             l.created_by, l.created_at, l.cancelled_at, u.full_name,
+             (l.cancelled_at IS NULL AND l.lock_end > (now() AT TIME ZONE $1)::date) AS active_now
+      FROM ews.operator_shift_lock l
+      LEFT JOIN usernfc u ON u.snssb = l.serialnumber
+      WHERE $2::boolean OR l.cancelled_at IS NULL
+      ORDER BY l.effective_from DESC, l.serialnumber
       `,
       [TZ, includeAll],
     );

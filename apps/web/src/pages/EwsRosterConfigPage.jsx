@@ -353,7 +353,14 @@ function EwsRosterConfigPage() {
                   return (
                     <li key={lk.id} className="flex items-center justify-between gap-2 py-2">
                       <div className="text-xs">
-                        <span className="font-mono font-bold text-slate-800">{lk.serialnumber}</span>
+                        {lk.full_name ? (
+                          <>
+                            <span className="font-bold text-slate-800">{lk.full_name}</span>
+                            <span className="ml-1.5 font-mono text-[11px] text-slate-400">({lk.serialnumber})</span>
+                          </>
+                        ) : (
+                          <span className="font-mono font-bold text-slate-800">{lk.serialnumber}</span>
+                        )}
                         <span className={`ml-2 rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${lk.locked_shift === 'DAY' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>{lk.locked_shift}</span>
                         <span className="ml-2 tabular-nums text-slate-500">{lk.effective_from} → {lk.lock_end}</span>
                         {started && <span className="ml-2 text-[10px] font-bold text-slate-400">(berjalan)</span>}
