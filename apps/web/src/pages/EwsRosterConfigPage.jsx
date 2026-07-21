@@ -191,6 +191,7 @@ function EwsRosterConfigPage() {
 
   const rc = config?.rotation_config;
   const groupCounts = Object.fromEntries((config?.group_counts || []).map((g) => [g.rotation_group, g.n]));
+  const groupMembers = config?.group_members || [];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
@@ -279,6 +280,31 @@ function EwsRosterConfigPage() {
             <button type="button" onClick={assignGroup} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95">
               <Save size={15} /> Simpan
             </button>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+            {['A', 'B'].map((g) => {
+              const members = groupMembers.filter((m) => m.rotation_group === g);
+              return (
+                <div key={g} className="rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="border-b border-slate-200 px-3 py-1.5 text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    Grup {g} · {members.length}
+                  </div>
+                  {members.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-slate-400">Belum ada operator.</div>
+                  ) : (
+                    <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto">
+                      {members.map((m) => (
+                        <li key={m.serialnumber} className="flex items-baseline gap-1.5 px-3 py-1.5 text-xs">
+                          <span className="font-semibold text-slate-700">{m.full_name || m.serialnumber}</span>
+                          {m.full_name && <span className="font-mono text-[11px] text-slate-400">({m.serialnumber})</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Card>
 
