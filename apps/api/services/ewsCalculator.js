@@ -1611,12 +1611,16 @@ async function applyYesterdayAdoptionComparison(kpis) {
 async function resolveSummaryBounds(options = {}) {
   if (options.basis === "date") {
     const bounds = await getDateBounds(options.date);
+    // Manual date mode is read-only debug by default (never written into ews.kpi_snapshot).
+    // With persistDaily, a PAST day is recomputed and UPSERT as the grain='today' daily snapshot
+    // (same window_start = date midnight), overwriting a stale frozen row. This is the ONLY path
+    // that rewrites a historical daily snapshot — used by scripts/recompute_daily_snapshots.js
+    // after inactive_from is set or shift_roster is corrected. No calculation logic changes; it
+    // only decides whether the (already-live) recompute is persisted and under which grain.
     return {
-      // Manual date mode is for safe local/debug analysis only.
-      // It uses live reads and is intentionally not written into ews.kpi_snapshot.
       basis: "date",
-      grain: "date",
-      read_only: true,
+      grain: options.persistDaily ? "today" : "date",
+      read_only: !options.persistDaily,
       current: {
         window_start: bounds.window_start,
         window_end: bounds.window_end,
