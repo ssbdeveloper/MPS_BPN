@@ -223,11 +223,11 @@ const router = createBrowserRouter([
   },
   {
     path: '/nfc-users',
-    lazy: page(() => import('../pages/TIMESHEET/NfcUserListPage')),
+    lazy: guardedPage(() => import('../pages/TIMESHEET/NfcUserListPage'), 'nfc_users'),
   },
   {
     path: '/create-edit-nfc',
-    lazy: page(() => import('../pages/TIMESHEET/CreateEditNfcPage')),
+    lazy: guardedPage(() => import('../pages/TIMESHEET/CreateEditNfcPage'), 'nfc_users'),
   },
   {
     path: '/unproductive',

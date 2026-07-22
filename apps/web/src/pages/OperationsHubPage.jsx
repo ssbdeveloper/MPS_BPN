@@ -8,6 +8,7 @@ import {
   Boxes,
   CalendarClock,
   CheckCircle2,
+  CreditCard,
   Database,
   Factory,
   Gauge,
@@ -66,6 +67,9 @@ const sidebarItems = [
   { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control' },
   { title: 'Tools Management', icon: Hammer, path: '/tools-management' },
   { title: 'Manage User', icon: UserCog, path: '/manage-user' },
+  // Pintu langsung ke NFC Users: sebelumnya HANYA bisa lewat kartu di /manage-user,
+  // jadi pemegang izin nfc_users tanpa manage_users tidak punya jalan masuk sama sekali.
+  { title: 'NFC Users', icon: CreditCard, path: '/nfc-users' },
   { title: 'TimeSheet', icon: ShieldCheck, path: '/timesheet-validation' },
   { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver' },
   { title: 'SAP Log', icon: Database, path: '/sap-log' },
