@@ -20,6 +20,8 @@ updated: 2026-07-11
 - [[concepts/sap-staging-identity]] — kenapa `source_key` rapuh, ZTIMESHEETID menipu, dan segmen adalah jangkar yang benar
 - [[concepts/order-no-spine]] — tulang punggung order_no + ssbr_ident, struktur 2 tingkat
 - [[concepts/ukur-dulu-baru-refactor]] — pelajaran: diagnosis performa pakai data, bukan asumsi
+- [[concepts/ews-roster]] — rotasi 2-kru, roster beku, dan cara `adoption_labour` memakainya
+- [[concepts/ews-roster-override]] — lapisan override saat baca: shift-lock, operator nonaktif (`inactive_from`), VIEW `roster_effective`, dan koreksi snapshot beku
 
 ## 🎯 Rencana aktif
 

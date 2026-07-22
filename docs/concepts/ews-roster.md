@@ -1,7 +1,7 @@
 ---
 type: concept
 tags: [ews, roster, adoption-labour, shift]
-updated: 2026-07-20
+updated: 2026-07-22
 ---
 
 # EWS Roster: rotasi 2-kru, materialisasi beku, dan cara `adoption_labour` memakainya
@@ -19,6 +19,11 @@ Logika inti: `apps/api/services/rosterGenerator.js`.
 | `rotation_config` | Mesin rotasi: `anchor_week_start`, `anchor_group_a_shift`, `rotation_period_weeks`, `week_start_dow` | 1 baris aktif; **tak ada `valid_until`/`effective_to`** |
 | `operator_rotation_group` | Operator → kru A/B | `serialnumber` (`DO UPDATE`, **tanpa histori**) |
 | `shift_roster` | Output ter-materialize: (serialnumber, business_date) → `scheduled_shift`, `scheduled_standard_hours`, `status`, `source` | **PK (serialnumber, business_date)** |
+
+> Di ATAS lima tabel ini ada **lapisan override saat baca** — shift-lock (`ews.operator_shift_lock`)
+> dan operator nonaktif (`usernfc.inactive_from`), keduanya diterapkan oleh VIEW
+> `ews.roster_effective`. Tabel dasar tak pernah dimutasi oleh override.
+> Detail lengkap: [[concepts/ews-roster-override]].
 
 ## Cara rotasi (`GENERATE_SQL`)
 
@@ -54,6 +59,11 @@ Dispatcher `calculateAdoptionLabour` (ewsCalculator.js): jika ADA baris roster u
 Jika **tak ada** baris → fallback `calculateAdoptionLabourFromLogs` (timesheet-only, operator
 tak-log tak terlihat).
 
+Sejak 2026-07-20 ketiga pembaca (denominator adoption, `getRoster`, dispatcher `EXISTS`) membaca
+**`ews.roster_effective`**, bukan `shift_roster` langsung — jadi shift terkunci dan operator
+nonaktif otomatis ikut terhitung/terbuang. `eff_shift`/`eff_std` di-alias ke nama lama
+(`scheduled_shift`/`scheduled_standard_hours`) supaya bentuk response API tak berubah.
+
 ## Jebakan yang sudah terbukti
 
 1. 🔒 **JANGAN hapus-lalu-regenerate `shift_roster` historis.** Integritas anti-misatribusi grup
@@ -61,10 +71,13 @@ tak-log tak terlihat).
    SEKARANG → shift historis salah-atribusi ke grup yang salah. **Regenerate hanya tanggal ≥ hari ini.**
 2. **`adoption_labour` mengunci ke KEBERADAAN baris roster, bukan `workday_rule` live** (roster
    CTE tak join `workday_rule`). Ubah aturan hari kerja **tidak retroaktif** — baris lama bertahan
-   dan tetap dihitung. Terukur: Sabtu di-OFF-kan 14-Jul, tapi baris stale half-day tetap dinilai —
-   **07-25 = 0,00% atas denominator 360 jam (45 terjadwal, 0 hadir)**; 07-18 = 42,6%. Koreksi
-   rule-compliant (bila dianggap phantom) = set `status='OFF'` **maju** di baris itu, BUKAN
-   hapus+regenerate (lihat #1).
+   dan tetap dihitung. Terukur: Sabtu di-OFF-kan 14-Jul, tapi baris stale half-day tetap dinilai.
+   Koreksi rule-compliant = set `status='OFF'` di baris itu, BUKAN hapus+regenerate (lihat #1).
+   **SUDAH DIEKSEKUSI 2026-07-22:** 91 baris Sabtu ≥14-Jul (07-18=46, 07-25=45) di-flip
+   `SCHEDULED→OFF` (`source='manual'`, `updated_by='ews-roster-cleanup'`); snapshot beku 07-18
+   ikut dikoreksi (`adoption_labour` 45,1 → `no_data`). Cutoff 14-Jul WAJIB: Sabtu sebelum itu
+   (mis. 07-11) memang hari kerja setengah hari — `roster_workday_rule` boolean timeless akan
+   salah menandainya. Prosedur & tooling: [[concepts/ews-roster-override]] §6-§7.
 3. **Fallback ke logs diam-diam longgar:** tanggal tanpa roster → pindah ke timesheet-only tanpa
    error → operator absen tak terlihat → angka naik palsu. Sah HANYA untuk tanggal pra-roster
    (< 29-Jun) & hari libur; untuk hari kerja-dalam-cakupan yang kosong seharusnya state eksplisit
@@ -76,8 +89,9 @@ tak-log tak terlihat).
 
 ## Permukaan konfigurasi (UI vs DB)
 
-UI `/ews/roster/config` hanya: toggle `workday_rule`, assign grup A/B, trigger generate. **Anchor,
-period rotasi, dan jam shift = read-only di UI, hanya via SQL.** Foreman tak bisa memperbaiki pola
-rotasi tanpa developer — risiko operasional.
+UI `/ews/roster/config`: toggle `workday_rule`, assign grup A/B, trigger generate, **shift-lock**
+(kunci DAY/NIGHT N minggu) + preview komposisi 7 hari. **Anchor, period rotasi, dan jam shift =
+read-only di UI, hanya via SQL** — begitu juga `usernfc.inactive_from` (penyetelnya belum dibuat).
+Foreman tak bisa memperbaiki pola rotasi tanpa developer — risiko operasional.
 
-**Terhubung:** [[concepts/payroll-data-path]] · [[PLANNING]] · `apps/api/services/rosterGenerator.js` · `apps/api/services/ewsCalculator.js` (dispatcher :996, roster path :678, fallback :553)
+**Terhubung:** [[concepts/ews-roster-override]] · [[concepts/payroll-data-path]] · [[PLANNING]] · `apps/api/services/rosterGenerator.js` · `apps/api/services/ewsCalculator.js` (dispatcher :996, roster path :678, fallback :553)
