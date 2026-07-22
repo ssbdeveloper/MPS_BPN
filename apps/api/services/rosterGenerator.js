@@ -38,9 +38,15 @@ gshift AS (
   FROM parity p
 ),
 op_date AS (
+  -- Exclude operators inactive AS OF each generated date: no NEW rows on/after inactive_from.
+  -- LEFT JOIN so operators without a usernfc row are kept (inactive_from IS NULL). Existing frozen
+  -- rows are never touched (ON CONFLICT DO NOTHING below); this only stops fresh rows being added.
   SELECT g.bd, org.serialnumber,
     CASE WHEN org.rotation_group = 'A' THEN g.group_a_shift ELSE g.group_b_shift END AS shift_code
-  FROM gshift g CROSS JOIN ews.operator_rotation_group org
+  FROM gshift g
+  CROSS JOIN ews.operator_rotation_group org
+  LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = org.serialnumber
+  WHERE u.inactive_from IS NULL OR g.bd < u.inactive_from
 ),
 scheduled AS (
   SELECT od.bd, od.serialnumber, od.shift_code, os.standard_hours
