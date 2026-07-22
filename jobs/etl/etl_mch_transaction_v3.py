@@ -677,6 +677,151 @@ def upsert_batch(cursor, values: list[tuple]) -> None:
     )
 
 
+# Lapis 1a — normalisasi interval. Lihat docs/concepts/mch-interval-normalization.md.
+#
+# end_effective = LEAST(enddatetime, start baris berikutnya di mesin yang sama). Kolom ini
+# yang WAJIB dibaca konsumen (staging SAP, report, OEE); enddatetime asli dibiarkan utuh
+# sebagai jejak anomali.
+#
+# KENAPA HARUS IKUT PENDAHULU. ETL ini inkremental: kalau baris N+1 baru datang di batch
+# berikutnya, end_effective baris N (yang dihitung saat N+1 belum ada) SALAH dan tak akan
+# pernah dikoreksi kalau recompute hanya menyentuh baris kandidat. Justru di situlah
+# blok nyangkut lahir — baris lama yang penerusnya datang belakangan. Karena itu lingkup
+# recompute = seluruh baris mesin tersentuh SEJAK SATU BARIS SEBELUM baris tersentuh
+# paling awal (jangkar), bukan hanya kandidatnya.
+#
+# Jangkar dicari lewat LATERAL (satu seek per mesin, ~36 mesin) alih-alih margin waktu
+# tebak-tebakan: blok nyangkut bisa 6 hari panjangnya, margin berapa pun bisa meleset.
+# Langkah 1 — jangkar per mesin: satu baris SEBELUM baris tersentuh paling awal.
+# Nilai minimumnya dipakai sebagai batas bawah literal di langkah 2 (lihat di sana).
+ANCHOR_SQL = f"""
+WITH touched AS (
+  SELECT machineno, MIN(startdatetime) AS min_start
+  FROM {TARGET_TABLE}
+  WHERE startdatetime >= %s
+    AND (%s::timestamp IS NULL OR startdatetime < %s::timestamp)
+  GROUP BY machineno
+)
+SELECT MIN(COALESCE(p.startdatetime, t.min_start)) AS min_anchor, COUNT(*) AS machines
+FROM touched t
+LEFT JOIN LATERAL (
+  SELECT m.startdatetime
+  FROM {TARGET_TABLE} m
+  WHERE m.machineno = t.machineno AND m.startdatetime < t.min_start
+  ORDER BY m.startdatetime DESC
+  LIMIT 1
+) p ON TRUE
+"""
+
+# Langkah 2 — hitung nilai baru ke tabel sementara.
+#
+# %s ke-4 (min_anchor) TERLIHAT redundan karena sudah ada `m.startdatetime >= a.from_start`,
+# tapi itu yang membuat query ini cepat: from_start berasal dari CTE sehingga planner tak
+# bisa menaksirnya dan memilih SEQ SCAN 489k baris (terukur 1,6 detik). Dengan batas bawah
+# berupa literal, index (machineno, startdatetime) terpakai -> 42 ms. Bukan hiasan.
+#
+# Batas bawah ini juga sebabnya jangkar TIDAK boleh diganti margin waktu tetap: pada run
+# nyata 22-Jul, jangkar terjauh ada di 13-Jul (9 hari) — mesin yang barisnya menggantung.
+BUILD_RECALC_SQL = f"""
+CREATE TEMP TABLE _mch_recalc ON COMMIT DROP AS
+WITH touched AS (
+  SELECT machineno, MIN(startdatetime) AS min_start
+  FROM {TARGET_TABLE}
+  WHERE startdatetime >= %s
+    AND (%s::timestamp IS NULL OR startdatetime < %s::timestamp)
+  GROUP BY machineno
+),
+anchor AS MATERIALIZED (
+  SELECT t.machineno, COALESCE(p.startdatetime, t.min_start) AS from_start
+  FROM touched t
+  LEFT JOIN LATERAL (
+    SELECT m.startdatetime
+    FROM {TARGET_TABLE} m
+    WHERE m.machineno = t.machineno AND m.startdatetime < t.min_start
+    ORDER BY m.startdatetime DESC
+    LIMIT 1
+  ) p ON TRUE
+),
+scope AS (
+  SELECT m.proddataid, m.machineno, m.startdatetime, m.enddatetime
+  FROM {TARGET_TABLE} m
+  JOIN anchor a ON a.machineno = m.machineno
+  WHERE m.startdatetime >= a.from_start
+    AND m.startdatetime >= %s::timestamp
+),
+calc AS (
+  SELECT
+    proddataid,
+    enddatetime,
+    lead(startdatetime) OVER (PARTITION BY machineno ORDER BY startdatetime, proddataid) AS next_start
+  FROM scope
+)
+SELECT
+  proddataid,
+  CASE
+    WHEN enddatetime IS NULL THEN NULL
+    WHEN next_start IS NOT NULL AND next_start < enddatetime THEN next_start
+    ELSE enddatetime
+  END AS end_effective,
+  CASE
+    WHEN enddatetime IS NOT NULL AND next_start IS NOT NULL AND next_start < enddatetime
+      THEN GREATEST(EXTRACT(EPOCH FROM (enddatetime - next_start))::int, 0)
+    ELSE 0
+  END AS overlap_seconds
+FROM calc
+"""
+
+# Langkah 3 — tulis balik. ANALYZE atas tabel sementara WAJIB sebelum ini: tanpa statistik,
+# planner menaksir puluhan ribu baris dan mem-hash SELURUH mch_transaction (seq scan 489k).
+# Dengan statistik benar (~1.000 baris) ia memilih nested loop lewat PK: 9 ms.
+UPDATE_FROM_RECALC_SQL = f"""
+UPDATE {TARGET_TABLE} t
+SET end_effective   = f.end_effective,
+    overlap_seconds = f.overlap_seconds,
+    is_stuck        = (f.overlap_seconds > 0)
+FROM _mch_recalc f
+WHERE f.proddataid = t.proddataid
+  -- Hanya tulis yang benar-benar berubah: recompute jalan tiap run, dan menulis ulang
+  -- ribuan baris identik hanya menambah bloat tabel tanpa mengubah apa pun.
+  AND (t.end_effective IS DISTINCT FROM f.end_effective
+       OR t.overlap_seconds IS DISTINCT FROM f.overlap_seconds)
+"""
+
+
+def recompute_end_effective(pg_conn, from_dt: datetime, to_dt: datetime | None, dry_run: bool) -> int:
+    """Hitung ulang end_effective/overlap_seconds/is_stuck untuk jendela run ini."""
+    if dry_run:
+        log.info("recompute_end_effective: DRY RUN — dilewati")
+        return 0
+
+    with pg_conn.cursor() as cur:
+        cur.execute(ANCHOR_SQL, (from_dt, to_dt, to_dt))
+        row = cur.fetchone()
+        min_anchor, machines = (row[0], row[1]) if row else (None, 0)
+        if not min_anchor:
+            log.info("recompute_end_effective: tidak ada baris tersentuh di jendela ini")
+            return 0
+
+        cur.execute(BUILD_RECALC_SQL, (from_dt, to_dt, to_dt, min_anchor))
+        cur.execute("ANALYZE _mch_recalc")
+        cur.execute(UPDATE_FROM_RECALC_SQL)
+        changed = cur.rowcount
+        cur.execute(
+            f"SELECT COUNT(*) FROM {TARGET_TABLE} WHERE is_stuck AND startdatetime >= %s",
+            (from_dt,),
+        )
+        stuck = cur.fetchone()[0]
+    pg_conn.commit()  # ON COMMIT DROP membuang tabel sementara di sini
+    log.info(
+        "recompute_end_effective: %d mesin, jangkar %s, %d baris diperbarui, %d baris nyangkut di jendela",
+        machines,
+        min_anchor,
+        changed,
+        stuck,
+    )
+    return changed
+
+
 def apply_overrides(pg_conn, dry_run: bool) -> int:
     """Terapkan koreksi manual (public.mch_transaction_override) DI ATAS hasil derivasi.
 
@@ -907,6 +1052,10 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
     # Terapkan koreksi manual DI ATAS hasil derivasi — supaya edit user (job/operator)
     # bertahan terhadap re-derivasi ini.
     apply_overrides(pg_conn, dry_run)
+
+    # Normalisasi interval TERAKHIR: baris baru batch ini bisa menjadi "penerus" yang
+    # memotong baris lama, jadi ini harus jalan setelah semua upsert selesai.
+    recompute_end_effective(pg_conn, from_dt, to_dt, dry_run)
 
     return total_upserted
 
