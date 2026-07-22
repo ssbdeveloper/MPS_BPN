@@ -1082,17 +1082,22 @@ async function buildKpiSourceDetail(type, summary) {
   if (type === "uptime") return buildUptimeSourceDetail(windowStart, windowEnd);
   if (type === "accuracy_machine") return buildAccuracyMachineSourceDetail(windowStart, windowEnd);
   if (type === "uptime_hmi") {
-    // Reuse the per-machine breakdown already computed by the KPI (no extra query).
+    // Reuse the per-device breakdown already computed by the KPI (no extra query).
+    // One HMI box = one IP = several machines; the KPI is the live share of boxes answering.
     const k = (summary.kpis || []).find((x) => x.key === "uptime_hmi");
     const d = k?.detail || {};
     return {
-      source_tables: ["ews.machine_heartbeat_daily", "public.mch_machines"],
-      basis: "per-machine uptime% (up_pings/pings, heartbeat <> 0) averaged across distinct machines for the day",
-      target_date: d.target_date || null,
-      machine_count: num(d.machine_count),
-      total_pings: num(d.total_pings),
-      total_up_pings: num(d.total_up_pings),
-      by_machine: Array.isArray(d.machines) ? d.machines : [],
+      source_tables: ["public.mch_machine_ping_log"],
+      basis: "each HMI device's LATEST ping row scored 100 (reachable) / 0 (unreachable), averaged across devices",
+      reference_time: d.reference_time || null,
+      last_check: d.last_check || null,
+      device_count: num(d.device_count),
+      devices_up: num(d.devices_up),
+      devices_down: num(d.devices_down),
+      machines_total: num(d.machines_total),
+      machines_down: num(d.machines_down),
+      fresh_window_minutes: num(d.fresh_window_minutes),
+      by_device: Array.isArray(d.devices) ? d.devices : [],
     };
   }
   if (type === "accuracy") return buildAccuracySourceDetail(windowStart, windowEnd);

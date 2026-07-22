@@ -29,7 +29,7 @@ Alert ──→ Detail ──→ Standard Action ──→ Correction ──→ 
 
 ```
 Sumber: timesheet_transaction · mch_productiondata/mch_transaction · sap_timesheet_staging
-        ews.machine_heartbeat_daily (uptime HMI) · ews.shift_roster (adoption labour)
+        public.mch_machine_ping_log (uptime HMI, live) · ews.shift_roster (adoption labour)
         [device_status + ews.device_heartbeat_daily — uptime tablet, infra siap, KPI belum]
    │  pg_notify('ews_source_changed') / interval
    ▼
@@ -50,7 +50,7 @@ Baris MACHINE: `uptime_hmi | accuracy_machine | adoption_machine | oee`
 | KPI | Formula (terverifikasi) | 🟢 | 🟡 | 🔴 | Sumber | Status |
 |---|---|---|---|---|---|---|
 | uptime_tablet | — (belum dihitung) | ≥99 | 98–99 | <98 | `ews.device_heartbeat_daily` (siap) | **placeholder no_data** |
-| uptime_hmi | AVG(uptime_pct per mesin), work_date=hari ini | ≥99 | 98–99 | <98 | `ews.machine_heartbeat_daily` | ✅ live |
+| uptime_hmi | AVG per **device HMI** dari ping TERAKHIR-nya (terjangkau=100/tidak=0); 9 IP = 36 mesin; guard segar 10 mnt | ≥99 | 98–99 | <98 | `public.mch_machine_ping_log` | ✅ live (2026-07-22) |
 | accuracy_labour | timesheet_ready/total; error = missing_order \| missing_operation \| sow_no_match; exclude state_flag=5 | ≥98 | 95–98 | <95 | timesheet + sap_staging | ✅ live |
 | accuracy_machine | mch rows dgn `status_record=true` / total (GENERATED col) | ≥98 | 95–98 | <95 | mch_productiondata/transaction | ✅ live |
 | adoption_labour | Σ LEAST(recorded,standard) / Σ standard — shift SELESAI saja | ≥95 | 90–95 | <90 | timesheet + roster | ✅ live |
@@ -85,8 +85,9 @@ Target accuracy diselesaikan ke **98** (drift 97-vs-98 lama sudah ditutup).
   ON CONFLICT tak pernah match → 423 action noise dari raw rows. Issue dibangun dari entitas
   AGREGAT, bukan raw rows.
 - **OEE/OLE issue = critical-only** (warning tampil di gauge, bukan di log — log harus actionable).
-- **Anti-false-alert:** uptime perlu ≥6 fail beruntun; accuracy minimum sample (total ≥50);
-  ping floor uptime_hmi ≥100; issue hanya saat KPI watch/critical.
+- **Anti-false-alert:** accuracy minimum sample (total ≥50); issue hanya saat KPI watch/critical.
+  uptime_hmi: KPI bereaksi seketika, tapi issue/TTS menunggu ≥3 siklus ping gagal beruntun
+  (`EWS_UPTIME_HMI_DOWN_STREAK`) — blip satu siklus tidak membangunkan IT.
 - **Bahasa issue:** `title/description` Bahasa Indonesia polos & SPESIFIK (SIAPA/APA/BERAPA/
   LAKUKAN APA) — frasa kabur ("terjadi ketidaksesuaian data") DILARANG. `error_code` stabil
   untuk mesin (MISSING_ORDER, SOW_NO_MATCH, ADOPTION_GAP, …); manusia baca title.
@@ -106,7 +107,7 @@ tergantung UI dibuka; kelemahan lama "FE-only generation" sudah mati).
 | adoption_machine | machine | segmen gap statusid 5 ∪ 2 >5mnt (reuse adoption_summary_snapshot) | gap ≥15mnt | cover% ≤50 |
 | oee | machine | band CRITICAL (reuse per_machine) | denom ≥2h | selalu |
 | ole | operator | band CRITICAL (reuse per_operator) | avail ≥2h | selalu |
-| uptime_hmi | machine | uptime < band (reuse machines list) | pings ≥100 | <98 |
+| uptime_hmi | **device** | ping terakhir gagal (reuse devices list) | gagal ≥3 siklus beruntun | selalu |
 | uptime_tablet | — | skip sampai KPI-nya hidup | — | — |
 
 **Resolve flow:** `PUT /ews/issue-log/:id/resolve` — justifikasi WAJIB (`resolution_note`,
@@ -159,6 +160,13 @@ operator · OEE↓+OLE normal → masalah mesin/material · OLE↓+Adoption norm
    mesin 28.5% yang ter-log). Fix: COALESCE running_h di `calculateOee.by_machine` +
    kolom `downtime_hours` per mesin + description issue menyebut "Terutama Downtime X jam".
    Terbukti live: 5 issue critical muncul + TTS ter-enqueue & diproses worker — 2026-07-12.
+10. **uptime_hmi jadi metrik HIDUP per device** — sumber pindah dari agregat harian
+   `ews.machine_heartbeat_daily` (reaksi ~0,03 poin/mnt, tak pernah pulih di hari sama)
+   ke ping TERAKHIR tiap device di `public.mch_machine_ping_log` (9 IP HMI = 36 mesin).
+   Satu box mati = −11,1 poin seketika & balik 100% saat nyala; guard segar 10 mnt supaya
+   ping worker mati ≠ 100% palsu; issue jadi per device + debounce 3 siklus (insiden 20-Jul:
+   14 issue → 3). Uji ulang vs prod: 20-Jul terbaca 66,7% critical (lama 86,32%) —
+   2026-07-22, [[log/2026-07-22-ews-uptime-hmi-live]].
 
 ## 7. 🔜 To-do (urutan disarankan)
 

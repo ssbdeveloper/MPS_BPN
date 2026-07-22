@@ -108,8 +108,10 @@ const KPI_CONFIG = {
     pic: 'IT (Wira)', errorType: 'Tablet Offline', action: 'Check operator tablet connectivity.', unit: 'device',
   },
   uptime_hmi: {
+    // unit = device: satu HMI (satu IP) menaungi beberapa mesin, dan KPI-nya menghitung
+    // device yang menjawab ping TERAKHIR — bukan rata-rata harian per mesin.
     label: 'Uptime HMI', title: 'Uptime HMI Detail', target: 99, icon: Wifi,
-    pic: 'IT (Wira)', errorType: 'HMI Offline', action: 'Check the HMI network path and repeated DOWN pings.', unit: 'machine',
+    pic: 'IT (Wira)', errorType: 'HMI Offline', action: 'Check the HMI network path and repeated DOWN pings.', unit: 'device',
   },
   accuracy_labour: {
     label: 'Accuracy Labour', title: 'Accuracy Labour Detail', target: 98, icon: ClipboardCheck,

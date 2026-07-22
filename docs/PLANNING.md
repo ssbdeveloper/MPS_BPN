@@ -45,6 +45,7 @@ updated: 2026-07-20
 
 ## ✅ Done
 
+- 2026-07-22 — **KPI `uptime_hmi` jadi state HIDUP per device** ([[log/2026-07-22-ews-uptime-hmi-live]]): sumber pindah `ews.machine_heartbeat_daily` (rata-rata harian per mesin, reaksi ~0,03 poin/menit dan tak pernah pulih di hari sama) → `public.mch_machine_ping_log`, ambil ping TERAKHIR tiap **device HMI** (9 IP menaungi 36 mesin) → 1 box mati = −11,1 poin seketika, kembali 100% saat nyala. Uji vs prod: insiden 20-Jul terbaca 66,7% critical (lama: 86,32%). Issue jadi per device (14 issue → 3) + debounce 3 siklus. **Sisa: tabel breakdown `by_device` di halaman detail belum ada**
 - 2026-07-16 — **SAP-log 2 tab + kelayakan unproductive + bundling harian + fresh start** ([[log/2026-07-16-sap-staging-dashboard-unproductive-daily-bundling]]): dashboard Jam Operator (heatmap+drill+edit job/operator), `status_record` redefinisi (unproductive tanpa confirmation), bundling per-hari (4.040→1.659 bundel, sub-menit 0), staging di-reset ID→1 (1.659 PENDING)
 - 2026-07-14 — **Normalisasi NFC endianness** (colon-hex ↔ desimal little-endian): util `nfcId` FE/BE, lookup toleran, migration `20260714_usernfc_normalize_nfcid` (12 kartu + kartu ganda Bagus/Dika), `backfill_operator.py`
 - 2026-07-14 — **SAP staging provenance + guard anti-double-post** ([[log/2026-07-14-sap-staging-provenance]]): `sap_staging_source` (backfill 156/156), unique index parsial (double-post mustahil di level DB), trigger pembekuan `mch_transaction`, guard konflik di poster

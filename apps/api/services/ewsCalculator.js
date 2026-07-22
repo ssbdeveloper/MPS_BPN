@@ -348,77 +348,146 @@ async function calculateUptime(bounds, options = {}) {
   };
 }
 
-// uptime_hmi — machine availability from ews.machine_heartbeat_daily.
-// The raw ~10s heartbeat is pre-aggregated per (work_date, machineno) by the sync job
-// (pings, up_pings where heartbeat<>0, uptime_pct). Metric per request: for TODAY's
-// calendar date (local tz), read each machine's stored uptime% then AVERAGE those
-// per-machine percentages across all machines. machinename comes from mch_machines.
-// role = "previous" compares against yesterday so the EWS delta is a day-over-day change.
-async function calculateUptimeHmi(options = {}) {
-  if (!(await tableExists("ews", "machine_heartbeat_daily"))) {
-    return { value: null, helper: "Table ews.machine_heartbeat_daily tidak tersedia", detail: { source: "no_table", machine_count: 0 } };
-  }
+// A device's newest ping row must be at most this old to count; past that the ping worker
+// itself is the suspect, not the fleet, so the KPI reports no_data instead of a fake 100%.
+const UPTIME_HMI_FRESH_MINUTES = Number(process.env.EWS_UPTIME_HMI_FRESH_MINUTES || 10);
+// How far back the consecutive-failure streak is counted (also caps the reported streak).
+const UPTIME_HMI_STREAK_LOOKBACK_MINUTES = Number(process.env.EWS_UPTIME_HMI_STREAK_LOOKBACK_MIN || 120);
 
-  const timezone = resolveTimezone();
-  const isPrevious = options.role === "previous";
+// uptime_hmi — LIVE HMI availability from public.mch_machine_ping_log.
+// One HMI box (= one IP) drives several machines, and the ping worker writes ONE row per
+// device per cycle (~60s, 4 ICMP folded into that row) — so "the newest row per device" IS
+// the fleet's current state. Metric: score each device's LATEST row 100 (reachable:
+// success_count > 0) or 0, then average across devices.
+//
+// Replaced (2026-07-22) the ews.machine_heartbeat_daily day-average, which diluted a dead
+// HMI across every ping since midnight: a box dying at noon moved the KPI ~0.03 pt/min and
+// never came back to 100% the same day even after the box recovered. Now one dead box on a
+// 9-device fleet costs a full 11.1 pt the moment it stops answering, and the KPI returns the
+// moment it answers again — which is the whole point of a health KPI.
+//
+// Packet loss short of a full outage deliberately does NOT dock the KPI (3/4 ICMP still
+// counts as up): with 9 devices a single dropped packet would otherwise read as -11 pt.
+//
+// The reading is taken AS OF bounds.window_end (capped at now), so the same code serves every
+// caller: the live window reads the fleet right now, and the "previous" bounds read the fleet
+// as it stood at that window's end — the EWS delta becomes "HMI lost/regained since then"
+// instead of comparing two different day-averages. Windows older than the ping log's retention
+// (the worker prunes it, --retention-days) have no rows and honestly report no_data.
+async function calculateUptimeHmi(bounds = {}) {
+  if (!(await tableExists("public", "mch_machine_ping_log"))) {
+    return { value: null, helper: "Tabel public.mch_machine_ping_log tidak tersedia", detail: { source: "no_table", device_count: 0 } };
+  }
 
   const result = await db.query(
     `
-    WITH target AS (
-      SELECT ((now() AT TIME ZONE $2 - make_interval(hours => $3::int))::date - CASE WHEN $1::boolean THEN 1 ELSE 0 END) AS d
+    WITH ref AS (
+      SELECT LEAST(now(), COALESCE($1::timestamptz, now())) AS at_time
     ),
-    per_machine AS (
+    recent AS (
       SELECT
-        h.machineno,
-        h.pings,
-        h.up_pings,
-        h.uptime_pct
-      FROM ews.machine_heartbeat_daily h
-      CROSS JOIN target t
-      WHERE h.work_date = t.d
+        BTRIM(p.ipaddress) AS ip,
+        p.checked_at,
+        p.ping_count,
+        p.success_count,
+        p.packet_loss_percent,
+        p.avg_latency_ms,
+        p.machineid,
+        BTRIM(COALESCE(p.machinename, '')) AS machinename,
+        p.machine_count,
+        p.machineids,
+        ROW_NUMBER() OVER (PARTITION BY BTRIM(p.ipaddress) ORDER BY p.checked_at DESC) AS rn
+      FROM public.mch_machine_ping_log p
+      CROSS JOIN ref r
+      WHERE p.checked_at <= r.at_time
+        AND p.checked_at > r.at_time - make_interval(mins => $3::int)
+        AND NULLIF(BTRIM(p.ipaddress), '') IS NOT NULL
+    ),
+    first_up AS (
+      SELECT ip, MIN(rn) AS rn_up FROM recent WHERE success_count > 0 GROUP BY ip
+    ),
+    streak AS (
+      -- Failed checks counted back from the newest row, stopping at the first success:
+      -- 0 when the device answered on its last check. Capped by the lookback window.
+      SELECT r.ip, COUNT(*)::int AS checks
+      FROM recent r
+      LEFT JOIN first_up u ON u.ip = r.ip
+      WHERE r.success_count = 0 AND r.rn < COALESCE(u.rn_up, 2147483647)
+      GROUP BY r.ip
+    ),
+    latest AS (
+      SELECT r.*, (r.success_count > 0) AS is_up, COALESCE(s.checks, 0) AS down_streak
+      FROM recent r
+      LEFT JOIN streak s ON s.ip = r.ip
+      CROSS JOIN ref f
+      WHERE r.rn = 1
+        AND r.checked_at > f.at_time - make_interval(mins => $2::int)
     )
     SELECT
-      COUNT(*)::int AS machine_count,
-      ROUND(AVG(pm.uptime_pct)::numeric, 2)::float AS avg_uptime_pct,
-      COALESCE(SUM(pm.pings), 0)::bigint AS total_pings,
-      COALESCE(SUM(pm.up_pings), 0)::bigint AS total_up_pings,
-      (SELECT d FROM target)::text AS target_date,
+      COUNT(*)::int AS device_count,
+      COUNT(*) FILTER (WHERE is_up)::int AS devices_up,
+      ROUND((100.0 * COUNT(*) FILTER (WHERE is_up) / NULLIF(COUNT(*), 0))::numeric, 2)::float AS value_pct,
+      COALESCE(SUM(machine_count), 0)::int AS machines_total,
+      COALESCE(SUM(machine_count) FILTER (WHERE NOT is_up), 0)::int AS machines_down,
+      MAX(checked_at)::text AS last_check,
+      (SELECT at_time FROM ref)::text AS reference_time,
+      ROUND(EXTRACT(EPOCH FROM (now() - (SELECT at_time FROM ref))) / 60)::int AS reference_age_minutes,
       COALESCE(
         json_agg(
           json_build_object(
-            'machineno', pm.machineno,
-            'machineid', m.machineid,
-            'machinename', m.machinename,
-            'uptime_pct', ROUND(pm.uptime_pct::numeric, 1),
-            'pings', pm.pings
-          ) ORDER BY pm.uptime_pct ASC, pm.machineno ASC
-        ) FILTER (WHERE pm.machineno IS NOT NULL),
+            'ip', ip,
+            'machineid', machineid,
+            'machinename', machinename,
+            'machine_count', machine_count,
+            'machineids', machineids,
+            'is_up', is_up,
+            'uptime_pct', CASE WHEN is_up THEN 100 ELSE 0 END,
+            'down_streak', down_streak,
+            'success_count', success_count,
+            'ping_count', ping_count,
+            'packet_loss_percent', packet_loss_percent,
+            'avg_latency_ms', avg_latency_ms,
+            'checked_at', checked_at,
+            'age_seconds', GREATEST(ROUND(EXTRACT(EPOCH FROM ((SELECT at_time FROM ref) - checked_at))::numeric), 0)
+          ) ORDER BY is_up ASC, down_streak DESC, ip ASC
+        ) FILTER (WHERE ip IS NOT NULL),
         '[]'::json
-      ) AS machines
-    FROM per_machine pm
-    LEFT JOIN public.mch_machines m ON m.machineno = pm.machineno
+      ) AS devices
+    FROM latest
     `,
-    [isPrevious, timezone, EWS_DAY_START_HOUR],
+    [bounds.window_end || null, UPTIME_HMI_FRESH_MINUTES, UPTIME_HMI_STREAK_LOOKBACK_MINUTES],
   );
 
   const row = result.rows[0] || {};
-  const machineCount = num(row.machine_count, 0);
-  const value = machineCount > 0 ? num(row.avg_uptime_pct) : null;
+  const deviceCount = num(row.device_count, 0);
+  const devicesUp = num(row.devices_up, 0);
+  const machinesDown = num(row.machines_down, 0);
+  const value = deviceCount > 0 ? num(row.value_pct) : null;
+  // No device inside the freshness window means either the ping worker is dead (live view) or
+  // the window predates the log's retention (historical view) — say which, they need different fixes.
+  const refAgeMinutes = num(row.reference_age_minutes, 0);
 
   return {
     value,
     helper: value === null
-      ? "Tidak ada heartbeat pada tanggal ini"
-      : `${machineCount} mesin · rata-rata uptime ${isPrevious ? "kemarin" : "hari ini"}`,
+      ? (refAgeMinutes > 60
+        ? "Tidak ada ping log HMI pada rentang itu (di luar retensi log)"
+        : `Ping log HMI basi (>${UPTIME_HMI_FRESH_MINUTES} menit) — cek machine-ping-worker`)
+      : `${devicesUp}/${deviceCount} HMI online${machinesDown > 0 ? ` · ${machinesDown} mesin terdampak` : ""}`,
     detail: {
-      target_date: row.target_date || null,
-      machine_count: machineCount,
-      total_pings: num(row.total_pings, 0),
-      total_up_pings: num(row.total_up_pings, 0),
-      machines: Array.isArray(row.machines) ? row.machines : [],
-      method: "AVG per-machine uptime% (up-pings/total-pings) across distinct machines for the day",
-      numerator: "COUNT(*) FILTER (heartbeat <> 0) per machine",
-      denominator: "COUNT(*) per machine",
+      reference_time: row.reference_time || null,
+      last_check: row.last_check || null,
+      device_count: deviceCount,
+      devices_up: devicesUp,
+      devices_down: deviceCount - devicesUp,
+      machines_total: num(row.machines_total, 0),
+      machines_down: machinesDown,
+      fresh_window_minutes: UPTIME_HMI_FRESH_MINUTES,
+      streak_lookback_minutes: UPTIME_HMI_STREAK_LOOKBACK_MINUTES,
+      devices: Array.isArray(row.devices) ? row.devices : [],
+      method: "AVG across HMI devices of their LATEST ping row scored 100 (reachable) / 0 (unreachable)",
+      numerator: "COUNT(devices whose newest ping row has success_count > 0)",
+      denominator: "COUNT(devices with a ping row inside the freshness window)",
     },
   };
 }
@@ -1532,7 +1601,7 @@ async function calculateKpisForBounds(bounds, thresholds, options = {}) {
     buildKpi("adoption_labour", adoptionLabour, thresholds),
     buildKpi("ole", ole, thresholds),
     // Row MACHINE
-    buildKpi("uptime_hmi", await safeCalculation("uptime_hmi", async () => calculateUptimeHmi({ role: options.role })), thresholds),
+    buildKpi("uptime_hmi", await safeCalculation("uptime_hmi", async () => calculateUptimeHmi(bounds)), thresholds),
     buildKpi("accuracy_machine", accuracyMachine, thresholds),
     buildKpi("adoption_machine", adoptionMachine, thresholds),
     buildKpi("oee", oee, thresholds),

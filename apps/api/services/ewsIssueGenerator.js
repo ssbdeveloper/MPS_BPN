@@ -55,13 +55,11 @@ const OEE_MACHINE_CRITICAL_PCT = Number(process.env.EWS_OEE_MACHINE_CRITICAL_PCT
 const OLE_OPERATOR_MIN_HOURS = Number(process.env.EWS_OLE_OPERATOR_MIN_HOURS || 2);
 const OLE_OPERATOR_CRITICAL_PCT = Number(process.env.EWS_OLE_OPERATOR_CRITICAL_PCT || 70);
 
-// uptime_hmi: a machine is an issue when its network uptime% is below the warning band, provided
-// it was pinged at least this many times (avoids flagging machines with too-little data early in
-// the day). uptime is network reachability, so 0% = machine down/unreachable all day (real fault),
-// not merely idle. Bands mirror the KPI: normal ≥99, warning 98–99, critical <98.
-const UPTIME_HMI_MIN_PINGS = Number(process.env.EWS_UPTIME_HMI_MIN_PINGS || 100);
-const UPTIME_HMI_WARNING_PCT = Number(process.env.EWS_UPTIME_HMI_WARNING_PCT || 99);
-const UPTIME_HMI_CRITICAL_PCT = Number(process.env.EWS_UPTIME_HMI_CRITICAL_PCT || 98);
+// uptime_hmi: satu HMI (satu IP) menaungi beberapa mesin, dan KPI-nya kini state SEKARANG —
+// device yang tidak menjawab ping langsung memotong 1/N nilai KPI. Issue + TTS-nya sengaja
+// menunggu kegagalan beruntun sebanyak ini (ping tiap ~60 detik) supaya blip satu siklus
+// tidak membangunkan IT; yang benar-benar mati tetap terangkat ~3 menit kemudian.
+const UPTIME_HMI_DOWN_STREAK = Number(process.env.EWS_UPTIME_HMI_DOWN_STREAK || 3);
 
 // Reads the per-entity breakdown a KPI persisted into the latest business-day snapshot.
 async function readSnapshotDetail(exec, bounds, kpiKey) {
@@ -523,36 +521,37 @@ async function generateOle(exec, bounds) {
   return count;
 }
 
-// uptime_hmi — machines whose network uptime dipped below the band, per machine. Reuses the
-// uptime_hmi KPI's per-machine list from the latest snapshot (computed in-main). 0% = down all
-// day (critical); a machine with too few pings for the day is skipped (not enough signal yet).
+// uptime_hmi — satu issue per HMI device yang sedang tidak terjangkau. Memakai daftar device
+// yang sudah dihitung KPI-nya di snapshot terakhir (tanpa query tambahan): device dinilai dari
+// ping TERAKHIR-nya, jadi issue ini berarti "HMI mati SEKARANG", bukan rekap sepanjang hari.
 async function generateUptimeHmi(exec, bounds) {
   const detail = await readSnapshotDetail(exec, bounds, "uptime_hmi");
-  const machines = detail?.machines;
-  if (!Array.isArray(machines) || machines.length === 0) return 0;
+  const devices = detail?.devices;
+  if (!Array.isArray(devices) || devices.length === 0) return 0;
 
   const bizDate = bounds.business_date;
   let count = 0;
-  for (const m of machines) {
-    const uptime = m.uptime_pct == null ? null : Number(m.uptime_pct);
-    const pings = Number(m.pings) || 0;
-    if (uptime === null || pings < UPTIME_HMI_MIN_PINGS || uptime >= UPTIME_HMI_WARNING_PCT) continue;
-    const key = String(m.machineid || m.machineno || "UNKNOWN");
-    const name = m.machinename || m.machineid || key;
-    const severity = uptime < UPTIME_HMI_CRITICAL_PCT ? "critical" : "warning";
-    const downNote = uptime === 0 ? "mesin tidak terjangkau jaringan sepanjang hari" : "HMI/jaringan mesin sempat terputus";
+  for (const d of devices) {
+    const streak = Number(d.down_streak) || 0;
+    if (d.is_up || streak < UPTIME_HMI_DOWN_STREAK) continue;
+    const key = String(d.ip || d.machineid || "UNKNOWN");
+    const name = `HMI ${key}`;
+    const machineIds = Array.isArray(d.machineids) ? d.machineids : [];
+    const machineCount = Number(d.machine_count) || machineIds.length;
+    const listed = machineIds.slice(0, 5).join(", ");
+    const machineNote = machineIds.length > 5 ? `${listed}, dll` : listed;
     await upsertIssue(exec, [
-      `uptime_hmi:${bizDate}:machine:${key}`,
+      `uptime_hmi:${bizDate}:device:${key}`,
       "uptime_hmi",
       bizDate,
-      "machine",
+      "device",
       key,
       name,
-      severity,
-      `Uptime HMI rendah: ${name}`,
-      `Uptime ${uptime}% — ${downNote} (${pings} ping). Cek koneksi jaringan / power HMI mesin.`,
-      uptime,
-      JSON.stringify({ machineid: m.machineid, machineno: m.machineno, uptime_pct: uptime, pings }),
+      "critical",
+      `HMI offline: ${name}`,
+      `Tidak menjawab ping ${streak} siklus beruntun — ${machineCount} mesin kehilangan HMI${machineNote ? ` (${machineNote})` : ""}. Cek power dan jalur jaringan HMI.`,
+      0,
+      JSON.stringify({ ip: key, machineids: machineIds, machine_count: machineCount, down_streak: streak }),
     ]);
     count += 1;
   }
