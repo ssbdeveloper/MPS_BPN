@@ -131,7 +131,21 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
       SELECT
         proddataid,
         startdatetime,
-        enddatetime,
+        -- LAPIS 1B — pakai akhir interval yang SUDAH dinormalisasi, bukan enddatetime mentah.
+        -- end_effective = LEAST(enddatetime, start baris berikutnya di mesin yang sama), diisi
+        -- oleh etl_mch_transaction_v3.recompute_end_effective. Tanpa ini, baris "nyangkut"
+        -- (HMI putus -> baris tak pernah ditutup, lalu ditutup proses lain dengan stempel now())
+        -- mengirim jam yang sebenarnya sudah diklaim baris lain. Contoh nyata: proddataid
+        -- 518505 mengirim 4,96 jam Setting padahal 4,18 jam di antaranya dipakai baris
+        -- Productive milik mesin yang sama. Lihat docs/concepts/mch-interval-normalization.md.
+        --
+        -- COALESCE-nya penting: baris yang BARU di-upsert ETL punya end_effective NULL sampai
+        -- recompute di akhir run selesai. Fallback ke enddatetime = perilaku lama, jadi jendela
+        -- sempit itu tak pernah lebih buruk dari sebelum lapis ini ada.
+        --
+        -- Alias tetap `enddatetime` supaya seluruh CTE di bawah (split per hari, segments,
+        -- bundling) ikut memakai nilai terpotong tanpa perlu disentuh satu per satu.
+        COALESCE(end_effective, enddatetime) AS enddatetime,
         sn_employee,
         un.employee_category,
         confirmation_number,
@@ -173,8 +187,12 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         LIMIT 1
       ) un ON TRUE
       WHERE startdatetime IS NOT NULL
-        AND enddatetime IS NOT NULL
-        AND enddatetime > startdatetime
+        -- WHERE membaca KOLOM tabel, bukan alias di SELECT (aturan SQL), jadi COALESCE-nya
+        -- harus ditulis ulang di sini. Kalau tidak, baris yang seluruh isinya terpotong
+        -- habis (end_effective = startdatetime) tetap lolos ke bundling dan baru mati
+        -- diam-diam di filter segment_end > segment_start.
+        AND COALESCE(end_effective, enddatetime) IS NOT NULL
+        AND COALESCE(end_effective, enddatetime) > startdatetime
         -- KELAYAKAN SAP (aturan owner 2026-07-15): productive vs unproductive beda syarat.
         --   • PRODUCTIVE (M1/M2, termasuk idle pendek yang dipromosikan ke M2): butuh
         --     order + operasi + confirmation — dibukukan ke order.
@@ -226,7 +244,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
           OR COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 60
         )
         AND startdatetime < %s
-        AND enddatetime > %s
+        AND COALESCE(end_effective, enddatetime) > %s
         __SEGMENT_PROVENANCE_FILTER__
     ),
     -- BUNDLING PER HARI (aturan owner 2026-07-16): dulu per JAM, tapi pemecahan per jam

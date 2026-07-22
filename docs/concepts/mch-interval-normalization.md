@@ -106,6 +106,38 @@ COALESCE(end_effective, enddatetime) AS end_dipakai
 recompute di akhir run selesai. Fallback ke `enddatetime` membuat perilaku di jendela
 sempit itu sama dengan sebelum lapis ini ada — tidak pernah lebih buruk.
 
+### Konsumen yang SUDAH pindah (lapis 1b)
+
+| Konsumen | Status |
+|---|---|
+| `jobs/sap_staging/stage_sap_timesheet.py` → `fetch_machine_hour_rows` | ✅ pindah 2026-07-22 |
+| `apps/api/controllers/machineHoursValidationController.js` (report) | ❌ belum |
+| Dashboard OEE | ❌ belum |
+
+Di stager, clamp dipasang di CTE `source_rows` dengan **alias tetap `enddatetime`**, jadi
+seluruh CTE di bawahnya (split per hari, `segments`, bundling) ikut memakai nilai terpotong
+tanpa perlu disentuh satu per satu.
+
+Tiga hal yang harus diingat kalau menyentuh query itu lagi:
+
+1. **`WHERE` membaca kolom tabel, bukan alias `SELECT`** (aturan SQL). Jadi `COALESCE`-nya
+   ditulis ULANG di klausa `WHERE` — kalau tidak, baris yang habis terpotong
+   (`end_effective = startdatetime`) tetap lolos ke bundling lalu mati diam-diam di filter
+   `segment_end > segment_start`.
+2. **Aturan klasifikasi TIDAK ikut di-clamp.** "Idle ≤300 dtk dipromosikan ke M2" dan
+   "Unidentified ≤60 dtk boleh masuk" tetap memakai `duration_seconds` mentah: itu penilaian
+   tentang SIFAT baris, bukan akuntansi jam. Blok nyangkut berjam-jam tidak lolos ambang itu
+   dengan cara apa pun.
+3. **Tidak ada risiko dobel-post.** Filter provenance (`sap_staging_source ... posted_at IS
+   NOT NULL`) mengecualikan baris yang sudah ter-post, jadi clamp hanya berlaku untuk yang
+   belum terkirim. Jam yang sudah telanjur di SAP TIDAK tertarik balik oleh lapis ini —
+   itu hanya bisa lewat STORNO.
+
+Dampak terukur saat dipasang (Juli 2026, baris layak SAP yang belum ter-post):
+**434,10 jam → 432,95 jam (−1,16 jam)**, 82 baris nyangkut, 1 baris habis terpotong.
+Angkanya kecil justru karena kerusakan besarnya sudah telanjur ter-post lebih dulu:
+kalau clamp ini ada sejak awal Juli, selisihnya **165,59 jam** dari 21.425 baris layak.
+
 ## Riwayat & lapis berikutnya
 
 - Migration: `20260722_mch_transaction_end_effective.sql` (kolom + backfill),
