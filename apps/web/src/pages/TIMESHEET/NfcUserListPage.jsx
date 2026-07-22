@@ -1,13 +1,24 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { goBackOrFallback } from '../../utils/navigation';
-import { X, Search, Pencil, Trash2, AlertTriangle, Plus } from 'lucide-react';
+import { X, Search, Pencil, Trash2, AlertTriangle, Plus, UserX } from 'lucide-react';
 import PasswordPrompt from '../../components/auth/PasswordPrompt';
+import { useCan } from '../../rbac/usePermissions';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+/** Tanggal hari ini di zona LOKAL (bukan UTC) — dibandingkan apa adanya dgn string 'YYYY-MM-DD'. */
+const todayISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const NfcUserListPage = () => {
   const navigate = useNavigate();
+  // RBAC: hanya pemilik izin tulis `nfc_users` yang boleh mengubah status aktif/nonaktif.
+  // Backend tetap penjaga sebenarnya (rbacGuard + manifest PUT /usernfc/inactive/:snssb).
+  const canManageNfc = useCan('nfc_users', 'write');
+  const today = todayISO();
 
   const [allData, setAllData] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -20,6 +31,15 @@ const NfcUserListPage = () => {
     snssb: ''
   });
   const [statusMessage, setStatusMessage] = useState({ type: '', text: '' });
+  const [inactiveModal, setInactiveModal] = useState({
+    show: false,
+    snssb: '',
+    full_name: '',
+    current: null,   // inactive_from tersimpan (null = aktif)
+    date: '',        // nilai input
+    saving: false,
+    error: '',
+  });
 
   useEffect(() => {
     loadNfcUsers();
@@ -95,6 +115,49 @@ const NfcUserListPage = () => {
     navigate(`/create-edit-nfc?edit=${encodeURIComponent(nfcid)}`);
   };
 
+  const openInactiveModal = (user) => {
+    setInactiveModal({
+      show: true,
+      snssb: user.snssb,
+      full_name: user.full_name || user.snssb,
+      current: user.inactive_from || null,
+      date: user.inactive_from || today,
+      saving: false,
+      error: '',
+    });
+  };
+
+  const closeInactiveModal = () => setInactiveModal((m) => ({ ...m, show: false, error: '' }));
+
+  /** clear=true → kembalikan ke aktif (inactive_from = null). */
+  const saveInactive = async (clear) => {
+    const value = clear ? null : inactiveModal.date;
+    if (!clear && !/^\d{4}-\d{2}-\d{2}$/.test(value || '')) {
+      setInactiveModal((m) => ({ ...m, error: 'Isi tanggal yang valid dulu.' }));
+      return;
+    }
+    setInactiveModal((m) => ({ ...m, saving: true, error: '' }));
+    try {
+      const res = await fetch(`${API_BASE}/usernfc/inactive/${encodeURIComponent(inactiveModal.snssb)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inactive_from: value }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || body?.message || `Server error ${res.status}`);
+      }
+      const saved = await res.json();
+      setAllData((prev) => prev.map((u) => (u.snssb === saved.snssb ? { ...u, inactive_from: saved.inactive_from } : u)));
+      showStatus('success', clear
+        ? `${inactiveModal.full_name} diaktifkan kembali`
+        : `${inactiveModal.full_name} nonaktif mulai ${value}`);
+      setInactiveModal((m) => ({ ...m, show: false, saving: false }));
+    } catch (err) {
+      setInactiveModal((m) => ({ ...m, saving: false, error: err.message }));
+    }
+  };
+
   return (
     <PasswordPrompt password="12345">
       <div className="h-dvh w-screen bg-slate-50 flex flex-col overflow-hidden">
@@ -110,7 +173,7 @@ const NfcUserListPage = () => {
           <h1 className="text-sm md:text-base font-extrabold text-slate-800">NFC User Management</h1>
           <button
             onClick={() => navigate('/create-edit-nfc')}
-            className="min-h-[44px] flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white px-3 md:px-4 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95"
+            className="min-h-[44px] flex items-center gap-1.5 bg-[#0077b6] hover:bg-[#023e8a] text-white px-3 md:px-4 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
             <Plus size={14} />
             <span className="hidden sm:inline">Create New</span>
@@ -198,16 +261,19 @@ const NfcUserListPage = () => {
                       <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap hidden md:table-cell">Machine Name</th>
                       <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap hidden md:table-cell">Work Center</th>
                       <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap">Role</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-700 whitespace-nowrap">Status</th>
                       <th className="px-3 py-2.5 text-center font-semibold text-slate-700 whitespace-nowrap">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredData.map((user) => (
-                      <tr key={user.nfcid} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-3 py-2 font-mono font-semibold text-[#0096c7]">
+                    {filteredData.map((user) => {
+                      const inactiveNow = user.inactive_from && user.inactive_from <= today;
+                      return (
+                      <tr key={user.nfcid} className={`transition-colors ${inactiveNow ? 'bg-slate-50/60 hover:bg-slate-100' : 'hover:bg-slate-50'}`}>
+                        <td className="px-3 py-2 font-mono font-semibold text-[#0077b6]">
                           {user.nfcid}
                         </td>
-                        <td className="px-3 py-2 text-slate-800">
+                        <td className={`px-3 py-2 ${inactiveNow ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
                           {highlightMatch(user.full_name || '', searchTerm)}
                         </td>
                         <td className="px-3 py-2 font-medium text-slate-700">
@@ -222,23 +288,37 @@ const NfcUserListPage = () => {
                           <RoleBadge role={user.roles} />
                         </td>
                         <td className="px-3 py-2">
+                          <ActiveBadge inactiveFrom={user.inactive_from} today={today} />
+                        </td>
+                        <td className="px-3 py-2">
                           <div className="flex gap-1.5 justify-center">
                             <button
                               onClick={() => handleEditClick(user.nfcid)}
-                              className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-[#0096c7] hover:bg-[#0077b6] text-white rounded-lg transition-all active:scale-95"
+                              className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-[#0077b6] hover:bg-[#023e8a] text-white rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                             >
                               <Pencil size={12} />Edit
                             </button>
+                            {canManageNfc && (
+                              <button
+                                onClick={() => openInactiveModal(user)}
+                                title={user.inactive_from ? 'Ubah / aktifkan kembali' : 'Tandai nonaktif (resign)'}
+                                aria-label={`Ubah status aktif ${user.full_name || user.snssb}`}
+                                className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                              >
+                                <UserX size={12} />Status
+                              </button>
+                            )}
                             <button
                               onClick={() => handleDeleteClick(user)}
-                              className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all active:scale-95"
+                              className="min-h-[32px] flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                             >
                               <Trash2 size={12} />Del
                             </button>
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -302,8 +382,112 @@ const NfcUserListPage = () => {
             </div>
           </div>
         )}
+        {/* Modal status aktif / nonaktif (resign) */}
+        {inactiveModal.show && (
+          <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm px-0 md:px-4">
+            <div className="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl shadow-xl p-6 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true">
+              <div className="flex items-center gap-2 mb-4">
+                <UserX className="w-5 h-5 text-slate-500 flex-shrink-0" />
+                <h3 className="text-base font-bold text-slate-800">Status Operator</h3>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-4 space-y-1.5">
+                <div className="flex text-xs">
+                  <span className="font-semibold text-slate-500 w-24">Nama</span>
+                  <span className="text-slate-800">{inactiveModal.full_name}</span>
+                </div>
+                <div className="flex text-xs">
+                  <span className="font-semibold text-slate-500 w-24">SNSSB</span>
+                  <span className="font-medium text-slate-800">{inactiveModal.snssb}</span>
+                </div>
+                <div className="flex items-center text-xs">
+                  <span className="font-semibold text-slate-500 w-24">Sekarang</span>
+                  <ActiveBadge inactiveFrom={inactiveModal.current} today={today} />
+                </div>
+              </div>
+
+              <label htmlFor="inactive-from" className="block text-xs font-bold text-slate-600 mb-1">
+                Nonaktif mulai tanggal
+              </label>
+              <input
+                id="inactive-from"
+                type="date"
+                value={inactiveModal.date}
+                onChange={(e) => setInactiveModal((m) => ({ ...m, date: e.target.value, error: '' }))}
+                className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
+              />
+              <p className="mt-2 text-xs text-slate-500">
+                Tanggal ini adalah <b>hari pertama operator TIDAK dihitung</b> (tanggal efektif resign).
+                Perhitungan sebelum tanggal ini tidak berubah.
+              </p>
+
+              {inactiveModal.date && inactiveModal.date < today && (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                  <span>
+                    Tanggal lampau: snapshot KPI untuk tanggal ≥ ini jadi tidak akurat sampai
+                    di-recompute (<span className="font-mono">detect_stale_snapshots.sql</span> →
+                    <span className="font-mono"> patch_adoption_labour_snapshot.js</span>).
+                  </span>
+                </div>
+              )}
+
+              {inactiveModal.error && (
+                <div className="mt-3 rounded-lg border border-red-400 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600" role="alert">
+                  {inactiveModal.error}
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-2 mt-6">
+                <button
+                  onClick={closeInactiveModal}
+                  disabled={inactiveModal.saving}
+                  className="flex-1 min-h-[44px] px-4 py-2.5 text-sm font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Batal
+                </button>
+                {inactiveModal.current && (
+                  <button
+                    onClick={() => saveInactive(true)}
+                    disabled={inactiveModal.saving}
+                    className="flex-1 min-h-[44px] px-4 py-2.5 text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Aktifkan kembali
+                  </button>
+                )}
+                <button
+                  onClick={() => saveInactive(false)}
+                  disabled={inactiveModal.saving}
+                  className="flex-1 min-h-[44px] flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-semibold bg-[#0077b6] hover:bg-[#023e8a] text-white rounded-lg transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {inactiveModal.saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  {inactiveModal.saving ? 'Menyimpan…' : 'Simpan'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </PasswordPrompt>
+  );
+};
+
+/** Aktif / Nonaktif <tgl> / Resign <tgl> — date-aware terhadap hari ini. */
+const ActiveBadge = ({ inactiveFrom, today }) => {
+  if (!inactiveFrom) {
+    return (
+      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold border bg-emerald-100 text-emerald-700 border-emerald-200">
+        Aktif
+      </span>
+    );
+  }
+  const past = inactiveFrom <= today;
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${
+      past ? 'bg-slate-200 text-slate-600 border-slate-300' : 'bg-amber-100 text-amber-700 border-amber-200'
+    }`}>
+      {past ? 'Nonaktif' : 'Resign'} {inactiveFrom}
+    </span>
   );
 };
 

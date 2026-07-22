@@ -176,6 +176,38 @@ exports.updateMode = async (req, res) => {
   }
 };
 
+// UPDATE penanda nonaktif (resign) berdasarkan snssb. body: { inactive_from: 'YYYY-MM-DD' | null }
+//
+// inactive_from = hari PERTAMA operator TIDAK dihitung (= tanggal efektif resign); NULL = aktif.
+// Dibaca date-aware oleh VIEW ews.roster_effective dan services/rosterGenerator.js:
+//   ikut dihitung bila  inactive_from IS NULL OR business_date < inactive_from
+// Sengaja DATE, bukan boolean: boolean timeless akan mencabut operator dari SEMUA tanggal lampau
+// begitu di-flip dan merusak adoption historis. Detail: docs/concepts/ews-roster-override.md.
+// Operator TIDAK dihapus (FK timesheet_transaction.serialnumber -> usernfc.snssb + histori SAP/ETL);
+// jalur resolusi nama/atribut tidak boleh memfilter kolom ini.
+exports.updateInactiveFrom = async (req, res) => {
+  const { snssb } = req.params;
+  const raw = req.body?.inactive_from;
+  const value = raw === null || raw === undefined || raw === "" ? null : String(raw);
+  if (value !== null && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return res.status(400).json({ error: "inactive_from harus format YYYY-MM-DD atau null" });
+  }
+  try {
+    const result = await db.query(
+      "UPDATE usernfc SET inactive_from = $1::date WHERE snssb = $2 RETURNING snssb, full_name, inactive_from",
+      [value, snssb]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "User tidak ditemukan" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    if (err.code === "42703") {
+      return res.status(503).json({ error: "Kolom inactive_from belum ada. Jalankan migration 20260722_usernfc_inactive_from.sql." });
+    }
+    console.error("[USERNFC INACTIVE ERROR]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.updatemesin = async (req, res) => {
   // ambil sn dari sessionStorage
   try {

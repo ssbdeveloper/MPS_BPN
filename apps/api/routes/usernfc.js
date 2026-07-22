@@ -10,6 +10,8 @@ router.post("/", controller.create);
 router.put("/update/", controller.updatemesin);
 router.put("/mode/:snssb", controller.updateMode);
 router.put("/nfcedit/:nfcid", controller.updatenfc);
+// Harus SEBELUM "/:snssb" — kalau tidak, catch-all menelan path ini.
+router.put("/inactive/:snssb", controller.updateInactiveFrom);
 router.put("/:snssb", controller.update);
 
 router.delete("/:nfcid", controller.remove);

@@ -74,6 +74,7 @@ const MANIFEST = [
   { m: 'PUT',    p: '/usernfc/update',                        f: 'nfc_users', a: W },
   { m: 'PUT',    p: '/usernfc/mode/:id',                      f: 'nfc_users', a: W },
   { m: 'PUT',    p: '/usernfc/nfcedit/:id',                   f: 'nfc_users', a: W },
+  { m: 'PUT',    p: '/usernfc/inactive/:snssb',               f: 'nfc_users', a: W },
   { m: 'PUT',    p: '/usernfc/:id',                           f: 'nfc_users', a: W },
   { m: 'DELETE', p: '/usernfc/:id',                           f: 'nfc_users', a: W },
 
