@@ -1,5 +1,22 @@
 /**
- * recompute_daily_snapshots.js — rewrite stale historical daily (grain='today') KPI snapshots.
+ * recompute_daily_snapshots.js
+ *
+ * ⛔ UNSAFE FOR PAST DATES — DO NOT RUN. Kept for reference only; it aborts at startup.
+ *    Use scripts/patch_adoption_labour_snapshot.js instead (surgical, one KPI element).
+ *
+ *    Defect (measured on 2026-07-18, 2026-07-22): a whole-row rewrite CANNOT faithfully reproduce
+ *    every KPI for a historical date, so it trades one fix for several regressions —
+ *      - adoption_machine -> null : calculateAdoptionForMainSnapshot(bounds, options.grain) ->
+ *        getCachedAdoptionCalculation reads kpi_snapshot WHERE grain=$1; basis:'date' yields
+ *        grain='date', for which no cached row exists. Real 99.8 would be overwritten with null.
+ *      - uptime_tablet -> null    : placeholderCalculation, never computed on this path.
+ *      - accuracy_* / ole drift   : underlying timesheet/machine data for past dates keeps being
+ *        backfilled, so a fresh calc legitimately differs from the frozen row (98.2->99.6,
+ *        99.7->99.9, 72.1->72.7) — a change the caller did not ask for and cannot review per-KPI.
+ *    Making this safe requires either per-KPI merge (which is what the surgical script does) or
+ *    fixing the calculator so a 'date' basis reproduces every KPI. Neither is done.
+ *
+ * ORIGINAL INTENT (unchanged below) — rewrite stale historical daily (grain='today') KPI snapshots.
  *
  * WHY THIS EXISTS
  *   The snapshot job (jobs/ewsSnapshotJob.js) only ever computes "today" + rolling windows. Once a
@@ -99,7 +116,16 @@ async function storedAdoption(date) {
 }
 
 async function main() {
-  const args = parseArgs(process.argv);
+  // Hard stop: see the ⛔ block at the top of this file. A whole-row rewrite corrupts KPIs that a
+  // basis:'date' recompute cannot reproduce. Escape hatch exists only so the defect can be re-measured.
+  if (!process.argv.includes("--i-know-this-is-unsafe")) {
+    throw new Error(
+      "UNSAFE — refusing to run. A whole-row recompute nulls adoption_machine/uptime_tablet and drifts "
+      + "accuracy_*/ole for past dates. Use scripts/patch_adoption_labour_snapshot.js instead. "
+      + "(Override for diagnostics only: --i-know-this-is-unsafe)",
+    );
+  }
+  const args = parseArgs(process.argv.filter((a) => a !== "--i-know-this-is-unsafe"));
   let dates;
   if (args.dates) dates = args.dates.split(",").map((s) => s.trim()).filter(Boolean);
   else if (args.from && args.to) dates = eachDate(args.from, args.to);
