@@ -367,22 +367,38 @@ def fetch_nfc_user_maps(cursor, operator_ids: list[str]) -> dict[str, dict]:
     """
     if not operator_ids:
         return {}
+    # Konversi hex->desimal DIPISAH ke CTE MATERIALIZED yang sudah tersaring, BUKAN
+    # digabung sebagai `guard AND cast` di dalam JOIN.
+    #
+    # Sebabnya: Postgres TIDAK menjamin urutan evaluasi di dalam JOIN/WHERE — planner boleh
+    # menjalankan cast ::bit(32) sebelum guard regexnya. Begitu ada satu operatorid sampah
+    # (pembacaan kartu NFC korup), seluruh ETL mati dengan
+    # `"..." is not a valid hexadecimal digit`. Persis itu yang terjadi 22-Jul-2026: tiga
+    # baris korup jam 09:47 ('3sÄCÍÌÄCf&', dua string 2 karakter) menghentikan pipeline
+    # machine-hours selama ~7 jam — jam mesin berhenti masuk mch_transaction, staging SAP
+    # dan OEE ikut basi. MATERIALIZED memaksa filter dieksekusi lebih dulu, jadi cast hanya
+    # pernah melihat 8 digit hex yang valid.
     cursor.execute(
         rf"""
         WITH ops(operatorid) AS (
             SELECT DISTINCT unnest(%s::text[])
+        ),
+        ops_dec AS MATERIALIZED (
+            SELECT
+                operatorid,
+                (
+                  ('x' || regexp_replace(operatorid, '(..)(..)(..)(..)', '\4\3\2\1'))::bit(32)::bigint
+                )::text AS nfc_decimal
+            FROM ops
+            WHERE operatorid ~ '^[0-9A-Fa-f]{{8}}$'
         )
         SELECT DISTINCT ON (o.operatorid)
             o.operatorid, u.full_name, u.snssb
         FROM ops o
+        LEFT JOIN ops_dec d ON d.operatorid = o.operatorid
         JOIN {NFC_TABLE} u
           ON u.nfcid = o.operatorid
-          OR (
-               o.operatorid ~ '^[0-9A-Fa-f]{{8}}$'
-               AND u.nfcid = (
-                 ('x' || regexp_replace(o.operatorid, '(..)(..)(..)(..)', '\4\3\2\1'))::bit(32)::bigint
-               )::text
-             )
+          OR u.nfcid = d.nfc_decimal
         ORDER BY o.operatorid, (u.nfcid = o.operatorid) DESC, u.idrow
         """,
         (operator_ids,),
