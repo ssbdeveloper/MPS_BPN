@@ -95,13 +95,14 @@ async function getConfig(req, res) {
       db.query(`SELECT day_of_week, runs_day, runs_night FROM ews.roster_workday_rule ORDER BY day_of_week`),
       db.query(`SELECT id, anchor_week_start::text, anchor_group_a_shift, rotation_period_weeks, week_start_dow, effective_from::text, is_active FROM ews.rotation_config WHERE is_active ORDER BY effective_from DESC, id DESC LIMIT 1`),
       db.query(`SELECT rotation_group, COUNT(*)::int AS n FROM ews.operator_rotation_group GROUP BY rotation_group ORDER BY rotation_group`),
-      db.query(`SELECT g.serialnumber, g.rotation_group, u.full_name
+      db.query(`SELECT g.serialnumber, g.rotation_group, u.full_name, u.inactive_from::text AS inactive_from
                 FROM ews.operator_rotation_group g
                 LEFT JOIN usernfc u ON u.snssb = g.serialnumber
                 ORDER BY g.rotation_group, u.full_name NULLS LAST, g.serialnumber`),
       db.query(`SELECT snssb, full_name FROM usernfc
                 WHERE snssb IS NOT NULL AND btrim(snssb) <> '' AND full_name IS NOT NULL AND btrim(full_name) <> ''
-                ORDER BY lower(full_name), snssb`),
+                  AND (inactive_from IS NULL OR inactive_from > (now() AT TIME ZONE $1)::date)
+                ORDER BY lower(full_name), snssb`, [TZ]),
     ]);
     res.json({
       data: {

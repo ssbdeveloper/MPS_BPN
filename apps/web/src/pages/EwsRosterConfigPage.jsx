@@ -299,12 +299,20 @@ function EwsRosterConfigPage() {
                     <div className="px-3 py-2 text-xs text-slate-400">Belum ada operator.</div>
                   ) : (
                     <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto">
-                      {members.map((m) => (
-                        <li key={m.serialnumber} className="flex items-baseline gap-1.5 px-3 py-1.5 text-xs">
-                          <span className="font-semibold text-slate-700">{m.full_name || m.serialnumber}</span>
-                          {m.full_name && <span className="font-mono text-[11px] text-slate-400">({m.serialnumber})</span>}
-                        </li>
-                      ))}
+                      {members.map((m) => {
+                        const inactiveNow = m.inactive_from && m.inactive_from <= todayLocalISO();
+                        return (
+                          <li key={m.serialnumber} className="flex items-baseline gap-1.5 px-3 py-1.5 text-xs">
+                            <span className={`font-semibold ${inactiveNow ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{m.full_name || m.serialnumber}</span>
+                            {m.full_name && <span className="font-mono text-[11px] text-slate-400">({m.serialnumber})</span>}
+                            {m.inactive_from && (
+                              <span className={`ml-auto rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${inactiveNow ? 'border-slate-300 bg-slate-100 text-slate-500' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                                {inactiveNow ? 'Nonaktif' : 'Resign'} {m.inactive_from}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </div>
@@ -339,9 +347,11 @@ function EwsRosterConfigPage() {
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
               >
                 <option value="">Pilih operator (harus sudah bergrup)…</option>
-                {groupMembers.map((m) => (
-                  <option key={m.serialnumber} value={m.serialnumber}>{m.full_name || m.serialnumber} ({m.serialnumber})</option>
-                ))}
+                {groupMembers
+                  .filter((m) => !m.inactive_from || m.inactive_from > todayLocalISO())
+                  .map((m) => (
+                    <option key={m.serialnumber} value={m.serialnumber}>{m.full_name || m.serialnumber} ({m.serialnumber})</option>
+                  ))}
               </select>
             </div>
             <div className="flex flex-col gap-1">
