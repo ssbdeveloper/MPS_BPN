@@ -38,6 +38,20 @@ CREATE SCHEMA tools_management;
 
 
 --
+-- Name: btree_gist; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION btree_gist; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION btree_gist IS 'support for indexing common datatypes in GiST';
+
+
+--
 -- Name: pg_trgm; Type: EXTENSION; Schema: -; Owner: -
 --
 
@@ -771,6 +785,104 @@ CREATE TABLE ews.operator_shift (
 
 
 --
+-- Name: operator_shift_lock; Type: TABLE; Schema: ews; Owner: -
+--
+
+CREATE TABLE ews.operator_shift_lock (
+    id bigint NOT NULL,
+    serialnumber text NOT NULL,
+    locked_shift text NOT NULL,
+    effective_from date NOT NULL,
+    lock_weeks integer NOT NULL,
+    lock_end date NOT NULL,
+    created_by text NOT NULL,
+    cancelled_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT operator_shift_lock_end_after_start CHECK ((lock_end > effective_from)),
+    CONSTRAINT operator_shift_lock_lock_weeks_check CHECK ((lock_weeks > 0))
+);
+
+
+--
+-- Name: operator_shift_lock_id_seq; Type: SEQUENCE; Schema: ews; Owner: -
+--
+
+ALTER TABLE ews.operator_shift_lock ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME ews.operator_shift_lock_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: shift_roster; Type: TABLE; Schema: ews; Owner: -
+--
+
+CREATE TABLE ews.shift_roster (
+    serialnumber text NOT NULL,
+    business_date date NOT NULL,
+    scheduled_shift text,
+    scheduled_standard_hours numeric,
+    status text DEFAULT 'SCHEDULED'::text NOT NULL,
+    source text DEFAULT 'auto'::text NOT NULL,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT shift_roster_source_check CHECK ((source = ANY (ARRAY['auto'::text, 'manual'::text]))),
+    CONSTRAINT shift_roster_status_check CHECK ((status = ANY (ARRAY['SCHEDULED'::text, 'OFF'::text, 'LEAVE'::text, 'SICK'::text, 'PERMIT'::text])))
+);
+
+
+--
+-- Name: usernfc; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.usernfc (
+    idrow integer NOT NULL,
+    nfcid text,
+    full_name text,
+    snssb text NOT NULL,
+    machineid text,
+    machinename text,
+    workcenter text,
+    roles text,
+    mode character varying(10) DEFAULT 'single'::character varying,
+    employee_category character varying(10),
+    inactive_from date
+);
+
+
+--
+-- Name: COLUMN usernfc.inactive_from; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.usernfc.inactive_from IS 'First day the operator is NO LONGER counted (resignation effective date). NULL = active. Historical rule: counted when inactive_from IS NULL OR business_date < inactive_from. Read-side only — name/attribute resolution (SAP, ETL, history) must not filter on this.';
+
+
+--
+-- Name: roster_effective; Type: VIEW; Schema: ews; Owner: -
+--
+
+CREATE VIEW ews.roster_effective AS
+ SELECT r.serialnumber,
+    r.business_date,
+    r.status,
+    r.source,
+    r.updated_by,
+    COALESCE(lk.locked_shift, r.scheduled_shift) AS eff_shift,
+    COALESCE(os_lk.standard_hours, r.scheduled_standard_hours) AS eff_std,
+    (lk.id IS NOT NULL) AS shift_locked
+   FROM (((ews.shift_roster r
+     LEFT JOIN ews.operator_shift_lock lk ON (((lk.serialnumber = r.serialnumber) AND (lk.cancelled_at IS NULL) AND (daterange(lk.effective_from, lk.lock_end, '[)'::text) @> r.business_date))))
+     LEFT JOIN ews.operator_shift os_lk ON ((os_lk.shift_code = lk.locked_shift)))
+     LEFT JOIN public.usernfc u ON ((NULLIF(btrim(u.snssb), ''::text) = r.serialnumber)))
+  WHERE ((u.inactive_from IS NULL) OR (r.business_date < u.inactive_from));
+
+
+--
 -- Name: roster_workday_rule; Type: TABLE; Schema: ews; Owner: -
 --
 
@@ -812,25 +924,6 @@ ALTER TABLE ews.rotation_config ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
-);
-
-
---
--- Name: shift_roster; Type: TABLE; Schema: ews; Owner: -
---
-
-CREATE TABLE ews.shift_roster (
-    serialnumber text NOT NULL,
-    business_date date NOT NULL,
-    scheduled_shift text,
-    scheduled_standard_hours numeric,
-    status text DEFAULT 'SCHEDULED'::text NOT NULL,
-    source text DEFAULT 'auto'::text NOT NULL,
-    updated_by text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT shift_roster_source_check CHECK ((source = ANY (ARRAY['auto'::text, 'manual'::text]))),
-    CONSTRAINT shift_roster_status_check CHECK ((status = ANY (ARRAY['SCHEDULED'::text, 'OFF'::text, 'LEAVE'::text, 'SICK'::text, 'PERMIT'::text])))
 );
 
 
@@ -1323,7 +1416,10 @@ CREATE TABLE public.mch_transaction (
     checkin timestamp with time zone,
     refreshed_at timestamp with time zone,
     finish_job boolean,
-    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR (((status_activitytype)::text = ANY ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)) OR ((NULLIF(btrim((status_activitytype)::text), ''::text) IS NOT NULL) AND ((status_activitytype)::text <> ALL ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL)))) STORED
+    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR (((status_activitytype)::text = ANY ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)) OR ((NULLIF(btrim((status_activitytype)::text), ''::text) IS NOT NULL) AND ((status_activitytype)::text <> ALL ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL)))) STORED,
+    end_effective timestamp without time zone,
+    overlap_seconds integer DEFAULT 0 NOT NULL,
+    is_stuck boolean DEFAULT false NOT NULL
 );
 
 
@@ -1332,6 +1428,27 @@ CREATE TABLE public.mch_transaction (
 --
 
 COMMENT ON COLUMN public.mch_transaction.status_record IS 'TRUE = record layak. statusid 0/3/4 (sah tanpa job), ATAU productive (M1/M2) dgn order+operasi+operator+confirmation, ATAU unproductive (activity type) dgn operator (tanpa confirmation). Basis accuracy_machine + kelayakan SAP (kecuali 0/3/4 dikecualikan staging).';
+
+
+--
+-- Name: COLUMN mch_transaction.end_effective; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.mch_transaction.end_effective IS 'Akhir interval SETELAH clamp ke start baris berikutnya pada mesin yang sama: LEAST(enddatetime, next_start). SEMUA konsumen (staging SAP, report, OEE) harus memakai kolom ini, bukan enddatetime. Dihitung ulang oleh etl_mch_transaction_v3.py atas kandidat + pendahulunya.';
+
+
+--
+-- Name: COLUMN mch_transaction.overlap_seconds; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.mch_transaction.overlap_seconds IS 'Detik yang terpotong oleh clamp (enddatetime - end_effective). 0 = baris sehat.';
+
+
+--
+-- Name: COLUMN mch_transaction.is_stuck; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.mch_transaction.is_stuck IS 'TRUE bila baris ini "nyangkut": intervalnya menabrak baris berikutnya di mesin yang sama. Untuk laporan/alert, bukan untuk menyaring diam-diam.';
 
 
 --
@@ -4102,24 +4219,6 @@ ALTER SEQUENCE public.tts_notifications_id_seq OWNED BY public.tts_notifications
 
 
 --
--- Name: usernfc; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.usernfc (
-    idrow integer NOT NULL,
-    nfcid text,
-    full_name text,
-    snssb text NOT NULL,
-    machineid text,
-    machinename text,
-    workcenter text,
-    roles text,
-    mode character varying(10) DEFAULT 'single'::character varying,
-    employee_category character varying(10)
-);
-
-
---
 -- Name: usernfc_idrow_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -5963,6 +6062,22 @@ ALTER TABLE ONLY ews.operator_rotation_group
 
 
 --
+-- Name: operator_shift_lock operator_shift_lock_no_overlap; Type: CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.operator_shift_lock
+    ADD CONSTRAINT operator_shift_lock_no_overlap EXCLUDE USING gist (serialnumber WITH =, daterange(effective_from, lock_end, '[)'::text) WITH &&) WHERE ((cancelled_at IS NULL));
+
+
+--
+-- Name: operator_shift_lock operator_shift_lock_pkey; Type: CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.operator_shift_lock
+    ADD CONSTRAINT operator_shift_lock_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: operator_shift operator_shift_pkey; Type: CONSTRAINT; Schema: ews; Owner: -
 --
 
@@ -6144,6 +6259,21 @@ ALTER TABLE ONLY public.mch_machines
 
 ALTER TABLE ONLY public.mch_statustypes
     ADD CONSTRAINT mch_statustypes_pkey PRIMARY KEY (statusid);
+
+
+--
+-- Name: mch_transaction mch_transaction_no_overlap; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mch_transaction
+    ADD CONSTRAINT mch_transaction_no_overlap EXCLUDE USING gist (machineno WITH =, tsrange(startdatetime, end_effective) WITH &&) WHERE (((end_effective IS NOT NULL) AND (end_effective > startdatetime))) DEFERRABLE;
+
+
+--
+-- Name: CONSTRAINT mch_transaction_no_overlap ON mch_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT mch_transaction_no_overlap ON public.mch_transaction IS 'Satu mesin tidak boleh punya dua interval bersamaan. Menjaga hasil clamp end_effective (lapis 1a/1b). DEFERRABLE: recompute_end_effective memakai SET CONSTRAINTS ALL DEFERRED karena melewati keadaan-antara yang sah. Kalau ini melanggar: cari kenapa end_effective tidak ter-clamp, JANGAN buang constraint-nya.';
 
 
 --
@@ -7223,6 +7353,13 @@ CREATE INDEX idx_mch_productiondata_startdatetime ON public.mch_productiondata U
 
 
 --
+-- Name: idx_mch_transaction_machine_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mch_transaction_machine_time ON public.mch_transaction USING btree (machineno, startdatetime, proddataid);
+
+
+--
 -- Name: idx_mch_transaction_sap_eligible; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7241,6 +7378,13 @@ CREATE INDEX idx_mch_transaction_sap_window ON public.mch_transaction USING btre
 --
 
 CREATE INDEX idx_mch_transaction_status_record_false ON public.mch_transaction USING btree (machineno) WHERE (status_record = false);
+
+
+--
+-- Name: idx_mch_transaction_stuck; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_mch_transaction_stuck ON public.mch_transaction USING btree (startdatetime) WHERE is_stuck;
 
 
 --
@@ -8035,6 +8179,13 @@ CREATE INDEX idx_workcenter_workcenterot ON public.workcenter USING btree (workc
 
 
 --
+-- Name: ix_usernfc_inactive_from; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_usernfc_inactive_from ON public.usernfc USING btree (inactive_from) WHERE (inactive_from IS NOT NULL);
+
+
+--
 -- Name: sap_staging_eligibility_audit_date_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8664,6 +8815,14 @@ ALTER TABLE ONLY ews.action_history
 
 ALTER TABLE ONLY ews.action_table
     ADD CONSTRAINT action_table_alert_id_fkey FOREIGN KEY (alert_id) REFERENCES ews.alert_log(id);
+
+
+--
+-- Name: operator_shift_lock operator_shift_lock_locked_shift_fkey; Type: FK CONSTRAINT; Schema: ews; Owner: -
+--
+
+ALTER TABLE ONLY ews.operator_shift_lock
+    ADD CONSTRAINT operator_shift_lock_locked_shift_fkey FOREIGN KEY (locked_shift) REFERENCES ews.operator_shift(shift_code);
 
 
 --
