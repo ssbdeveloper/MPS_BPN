@@ -788,11 +788,43 @@ WHERE f.proddataid = t.proddataid
 """
 
 
+def _end_effective_columns_present(cur) -> bool:
+    """TRUE bila migration lapis 1a (kolom end_effective) sudah diterapkan.
+
+    Ketiga kolom (end_effective/overlap_seconds/is_stuck) ditambahkan dalam SATU migration,
+    jadi memeriksa satu = memeriksa semua. Cukup cek end_effective."""
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name   = 'mch_transaction'
+          AND column_name  = 'end_effective'
+        LIMIT 1
+        """
+    )
+    return cur.fetchone() is not None
+
+
 def recompute_end_effective(pg_conn, from_dt: datetime, to_dt: datetime | None, dry_run: bool) -> int:
     """Hitung ulang end_effective/overlap_seconds/is_stuck untuk jendela run ini."""
     if dry_run:
         log.info("recompute_end_effective: DRY RUN — dilewati")
         return 0
+
+    # GUARD AMAN-URUTAN. Kolom end_effective berasal dari migration lapis 1a yang TERPISAH
+    # dari deploy kode ini. Tanpa guard, men-deploy versi ini SEBELUM migration jalan (atau
+    # SETELAH rollback kolomnya) membuat UPDATE di bawah gagal `column "end_effective" does
+    # not exist` SETIAP run — meracuni log dan (kalau tak ditangani) menggagalkan run.
+    # Dengan guard: kolom belum ada -> lewati diam-diam, sisa ETL (sync + apply_overrides)
+    # tetap jalan normal. Begitu migration diterapkan, recompute otomatis aktif tanpa
+    # perlu redeploy. Jadi urutan deploy-vs-migration tidak lagi penting.
+    with pg_conn.cursor() as guard_cur:
+        if not _end_effective_columns_present(guard_cur):
+            log.info(
+                "recompute_end_effective: kolom end_effective belum ada "
+                "(migration lapis 1a belum diterapkan) — dilewati"
+            )
+            return 0
 
     with pg_conn.cursor() as cur:
         cur.execute(ANCHOR_SQL, (from_dt, to_dt, to_dt))
