@@ -804,6 +804,14 @@ def recompute_end_effective(pg_conn, from_dt: datetime, to_dt: datetime | None, 
 
         cur.execute(BUILD_RECALC_SQL, (from_dt, to_dt, to_dt, min_anchor))
         cur.execute("ANALYZE _mch_recalc")
+        # WAJIB sebelum UPDATE — lihat migration 20260722_..._no_overlap_deferrable.sql.
+        # Satu UPDATE ini memotong baris lama DAN mengisi baris baru sekaligus, jadi ada
+        # keadaan-antara yang tumpang tindih. Constraint mch_transaction_no_overlap
+        # memeriksa PER BARIS dan urutan baris dalam satu UPDATE tidak dijamin, jadi tanpa
+        # penundaan ini ETL gagal ACAK tergantung tata letak baris di disk (sudah diuji).
+        # ALL DEFERRED, bukan menyebut nama constraint-nya: kalau constraint belum terpasang
+        # (DB lama), menyebut nama = error "constraint does not exist"; ALL aman.
+        cur.execute("SET CONSTRAINTS ALL DEFERRED")
         cur.execute(UPDATE_FROM_RECALC_SQL)
         changed = cur.rowcount
         cur.execute(

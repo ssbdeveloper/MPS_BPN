@@ -138,13 +138,60 @@ Dampak terukur saat dipasang (Juli 2026, baris layak SAP yang belum ter-post):
 Angkanya kecil justru karena kerusakan besarnya sudah telanjur ter-post lebih dulu:
 kalau clamp ini ada sejak awal Juli, selisihnya **165,59 jam** dari 21.425 baris layak.
 
-## Riwayat & lapis berikutnya
+## Lapis 2 — jaring pengaman di database
+
+Constraint `mch_transaction_no_overlap`: satu mesin tak boleh punya dua interval bersamaan.
+
+```sql
+EXCLUDE USING gist (machineno WITH =, tsrange(startdatetime, end_effective) WITH &&)
+WHERE (end_effective IS NOT NULL AND end_effective > startdatetime)
+DEFERRABLE INITIALLY IMMEDIATE
+```
+
+Lapis 1a/1b adalah KODE, dan kode bisa dilewati (query lupa `COALESCE`, ETL gagal
+di tengah, INSERT manual). Constraint memindahkan invariannya ke database.
+
+**WAJIB `DEFERRABLE`.** Versi pertama non-deferrable dan itu bom waktu:
+`recompute_end_effective` memotong baris lama DAN mengisi baris baru dalam SATU `UPDATE`,
+jadi ada keadaan-antara yang tumpang tindih. Constraint EXCLUDE diperiksa per baris, dan
+urutan baris dalam satu UPDATE tak dijamin — jadi update logis yang identik LOLOS bila
+baris lama kebetulan diproses lebih dulu, DITOLAK bila baris baru lebih dulu. Diuji
+langsung: gagal acak tergantung tata letak baris di disk. Karena itu:
+
+- constraint `DEFERRABLE INITIALLY IMMEDIATE` (ketat sehari-hari, bisa ditunda saat perlu),
+- `recompute_end_effective` menjalankan `SET CONSTRAINTS ALL DEFERRED` sebelum UPDATE-nya
+  → pemeriksaan digeser ke COMMIT, keadaan-antara dilewati dengan sah.
+
+`ALTER CONSTRAINT ... DEFERRABLE` hanya untuk FK, bukan exclusion → constraint harus
+DROP lalu ADD ulang. Build GiST ~1,5 menit, ACCESS EXCLUSIVE lock → jalankan saat sepi.
+
+**Kalau constraint ini melanggar** (ETL gagal dengan `conflicting key value violates
+exclusion constraint`): JANGAN buang constraint-nya. Cari kenapa `end_effective` tidak
+ter-clamp — hampir selalu `recompute_end_effective` tidak jalan / gagal di run itu.
+
+Dua kelompok baris sengaja di luar jangkauan (partial `WHERE`):
+- `end_effective IS NULL` (~105 baris) — belum ditutup sumbernya; `tsrange(start, NULL)` =
+  tak hingga, satu baris terbuka akan menabrak semua baris sesudahnya.
+- `end_effective <= startdatetime` (~123 baris, 28-Apr..22-Jun, 17 mesin) — data sumber
+  terbalik (end 5–21 detik SEBELUM start, `duration_seconds = 0`); `tsrange()` melempar
+  error untuk baris begini. Sudah dikecualikan dari SAP oleh `enddatetime > startdatetime`,
+  dan nol kemunculan di Juli — sumbernya tampak sudah membaik.
+
+## Riwayat
 
 - Migration: `20260722_mch_transaction_end_effective.sql` (kolom + backfill),
-  `20260722_mch_transaction_machine_time_idx.sql` (indeks).
+  `..._machine_time_idx.sql` (indeks), `..._no_overlap.sql` +
+  `..._no_overlap_deferrable.sql` (constraint; yang kedua memperbaiki yang pertama).
 - Backfill sekali jalan: 489.306 baris, 4.955 nyangkut, 23.310 jam terpotong
   (didominasi data trial Mei–Juni; Juli sendiri 423 jam).
 - Deteksi ad-hoc: `node scripts/detect_mch_stuck_blocks.js --days 7`.
-- Log sesi: [[log/2026-07-22-mch-stuck-blocks]], [[log/2026-07-22-mch-normalisasi-lapis1]].
-- **Lapis 1b** (konsumen pindah ke `end_effective`) dan **Lapis 2** (constraint anti-overlap):
-  lihat log lapis-1.
+- Log sesi: [[log/2026-07-22-mch-stuck-blocks]], [[log/2026-07-22-mch-normalisasi-lapis]].
+- Bug terpisah yang ikut ketemu & diperbaiki di sesi ini: ETL crash total gara-gara satu
+  `operatorid` NFC korup (cast hex dievaluasi sebelum guard regex). Detail di log sesi.
+
+## Yang BELUM dikerjakan (sadar)
+
+- Report machine-hours (`machineHoursValidationController.js`) + dashboard OEE masih baca
+  `enddatetime` mentah → No Job 248 jam / Coffee Break 149 jam Juli masih meracuni OEE.
+- STORNO untuk jam nyangkut yang sudah telanjur POSTED (61,4 jam, 15–22 Jul). Lapis ini
+  TIDAK menariknya balik — hanya mencegah yang baru.
