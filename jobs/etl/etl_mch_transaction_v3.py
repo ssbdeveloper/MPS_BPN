@@ -692,16 +692,49 @@ def upsert_batch(cursor, values: list[tuple]) -> None:
 #
 # Jangkar dicari lewat LATERAL (satu seek per mesin, ~36 mesin) alih-alih margin waktu
 # tebak-tebakan: blok nyangkut bisa 6 hari panjangnya, margin berapa pun bisa meleset.
+# `touched` = himpunan baris yang mungkin berubah end_effective-nya. Sumbernya BEDA:
+#
+#  INCREMENTAL (cron, default): dari CANDIDATE_TABLE — baris yang BENAR-BENAR di-upsert run
+#    ini (baris baru ∪ baris open `enddatetime IS NULL`). Lingkup recompute jadi seukuran
+#    kerja run itu (~kandidat + jendela ke depan), BUKAN seluruh --from. Sebelum ini cron
+#    tanpa --from menganggap from_dt=2026-01-01 → recompute memindai ~493k baris tiap 5 menit.
+#    Kandidat sudah memuat baris open, jadi saat baris nyangkut akhirnya DITUTUP ia jadi
+#    kandidat dan ikut ter-recompute — jebakan "pendahulu inkremental" tetap tertutup:
+#    jangkar (satu baris sebelum kandidat paling awal per mesin) menarik pendahulunya juga.
+#
+#  FULL-REBUILD (manual --full-rebuild): dari window from_dt/to_dt (rentang yang dibangun
+#    ulang). CANDIDATE_TABLE tidak dibuat di mode ini, jadi tak bisa dipakai.
+#
+# __TOUCHED__ diisi salah satu fragmen ini saat runtime (TARGET_TABLE/CANDIDATE_TABLE sudah
+# tersubstitusi f-string). Fragmen kandidat TANPA %s; fragmen window PUNYA 3 %s (urut paling
+# depan di SQL → param window mendahului param jangkar).
+# `enddatetime IS NOT NULL` di kedua fragmen KRUSIAL untuk performa. Baris open (end NULL)
+# ikut jadi kandidat tiap run (reprocess), dan ADA baris open menggantung sejak Januari
+# (HMI tak pernah kirim event tutup). Tanpa filter ini, satu baris open Jan menyeret jangkar
+# ke Januari -> lingkup kembali ~493k. Baris open toh di-skip recompute (end_effective NULL),
+# jadi tak perlu di `touched`. Saat baris open AKHIRNYA ditutup, ia jadi kandidat CLOSED run
+# itu -> ikut ter-recompute + jangkar menariknya (benar; itu memang run mahal sekali-sekali).
+_TOUCHED_FROM_CANDIDATES = f"""
+    SELECT t.machineno, MIN(t.startdatetime) AS min_start
+    FROM {TARGET_TABLE} t
+    JOIN {CANDIDATE_TABLE} c ON c.proddataid = t.proddataid
+    WHERE t.enddatetime IS NOT NULL
+    GROUP BY t.machineno
+"""
+
+_TOUCHED_FROM_WINDOW = f"""
+    SELECT machineno, MIN(startdatetime) AS min_start
+    FROM {TARGET_TABLE}
+    WHERE startdatetime >= %s
+      AND (%s::timestamp IS NULL OR startdatetime < %s::timestamp)
+      AND enddatetime IS NOT NULL
+    GROUP BY machineno
+"""
+
 # Langkah 1 — jangkar per mesin: satu baris SEBELUM baris tersentuh paling awal.
 # Nilai minimumnya dipakai sebagai batas bawah literal di langkah 2 (lihat di sana).
 ANCHOR_SQL = f"""
-WITH touched AS (
-  SELECT machineno, MIN(startdatetime) AS min_start
-  FROM {TARGET_TABLE}
-  WHERE startdatetime >= %s
-    AND (%s::timestamp IS NULL OR startdatetime < %s::timestamp)
-  GROUP BY machineno
-)
+WITH touched AS (__TOUCHED__)
 SELECT MIN(COALESCE(p.startdatetime, t.min_start)) AS min_anchor, COUNT(*) AS machines
 FROM touched t
 LEFT JOIN LATERAL (
@@ -724,13 +757,7 @@ LEFT JOIN LATERAL (
 # nyata 22-Jul, jangkar terjauh ada di 13-Jul (9 hari) — mesin yang barisnya menggantung.
 BUILD_RECALC_SQL = f"""
 CREATE TEMP TABLE _mch_recalc ON COMMIT DROP AS
-WITH touched AS (
-  SELECT machineno, MIN(startdatetime) AS min_start
-  FROM {TARGET_TABLE}
-  WHERE startdatetime >= %s
-    AND (%s::timestamp IS NULL OR startdatetime < %s::timestamp)
-  GROUP BY machineno
-),
+WITH touched AS (__TOUCHED__),
 anchor AS MATERIALIZED (
   SELECT t.machineno, COALESCE(p.startdatetime, t.min_start) AS from_start
   FROM touched t
@@ -853,11 +880,26 @@ def _end_effective_columns_present(cur) -> bool:
     return cur.fetchone() is not None
 
 
-def recompute_end_effective(pg_conn, from_dt: datetime, to_dt: datetime | None, dry_run: bool) -> int:
-    """Hitung ulang end_effective/overlap_seconds/is_stuck untuk jendela run ini."""
+def recompute_end_effective(
+    pg_conn,
+    from_dt: datetime,
+    to_dt: datetime | None,
+    dry_run: bool,
+    full_rebuild: bool = False,
+) -> int:
+    """Hitung ulang end_effective/overlap_seconds/is_stuck untuk baris yang tersentuh run ini.
+
+    Incremental (default): lingkup diturunkan dari CANDIDATE_TABLE (baris yang di-upsert run
+    ini) — bukan from_dt — supaya cron tanpa --from tak memindai seluruh sejarah.
+    full_rebuild: lingkup dari window from_dt/to_dt (CANDIDATE_TABLE tak ada di mode itu)."""
     if dry_run:
         log.info("recompute_end_effective: DRY RUN — dilewati")
         return 0
+
+    # Fragmen `touched` + param window. Kandidat: 0 %s. Window: 3 %s (from, to, to) yang
+    # muncul PALING DEPAN di SQL, jadi mendahului param jangkar (min_anchor) di langkah 2.
+    touched_frag = _TOUCHED_FROM_WINDOW if full_rebuild else _TOUCHED_FROM_CANDIDATES
+    window_params = (from_dt, to_dt, to_dt) if full_rebuild else ()
 
     # GUARD AMAN-URUTAN. Kolom end_effective berasal dari migration lapis 1a yang TERPISAH
     # dari deploy kode ini. Tanpa guard, men-deploy versi ini SEBELUM migration jalan (atau
@@ -875,14 +917,16 @@ def recompute_end_effective(pg_conn, from_dt: datetime, to_dt: datetime | None, 
             return 0
 
     with pg_conn.cursor() as cur:
-        cur.execute(ANCHOR_SQL, (from_dt, to_dt, to_dt))
+        cur.execute(ANCHOR_SQL.replace("__TOUCHED__", touched_frag), window_params)
         row = cur.fetchone()
         min_anchor, machines = (row[0], row[1]) if row else (None, 0)
         if not min_anchor:
-            log.info("recompute_end_effective: tidak ada baris tersentuh di jendela ini")
+            # Run kosong (0 kandidat) -> touched kosong -> min_anchor NULL. Berhenti di sini:
+            # TIDAK ada build, TIDAK ada full scan.
+            log.info("recompute_end_effective: tidak ada baris tersentuh — dilewati")
             return 0
 
-        cur.execute(BUILD_RECALC_SQL, (from_dt, to_dt, to_dt, min_anchor))
+        cur.execute(BUILD_RECALC_SQL.replace("__TOUCHED__", touched_frag), window_params + (min_anchor,))
         cur.execute("ANALYZE _mch_recalc")
         # WAJIB sebelum UPDATE — lihat migration 20260722_..._no_overlap_deferrable.sql.
         # Satu UPDATE ini memotong baris lama DAN mengisi baris baru sekaligus, jadi ada
@@ -894,9 +938,11 @@ def recompute_end_effective(pg_conn, from_dt: datetime, to_dt: datetime | None, 
         cur.execute("SET CONSTRAINTS ALL DEFERRED")
         cur.execute(UPDATE_FROM_RECALC_SQL)
         changed = cur.rowcount
+        # Hitung nyangkut memakai min_anchor (batas bawah lingkup nyata), BUKAN from_dt —
+        # kalau pakai from_dt=2026-01-01 (cron), query logging ini sendiri jadi full scan.
         cur.execute(
             f"SELECT COUNT(*) FROM {TARGET_TABLE} WHERE is_stuck AND startdatetime >= %s",
-            (from_dt,),
+            (min_anchor,),
         )
         stuck = cur.fetchone()[0]
     pg_conn.commit()  # ON COMMIT DROP membuang tabel sementara di sini
@@ -1142,8 +1188,9 @@ def run_etl(pg_conn, from_dt: datetime, to_dt: datetime | None, full_rebuild: bo
     apply_overrides(pg_conn, dry_run)
 
     # Normalisasi interval TERAKHIR: baris baru batch ini bisa menjadi "penerus" yang
-    # memotong baris lama, jadi ini harus jalan setelah semua upsert selesai.
-    recompute_end_effective(pg_conn, from_dt, to_dt, dry_run)
+    # memotong baris lama, jadi ini harus jalan setelah semua upsert selesai. full_rebuild
+    # diteruskan: incremental -> lingkup dari CANDIDATE_TABLE; full-rebuild -> window from_dt.
+    recompute_end_effective(pg_conn, from_dt, to_dt, dry_run, full_rebuild=full_rebuild)
 
     return total_upserted
 
