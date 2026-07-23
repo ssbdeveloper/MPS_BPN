@@ -743,7 +743,7 @@ anchor AS MATERIALIZED (
   ) p ON TRUE
 ),
 scope AS (
-  SELECT m.proddataid, m.machineno, m.startdatetime, m.enddatetime
+  SELECT m.proddataid, m.machineno, m.status_activitytype, m.startdatetime, m.enddatetime
   FROM {TARGET_TABLE} m
   JOIN anchor a ON a.machineno = m.machineno
   WHERE m.startdatetime >= a.from_start
@@ -751,24 +751,70 @@ scope AS (
 ),
 calc AS (
   SELECT
-    proddataid,
-    enddatetime,
+    proddataid, machineno, status_activitytype, startdatetime, enddatetime,
     lead(startdatetime) OVER (PARTITION BY machineno ORDER BY startdatetime, proddataid) AS next_start
   FROM scope
+),
+-- GUARD-HOLE. Clamp mengasumsikan baris PENUTUP-lah yang nyangkut dan stream sesudahnya
+-- yang nyata. Validasi Juli 2026 (409 overlap): stream selalu menile mencapai akhir baris
+-- penutup — nol hole, nol jam hilang. TAPI mode gagal masih mungkin: blip pendek SPURIOUS
+-- di tengah kerja NYATA -> clamp memotong kerja nyata dan kurang-kirim ke SAP.
+--
+-- Guard: untuk overlap FOREGROUND (M1/M2 -> dibukukan ke order SAP), cek apakah ekor yang
+-- akan dibuang [next_start, end] benar-benar tergantikan stream sesudahnya (stream_reach =
+-- sejauh mana baris berikutnya di mesin yang sama menile). Kalau TIDAK penuh tergantikan
+-- (hole), JANGAN clamp — pertahankan baris utuh + tandai (is_stuck true, overlap_seconds 0)
+-- supaya di-review, bukan diam-diam terpotong. Baris terbalik (end < start, data sumber
+-- rusak) dikecualikan dari stream_reach — bukan "cakupan" yang sah.
+--
+-- Terbukti pada seluruh 493k baris prod: guard-hole == clamp polos untuk SELURUH data Juli
+-- (nol beda). Hanya 8 baris trial Mei-Jun (foreground bertetangga baris terbalik) yang
+-- ditahan + ditandai — tak menyentuh SAP. is_stuck identik backfill di mana pun.
+--
+-- Subquery hanya berjalan untuk overlap FOREGROUND (sedikit, span pendek) — murah.
+judged AS (
+  SELECT c.*,
+    CASE WHEN c.status_activitytype IN ('M1','M2')
+          AND c.next_start IS NOT NULL AND c.next_start < c.enddatetime THEN (
+      SELECT max(m.enddatetime)
+      FROM {TARGET_TABLE} m
+      WHERE m.machineno = c.machineno
+        AND m.startdatetime >= c.next_start
+        AND m.startdatetime <  c.enddatetime
+        AND m.enddatetime IS NOT NULL
+        AND m.enddatetime > m.startdatetime
+    ) END AS stream_reach
+  FROM calc c
+),
+final AS (
+  SELECT
+    proddataid, enddatetime, next_start,
+    CASE
+      WHEN enddatetime IS NULL THEN NULL
+      WHEN next_start IS NULL OR next_start >= enddatetime THEN enddatetime
+      -- FOREGROUND yang ekornya TIDAK penuh tergantikan -> JANGAN clamp (pertahankan, flag).
+      WHEN status_activitytype IN ('M1','M2')
+           AND (stream_reach IS NULL OR stream_reach < enddatetime) THEN enddatetime
+      -- Selebihnya (foreground tercakup penuh, atau background/lainnya): clamp.
+      ELSE next_start
+    END AS end_effective
+  FROM judged
 )
 SELECT
   proddataid,
-  CASE
-    WHEN enddatetime IS NULL THEN NULL
-    WHEN next_start IS NOT NULL AND next_start < enddatetime THEN next_start
-    ELSE enddatetime
-  END AS end_effective,
-  CASE
-    WHEN enddatetime IS NOT NULL AND next_start IS NOT NULL AND next_start < enddatetime
-      THEN GREATEST(EXTRACT(EPOCH FROM (enddatetime - next_start))::int, 0)
-    ELSE 0
-  END AS overlap_seconds
-FROM calc
+  end_effective,
+  -- Jumlah detik yang BENAR-BENAR dipotong (0 utk baris flag yang tak di-clamp).
+  GREATEST(EXTRACT(EPOCH FROM (enddatetime - end_effective))::int, 0) AS overlap_seconds,
+  -- is_stuck = baris MATERIAL overlap (>= 1 dtk setelah pembulatan), lepas dari apakah
+  -- di-clamp. Identik definisi backfill lama (overlap_seconds>0) untuk baris ter-clamp,
+  -- TAPI tetap true utk baris flag (overlap besar walau tak di-clamp). Baris flag review
+  -- = `is_stuck AND overlap_seconds = 0`.
+  COALESCE(
+    next_start IS NOT NULL
+    AND GREATEST(EXTRACT(EPOCH FROM (enddatetime - next_start))::int, 0) > 0,
+    false
+  ) AS is_stuck
+FROM final
 """
 
 # Langkah 3 — tulis balik. ANALYZE atas tabel sementara WAJIB sebelum ini: tanpa statistik,
@@ -778,13 +824,15 @@ UPDATE_FROM_RECALC_SQL = f"""
 UPDATE {TARGET_TABLE} t
 SET end_effective   = f.end_effective,
     overlap_seconds = f.overlap_seconds,
-    is_stuck        = (f.overlap_seconds > 0)
+    is_stuck        = f.is_stuck
 FROM _mch_recalc f
 WHERE f.proddataid = t.proddataid
   -- Hanya tulis yang benar-benar berubah: recompute jalan tiap run, dan menulis ulang
   -- ribuan baris identik hanya menambah bloat tabel tanpa mengubah apa pun.
+  -- is_stuck ikut dibandingkan — guard-hole bisa mengubahnya tanpa mengubah overlap_seconds.
   AND (t.end_effective IS DISTINCT FROM f.end_effective
-       OR t.overlap_seconds IS DISTINCT FROM f.overlap_seconds)
+       OR t.overlap_seconds IS DISTINCT FROM f.overlap_seconds
+       OR t.is_stuck IS DISTINCT FROM f.is_stuck)
 """
 
 
