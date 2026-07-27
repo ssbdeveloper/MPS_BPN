@@ -12,6 +12,7 @@ updated: 2026-07-20
 ## 🏗️ Sedang dikerjakan (active)
 
 - [[REFACTOR_PLAN]] — refactor besar DB/API/frontend. Phase 1 ✅ · Phase 2 berikutnya: A-R1 auth, A-R3 satu jalur SAP, D-R1 migration ledger
+- [[deployment/PLANT_CONFIG_VARIANT_DESIGN]] · [[deployment/PLANT_CONFIG_VARIANT_PLAN]] — sumber kebenaran per plant (identitas+varian+timezone) di tabel `plant_config`; frontend fetch varian dari `/config` (revisi F-R4). **Kode SELESAI 2026-07-27** (12 task, test/build/lint hijau, uncommitted). **Pending: rollout** (migrate+seed+deploy per plant) + commit. Jobs & aturan SAP (BLOCKED PRD D2/D3) = follow-up
 
 ## 👀 Menunggu review / keputusan
 
