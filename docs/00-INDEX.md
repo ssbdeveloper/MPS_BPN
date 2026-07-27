@@ -29,18 +29,20 @@ updated: 2026-07-24
 
 ## 🎯 Rencana aktif
 
-| Dokumen | Status | Ringkas |
-|---|---|---|
-| [[EWS_PLAN]] | executing | **Master plan EWS tunggal** (8 KPI, issue log, drill-through) — 7 dokumen lama dilebur ke sini 2026-07-12 |
-| [[REFACTOR_PLAN]] | executing | Refactor besar DB/API/frontend — progres ditandai inline per item |
-| [[security/AUTH_RBAC_DESIGN]] | review | Token auth + RBAC enforcement (A-R1) — menunggu jawaban §7 + §5b |
-| [[salvaging/SALVAGE_FLOW_DESIGN]] | review | Alur salvaging end-to-end: lifecycle 2 tingkat, QC, Quote — menunggu jawaban §10 |
+> **Status hidup di [[STATUS]]** (board Dataview) — sumber kebenaran. Tabel ini hanya daftar + ringkas.
+
+| Dokumen | Ringkas |
+|---|---|
+| [[EWS_PLAN]] | **Master plan EWS tunggal** (8 KPI, issue log, drill-through) — 7 dokumen lama dilebur ke sini 2026-07-12 |
+| [[REFACTOR_PLAN]] | Refactor besar DB/API/frontend — progres ditandai inline per item |
+| [[security/AUTH_RBAC_DESIGN]] | Token auth + RBAC enforcement (A-R1) — menunggu jawaban §7 + §5b |
+| [[salvaging/SALVAGE_FLOW_DESIGN]] | Alur salvaging end-to-end: lifecycle 2 tingkat, QC, Quote — menunggu jawaban §10 |
 
 ## 📋 PRD
 
-| Dokumen | Status | Ringkas |
-|---|---|---|
-| [[prd/manufacturing-variant]] | draft | Varian manufacturing: peta beda vs salvaging, FR-0..8, keputusan terbuka D1–D11 |
+| Dokumen | Ringkas |
+|---|---|
+| [[prd/manufacturing-variant]] | Varian manufacturing: peta beda vs salvaging, FR-0..8, keputusan terbuka D1–D11 |
 
 ## 🗄️ Migration & Database
 

@@ -9,7 +9,7 @@ updated: 2026-07-20
 > frontmatter `status:`. Papan ini hanya daftar link — sumber kebenaran ada di
 > dokumennya. Selesai → pindahkan barisnya ke ✅ dan set `status: done`.
 
-## 🏗️ Sedang dikerjakan (executing)
+## 🏗️ Sedang dikerjakan (active)
 
 - [[REFACTOR_PLAN]] — refactor besar DB/API/frontend. Phase 1 ✅ · Phase 2 berikutnya: A-R1 auth, A-R3 satu jalur SAP, D-R1 migration ledger
 

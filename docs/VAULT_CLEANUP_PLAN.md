@@ -36,7 +36,7 @@ Audit 2026-07-24 (bandingkan `docs/` di disk vs klaim CLAUDE.md) menemukan drift
    Pemicunya "sesi kerja signifikan" (subjektif), bukan "setiap perubahan code". Draf
    penguatan sudah dibuat (lihat riwayat chat 2026-07-24) — perlu di-ACC.
 2. **Brainstorming belum punya rumah.** Vault cuma punya `concepts/` (menetap) + `log/`
-   (kejadian) + doc rencana `status: draft`. Kalau mau lane `status: brainstorm` atau folder
+   (kejadian) + doc rencana ber-`status:` (planning/active/done/parked). Kalau mau lane `status: brainstorm` atau folder
    `brainstorm/`, itu konvensi BARU → sekalian update [[KONVENSI]] §3.
 3. **`_isolasi/` — deadline hapus 2026-09-01** ([[_isolasi/README]]). 17 file, semua nol
    wikilink. Putuskan per file: angkat ke concept/plan aktif, atau buang.
@@ -49,7 +49,7 @@ Audit 2026-07-24 (bandingkan `docs/` di disk vs klaim CLAUDE.md) menemukan drift
 - [ ] Target: tiap plan/concept/log **wajib** minimal 1 wikilink + tercapai dari INDEX ≤2 hop.
       Prioritas file "hidup" dulu (plan aktif, concept), bukan arsip.
 - [ ] `REFACTOR_PLAN.md` & `MSPROJECT_PWA_LITE_PLAN.md` (root, nol wikilink) → tautkan atau
-      tandai `status: superseded`.
+      beri `status:` — keduanya kini `active` (bukan superseded).
 - [ ] `log/2026-07-22-ews-uptime-hmi-live.md` — satu-satunya LOG tanpa wikilink → tautkan ke
       konsep/plan EWS.
 - [ ] Konsolidasi duplikat cheatsheet: `archive/mpsobsidian/cheatsheet.md` (masih diedit) vs

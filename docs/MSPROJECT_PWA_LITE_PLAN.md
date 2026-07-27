@@ -1,7 +1,7 @@
 ---
 tags: [domain/msproject]
 type: plan
-status: done
+status: active
 ---
 
 # Rencana Refactor: MS Project ⇄ MPS2 — "PWA Lite"
