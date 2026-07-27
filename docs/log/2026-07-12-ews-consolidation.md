@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/ews]
 date: 2026-07-12
 topic: Konsolidasi dokumen EWS + perbaikan encoding
 ---

@@ -1,3 +1,7 @@
+---
+tags: [domain/sap]
+---
+
 # SAP Manual Staging And Posting Test
 
 ## Seed Manual Payload

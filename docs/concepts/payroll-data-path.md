@@ -1,6 +1,6 @@
 ---
 type: concept
-tags: [payroll, timesheet, sap]
+tags: [payroll, timesheet, sap, domain/timesheet]
 updated: 2026-07-11
 ---
 

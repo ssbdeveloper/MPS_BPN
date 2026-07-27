@@ -1,3 +1,9 @@
+---
+tags: [domain/timesheet, domain/sow]
+type: plan
+status: planning
+---
+
 # Planhours Guard Implementation Plan
 
 ## Goal

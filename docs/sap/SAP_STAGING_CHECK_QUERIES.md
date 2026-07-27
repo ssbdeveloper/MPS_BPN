@@ -1,3 +1,7 @@
+---
+tags: [domain/sap]
+---
+
 # SAP Staging Check Queries
 
 Query-query ini dipakai untuk audit hasil `sap_timesheet_staging` sebelum/selama posting ke SAP.

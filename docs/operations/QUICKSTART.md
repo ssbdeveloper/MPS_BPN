@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # 🚀 Quick Start Guide - MPS2 Timesheet System
 
 ## Setup dalam 5 Menit

@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # Redis Cache Controller Analysis
 
 Tanggal analisis: 2026-06-29

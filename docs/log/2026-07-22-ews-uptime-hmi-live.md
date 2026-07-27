@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/ews]
 date: 2026-07-22
 topic: KPI uptime_hmi — dari rata-rata harian per mesin → state HIDUP per device HMI
 ---

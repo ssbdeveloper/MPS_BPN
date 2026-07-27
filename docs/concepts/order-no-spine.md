@@ -1,6 +1,6 @@
 ---
 type: concept
-tags: [data-model, salvaging]
+tags: [data-model, salvaging, domain/sap]
 updated: 2026-07-11
 ---
 

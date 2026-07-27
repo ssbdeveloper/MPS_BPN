@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # Analisis: PostgreSQL Connection Exhaustion MPS2
 
 > Status: Investigasi selesai, rekomendasi diperbarui.

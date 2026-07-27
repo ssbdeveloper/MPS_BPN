@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/sap]
 date: 2026-07-14
 topic: Provenance + guard anti-double-post jalur SAP staging
 ---

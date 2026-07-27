@@ -1,6 +1,6 @@
 ---
 type: concept
-tags: [sap, payroll, staging]
+tags: [sap, payroll, staging, domain/sap]
 updated: 2026-07-14
 ---
 

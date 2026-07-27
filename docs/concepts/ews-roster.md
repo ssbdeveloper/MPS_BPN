@@ -1,6 +1,6 @@
 ---
 type: concept
-tags: [ews, roster, adoption-labour, shift]
+tags: [ews, roster, adoption-labour, shift, domain/ews]
 updated: 2026-07-22
 ---
 

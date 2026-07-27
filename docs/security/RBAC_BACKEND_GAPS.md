@@ -1,3 +1,7 @@
+---
+tags: [domain/security]
+---
+
 # RBAC — Backend Enforcement Gaps
 
 > **Status:** Frontend RBAC implemented (UX only). Backend enforcement **NOT done**.

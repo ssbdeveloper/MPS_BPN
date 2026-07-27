@@ -1,7 +1,8 @@
 ---
-status: review
-tags: [design, security]
+status: active
+tags: [design, security, domain/security]
 created: 2026-07-11
+type: design
 ---
 
 # Auth + RBAC Enforcement — Design (A-R1)

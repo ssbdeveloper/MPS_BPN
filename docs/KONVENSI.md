@@ -1,6 +1,6 @@
 ---
 type: ops
-tags: [konvensi, meta]
+tags: [konvensi, meta, domain/vault]
 updated: 2026-07-11
 ---
 
@@ -28,11 +28,16 @@ updated: 2026-07-11
 ## 3. Frontmatter (supaya bisa difilter mesin & Obsidian)
 
 ```yaml
-type: plan | design | log | concept | uat | ops
-status: draft | review | approved | executing | done | superseded   # untuk plan/design
+type: plan | prd | design | feature | concept | log | uat | ops | moc
+status: planning | active | done | parked   # HANYA dok kerja (plan/prd/design/feature); referensi tak berstatus
 date: YYYY-MM-DD                                                    # untuk log
 tags: [..]
 ```
+
+**Status rencana bertahap:** `done` hanya bila SEMUA fase sudah rilis; sebagian fase rilis = `active`; `planning` = belum ada fase yang rilis.
+
+**Tag domain (nested, di `tags:`):** satu domain utama per dokumen, maksimal dua bila lintas-domain.
+`domain/ews` · `domain/sow` · `domain/timesheet` · `domain/sap` · `domain/msproject` · `domain/security` · `domain/ops` · `domain/vault`
 
 ## 4. Cara AI memakai vault ini (instruksi untuk sesi AI)
 

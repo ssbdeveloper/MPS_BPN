@@ -1,3 +1,7 @@
+---
+tags: [domain/msproject]
+---
+
 hapus
 rm -rf venv
 rmdir /s /q venv

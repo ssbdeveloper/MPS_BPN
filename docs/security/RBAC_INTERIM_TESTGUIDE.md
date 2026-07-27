@@ -1,3 +1,7 @@
+---
+tags: [domain/security]
+---
+
 # RBAC Interim Enforcement — What Was Built + How To Test
 
 > Interim x-role enforcement (Phases A–E) per

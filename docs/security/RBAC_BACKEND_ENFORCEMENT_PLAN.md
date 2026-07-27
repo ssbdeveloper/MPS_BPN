@@ -1,3 +1,9 @@
+---
+tags: [domain/security]
+type: plan
+status: active
+---
+
 # RBAC Backend Enforcement — Interim (x-role) → Proper (verified token)
 
 > Companion to [RBAC_BACKEND_GAPS.md](./RBAC_BACKEND_GAPS.md) (why) and

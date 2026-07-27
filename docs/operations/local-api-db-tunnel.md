@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # Menjalankan API Lokal Dengan Database Remote
 
 Dokumen ini untuk menjalankan `apps/api/server.js` di laptop lokal, tetapi tetap memakai database PostgreSQL remote dari `.env`.

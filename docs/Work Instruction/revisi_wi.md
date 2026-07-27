@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 ## Kesimpulan review
 
 **Belum sepenuhnya siap masuk Document Management System sebagai WI end-user.** Isinya sudah lengkap secara proses, tetapi masih terlalu bercampur antara:

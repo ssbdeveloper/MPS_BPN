@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/sap]
 date: 2026-07-22
 topic: Overlap jam mesin — mekanismenya "blok nyangkut", plus detektor read-only
 ---

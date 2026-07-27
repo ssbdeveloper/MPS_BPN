@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 # Manufacturing Version - UAT Guide
 
 Dokumen ini menjelaskan fitur versi Manufacturing yang sudah dibuat untuk kebutuhan UAT. Fokusnya adalah cara kerja dari sisi user, alur test, dan hal yang perlu dicek saat validasi.

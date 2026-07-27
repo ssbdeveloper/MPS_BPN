@@ -1,13 +1,16 @@
 ---
 type: design
-status: draft
-tags: [ews, roster, adoption-labour, planning]
+status: active
+tags: [ews, roster, adoption-labour, planning, domain/ews]
 updated: 2026-07-20
 ---
 
 # Rancangan Fitur Roster EWS — Override Foreman + Adoption Mode A
 
-> RANCANGAN untuk direview sebelum implementasi bertahap. **Belum ada kode/skema/migrasi.**
+> RANCANGAN implementasi bertahap. **UPDATE 2026-07-27:** Fase 1 shift-lock **sudah rilis**
+> (migrasi `20260720_ews_operator_shift_lock.sql` + `20260720_ews_roster_effective_view.sql`,
+> endpoint `/ews/roster/lock`); Fase 2 std-override / 3 extra-workday / 4 horizon belum.
+> Penanda `[BARU]`/"tak ada tabel" di §1 & §11 = kondisi saat desain ditulis, kini sebagian usang.
 > Klaim tentang kode/data existing ditandai **[READ]** (diverifikasi sesi ini) / **[INFERRED]**.
 > Konsep dasar: [[concepts/ews-roster]].
 

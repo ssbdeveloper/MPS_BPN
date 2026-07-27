@@ -1,3 +1,9 @@
+---
+tags: [domain/security]
+type: plan
+status: planning
+---
+
 # RBAC Rollout Plan — Whole-App Impact & Per-Page Tasks
 
 > Companion to [RBAC_BACKEND_GAPS.md](./RBAC_BACKEND_GAPS.md).

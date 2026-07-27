@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 # WI Digital Timesheet MPS2 - Mode Salvaging
 
 ## 1. Tujuan

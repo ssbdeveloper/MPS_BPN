@@ -1,7 +1,7 @@
 ---
 type: log
 date: 2026-07-16
-tags: [sap, staging, machine-hours, dashboard, ews, payroll]
+tags: [sap, staging, machine-hours, dashboard, ews, payroll, domain/sap]
 ---
 
 # SAP-log redesign, kelayakan unproductive, bundling harian, fresh start staging

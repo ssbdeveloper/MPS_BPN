@@ -1,3 +1,7 @@
+---
+tags: [domain/msproject]
+---
+
 # MS Project API Testing
 
 Base URL examples:

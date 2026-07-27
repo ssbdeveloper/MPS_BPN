@@ -1,7 +1,7 @@
 ---
 type: log
 date: 2026-07-14
-tags: [manufacturing, variant, prd, timesheet]
+tags: [manufacturing, variant, prd, timesheet, domain/timesheet]
 ---
 
 # 2026-07-14 — PRD varian manufacturing (scan 3 lapisan → dokumen)

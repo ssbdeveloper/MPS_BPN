@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # MPS2 Timesheet System - Docker Deployment Guide
 
 ## 📋 Architecture Overview

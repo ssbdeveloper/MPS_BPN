@@ -1,8 +1,9 @@
 ---
-status: executing
-tags: [plan, refactor]
+status: active
+tags: [plan, refactor, domain/ops]
 created: 2026-07-07
 updated: 2026-07-11
+type: plan
 ---
 
   # MPS2 Large-Scale Refactor Plan

@@ -1,3 +1,7 @@
+---
+tags: [domain/msproject]
+---
+
 # Runbook — MS Project Hub & Integrasi VBA v2
 
 Tanggal: 2026-07-07. Pasangan dokumen: `docs/MSPROJECT_PWA_LITE_PLAN.md` (rencana)

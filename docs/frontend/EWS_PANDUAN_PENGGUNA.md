@@ -1,3 +1,7 @@
+---
+tags: [domain/ews]
+---
+
 # Panduan Pengguna — EWS (Early Warning System)
 
 > Panduan ini ditulis untuk **pengguna awam** (foreman, supervisor, PPIC, manajemen).

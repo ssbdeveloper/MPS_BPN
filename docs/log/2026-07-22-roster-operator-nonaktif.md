@@ -1,7 +1,7 @@
 ---
 type: log
 date: 2026-07-22
-tags: [ews, roster, adoption-labour, inactive-operator, snapshot, prod-change]
+tags: [ews, roster, adoption-labour, inactive-operator, snapshot, prod-change, domain/ews]
 ---
 
 # 2026-07-22 — Penanda operator nonaktif, cleanup Sabtu, koreksi snapshot 07-18

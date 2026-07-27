@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # Edit nginx.conf
 notepad nginx/nginx.conf
 

@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 # F5 — Multi-Day Scheduling Timeline: What Was Built + How To Test
 
 > Fase F5 dari [sow Scheduling master plan.md](./sow%20Scheduling%20master%20plan.md).

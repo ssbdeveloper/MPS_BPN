@@ -1,6 +1,6 @@
 ---
-status: approved
-tags: [uat, timesheet, sap]
+tags: [uat, timesheet, sap, domain/sap, domain/timesheet]
+uat_result: approved
 ---
 
 # UAT Scenarios — Timesheet Validation: SAP Posting

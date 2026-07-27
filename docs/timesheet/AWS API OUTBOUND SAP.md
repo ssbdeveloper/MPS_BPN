@@ -1,3 +1,7 @@
+---
+tags: [domain/sap, domain/timesheet]
+---
+
 Saya ingin membuat **AWS Lambda Function menggunakan Node.js** untuk menerima data dari **SAP CPI** melalui **AWS API Gateway**, lalu menyimpan data tersebut ke database **PostgreSQL AWS** pada tabel:
 
 ```sql

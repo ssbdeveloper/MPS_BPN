@@ -1,3 +1,7 @@
+---
+tags: [domain/sow]
+---
+
 # Receiving, Component Breakdown, SOW, and Shipping Schema Plan
 
 Source of truth for this plan: `database/schema_receiving_revised.sql`.

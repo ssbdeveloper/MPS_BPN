@@ -1,7 +1,7 @@
 ---
-type: plan
-status: draft
-tags: [prd, manufacturing, variant, timesheet, sap]
+type: prd
+status: active
+tags: [prd, manufacturing, variant, timesheet, sap, domain/timesheet]
 updated: 2026-07-14
 ---
 

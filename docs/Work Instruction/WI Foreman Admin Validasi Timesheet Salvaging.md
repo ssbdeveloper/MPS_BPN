@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 # WI Foreman Admin - Validasi Timesheet Salvaging
 
 | Kontrol Dokumen | Keterangan |

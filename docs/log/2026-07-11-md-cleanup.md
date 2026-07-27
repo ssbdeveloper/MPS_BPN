@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/vault]
 date: 2026-07-11
 topic: Audit & pembersihan file .md
 ---

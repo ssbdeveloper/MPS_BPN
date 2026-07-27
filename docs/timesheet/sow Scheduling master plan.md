@@ -1,3 +1,9 @@
+---
+tags: [domain/sow]
+type: plan
+status: active
+---
+
 # MPS2 — SOW Scheduling: Master Refactor & Feature Plan
 
 > **Status:** Perencanaan (belum dieksekusi). Dokumen ini adalah satu sumber

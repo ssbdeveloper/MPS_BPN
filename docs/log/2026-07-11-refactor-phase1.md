@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/ops]
 date: 2026-07-11
 topic: Eksekusi REFACTOR_PLAN Phase 1 + audit index
 ---

@@ -1,7 +1,7 @@
 ---
 type: design
-status: draft
-tags: [sap, staging, machine-hours, ops, ui]
+status: active
+tags: [sap, staging, machine-hours, ops, ui, domain/sap]
 updated: 2026-07-15
 ---
 

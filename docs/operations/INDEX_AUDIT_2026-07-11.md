@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # Index & Bloat Audit — 2026-07-11
 
 > Dijalankan terhadap DB **produksi** `ptssb` (via tunnel Tailscale `100.86.231.55:5433`, PostgreSQL 15).

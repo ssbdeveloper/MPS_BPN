@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # NGINX Configuration Guide
 
 ## 🔒 Force HTTPS - Konfigurasi

@@ -1,7 +1,7 @@
 ---
 type: plan
-status: executing
-tags: [ews, plan, master]
+status: active
+tags: [ews, plan, master, domain/ews]
 created: 2026-07-12
 ---
 
@@ -57,6 +57,8 @@ Baris MACHINE: `uptime_hmi | accuracy_machine | adoption_machine | oee`
 | adoption_machine | 1 − gap (statusid 5 ∪ statusid 2 >300 dtk) / total | ≥95 | 90–95 | <90 | mch_productiondata (cache) | ✅ live |
 | oee | run(M1,M2 ∪ productive) / denominator (excl. no job/off/preventive/breakdown/break/daily pm) — proxy waktu, bukan OEE klasik | ≥80 | 65–80 | <65 | mch_transaction | ✅ live |
 | ole | working / available per operator | ≥85 | 70–85 | <70 | timesheet | ✅ live |
+
+> **Keputusan lingkup OEE/OLE:** kenapa proxy waktu (bukan model ISO 22400 A×P×Q penuh) & apa yang ikut terparkir → [[concepts/oee-proxy-vs-iso-dashboard]].
 
 Sumber threshold: `DEFAULT_THRESHOLDS` (ewsCalculator.js) + override `ews.kpi_threshold`
 (termasuk owner per KPI: uptime→IT, accuracy/adoption→Foreman/Spv, oee/ole→+PPIC).

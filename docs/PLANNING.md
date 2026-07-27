@@ -1,5 +1,5 @@
 ---
-tags: [board]
+tags: [board, domain/vault]
 updated: 2026-07-20
 ---
 
@@ -21,6 +21,7 @@ updated: 2026-07-20
 
 ## 🔜 Backlog (belum dimulai)
 
+- 🧹 **Pembenahan vault + pengelolaan .md** ([[VAULT_CLEANUP_PLAN]]) — audit 2026-07-24: 64/92 file nol wikilink, 4 folder (`_isolasi/ planning/ prd/ salvaging/`) tak disebut CLAUDE.md, klaim `docs/` di CLAUDE.md tak sinkron. Butuh keputusan owner: perkuat aturan wikilink di CLAUDE.md? lane brainstorm? nasib `_isolasi/` (deadline hapus 2026-09-01). Dikerjakan nanti
 - [[operations/sap-staging-reconciliation-page]] — design draft. Fitur 1 (read-only) + edit terpandu SEBAGIAN SUDAH (tab Jam Operator di SAP-log). Sisa: `ops_worker` deploy (Fitur 2), pertimbangkan buang `sap_ops_request`
 - 🔴 **SAP: baris unproductive ditolak "cost center"** — per 2026-07-16 unproductive IKUT di-stage (aturan kelayakan baru). Akan FAILED sampai master data cost center di SAP beres (perbaikan sisi user/SAP). Dashboard triase menampilkannya jelas
 - 🔴 **SAP: mekanisme STORNO** — guard sekarang hanya *mendeteksi* konflik; pembatalan kiriman salah di SAP masih **manual**. Lihat [[concepts/sap-staging-identity]]
@@ -45,9 +46,13 @@ updated: 2026-07-20
 - Salvage Flow Fase 1 (backbone lifecycle) — menunggu design approved
 - Rotasi password `@dmin*` — **user action**, masih di git history
 - Restart daemon heartbeat — **user action**, mati sejak 2026-07-10
+- 🧩 **Konsolidasi dokumen RBAC** — [[security/AUTH_RBAC_DESIGN]] · [[security/RBAC_BACKEND_ENFORCEMENT_PLAN]] · [[security/RBAC_BACKEND_GAPS]] · [[security/RBAC_ROLLOUT_PLAN]] tumpang tindih (muncul berulang di [[STATUS]]). Gabung jadi satu sumber — masalah konsolidasi, bukan status
+- 🧩 **Konsolidasi [[timesheet/Fitur Block Timesheet Tapping]] → [[timesheet/PLANHOURS_GUARD_IMPLEMENTATION_PLAN]]** — dua dokumen, satu fitur (belum dibangun). PLANHOURS_GUARD = kanonik; Fitur Block sudah `parked`
 
 ## ✅ Done
 
+- 2026-07-24 — **Rekonsiliasi jam mesin → SAP: analisa CSV + tab drill-through** ([[log/2026-07-24-sap-reconciliation-drilldown]] · konsep [[concepts/sap-machine-hours-reconciliation]]): bedah kenapa UI POSTED ±1.698 j ≠ CSV ±1.094 j (produktif→order 1.101 j muncul di CSV, unproduktif→cost-center 596 j tidak; sisa = pembulatan SAP **tak bisa direplikasi**). Tab Rekonsiliasi ditulis ulang bahasa awam + breadcrumb 3 level (Ringkasan→Tanggal→Konfirmasi→Rekaman mesin), 2 endpoint baca baru (`sap-reconciliation-day/-record`), kolom `source_hrs` vs `sent_hrs` = alat pisah kandidat STORNO vs re-stage. 12753 di-STORNO→SKIPPED. **Belum di-commit/deploy.**
+- 2026-07-23 — **Recompute `end_effective`: lingkup kandidat + guard-hole** ([[log/2026-07-23-mch-recompute-scope-guardhole]] · konsep [[concepts/mch-interval-normalization]]): cron tanpa `--from` tadinya scan ~493k baris tiap 5 mnt → lingkup dari `CANDIDATE_TABLE` (`70dfa06`, ~198 baris), filter `enddatetime IS NOT NULL` cegah baris open Jan menyeret jangkar. Guard-hole (`89a066e`): overlap foreground yang ekornya tak tergantikan stream TIDAK di-clamp (cegah kurang-kirim), ditandai `is_stuck AND overlap_seconds=0` untuk review — nol beda vs clamp polos di Juli. Plus recompute aman-urutan (`fa82a9a`), 2 file constraint ditahan `deferred/` (`9b0bea6`)
 - 2026-07-22 — **KPI `uptime_hmi` jadi state HIDUP per device** ([[log/2026-07-22-ews-uptime-hmi-live]]): sumber pindah `ews.machine_heartbeat_daily` (rata-rata harian per mesin, reaksi ~0,03 poin/menit dan tak pernah pulih di hari sama) → `public.mch_machine_ping_log`, ambil ping TERAKHIR tiap **device HMI** (9 IP menaungi 36 mesin) → 1 box mati = −11,1 poin seketika, kembali 100% saat nyala. Uji vs prod: insiden 20-Jul terbaca 66,7% critical (lama: 86,32%). Issue jadi per device (14 issue → 3) + debounce 3 siklus. **Sisa: tabel breakdown `by_device` di halaman detail belum ada**
 - 2026-07-16 — **SAP-log 2 tab + kelayakan unproductive + bundling harian + fresh start** ([[log/2026-07-16-sap-staging-dashboard-unproductive-daily-bundling]]): dashboard Jam Operator (heatmap+drill+edit job/operator), `status_record` redefinisi (unproductive tanpa confirmation), bundling per-hari (4.040→1.659 bundel, sub-menit 0), staging di-reset ID→1 (1.659 PENDING)
 - 2026-07-14 — **Normalisasi NFC endianness** (colon-hex ↔ desimal little-endian): util `nfcId` FE/BE, lookup toleran, migration `20260714_usernfc_normalize_nfcid` (12 kartu + kartu ganda Bagus/Dika), `backfill_operator.py`

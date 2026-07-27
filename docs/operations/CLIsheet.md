@@ -1,3 +1,7 @@
+---
+tags: [domain/ops]
+---
+
 # 🐧 Ubuntu Server CLI Cheat Sheet
 
 > Panduan lengkap command line interface untuk Ubuntu Server - dari basic hingga advanced

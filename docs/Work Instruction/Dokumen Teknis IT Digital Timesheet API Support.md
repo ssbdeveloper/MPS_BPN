@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 # Dokumen Teknis IT - Digital Timesheet API & Support
 
 | Kontrol Dokumen | Keterangan |

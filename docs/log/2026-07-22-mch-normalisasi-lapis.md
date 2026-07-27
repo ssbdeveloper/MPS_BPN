@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/sap]
 date: 2026-07-22
 topic: Normalisasi interval jam mesin (end_effective) — lapis 1a, 1b, 2 + hotfix ETL
 ---

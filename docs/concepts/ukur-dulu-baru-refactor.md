@@ -1,6 +1,6 @@
 ---
 type: concept
-tags: [lesson, database, metodologi]
+tags: [lesson, database, metodologi, domain/ops]
 updated: 2026-07-11
 ---
 

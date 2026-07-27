@@ -1,4 +1,14 @@
+---
+tags: [domain/timesheet]
+type: design
+status: parked
+---
+
 # Pembahasan Fitur Block Timesheet Tapping
+
+> **Kanonik:** rencana & implementasi teknis di [[PLANHOURS_GUARD_IMPLEMENTATION_PLAN]] —
+> fitur yang sama (block Start saat plan hours habis + request overrun). Dokumen ini =
+> deskripsi sisi-user, `parked`. Jangan dikembangkan terpisah; konsolidasikan ke sana.
 
 ## Ringkasan
 

@@ -1,7 +1,8 @@
 ---
-status: review
-tags: [design, salvaging]
+status: active
+tags: [design, salvaging, domain/sow]
 created: 2026-07-11
+type: design
 ---
 
 # Salvage Flow — Design Document

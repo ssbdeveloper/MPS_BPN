@@ -1,3 +1,9 @@
+---
+tags: [domain/msproject]
+type: plan
+status: done
+---
+
 # Rencana Refactor: MS Project ⇄ MPS2 — "PWA Lite"
 
 **Tanggal:** 2026-07-07 · **Sasaran:** pengalaman ala *Project Web App* (Microsoft) versi sederhana:

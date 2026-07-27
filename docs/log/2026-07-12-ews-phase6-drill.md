@@ -1,5 +1,5 @@
 ---
-tags: [decision-log]
+tags: [decision-log, domain/ews]
 date: 2026-07-12
 topic: EWS Phase 6 drill-through — selesai 6/6 kategori
 ---

@@ -1,27 +1,31 @@
 ---
-tags: [moc]
-updated: 2026-07-11
+tags: [moc, domain/vault]
+updated: 2026-07-24
 ---
 
 # MPS2 — Peta Dokumen (MOC)
 
 > Buka folder `docs/` ini sebagai vault Obsidian. Semua rencana, PRD, dan log keputusan
 > hidup di sini, ter-versi git bersama kode. Konvensi: setiap dokumen rencana punya
-> frontmatter `status: draft | review | approved | executing | done | superseded`.
+> frontmatter `status: planning | active | done | parked` (dokumen kerja saja).
 
 ## 📌 MULAI DI SINI
 
 **[[PLANNING]]** — papan kerja: sedang dikerjakan / menunggu review / backlog / done.
+**[[STATUS]]** — papan status otomatis (Dataview): apa yang active / planning / done / parked.
 **[[KONVENSI]]** — aturan main vault ini (4 lapisan, aturan link, cara AI memakainya).
 
 ## 🧠 Konsep (memori semantik — pengetahuan yang menetap)
 
 - [[concepts/payroll-data-path]] — jalur data jam kerja → gaji (yang tidak boleh rusak)
 - [[concepts/sap-staging-identity]] — kenapa `source_key` rapuh, ZTIMESHEETID menipu, dan segmen adalah jangkar yang benar
+- [[concepts/mch-interval-normalization]] — normalisasi interval jam mesin (`end_effective`), guard-hole, constraint anti-overlap — **fitur guard overlapping**
+- [[concepts/sap-machine-hours-reconciliation]] — telusuri jam mesin → staging → POSTED, kenapa total UI ≠ CSV SAP, pembulatan SAP tak bisa dipalsukan
 - [[concepts/order-no-spine]] — tulang punggung order_no + ssbr_ident, struktur 2 tingkat
 - [[concepts/ukur-dulu-baru-refactor]] — pelajaran: diagnosis performa pakai data, bukan asumsi
 - [[concepts/ews-roster]] — rotasi 2-kru, roster beku, dan cara `adoption_labour` memakainya
 - [[concepts/ews-roster-override]] — lapisan override saat baca: shift-lock, operator nonaktif (`inactive_from`), VIEW `roster_effective`, dan koreksi snapshot beku
+- [[concepts/codebase-memory-graph-accuracy]] — batas akurasi graph cbm: handler `exports.X = fn` tak jadi node, CALLS Python cross-file bisa hilang — validasi impact analysis ke sumber
 
 ## 🎯 Rencana aktif
 
@@ -46,6 +50,7 @@ updated: 2026-07-11
 
 ## 📓 Log keputusan (per sesi kerja)
 
+- **Guard overlapping jam mesin** (baca berurut): [[log/2026-07-22-mch-stuck-blocks]] (detektor blok nyangkut) → [[log/2026-07-22-mch-normalisasi-lapis]] (lapis 1a/1b/2 + hotfix ETL) → [[log/2026-07-23-mch-recompute-scope-guardhole]] (lingkup kandidat + guard-hole) → [[log/2026-07-24-sap-reconciliation-drilldown]] (rekonsiliasi CSV + tab drill-through)
 - [[log/2026-07-11-refactor-phase1]] — eksekusi Phase 1+: index drop, D-R3, S-R1, heartbeat
 - [[log/2026-07-11-md-cleanup]] — audit .md: 28 dihapus, 20 diisolasi
 - [[log/2026-07-12-ews-consolidation]] — 7 dokumen EWS dilebur ke [[EWS_PLAN]]

@@ -1,3 +1,7 @@
+---
+tags: [domain/timesheet]
+---
+
 # WI Operator - Digital Timesheet Salvaging
 
 | Kontrol Dokumen | Keterangan |

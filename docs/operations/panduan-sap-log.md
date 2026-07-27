@@ -1,6 +1,6 @@
 ---
 type: ops
-tags: [panduan, sap, user-guide]
+tags: [panduan, sap, user-guide, domain/sap]
 updated: 2026-07-16
 ---
 

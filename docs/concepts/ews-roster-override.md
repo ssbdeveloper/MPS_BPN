@@ -1,6 +1,6 @@
 ---
 type: concept
-tags: [ews, roster, adoption-labour, override, shift-lock, inactive-operator, snapshot]
+tags: [ews, roster, adoption-labour, override, shift-lock, inactive-operator, snapshot, domain/ews]
 updated: 2026-07-22
 ---
 

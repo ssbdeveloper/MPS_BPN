@@ -1,7 +1,6 @@
 ---
-tags: [concept]
-status: active
-updated: 2026-07-22
+tags: [concept, domain/sap]
+updated: 2026-07-24
 ---
 
 # Normalisasi interval jam mesin (`end_effective`)
@@ -95,6 +94,33 @@ Indeks pendukung: `idx_mch_transaction_machine_time (machineno, startdatetime, p
 `proddataid` ikut karena urutan baku kita `(startdatetime, proddataid)` — dua baris bisa
 mulai di detik yang sama, tanpa pemecah seri hasil `LEAD` bisa beda antar-run.
 
+### Lingkup recompute — dari kandidat, bukan `--from` (patch 2026-07-23)
+
+Cron jalan tanpa `--from`, jadi "baris kandidat" di poin #1 **bukan window tanggal** melainkan
+`CANDIDATE_TABLE` — baris yang benar-benar di-upsert run itu (`_TOUCHED_FROM_CANDIDATES`).
+Tanpa ini, default `from_dt=2026-01-01` membuat recompute memindai ~493k baris **tiap 5 menit**.
+Jangkar LATERAL tetap menarik pendahulu, jadi jebakan inkremental tetap tertutup; lingkup run
+normal turun ~493.682 → **198 baris**. `--full-rebuild` tetap pakai fragmen window.
+
+Filter **`WHERE enddatetime IS NOT NULL`** di kedua fragmen bukan kosmetik: baris open (end
+NULL) di-reprocess tiap run, dan ADA baris open menggantung sejak Januari (HMI tak kirim event
+tutup). Satu baris open Jan akan menyeret jangkar mundur → lingkup meledak lagi. Aman karena
+baris open toh di-skip recompute; saat akhirnya ditutup ia jadi kandidat CLOSED run itu.
+Detail: [[log/2026-07-23-mch-recompute-scope-guardhole]].
+
+### Guard-hole — clamp tidak boleh memakan kerja nyata (2026-07-23)
+
+Clamp mengasumsikan baris PENUTUP yang nyangkut. Mode gagal simetris: **blip spurious pendek
+di tengah kerja foreground nyata** → `next_start` jatuh di dalam kerja sah → clamp memotong
+kerja nyata → **kurang-kirim** ke SAP. Under-report ke payroll = sama buruknya.
+
+Guard: untuk overlap **foreground** (`status_activitytype IN ('M1','M2')`), cek apakah ekor
+`[next_start, enddatetime]` benar-benar tergantikan stream sesudahnya (`stream_reach`). Kalau
+ada **hole**, JANGAN clamp — pertahankan baris utuh, tandai `is_stuck = true` dengan
+`overlap_seconds = 0` → masuk review, bukan diam-diam terpotong. **Baris review = `is_stuck
+AND overlap_seconds = 0`.** Terbukti nol beda vs clamp polos untuk SELURUH Juli; hanya 8 baris
+trial Mei–Jun tertahan (tak menyentuh SAP). Pertahanan terhadap pola yang belum muncul.
+
 ## Cara membacanya di konsumen
 
 ```sql
@@ -185,13 +211,20 @@ Dua kelompok baris sengaja di luar jangkauan (partial `WHERE`):
 - Backfill sekali jalan: 489.306 baris, 4.955 nyangkut, 23.310 jam terpotong
   (didominasi data trial Mei–Juni; Juli sendiri 423 jam).
 - Deteksi ad-hoc: `node scripts/detect_mch_stuck_blocks.js --days 7`.
-- Log sesi: [[log/2026-07-22-mch-stuck-blocks]], [[log/2026-07-22-mch-normalisasi-lapis]].
+- Patch lanjutan 2026-07-23 (`70dfa06` lingkup kandidat, `89a066e` guard-hole, `fa82a9a`
+  recompute aman-urutan, `9b0bea6` 2 file constraint ditahan di `deferred/`).
+- Log sesi: [[log/2026-07-22-mch-stuck-blocks]], [[log/2026-07-22-mch-normalisasi-lapis]],
+  [[log/2026-07-23-mch-recompute-scope-guardhole]].
 - Bug terpisah yang ikut ketemu & diperbaiki di sesi ini: ETL crash total gara-gara satu
   `operatorid` NFC korup (cast hex dievaluasi sebelum guard regex). Detail di log sesi.
+- Observabilitas hasil clamp (menelusuri mch → staging → POSTED, kenapa UI ≠ CSV SAP):
+  [[concepts/sap-machine-hours-reconciliation]].
 
 ## Yang BELUM dikerjakan (sadar)
 
 - Report machine-hours (`machineHoursValidationController.js`) + dashboard OEE masih baca
   `enddatetime` mentah → No Job 248 jam / Coffee Break 149 jam Juli masih meracuni OEE.
 - STORNO untuk jam nyangkut yang sudah telanjur POSTED (61,4 jam, 15–22 Jul). Lapis ini
-  TIDAK menariknya balik — hanya mencegah yang baru.
+  TIDAK menariknya balik — hanya mencegah yang baru. Cara menemukan kandidatnya (`sent_hrs >
+  source_hrs` pada baris POSTED) ada di [[concepts/sap-machine-hours-reconciliation]]; anomali
+  12753 sudah di-STORNO + ditandai SKIPPED.
