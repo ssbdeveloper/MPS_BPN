@@ -62,6 +62,7 @@ services:
       - PORT=${PORT}
       - NODE_ENV=${NODE_ENV}
       - PLANT_SSB=${PLANT_SSB}
+      - APP_VARIANT=${VITE_APP_VARIANT:-salvaging}
       - TIMEZONE=${TIMEZONE}
       - CORS_ORIGIN=${CORS_ORIGIN}
       - TZ=${TIMEZONE}
@@ -278,7 +279,6 @@ services:
       args:
         VITE_API_URL: /api
         VITE_TTS_API_URL: ""
-        VITE_APP_VARIANT: ${VITE_APP_VARIANT:-salvaging}
     container_name: timesheet-frontend
     expose:
       - "80"
