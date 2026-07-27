@@ -106,6 +106,20 @@ salvaging yang tetap pakai machine-hours. Kunci awal: `ms_project`, `machine_hou
 - **Build**: hapus build-arg `VITE_APP_VARIANT` di `docker-compose.yml` + `apps/web/Dockerfile`
   (atau biarkan diabaikan selama transisi).
 
+## Registry plant (WERKS ↔ varian) — dikonfirmasi owner 2026-07-27
+
+| Plant | WERKS (`plant_code`) | Varian | `ms_project` | Status `plant_config` |
+|---|---|---|---|---|
+| Cikupa | `5100` | manufacturing | true | ✅ seeded (ckp `100.80.101.53`) |
+| Balikpapan | `5051` | salvaging | false | ✅ seeded (svr-balikpapan `100.101.215.16`, prod) |
+| Sebamban | `5173` | salvaging | false | ⛔ belum (svr-sebamban `100.107.210.61`, reachable) |
+| Kuala Kencana | `5071` | salvaging | false | ⛔ belum (vm-linux-kk `100.86.20.42`, sering offline) |
+
+> Catatan: `plant_code` di-seed dari `PLANT_SSB` per-deployment `.env`; nilai di atas = kebenaran
+> yang dikonfirmasi owner. `feature_flags.machine_hours` default `true` untuk semua (verifikasi ETL
+> per plant bila perlu). Prod utama `vm-linux-bpn 100.86.231.55` = DB salvaging terpisah — pastikan
+> mana DB yang benar-benar dilayani app balikpapan sebelum dianggap tuntas.
+
 ## 6. Rollout ke plant existing (aman di DB live)
 
 Urutan per plant (balikpapan=salvaging, cikupa=manufacturing):
