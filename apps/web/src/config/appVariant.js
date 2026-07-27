@@ -1,8 +1,19 @@
-export const APP_VARIANT = String(import.meta.env.VITE_APP_VARIANT || 'salvaging')
-  .split('#')[0]
-  .trim()
-  .split(/\s+/)[0]
-  .toLowerCase();
+import { getConfig } from './loadConfig';
 
-export const isManufacturing = APP_VARIANT === 'manufacturing';
-export const isSalvaging = !isManufacturing;
+// Varian kini runtime (dari /config), bukan build-time VITE_APP_VARIANT.
+export function getVariant() {
+  const v = String(getConfig()?.variant || 'salvaging').toLowerCase();
+  return v === 'manufacturing' ? 'manufacturing' : 'salvaging';
+}
+
+export function isManufacturing() {
+  return getVariant() === 'manufacturing';
+}
+
+export function isSalvaging() {
+  return !isManufacturing();
+}
+
+export function getFeatureFlags() {
+  return getConfig()?.feature_flags || {};
+}

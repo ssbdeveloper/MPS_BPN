@@ -3,7 +3,7 @@ import ManufacturingSowSchedulingPage from './manufacturing/SowSchedulingPage';
 import SalvagingSowSchedulingPage from './salvaging/SowSchedulingPage';
 
 export default function SowSchedulingPage() {
-  return isManufacturing
+  return isManufacturing()
     ? <ManufacturingSowSchedulingPage />
     : <SalvagingSowSchedulingPage />;
 }
