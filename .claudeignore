@@ -1,0 +1,3 @@
+# graphify output — jangan masukkan ke context (mencegah invalidasi prompt cache tiap build)
+graph.json
+graphify-out/

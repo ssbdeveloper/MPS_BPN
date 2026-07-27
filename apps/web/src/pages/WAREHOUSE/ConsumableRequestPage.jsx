@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
+  AlertCircle,
   ArrowLeft,
   Check,
   ChevronDown,
@@ -9,6 +10,7 @@ import {
   Loader2,
   Package,
   Plus,
+  RefreshCw,
   Search,
   ShoppingCart,
   Trash2,
@@ -25,6 +27,19 @@ const GL_ACCOUNTS = [
   { Kode: '6023001000', Deskripsi: 'COS Tools Equip & Sparepart', Kategori: 'tools' },
   { Kode: '6010002000', Deskripsi: 'COS-RM Bldg Maintenance', Kategori: 'GA & Maintenance building' },
 ];
+
+const STATUS_TONES = {
+  'waiting leader': 'border-amber-200 bg-amber-50 text-amber-700',
+  'waiting warehouse': 'border-sky-200 bg-sky-50 text-sky-700',
+  ready: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  close: 'border-slate-200 bg-slate-100 text-slate-700',
+  rejected: 'border-rose-200 bg-rose-50 text-rose-700',
+};
+
+function statusTone(status) {
+  return STATUS_TONES[String(status || '').trim().toLowerCase()]
+    || 'border-slate-200 bg-slate-50 text-slate-600';
+}
 
 function readCurrentUser() {
   try {
@@ -88,7 +103,7 @@ function HistoryTable({ tickets }) {
                 <td className="px-4 py-3 font-mono text-xs font-bold text-slate-700">{ticket.cis_no}</td>
                 <td className="px-4 py-3 text-xs font-semibold text-slate-600">{formatDateTime(ticket.created)}</td>
                 <td className="px-4 py-3">
-                  <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-extrabold text-amber-700">
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-extrabold uppercase ${statusTone(ticket.status)}`}>
                     {ticket.status || '-'}
                   </span>
                 </td>
@@ -114,13 +129,26 @@ function HistoryTable({ tickets }) {
   );
 }
 
-function StockList({ stock, loading, selected, onSelect }) {
+function StockList({ stock, loading, error, onRetry, selected, onSelect }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       {loading ? (
         <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-400">
           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Loading stock
+          Memuat stock
+        </div>
+      ) : error ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+          <AlertCircle className="h-8 w-8 text-rose-400" />
+          <p className="text-sm font-bold text-slate-700">Gagal memuat stock</p>
+          <p className="max-w-xs text-xs font-semibold text-slate-500">{error}</p>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            <RefreshCw size={16} /> Coba lagi
+          </button>
         </div>
       ) : stock.length === 0 ? (
         <div className="flex h-full items-center justify-center px-6 text-center text-sm font-semibold text-slate-400">
@@ -203,7 +231,7 @@ function GlAccountPanel({ selectedGl, onSelect, onClose }) {
                   <p className="mt-1 text-[11px] font-extrabold uppercase text-slate-400">{account.Kategori}</p>
                 </div>
                 <span className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full ${
-                  isSelected ? 'bg-[#0096c7] text-white' : 'bg-slate-100 text-slate-300'
+                  isSelected ? 'bg-[#0077b6] text-white' : 'bg-slate-100 text-slate-300'
                 }`}>
                   <Check size={16} />
                 </span>
@@ -330,7 +358,7 @@ function ItemDetailPanel({ item, requestedQty, onClose, onAdd }) {
             type="button"
             onClick={handleAdd}
             disabled={!canAdd}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#0096c7] px-4 text-sm font-extrabold text-white hover:bg-[#0077b6] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus size={17} />
             Add
@@ -359,6 +387,7 @@ function RequestPanel({ user, onClose, onSubmitted }) {
   const [cart, setCart] = useState([]);
   const [comment, setComment] = useState('');
   const [loadingStock, setLoadingStock] = useState(false);
+  const [stockError, setStockError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const requestedByStock = useMemo(() => {
@@ -372,19 +401,20 @@ function RequestPanel({ user, onClose, onSubmitted }) {
   const loadStock = useCallback((term) => {
     const controller = new AbortController();
     setLoadingStock(true);
+    setStockError('');
 
     fetch(`${API_BASE}/consumable/stock?search=${encodeURIComponent(term)}&limit=80`, {
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok) throw new Error('Gagal load consumable stock');
+        if (!response.ok) throw new Error('Gagal memuat stock consumable');
         return response.json();
       })
       .then((payload) => setStock(Array.isArray(payload) ? payload : []))
       .catch((err) => {
         if (err.name === 'AbortError') return;
         setStock([]);
-        toast.error('Gagal load consumable stock', { description: err.message });
+        setStockError(err.message || 'Gagal memuat stock');
       })
       .finally(() => setLoadingStock(false));
 
@@ -511,6 +541,8 @@ function RequestPanel({ user, onClose, onSubmitted }) {
           <StockList
             stock={stock}
             loading={loadingStock}
+            error={stockError}
+            onRetry={() => loadStock(search)}
             selected={selectedStock}
             onSelect={setSelectedStock}
           />
@@ -579,7 +611,7 @@ function RequestPanel({ user, onClose, onSubmitted }) {
               type="button"
               onClick={handleSubmit}
               disabled={cart.length === 0 || submitting}
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#0096c7] text-sm font-extrabold text-white hover:bg-[#0077b6] disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#0077b6] text-sm font-extrabold text-white hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               Request
@@ -605,26 +637,28 @@ export default function ConsumableRequestPage() {
   const [user] = useState(readCurrentUser);
   const [tickets, setTickets] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const [showRequestPanel, setShowRequestPanel] = useState(false);
   const currentSn = user?.snssb || '';
 
   const loadHistory = useCallback(() => {
-    if (!currentSn) return;
+    if (!currentSn) return undefined;
     const controller = new AbortController();
     setLoadingHistory(true);
+    setHistoryError('');
 
     fetch(`${API_BASE}/consumable/history?sn=${encodeURIComponent(currentSn)}`, {
       signal: controller.signal,
     })
       .then((response) => {
-        if (!response.ok) throw new Error('Gagal load historical request');
+        if (!response.ok) throw new Error('Gagal memuat riwayat request');
         return response.json();
       })
       .then((payload) => setTickets(Array.isArray(payload) ? payload : []))
       .catch((err) => {
         if (err.name === 'AbortError') return;
         setTickets([]);
-        toast.error('Gagal load historical request', { description: err.message });
+        setHistoryError(err.message || 'Gagal memuat riwayat');
       })
       .finally(() => setLoadingHistory(false));
 
@@ -679,7 +713,7 @@ export default function ConsumableRequestPage() {
           <button
             type="button"
             onClick={() => setShowRequestPanel(true)}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 text-sm font-extrabold text-white hover:bg-[#0077b6]"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a]"
           >
             <Plus size={18} />
             New Request
@@ -706,7 +740,22 @@ export default function ConsumableRequestPage() {
           </div>
         </section>
 
-        <HistoryTable tickets={tickets} />
+        {historyError ? (
+          <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 rounded-lg border border-slate-200 bg-white px-6 py-10 text-center shadow-sm">
+            <AlertCircle className="h-8 w-8 text-rose-400" />
+            <p className="text-sm font-bold text-slate-700">Gagal memuat riwayat request</p>
+            <p className="max-w-md text-xs font-semibold text-slate-500">{historyError}</p>
+            <button
+              type="button"
+              onClick={() => loadHistory()}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+            >
+              <RefreshCw size={16} /> Coba lagi
+            </button>
+          </div>
+        ) : (
+          <HistoryTable tickets={tickets} />
+        )}
       </main>
 
       {showRequestPanel && (

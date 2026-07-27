@@ -18,6 +18,7 @@ import {
 import ConfirmationModal from '../components/ui/ConfirmationModal';
 import MachineHoursMatrix from '../components/sap/MachineHoursMatrix';
 import CorrectionsPanel from '../components/sap/CorrectionsPanel';
+import ReconciliationPanel from '../components/sap/ReconciliationPanel';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -352,6 +353,7 @@ function SapLogPage() {
         <div className="mt-2 flex gap-1" role="tablist" aria-label="Tampilan">
           {[
             { key: 'staging', label: 'SAP Posting' },
+            { key: 'reconcile', label: 'Rekonsiliasi' },
             { key: 'hours', label: 'Operator Hours' },
             { key: 'corrections', label: 'Corrections' },
           ].map((tb) => (
@@ -369,7 +371,9 @@ function SapLogPage() {
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-6">
-        {tab === 'hours' ? (
+        {tab === 'reconcile' ? (
+          <ReconciliationPanel />
+        ) : tab === 'hours' ? (
           <div className="mx-auto max-w-6xl"><MachineHoursMatrix /></div>
         ) : tab === 'corrections' ? (
           <div className="mx-auto max-w-6xl"><CorrectionsPanel /></div>

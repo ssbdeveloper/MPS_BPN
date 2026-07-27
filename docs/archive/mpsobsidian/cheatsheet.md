@@ -59,3 +59,5 @@ scp "D:\Users\tee.san\Downloads\header.mp3" tag@100.86.231.55:"/home/tag/MPS2/TT
 sudo docker compose build frontend api ews-snapshot-job ews-adoption-job frontend
 
 sudo docker compose up -d --no-deps frontend api ews-snapshot-job ews-adoption-job frontend
+
+sudo docker compose restart ews-tts-worker

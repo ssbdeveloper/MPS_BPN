@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { normalizeNfcId } from '../../utils/nfcId';
 import {
+  AlertCircle,
   ArrowLeft,
   Camera,
   CheckCircle2,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Save,
   ScanLine,
+  Upload,
   UserCheck,
   X,
   XCircle,
@@ -239,7 +241,7 @@ function TicketItems({ ticket, role, busyItemId, onAdjustItem, onRejectItem }) {
                             type="button"
                             onClick={() => submitAdjust(item)}
                             disabled={busy}
-                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 text-sm font-extrabold text-white disabled:opacity-60"
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-60"
                           >
                             {busy && <Loader2 size={15} className="animate-spin" />}
                             Save
@@ -596,6 +598,118 @@ function PickupPanel({ ticket, role, authUser, onClose, onSuccess }) {
   );
 }
 
+function StockUploadResultModal({ result, onClose }) {
+  const ok = result.ok;
+  const created = result.created || [];
+  const cleaned = result.cleaned || [];
+  const CREATED_CAP = 200;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
+        <header className={`flex items-start justify-between gap-3 border-b px-5 py-4 ${ok ? 'border-emerald-100 bg-emerald-50' : 'border-rose-100 bg-rose-50'}`}>
+          <div className="flex items-start gap-3">
+            {ok
+              ? <CheckCircle2 className="mt-0.5 h-6 w-6 flex-shrink-0 text-emerald-600" />
+              : <AlertCircle className="mt-0.5 h-6 w-6 flex-shrink-0 text-rose-600" />}
+            <div className="min-w-0">
+              <h3 className={`text-base font-extrabold ${ok ? 'text-emerald-900' : 'text-rose-900'}`}>
+                {ok ? 'Stok berhasil di-upload' : 'Upload gagal'}
+              </h3>
+              <p className={`mt-0.5 text-xs font-semibold ${ok ? 'text-emerald-700' : 'text-rose-700'}`}>
+                {ok ? result.message : 'Tidak ada perubahan disimpan — seluruh file ditolak.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Tutup"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            <X size={18} />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          {!ok ? (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+              {result.error}
+              <p className="mt-2 text-xs font-normal text-rose-600">Perbaiki baris yang disebut lalu upload ulang.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-400">Diterapkan</p>
+                  <p className="mt-1 text-xl font-extrabold text-slate-800">{result.applied ?? 0}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-400">Baru</p>
+                  <p className="mt-1 text-xl font-extrabold text-emerald-700">{created.length}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-3">
+                  <p className="text-[11px] font-bold uppercase text-slate-400">Baris kosong</p>
+                  <p className="mt-1 text-xl font-extrabold text-slate-800">{result.skipped_blank ?? 0}</p>
+                </div>
+              </div>
+              <p className="text-xs font-semibold text-slate-500">
+                Plant: <span className="font-mono font-extrabold text-slate-700">{result.plant || '-'}</span>
+              </p>
+
+              {cleaned.length > 0 && (
+                <section>
+                  <h4 className="text-xs font-extrabold uppercase text-slate-500">Dibersihkan ({cleaned.length})</h4>
+                  <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
+                    {cleaned.map((c) => (
+                      <p key={c.row} className="font-mono text-xs text-slate-600">
+                        baris {c.row}: <span className="text-rose-500 line-through">{c.raw}</span>{' → '}
+                        <span className="font-bold text-slate-800">{c.normalized}</span>
+                      </p>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {created.length > 0 && (
+                <section>
+                  <h4 className="text-xs font-extrabold uppercase text-slate-500">
+                    Material baru ({created.length}) — periksa typo
+                  </h4>
+                  <div className="mt-2 max-h-52 overflow-y-auto rounded-lg border border-slate-200 p-2">
+                    <div className="flex flex-wrap gap-1">
+                      {created.slice(0, CREATED_CAP).map((code) => (
+                        <span key={code} className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs font-bold text-slate-700">
+                          {code}
+                        </span>
+                      ))}
+                    </div>
+                    {created.length > CREATED_CAP && (
+                      <p className="mt-2 text-xs font-semibold text-slate-400">
+                        …dan {created.length - CREATED_CAP} material lainnya
+                      </p>
+                    )}
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+        </div>
+
+        <footer className="flex flex-shrink-0 justify-end border-t border-slate-200 px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-11 items-center rounded-lg bg-[#0077b6] px-6 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            Tutup
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 export default function ConsumableControlPage() {
   const navigate = useNavigate();
   const [authUser] = useState(readAuthUser);
@@ -606,6 +720,14 @@ export default function ConsumableControlPage() {
   const [approvingId, setApprovingId] = useState(null);
   const [busyItemId, setBusyItemId] = useState(null);
   const [pickupTicket, setPickupTicket] = useState(null);
+  const [loadError, setLoadError] = useState('');
+  const [statusFilter, setStatusFilter] = useState(
+    role === 'warehouse' ? 'waiting warehouse' : role === 'foreman' ? 'waiting leader' : 'all',
+  );
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const stockFileRef = useRef(null);
+  const canUploadStock = role === 'warehouse' || role === 'administrator';
 
   const stats = useMemo(() => {
     const waitingLeader = tickets.filter((ticket) => normalizeStatus(ticket.status) === 'waiting leader').length;
@@ -614,6 +736,14 @@ export default function ConsumableControlPage() {
     const closed = tickets.filter((ticket) => normalizeStatus(ticket.status) === 'close').length;
     return { waitingLeader, waitingWarehouse, ready, closed };
   }, [tickets]);
+
+  // Status filtering is applied client-side over the loaded page (stat tabs below).
+  const visibleTickets = useMemo(
+    () => (statusFilter === 'all'
+      ? tickets
+      : tickets.filter((ticket) => normalizeStatus(ticket.status) === statusFilter)),
+    [tickets, statusFilter],
+  );
 
   const updateTicketInState = useCallback((updatedTicket) => {
     if (!updatedTicket?.id) return;
@@ -625,24 +755,26 @@ export default function ConsumableControlPage() {
   const loadTickets = useCallback((opts = {}) => {
     const controller = new AbortController();
     setLoading(true);
+    setLoadError('');
 
-    // Backend paginates now; pass a bounded page. status/offset are wired for a future
-    // pagination/tab UI (not built yet — the list currently shows only the first page).
+    // Load a bounded page that feeds both the stat counts and the list; status is filtered
+    // client-side over this set (visibleTickets). Note: counts beyond this window are not
+    // reflected — an accurate global count needs a backend counts endpoint (follow-up).
     const qs = new URLSearchParams();
-    qs.set('limit', String(opts.limit ?? 200));
+    qs.set('limit', String(opts.limit ?? 500));
     if (opts.offset) qs.set('offset', String(opts.offset));
     if (opts.status) qs.set('status', opts.status);
 
     fetch(`${API_BASE}/consumable/control?${qs.toString()}`, { signal: controller.signal })
       .then((response) => {
-        if (!response.ok) throw new Error('Gagal load consumable control');
+        if (!response.ok) throw new Error('Gagal memuat consumable control');
         return response.json();
       })
       .then((payload) => setTickets(Array.isArray(payload) ? payload : []))
       .catch((err) => {
         if (err.name === 'AbortError') return;
         setTickets([]);
-        toast.error('Gagal load consumable control', { description: err.message });
+        setLoadError(err.message || 'Gagal memuat data');
       })
       .finally(() => setLoading(false));
 
@@ -742,6 +874,35 @@ export default function ConsumableControlPage() {
     setPickupTicket(null);
   };
 
+  const handleStockFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // allow re-selecting the same file after a fix
+    if (!file) return;
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      // No Content-Type header: the browser sets the multipart boundary. Identity via headers.
+      const response = await fetch(`${API_BASE}/consumable/stock/upload`, {
+        method: 'POST',
+        headers: { 'x-user-role': role, 'x-user-name': authUser?.username || '' },
+        body: form,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setUploadResult({ ok: false, error: payload.error || `Upload gagal (${response.status})` });
+      } else {
+        setUploadResult({ ok: true, ...payload });
+        toast.success(payload.message || 'Stok berhasil di-upload');
+      }
+    } catch (err) {
+      setUploadResult({ ok: false, error: err.message || 'Upload gagal' });
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const isKnownRole = role === 'foreman' || role === 'warehouse';
 
   return (
@@ -764,36 +925,67 @@ export default function ConsumableControlPage() {
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => loadTickets()}
-            disabled={loading}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-extrabold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? <Loader2 size={17} className="animate-spin" /> : <RefreshCw size={17} />}
-            Refresh
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {canUploadStock && (
+              <>
+                <input
+                  ref={stockFileRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleStockFile}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => stockFileRef.current?.click()}
+                  disabled={uploading}
+                  title="Upload stok consumable dari Excel (reset absolut)"
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {uploading ? <Loader2 size={17} className="animate-spin" /> : <Upload size={17} />}
+                  {uploading ? 'Mengupload…' : 'Upload Stok'}
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => loadTickets()}
+              disabled={loading}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-extrabold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? <Loader2 size={17} className="animate-spin" /> : <RefreshCw size={17} />}
+              Refresh
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="space-y-4 px-4 py-4 md:px-6">
-        <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-[11px] font-bold uppercase text-slate-500">Waiting Leader</p>
-            <p className="mt-2 text-2xl font-extrabold text-amber-700">{stats.waitingLeader}</p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-[11px] font-bold uppercase text-slate-500">Waiting Warehouse</p>
-            <p className="mt-2 text-2xl font-extrabold text-sky-700">{stats.waitingWarehouse}</p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-[11px] font-bold uppercase text-slate-500">Ready</p>
-            <p className="mt-2 text-2xl font-extrabold text-emerald-700">{stats.ready}</p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-[11px] font-bold uppercase text-slate-500">Close</p>
-            <p className="mt-2 text-2xl font-extrabold text-slate-700">{stats.closed}</p>
-          </div>
+        {/* Stat cards double as status filter tabs — click to filter the list below. */}
+        <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          {[
+            { key: 'all', label: 'All', value: tickets.length, tone: 'text-slate-700' },
+            { key: 'waiting leader', label: 'Waiting Leader', value: stats.waitingLeader, tone: 'text-amber-700' },
+            { key: 'waiting warehouse', label: 'Waiting Warehouse', value: stats.waitingWarehouse, tone: 'text-sky-700' },
+            { key: 'ready', label: 'Ready', value: stats.ready, tone: 'text-emerald-700' },
+            { key: 'close', label: 'Close', value: stats.closed, tone: 'text-slate-700' },
+          ].map((tab) => {
+            const active = statusFilter === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setStatusFilter(tab.key)}
+                aria-pressed={active}
+                className={`min-h-[76px] rounded-xl border bg-white p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
+                  active ? 'border-[#0077b6] ring-2 ring-[#0077b6]' : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <p className="text-[11px] font-bold uppercase text-slate-500">{tab.label}</p>
+                <p className={`mt-2 text-2xl font-extrabold ${tab.tone}`}>{tab.value}</p>
+              </button>
+            );
+          })}
         </section>
 
         {!isKnownRole && (
@@ -806,7 +998,11 @@ export default function ConsumableControlPage() {
           <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
             <div>
               <h2 className="text-sm font-extrabold text-slate-900">CIS Ticket</h2>
-              <p className="text-xs font-semibold text-slate-500">{tickets.length} ticket</p>
+              <p className="text-xs font-semibold text-slate-500">
+                {statusFilter === 'all'
+                  ? `${tickets.length} ticket`
+                  : `${visibleTickets.length} dari ${tickets.length} ticket`}
+              </p>
             </div>
             <ClipboardCheck className="h-5 w-5 text-[#0077b6]" />
           </div>
@@ -814,16 +1010,31 @@ export default function ConsumableControlPage() {
           {loading ? (
             <div className="flex min-h-[360px] items-center justify-center text-sm font-semibold text-slate-400">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Loading ticket
+              Memuat ticket
             </div>
-          ) : tickets.length === 0 ? (
+          ) : loadError ? (
+            <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-6 text-center">
+              <XCircle className="h-9 w-9 text-rose-400" />
+              <p className="text-sm font-bold text-slate-700">Gagal memuat consumable ticket</p>
+              <p className="max-w-md text-xs font-semibold text-slate-500">{loadError}</p>
+              <button
+                type="button"
+                onClick={() => loadTickets()}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+              >
+                <RefreshCw size={16} /> Coba lagi
+              </button>
+            </div>
+          ) : visibleTickets.length === 0 ? (
             <div className="flex min-h-[360px] flex-col items-center justify-center text-center text-sm font-semibold text-slate-400">
               <Package className="mb-3 h-9 w-9 text-slate-300" />
-              Belum ada consumable ticket.
+              {statusFilter === 'all'
+                ? 'Belum ada consumable ticket.'
+                : `Tidak ada ticket berstatus "${statusFilter}".`}
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {tickets.map((ticket) => {
+              {visibleTickets.map((ticket) => {
                 const expanded = expandedIds.has(ticket.id);
                 const statusTone = STATUS_TONES[normalizeStatus(ticket.status)] || 'border-slate-200 bg-slate-50 text-slate-600';
                 const canApprove = canApproveTicket(role, ticket.status);
@@ -881,7 +1092,7 @@ export default function ConsumableControlPage() {
                             type="button"
                             onClick={() => handleApprove(ticket)}
                             disabled={!canApprove || approvingId === ticket.id}
-                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 text-sm font-extrabold text-white hover:bg-[#0077b6] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                           >
                             {approvingId === ticket.id ? (
                               <Loader2 size={16} className="animate-spin" />
@@ -926,6 +1137,10 @@ export default function ConsumableControlPage() {
           onClose={() => setPickupTicket(null)}
           onSuccess={handlePickupSuccess}
         />
+      )}
+
+      {uploadResult && (
+        <StockUploadResultModal result={uploadResult} onClose={() => setUploadResult(null)} />
       )}
     </div>
   );

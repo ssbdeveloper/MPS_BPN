@@ -51,6 +51,12 @@ apps/api/uploads/
 # Claude
 .claude/
 
+# Codebase-memory MCP — artefak graph (.codebase-memory/graph.db.zst), jangan commit
+.codebase-memory/
+
+# graphify — output graph docs, jangan commit
+graphify-out/
+
 # Temporary / Backup / Export
 *.tmp
 *.temp

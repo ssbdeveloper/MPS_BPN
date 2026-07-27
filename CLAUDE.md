@@ -31,6 +31,48 @@ menulis dokumen apa pun.** Aturan inti:
   `docs/PLANNING.md`, dan update note `docs/concepts/` yang tersentuh.
 - Papan kerja: `docs/PLANNING.md` · Peta dokumen: `docs/00-INDEX.md`.
 
+### Tangkap permintaan ke vault (WAJIB)
+
+Begitu user minta **develop / rencana / to-do / mencatat keputusan**, tulis LANGSUNG ke layer yang
+benar lalu lapor path-nya (jangan minta ACC dulu — user bisa revert). BUKAN untuk tiap pertanyaan
+atau eksplorasi; hanya permintaan kerja nyata.
+
+- Rencana / desain / PRD / fitur baru → doc baru di folder sesuai (`security/`, `salvaging/`,
+  `prd/`, `timesheet/`, `planning/`, …) + frontmatter `type: plan|prd|design|feature`, `status:`,
+  `tags: [domain/<x>]`; daftarkan barisnya di `docs/PLANNING.md`.
+- To-do singkat → baris backlog `docs/PLANNING.md`. Keputusan sesi → `docs/log/YYYY-MM-DD-topik.md`.
+  Pengetahuan menetap → `docs/concepts/<nama>.md`.
+- **Status lifecycle** (frontmatter, HANYA dok kerja plan/prd/design/feature): `planning` (belum
+  mulai) · `active` (sebagian fase rilis) · `done` (SEMUA fase rilis) · `parked` (ditunda/superseded).
+  Referensi (concept/log/ops/guide/moc) TIDAK ber-status. Papan live: `docs/STATUS.md` (Dataview).
+- **Tag domain wajib** (nested `tags:`): `domain/ews|sow|timesheet|sap|msproject|security|ops|vault`
+  — 1 utama, maks 2.
+- **Verifikasi status ke KODE, jangan tebak** ("fase X rilis?" → cek migrasi/endpoint/`schema_prod` dulu).
+
+Detail konvensi: `docs/KONVENSI.md` §3.
+
+---
+
+## Navigasi kode — codebase-memory-mcp
+
+Graph kode via MCP (`search_graph`, `trace_path`, `query_graph`, `get_architecture`). Project: **`D-website-MPS2`**.
+- **Discovery** (simbol, Route, struktur, arsitektur, klaster) — andal, pakai bebas.
+- **Callers / impact / dead-code** (`trace_path` inbound, "siapa memanggil X", "X kepakai?") — graph UNDER-report; perlakukan sebagai petunjuk. WAJIB cross-check ke Grep/sumber sebelum klaim negatif/impact ("tak ada pemanggil", "dead code", "aman diubah").
+- **Delegasi subagent:** saat menugaskan subagent untuk eksplorasi kode, tulis batasan cross-check ini di prompt tugasnya — jangan andalkan subagent mewarisinya.
+
+Detail + repro batas extractor: `docs/concepts/codebase-memory-graph-accuracy.md`.
+
+### Graph graphify (pelengkap cbm; auto-refresh aktif)
+
+Dua graph tersimpan: `graphify-out/` (seluruh repo, kode+docs) & `docs/graphify-out/` (vault docs +
+Obsidian vault). Keduanya git-ignored.
+- **Query dulu, jangan rebuild:** pertanyaan arsitektur / relasi file / isi vault → baca graph yang
+  ADA (`graphify query "..."` atau `graph.json`). Instan, nol token ekstra.
+- **Auto-refresh KODE:** post-commit hook (`graphify hook`, terpasang) rebuild graph tiap commit —
+  AST saja, gratis, otomatis. Cek `graphify hook status`.
+- **Perubahan DOC:** hook TIDAK menyentuh semantik doc; setelah edit docs signifikan jalankan
+  `/graphify docs --update` (perlu sesi AI — headless tak bisa ekstraksi semantik tanpa Gemini key).
+
 ---
  
 ## Corporate Color System
