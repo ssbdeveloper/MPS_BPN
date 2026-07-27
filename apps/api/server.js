@@ -200,6 +200,7 @@ app.use('/tools', require('./routes/tools'));
 app.use('/auth', require('./routes/auth'));
 app.use('/ms-project', require('./routes/msProject'));
 app.use('/ews', require('./routes/ews'));
+app.use('/config', require('./routes/config'));
 app.use('/device-heartbeat', require('./routes/deviceHeartbeat'));
 
 const wss = new WebSocketServer({ noServer: true });
@@ -249,6 +250,8 @@ async function startServer() {
       console.log('✅ Database connected successfully');
       client.release();
       connected = true;
+      // Muat profil plant sekali ke cache sebelum melayani request.
+      await require('./config/plantConfig').loadPlantConfig(global.pool);
     } catch (err) {
       console.error('❌ Database not ready, retrying in 3s...', {
         code: err.code,
