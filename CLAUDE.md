@@ -843,8 +843,9 @@ Aturan API komponen:
 
 **Komponen target — buat saat pertama kali dibutuhkan, jangan tulis inline:**
 `Badge`/`StatusPill`, `EmptyState`, `Skeleton`, `Spinner`/`LoadingButton`,
-`PageHeader` (back + title + action standar), `SearchInput`, `Select`,
+`PageHeader` (back + title + action standar), `SearchInput`,
 `StatCard`, `FilterBar`, `OfflineIndicator`.
+(`Select` sudah ada versi LAMA di `forms/Input.jsx` — migrasikan, jangan buat baru.)
 
 ### 2. Offline-First — Larangan Aset Eksternal (WAJIB)
 
@@ -859,7 +860,8 @@ HARUS berasal dari bundle sendiri (npm → Vite) atau origin sendiri.
   suatu saat butuh font brand → self-host via package `@fontsource/*` (ikut
   bundle), BUKAN link CDN.
 - Entry `google-fonts-cache` di `vite.config.js` (workbox) adalah sisa konfigurasi
-  lama — tidak ada referensi Google Fonts di aplikasi; hapus saat menyentuh file itu.
+  lama (SW rule tak terpakai). TAPI `apps/web/src/templates/backuptc.html` masih memuat
+  `<link>` ke fonts.googleapis.com — **pelanggaran offline-first, hapus link itu**.
 
 ### 3. Typography & Angka
 
@@ -968,7 +970,7 @@ Palet kategorikal standar — **urutan TETAP, sudah tervalidasi colorblind-safe
 | Palet brand di `tailwind.config.js` | §5 Corporate Color | ❌ Belum — config masih token legacy `primary #007bff` + `shadow-3d` (jangan dipakai UI baru) |
 | `ui/Button`, `forms/Input`, `ui/Switch`, `tables/Table` | Component-First §1 | ⚠️ Ada tapi gaya lama — migrasikan saat disentuh |
 | Font | system stack (§3) | ❌ `index.css` masih `Arial` |
-| Warna primary button | `#0077b6` (AA 4.9:1) | ⚠️ ±363 pemakaian `#0096c7` di 58 file (standar lama). Migrasi bertahap: saat mengedit sebuah halaman, samakan SELURUH tombol primary halaman itu ke `#0077b6` — jangan campur dua warna primary dalam satu halaman |
+| Warna primary button | `#0077b6` (AA 4.9:1) | ⚠️ ±364 pemakaian `#0096c7` di 62 file (standar lama). Migrasi bertahap: saat mengedit sebuah halaman, samakan SELURUH tombol primary halaman itu ke `#0077b6` — jangan campur dua warna primary dalam satu halaman |
 
 ---
 
@@ -982,7 +984,7 @@ Palet kategorikal standar — **urutan TETAP, sudah tervalidasi colorblind-safe
 | Router | React Router v7.13 | `createBrowserRouter` |
 | State Management | useState + useCallback | No Redux/Zustand/MobX — logic stays in components |
 | Notifications | sonner v2 | `Toaster` in `App.jsx` with `richColors` |
-| PWA | vite-plugin-pwa + Workbox v7 | Runtime caching /api/* (NetworkFirst 5min). Entry `google-fonts-cache` di vite.config = sisa lama — app TIDAK memakai Google Fonts (offline-first), boleh dihapus saat menyentuh vite.config.js |
+| PWA | vite-plugin-pwa + Workbox v7 | Runtime caching /api/* (NetworkFirst 5min). Entry `google-fonts-cache` di vite.config = sisa lama (SW rule tak terpakai, boleh dihapus). Catatan: `src/templates/backuptc.html` MASIH punya `<link>` Google Fonts — pelanggaran offline-first, hapus |
 | Charts | ECharts v6 + Recharts v3 | Both used across dashboard |
 | Drag & Drop | @dnd-kit (core, sortable, modifiers) | |
 | Icons | lucide-react v1 | |
@@ -991,7 +993,7 @@ Palet kategorikal standar — **urutan TETAP, sudah tervalidasi colorblind-safe
 | Backend Python | FastAPI (Python 3.11, uvicorn) | In `apps/fastapi-msproject/main.py` — SOW plan-sync + antrian TTS (MS Project .mpp sync sebenarnya di Express `/ms-project`) |
 | Database | PostgreSQL 15 | + Microsoft SQL Server (SSB_OEE for machine hours) |
 | Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, HTTP→HTTPS redirect, routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/`, SPA fallback |
-| Containerization | Docker Compose | 13 services — lihat tabel "Docker Compose Services" di bawah |
+| Containerization | Docker Compose | 16 services (main compose) — lihat tabel "Docker Compose Services" di bawah |
 | API Client | fetch (native) | No Axios |
 | Dev port (frontend) | 5173 | Proxied `/api` → `http://localhost:3001` |
 | API port | 3001 | |
@@ -1037,6 +1039,7 @@ MPS2/
 �  +- api/                         # Express API, controllers, routes, rbac, jobs, uploads
 �  +- fastapi-msproject/            # FastAPI SOW/TTS helper service (MS Project sync sebenarnya di Express /ms-project)
 �  +- tts-worker/                   # Piper/Edge TTS worker (EWS audio announcements)
+   +- mobile/                      # Android (Kotlin) 'MPS Heartbeat' — device heartbeat armada tablet → POST /device-heartbeat
 +- jobs/
 �  +- sap_staging/                  # Stage/post/seed SAP payload rows
 �  +- etl/                          # SQL Server -> Postgres ETL (machine hours, heartbeat, order sync)
@@ -1044,7 +1047,7 @@ MPS2/
 �  +- sow/                          # SOW seed/export Docker helper files
 �  +- machine_ping/                 # Dockerfile untuk machine-ping-worker (script di scripts/ping_m5051_machines.js)
 +- database/
-�  +- migrations/                   # api/ (timestamped) + legacy/ (tidak berurut)
+�  +- migrations/                   # api/ (timestamped) + legacy/ (tidak berurut) + deferred/
 �  +- seeds/                        # Seed data and seed helpers
 �  +- schema/                       # schema_prod.sql = SATU-SATUNYA dump kanonik (regenerate dari prod tiap batch migrasi)
 �  +- machinehours/                 # CSV data + import scripts machine hours
@@ -1052,7 +1055,7 @@ MPS2/
 �  +- paket_kumplit/, query_use/    # SQL/data pendukung
 +- docs/
 �  +- operations/, sap/, frontend/, deployment/, archive/
-�  +- Work Instruction/, security/, timesheet/
+�  +- Work Instruction/, security/, timesheet/, concepts/, log/, prd/, salvaging/ (+ _isolasi/, graphify-out/ git-ignored)
 +- samples/
 �  +- sap_payloads/, excel/, media/
 +- infra/
@@ -1073,6 +1076,7 @@ MPS2/
 - Express API changes go in `apps/api`; route/controller imports must stay relative inside that app.
 - FastAPI MS Project changes go in `apps/fastapi-msproject`.
 - TTS worker changes go in `apps/tts-worker`; generated upload output belongs under `apps/api/uploads` or the Docker `/uploads` mount.
+- Android heartbeat app ("MPS Heartbeat", Gradle/Kotlin) changes go in `apps/mobile`; kirim device heartbeat ke `POST /device-heartbeat`.
 - SAP staging/posting code goes in `jobs/sap_staging`; shared staging helpers stay in `sap_staging_common.py` only when used by more than one SAP script.
 - ETL sync jobs go in `jobs/etl`; export-only helpers go in `jobs/export`; SOW seed/export container files go in `jobs/sow`.
 - SQL migrations and schema references go under `database`; do not put new migration files in app folders.
@@ -1093,6 +1097,7 @@ MPS2/
 | `/ews/notifications` | `EwsNotificationsPage` | — | EWS |
 | `/ews/roster` | `EwsRosterPage` | RBAC:roster_operator | EWS |
 | `/ews/roster/config` | `EwsRosterConfigPage` | RBAC:roster_operator | EWS |
+| `/ews/issue/:issueKey` | `EwsIssueDrillPage` | — | EWS |
 | `/sap-log` | `SapLogPage` | — | Core |
 | `/order-progress-dashboard` | `OrderProgressDashboardPage` | — | Core |
 | `/login-timesheet` | `LoginTimesheetPage` | — | TIMESHEET |
@@ -1106,8 +1111,8 @@ MPS2/
 | `/select-job` | `SelectJobPage` (dispatcher varian) | — | TIMESHEET |
 | `/select-machine` | `SelectMachinePage` | — | TIMESHEET |
 | `/tts-audio-test` | `TtsAudioTestPage` | — | TIMESHEET |
-| `/nfc-users` | `NfcUserListPage` | — | TIMESHEET |
-| `/create-edit-nfc` | `CreateEditNfcPage` | — | TIMESHEET |
+| `/nfc-users` | `NfcUserListPage` | RBAC:nfc_users | TIMESHEET |
+| `/create-edit-nfc` | `CreateEditNfcPage` | RBAC:nfc_users | TIMESHEET |
 | `/unproductive` | `UnproductiveMenuPage` | — | TIMESHEET |
 | `/dashboard` | `DashboardPage` | — | Core |
 | `/setting` | `SettingPage` | — | Core |
@@ -1142,13 +1147,24 @@ MPS2/
 | `/tools-management` | `ToolsManagementPage` | PIN | WAREHOUSE |
 | `*` | `NotFoundPage` (link ke /operations-hub) | — | — |
 
-> Semua route lazy-loaded. Halaman TIMESHEET/PPC tertentu punya varian `salvaging/` vs `manufacturing/` yang dipilih dispatcher berdasarkan `VITE_APP_VARIANT` (default `salvaging`).
+> Semua route lazy-loaded. Halaman TIMESHEET/PPC tertentu punya varian `salvaging/` vs
+> `manufacturing/`; dispatcher memilih via `isManufacturing()` (`apps/web/src/config/appVariant.js`).
+>
+> **Varian di-drive DB, bukan build flag.** `getVariant()` membaca **config runtime** dari
+> `GET /config` — di-`loadConfig()` saat boot (`apps/web/src/main.jsx`), di-cache `localStorage`
+> untuk offline. Sumber kebenaran = **baris DB `public.plant_config`** (single-row `id=1`).
+> `getVariant()` TIDAK membaca `VITE_APP_VARIANT` di runtime (default hard-coded `'salvaging'`).
+> Env `APP_VARIANT`/`VITE_APP_VARIANT` kini hanya: (a) fallback backend `buildConfigFromEnv` saat
+> baris DB hilang/DB error, dan (b) input seeder `apps/api/scripts/seed_plant_config.js`.
+> Ganti varian sebuah plant = **UPDATE baris `plant_config`** (lalu `reloadPlantConfig`), bukan
+> rebuild image. Timezone ikut mekanisme sama (`config/timezone.js resolveTimezone`).
+> Desain & rollout: `docs/deployment/PLANT_CONFIG_VARIANT_DESIGN.md`.
 
 ---
 
 ## Backend API Routes
 
-> 18 router di-mount di `server.js`. Jumlah endpoint per router tidak dihitung ulang — lihat file route masing-masing.
+> 20 router di-mount di `server.js`. Jumlah endpoint per router tidak dihitung ulang — lihat file route masing-masing.
 
 | Base Path | Description |
 |-----------|-------------|
@@ -1170,6 +1186,8 @@ MPS2/
 | `/production-operations` | List all, lookup, get by ID |
 | `/ms-project` | MS Project sync (.mpp upload/import; dipakai VBA client) |
 | `/ews` | EWS KPI summary/detail/trend/actions/roster/notifications + SSE `/ews/stream` |
+| `/config` | `GET /` — subset publik profil plant (`plant_code`, `plant_name`, `variant`, `timezone`, `feature_flags`) dari `plant_config`; di-fetch frontend saat boot. `Cache-Control: max-age=60`, 503 kalau config belum siap |
+| `/device-heartbeat` | Heartbeat perangkat/tablet — `POST /` dari app Android (`X-Device-Token`), `GET /fleet` monitoring armada |
 
 ### Important Backend Details
 - **PostgreSQL pool:** `.env` dari root `D:\website\MPS2\.env`. Di Docker, api konek via **pgbouncer:6432** (transaction pooling) dengan `DB_POOL_MAX` default 5; default pool di kode 10. Pool disimpan di `global.pool`; ada pool kedua di `db.js` (fallback `require("../db")`) — dua instance berbeda, hati-hati.
@@ -1178,7 +1196,7 @@ MPS2/
 - **Timestamp handling:** OID 1082/1114/1184 forced to string (no JS Date conversion)
 - **WebSocket:** `/machine-hours-sqlserver/ws` (streaming machine data); `mpsDashboardSocket` opsional via `ENABLE_MPS_DASHBOARD_WS=1`. SSE di `/ews/stream`.
 - **EWS jobs:** `apps/api/jobs/` (ewsSnapshotJob, ewsAdoptionBucketJob, ewsRosterGenerateJob) — dijalankan sebagai service compose `ews-*-job` (`npm run ews:*`).
-- **File uploads:** multer, disimpan di `apps/api/uploads/` (sow-pdf/, ms-project-mpp/, consumable/)
+- **File uploads:** multer diskStorage → `apps/api/uploads/` (subfolder: sow-pdf/, ms-project-mpp/, operation-card/, announcement/). Catatan: upload `consumable` pakai `memoryStorage` (tak ditulis ke disk)
 - **SAP Integration:** POST ke SAP CPI inbound URL (env `SAP_INBOUND_URL`)
 - **CORS:** `*` origin (all origins allowed)
 
@@ -1203,22 +1221,24 @@ MPS2/
 | `processcontroldata` | Process control data records (linked to timesheet) |
 | `processcontroldata_item` | Process control data item values |
 | `production_operations` | Production operations from SAP/ETL |
+| `buffer_transaction` | Transaksi pergerakan buffer/komponen (PPC / component-tracking + kanban) |
 | `log_timesheet_sap` | SAP posting audit log |
 | `progress_update_history` | Progress update tracking |
 | `ph3_order` / `qh3_order` | Order/operation master dari SAP (via AWS Lambda + ETL) — acuan eligibility SAP |
-| `sap_timesheet_staging` | Antrian posting SAP (unique `(source_system, source_key)`, status PENDING/POSTED/FAILED) |
+| `sap_timesheet_staging` (+ satelit `sap_staging_source`, `sap_ops_request`, `sap_stage_cursor`, `sap_staging_eligibility_audit`) | Antrian posting SAP (unique `(source_system, source_key)`, status PENDING/POSTED/FAILED) + tabel sumber/ops-queue/cursor/audit |
 | `mch_productiondata`, `mch_transaction`, `mch_machines`, `mch_statustypes` | Machine hours dari SQL Server SSB_OEE (via ETL) |
-| `machine_heartbeat` | Mirror heartbeat mesin dari SQL Server (sync tiap 10 detik) |
+| `ews.machine_heartbeat_daily` | Agregat heartbeat mesin **harian** (1 baris/hari/mesin, PK `(work_date, machineno)`) dari SQL Server `dbo.MachineHeartbeat` via ETL `jobs/etl/sync_machine_heartbeat.py`. Sengaja TANPA tabel beat mentah |
 | `mch_machine_ping_log` | Log ping jaringan mesin (machine-ping-worker) |
 | `ews.*` (schema) | kpi_snapshot, kpi_threshold, adoption_bucket/summary_snapshot, shift_roster, operator_shift, rotation_config, action_table/history, alert_log, tts_notification, activity_type_ref |
 | `ms_project_*` | MS Project sync (task, assignment, resource, calendar, revision, lock, audit_log, dll) |
 | `sow_schedule*`, `sow_verification_log`, `sow_revision_history`, `sow_templates`, `sow_template_lines` | SOW extended (scheduling, verifikasi, revisi, template) |
 | `consumable_item/stock/ticket`, tools tables | Warehouse consumable & tools management |
 | `users`, `rbac.user_permissions` | Login users + RBAC per-user overrides |
-| `shift_definition`, `tablet_status`, `tts_notification_order` | Shift, monitoring tablet, antrian TTS |
+| `shift_definition`, `device_status`, `tts_notification_order` | Shift; `device_status` = monitoring armada tablet/perangkat (+ counter harian `ews.device_heartbeat_daily`, diisi dari `POST /device-heartbeat`); antrian TTS |
+| `plant_config` | **Single-row (`id=1`)** config per-plant: identitas plant + `variant` (`salvaging`\|`manufacturing`) + `timezone` + `order_master_table` + `feature_flags`/`sap_rules` (jsonb). **Sumber varian runtime** (via `GET /config`); seed `apps/api/scripts/seed_plant_config.js`. Migrasi `20260727_plant_config.sql` |
 
-- **Trigram indexes** on `full_name`, `order_no`, `serialnumber`, `part_name` (pg_trgm extension)
-- **Foreign keys:** process control → timesheet, SOW ↔ parts/operations; FK `timesheet_transaction.serialnumber → usernfc.snssb` berstatus `NOT VALID`
+- **Trigram (gin_trgm_ops) indexes** hanya 2: `timesheet_transaction.order_no` dan `consumable_stock.material_description`. `serialnumber` = **btree** (bukan trigram); `full_name`/`part_name` **tidak** ber-index (verifikasi 2026-07-28)
+- **Foreign keys:** process control → timesheet, SOW ↔ parts/operations; FK `fk_timesheet_user`: `timesheet_transaction.serialnumber → usernfc.snssb` (ON UPDATE CASCADE, ON DELETE RESTRICT) — **validated** (bukan `NOT VALID`)
 - **Schema kanonik:** `database/schema/schema_prod.sql` (regenerate dari prod setelah tiap batch migrasi). Migration ledger: tabel `schema_migrations` + `node database/migrate.js` (per 2026-07-11); dump lama yang saling drift sudah dihapus.
 
 ---
@@ -1233,7 +1253,10 @@ MPS2/
 | `ews-snapshot-job` | (image api) | — | `npm run ews:snapshot` |
 | `ews-adoption-job` | (image api) | — | `npm run ews:adoption` |
 | `ews-roster-job` | (image api) | — | `npm run ews:roster` |
-| `frontend` | nginx:alpine (built React) | 80 (internal) | Build args `VITE_API_URL=/api`, `VITE_APP_VARIANT` |
+| `sap-stage-worker` | build `./jobs/sap_staging` (Dockerfile.sap) | — | Loop `stage_machinehours.py --catchup` — auto-bundle machine hours → staging SAP |
+| `sap-post-worker` | (image sap_staging) | — | Loop `post_sap_staging.py` — auto-post hari yang lengkap ke SAP |
+| `sap-ops-worker` | (image sap_staging) | — | `ops_worker.py --loop` — konsumen antrian tombol-UI |
+| `frontend` | nginx:alpine (built React) | 80 (internal) | Build args `VITE_API_URL=/api`, `VITE_TTS_API_URL=""` (BUKAN `VITE_APP_VARIANT` — itu env service `api`: `APP_VARIANT=${VITE_APP_VARIANT:-salvaging}`) |
 | `nginx` | nginx:alpine | 80, 443 | Reverse proxy + SSL; routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/` |
 | `sow_exporter` | Python (`./jobs` + `sow/Dockerfile`) | — | SOW export ke `./export`; cron `*/10` via `docker compose run` |
 | `machine-ping-worker` | `jobs/machine_ping/Dockerfile` | — | Ping mesin M5051, `cap_add: NET_RAW` |
@@ -1241,7 +1264,7 @@ MPS2/
 | `tts-worker` | `./apps/tts-worker` | — | Piper TTS worker |
 | `ews-tts-worker` | (tts-worker) | — | `generate_ews_audio.py`, Edge TTS `id-ID-GadisNeural` |
 
-> Compose terpisah: `jobs/etl/docker-compose.etl.yml` (`timesheet_sap_etl` = etl_sync_v2) dan `jobs/etl/docker-compose.heartbeat.yml` (`machine-heartbeat-sync`).
+> Compose terpisah: `jobs/etl/docker-compose.etl.yml` (service `timesheet_sap_etl`) dan `jobs/etl/docker-compose.heartbeat.yml` (service `machine_heartbeat_sync`).
 
 ---
 
@@ -1265,7 +1288,7 @@ MPS2/
 
 9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
 
-10. **Environment variables (kunci utama):** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER`, `DB_PASSWORD`, `DB_PORT`, `PORT` (3001), `PLANT_SSB` (5100), `TIMEZONE` (**Asia/Makassar**). Selain itu `.env` root juga berisi kelompok: `SAP_INBOUND_*`, `SAP_STAGING_DB_*`, `SAP_STAGE_*`, `SQLSERVER_*`, `SRC_*`/`TGT_*` (+ varian per-plant `_BALIKPAPAN/_CIKUPA/_KUALA_KENCANA/_SEBAMBAN`), `EWS_*`, `AWS_PG*`, `VITE_API_URL`, `VITE_API_PROXY_TARGET`, `VITE_APP_VARIANT`, `VITE_TTS_PROXY_TARGET`, `CORS_ORIGIN`, `DRAWINGS_PATH`, `clientid_ph3/qh3`, `clientsecret_ph3/qh3`, `tokenurl`, `url_ph3/qh3`.
+10. **Environment variables (kunci utama):** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER`, `DB_PASSWORD`, `DB_PORT`, `PORT` (3001), `PLANT_SSB` (per-plant; mis. `5051` Balikpapan / `5100` Cikupa — identitas juga di-resolve via DB `plant_config`, tak ada default kode `5100`), `TIMEZONE` (**Asia/Makassar**). Selain itu `.env` root juga berisi kelompok: `SAP_INBOUND_*`, `SAP_STAGING_DB_*`, `SAP_STAGE_*`, `SQLSERVER_*`, `SRC_*`/`TGT_*` (+ varian per-plant `_BALIKPAPAN/_CIKUPA/_KUALA_KENCANA/_SEBAMBAN`), `EWS_*`, `AWS_PG*`, `VITE_API_URL`, `VITE_API_PROXY_TARGET`, `VITE_APP_VARIANT`, `VITE_TTS_PROXY_TARGET`, `CORS_ORIGIN`, `DRAWINGS_PATH`, `clientid_ph3/qh3`, `clientsecret_ph3/qh3`, `tokenurl`, `url_ph3/qh3`.
 
 11. **Component-first (anti-boilerplate)** — Sebelum menulis UI, cek `apps/web/src/components/`. Pakai/extend komponen yang ada; kalau pola akan dipakai ≥2 tempat, buat komponennya dulu di `components/`. Saat melihat markup duplikat ≥2×, WAJIB merekomendasikan ekstraksi komponen — jangan menambah salinan baru. Detail: "UI Engineering Standards §1".
 
