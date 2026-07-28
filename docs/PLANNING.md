@@ -1,6 +1,6 @@
 ---
 tags: [board, domain/vault]
-updated: 2026-07-20
+updated: 2026-07-28
 ---
 
 # 📌 Planning Board
@@ -44,6 +44,7 @@ updated: 2026-07-20
 - [[timesheet/PLANHOURS_GUARD_IMPLEMENTATION_PLAN]] — guard planhours (terverifikasi belum ada di kode)
 - [[timesheet/Fitur Block Timesheet Tapping]] — spec block tapping (fitur yang sama, sisi user)
 - [[MSPROJECT_PWA_LITE_PLAN]] — MS Project PWA lite
+- [[MSPROJECT_COLLAB_HARDENING_PLAN]] — hardening kolaborasi/identitas MS Project VBA (lanjutan manufaktur). **4 keputusan DIKUNCI 2026-07-28**: identitas honor-system · web=kontrol lock saja · lock non-expiring · single-writer. Siap implementasi — Fase 1 identitas → 2 guard write-path/UX konflik → 3 visibilitas sinkron → 4 kebersihan (regen `schema_prod.sql`, bay signposting, dead code) → 5 check-in manufaktur single/multiple (paritas salvaging; kini placeholder) → 6 area→Select Job hardening (§6). **Auth-bound VBA DITUNDA** (plan owner). ⚠️ Temuan: alur area→Select Job baru setengah jalan + bug blasting `AREA-18`↔`BLASTING`
 - Salvage Flow Fase 1 (backbone lifecycle) — menunggu design approved
 - Rotasi password `@dmin*` — **user action**, masih di git history
 - Restart daemon heartbeat — **user action**, mati sejak 2026-07-10
