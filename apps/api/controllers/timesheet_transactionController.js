@@ -337,7 +337,13 @@ exports.create = async (req, res) => {
       workcenterdescription,
       planhours,
       id_unprod,
-      activitytype
+      activitytype,
+      // Manufacturing bay-reservation link (nullable; salvaging callers omit these -> null)
+      ms_area_code,
+      ms_bay_codes,
+      ms_task_id,
+      ms_project_id,
+      ms_bay_schedule_id
     } = req.body;
 
     // Validate required fields
@@ -358,11 +364,13 @@ exports.create = async (req, res) => {
       `INSERT INTO timesheet_transaction
         (order_no, ssbr_id, part_name, serialnumber, full_name, operation_no, operation_text,
          workcentercode, workcenterdescription, planhours, longdate_checkin,
-         date_checkin, hour_checkin, plant, activitytype)
+         date_checkin, hour_checkin, plant, activitytype,
+         ms_area_code, ms_bay_codes, ms_task_id, ms_project_id, ms_bay_schedule_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(),
          to_char(NOW(), 'DD/MM/YYYY'),
          to_char(NOW(), 'HH24:MI'),
-         $11, $12)
+         $11, $12,
+         $13, $14::text[], $15, $16, $17)
        RETURNING *`,
       [
         order_no,
@@ -376,9 +384,31 @@ exports.create = async (req, res) => {
         workcenterdescription,
         planhours,
         PLANT_SSB,
-        normalizedActivityType
+        normalizedActivityType,
+        ms_area_code ?? null,
+        ms_bay_codes ?? null,
+        ms_task_id ?? null,
+        ms_project_id ?? null,
+        ms_bay_schedule_id ?? null
       ]
     );
+
+    // Best-effort: mark the source bay reservation CONFIRMED once an operator checks in
+    // under it. Non-fatal — a failed flip must never fail the check-in.
+    if (ms_bay_schedule_id) {
+      try {
+        await db.query(
+          `UPDATE ms_project_bay_schedule
+             SET status = 'CONFIRMED',
+                 updated_at = now()
+           WHERE schedule_id = $1
+             AND status = 'RESERVED'`,
+          [ms_bay_schedule_id]
+        );
+      } catch (flipErr) {
+        console.error('bay schedule RESERVED->CONFIRMED flip failed (non-fatal):', flipErr.message);
+      }
+    }
 
     res.json(result.rows[0]);
   } catch (err) {

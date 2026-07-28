@@ -1,51 +1,65 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  CalendarDays, GripVertical, Loader2, MapPin, Save, Search, Warehouse, X,
+  CalendarDays, GripVertical, ListChecks, Loader2, MapPin, Save, Search, Warehouse, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   cancelBaySchedule,
   createBaySchedule,
   fetchBaySchedules,
+  fetchOrderTasks,
   fetchSowOrders,
 } from '../../../services/msProjectService';
+import { areaDef } from '../../../config/manufacturingAreas';
+
+// Reserve audit actor = the logged-in scheduler (falls back to omitted so the
+// backend records null rather than a fake 'web-manufacturing' identity).
+function readLoginActor() {
+  try {
+    const user = JSON.parse(sessionStorage.getItem('authUser') || 'null');
+    if (!user) return undefined;
+    if (user.id != null && user.id !== '') return String(user.id);
+    return user.username || user.name || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Area name + bays come from the shared topology module (config/manufacturingAreas.js)
+// so this map and the timesheet SelectJobPage can no longer drift. Only layout
+// metadata (lane placement, road markers, warehouse, top/bottom label) is local.
+const areaItem = (code, label) => ({ type: 'area', ...areaDef(code), label });
 
 const LANE_A = [
-  { type: 'area', areaCode: 'AREA-01', areaName: 'Area 1', bays: ['A38', 'A37', 'A36', 'A35'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-02', areaName: 'Area 2', bays: ['A34', 'A33', 'A32'], label: 'top' },
+  areaItem('AREA-01', 'top'),
+  areaItem('AREA-02', 'top'),
   { type: 'road', code: 'A31', label: 'top' },
-  { type: 'area', areaCode: 'AREA-03', areaName: 'Area 3', bays: ['A30', 'A29', 'A28', 'A27'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-04', areaName: 'Area 4', bays: ['A26', 'A25', 'A24', 'A23'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-05', areaName: 'Area 5', bays: ['A22', 'A21', 'A20', 'A19'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-06', areaName: 'Area 6', bays: ['A18', 'A17', 'A16', 'A15'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-07', areaName: 'Area 7', bays: ['A14', 'A13', 'A12', 'A11'], label: 'top' },
+  areaItem('AREA-03', 'top'),
+  areaItem('AREA-04', 'top'),
+  areaItem('AREA-05', 'top'),
+  areaItem('AREA-06', 'top'),
+  areaItem('AREA-07', 'top'),
   { type: 'road', code: 'A10', label: 'top' },
-  { type: 'area', areaCode: 'AREA-08', areaName: 'Area 8', bays: ['A9', 'A8', 'A7', 'A6'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-09', areaName: 'Area 9', bays: ['A5', 'A4', 'A3', 'A2'], label: 'top' },
-  { type: 'area', areaCode: 'AREA-10', areaName: 'Area 10', bays: ['A1'], label: 'top' },
+  areaItem('AREA-08', 'top'),
+  areaItem('AREA-09', 'top'),
+  areaItem('AREA-10', 'top'),
 ];
 
 const LANE_B = [
-  { type: 'area', areaCode: 'AREA-11', areaName: 'Area 11', bays: ['B38', 'B37', 'B36', 'B35'], label: 'bottom' },
-  { type: 'area', areaCode: 'AREA-12', areaName: 'Area 12', bays: ['B34', 'B33', 'B32'], label: 'bottom' },
+  areaItem('AREA-11', 'bottom'),
+  areaItem('AREA-12', 'bottom'),
   { type: 'road', code: 'B31', label: 'bottom' },
-  { type: 'area', areaCode: 'AREA-13', areaName: 'Area 13', bays: ['B30', 'B29', 'B28', 'B27'], label: 'bottom' },
-  { type: 'area', areaCode: 'AREA-14', areaName: 'Area 14', bays: ['B26', 'B25', 'B24', 'B23'], label: 'bottom' },
-  { type: 'area', areaCode: 'AREA-15', areaName: 'Area 15', bays: ['B22', 'B21', 'B20', 'B19'], label: 'bottom' },
+  areaItem('AREA-13', 'bottom'),
+  areaItem('AREA-14', 'bottom'),
+  areaItem('AREA-15', 'bottom'),
   { type: 'road', code: 'B18', label: 'bottom' },
-  { type: 'area', areaCode: 'AREA-16', areaName: 'Area 16', bays: ['B17', 'B16', 'B15', 'B14'], label: 'bottom' },
-  { type: 'area', areaCode: 'AREA-17', areaName: 'Area 17', bays: ['B13', 'B12', 'B11', 'B10'], label: 'bottom' },
+  areaItem('AREA-16', 'bottom'),
+  areaItem('AREA-17', 'bottom'),
   { type: 'road', code: 'B9', label: 'bottom' },
   { type: 'warehouse', bays: ['B8', 'B7', 'B6', 'B5', 'B4', 'B3', 'B2', 'B1'] },
 ];
 
-const BLASTING_AREA = {
-  type: 'area',
-  areaCode: 'AREA-18',
-  areaName: 'Blasting & Prime',
-  bays: ['BP4', 'BP3', 'BP2', 'BP1'],
-  label: 'top',
-};
+const BLASTING_AREA = { type: 'area', ...areaDef('AREA-18'), label: 'top' };
 
 const BAY_COLUMN_WIDTH = 104;
 const LANE_COLUMN_GAP = 6;
@@ -74,10 +88,6 @@ function formatHours(value) {
   const hours = Number(value);
   if (!Number.isFinite(hours)) return '-';
   return `${hours.toLocaleString('id-ID', { maximumFractionDigits: 2 })}h`;
-}
-
-function scheduleOverlapsBay(schedule, bayCode) {
-  return Array.isArray(schedule.bay_codes) && schedule.bay_codes.includes(bayCode);
 }
 
 function scheduleBayCount(schedule) {
@@ -356,18 +366,65 @@ function BlastingReservationArea({ schedulesByBay, onDropOrder, onOpenReserve, o
   );
 }
 
+function TaskRow({ task, checked, onToggle }) {
+  return (
+    <label className="flex min-h-[44px] cursor-pointer items-start gap-2.5 border-b border-slate-100 px-3 py-2 last:border-b-0 hover:bg-slate-50">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={() => onToggle(task.task_id)}
+        className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-[#0077b6] focus:ring-2 focus:ring-[#00b4d8]"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600">
+            Op {task.operation_no || '-'}
+          </span>
+          {task.workcenter && (
+            <span className="rounded bg-[#caf0f8] px-1.5 py-0.5 text-[11px] font-bold text-[#0077b6]">
+              {task.workcenter}
+            </span>
+          )}
+        </span>
+        <span className="mt-1 block truncate text-sm font-semibold text-slate-800">
+          {task.task_name || '-'}
+        </span>
+      </span>
+    </label>
+  );
+}
+
 function ReserveModal({ reservation, onClose, onSubmit, saving }) {
   const [bayCount, setBayCount] = useState(1);
   const [startDate, setStartDate] = useState(todayText());
   const [endDate, setEndDate] = useState(addDaysText(todayText(), 7));
   const [notes, setNotes] = useState('');
+  const [orderTasks, setOrderTasks] = useState([]);
+  const [loadingTasks, setLoadingTasks] = useState(Boolean(reservation));
+  const [tasksError, setTasksError] = useState('');
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
-    setBayCount(1);
-    setStartDate(todayText());
-    setEndDate(addDaysText(todayText(), 7));
-    setNotes('');
-  }, [reservation]);
+    if (!reservation) return undefined;
+
+    let active = true;
+    fetchOrderTasks(reservation.order.order_no)
+      .then((rows) => {
+        if (!active) return;
+        setOrderTasks(Array.isArray(rows) ? rows : []);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setTasksError(error.message || 'Gagal memuat task order');
+        setOrderTasks([]);
+      })
+      .finally(() => {
+        if (active) setLoadingTasks(false);
+      });
+
+    return () => { active = false; };
+  }, [reservation, reloadToken]);
 
   if (!reservation) return null;
 
@@ -376,9 +433,38 @@ function ReserveModal({ reservation, onClose, onSubmit, saving }) {
   const maxBayCount = Math.max(1, area.bays.length - bayIndex);
   const selectedBays = area.bays.slice(bayIndex, bayIndex + Number(bayCount));
 
+  const allChecked = orderTasks.length > 0 && selectedTaskIds.length === orderTasks.length;
+  const toggleTask = (taskId) => {
+    setSelectedTaskIds((prev) => (
+      prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId]
+    ));
+  };
+  const toggleAll = () => {
+    setSelectedTaskIds(allChecked ? [] : orderTasks.map((task) => task.task_id));
+  };
+
+  const selectedTasks = orderTasks.filter((task) => selectedTaskIds.includes(task.task_id));
+  const canSubmit = !saving && selectedTasks.length > 0;
+
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    const actor = readLoginActor();
+    onSubmit({
+      order_no: order.order_no,
+      area_code: area.areaCode,
+      area_name: area.areaName,
+      bay_codes: selectedBays,
+      start_date: startDate,
+      end_date: endDate,
+      notes,
+      tasks: selectedTasks.map((task) => ({ task_id: task.task_id, project_id: task.project_id })),
+      ...(actor ? { actor } : {}),
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 px-0 md:items-center md:px-4">
-      <div className="w-full rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl">
+      <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[10px] font-bold uppercase text-[#0077b6]">Reserve Bay</p>
@@ -396,6 +482,77 @@ function ReserveModal({ reservation, onClose, onSubmit, saving }) {
         </div>
 
         <div className="mt-5 grid gap-4">
+          <div className="grid gap-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                <ListChecks className="h-4 w-4 text-[#0077b6]" />
+                Pilih Operasi / Task
+                {selectedTasks.length > 0 && (
+                  <span className="rounded-full bg-[#caf0f8] px-2 py-0.5 text-[10px] font-bold text-[#0077b6]">
+                    {selectedTasks.length} dipilih
+                  </span>
+                )}
+              </span>
+              {orderTasks.length > 0 && (
+                <button
+                  type="button"
+                  onClick={toggleAll}
+                  className="text-[11px] font-bold text-[#0077b6] hover:underline focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                >
+                  {allChecked ? 'Kosongkan' : 'Pilih semua'}
+                </button>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white">
+              {loadingTasks ? (
+                <div className="space-y-2 p-3">
+                  {[0, 1, 2].map((row) => (
+                    <div key={row} className="h-9 animate-pulse rounded-lg bg-slate-100" />
+                  ))}
+                </div>
+              ) : tasksError ? (
+                <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                  <p className="text-xs font-semibold text-red-600">{tasksError}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoadingTasks(true);
+                      setTasksError('');
+                      setReloadToken((token) => token + 1);
+                    }}
+                    className="min-h-[36px] rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                  >
+                    Coba lagi
+                  </button>
+                </div>
+              ) : orderTasks.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                    <ListChecks className="h-5 w-5" />
+                  </span>
+                  <p className="text-xs font-semibold text-slate-500">Order ini belum di-map ke MS Project.</p>
+                  <p className="text-[11px] text-slate-400">Import / map order ke sebuah project dulu agar task-nya bisa direservasi.</p>
+                </div>
+              ) : (
+                <div className="max-h-56 overflow-y-auto">
+                  {orderTasks.map((task) => (
+                    <TaskRow
+                      key={task.task_id}
+                      task={task}
+                      checked={selectedTaskIds.includes(task.task_id)}
+                      onToggle={toggleTask}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {!loadingTasks && !tasksError && orderTasks.length > 0 && selectedTasks.length === 0 && (
+              <p className="text-[11px] font-semibold text-amber-600">Pilih minimal satu task untuk direservasi.</p>
+            )}
+          </div>
+
           <label className="grid gap-1 text-xs font-bold text-slate-700">
             Bay Count
             <select
@@ -457,18 +614,9 @@ function ReserveModal({ reservation, onClose, onSubmit, saving }) {
           </button>
           <button
             type="button"
-            onClick={() => onSubmit({
-              order_no: order.order_no,
-              area_code: area.areaCode,
-              area_name: area.areaName,
-              bay_codes: selectedBays,
-              start_date: startDate,
-              end_date: endDate,
-              notes,
-              actor: 'web-manufacturing',
-            })}
-            disabled={saving}
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#0077b6] disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Reserve
@@ -564,8 +712,9 @@ export default function SchedulingAreaPage() {
     setSaving(true);
     try {
       await createBaySchedule(payload);
-      toast.success('Bay reserved', {
-        description: `${payload.order_no} reserved at ${payload.bay_codes.join(', ')}.`,
+      const taskCount = Array.isArray(payload.tasks) ? payload.tasks.length : 0;
+      toast.success('Reservasi tersimpan', {
+        description: `${taskCount} task direservasi di ${payload.bay_codes.join(', ')}.`,
       });
       setReservation(null);
       await loadSchedules();
@@ -707,6 +856,7 @@ export default function SchedulingAreaPage() {
       </div>
 
       <ReserveModal
+        key={reservation ? `${reservation.area.areaCode}-${reservation.bayCode}-${reservation.order.order_no}` : 'none'}
         reservation={reservation}
         onClose={() => setReservation(null)}
         onSubmit={handleSubmitReservation}

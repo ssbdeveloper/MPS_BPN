@@ -30,6 +30,7 @@ router.get("/health", controller.health);
 
 router.get("/sow-orders", controller.listSowOrders);
 router.get("/sow-orders/:order_no/operations", controller.getSowOrderOperations);
+router.get("/sow-orders/:order_no/tasks", controller.listOrderTasks);
 
 router.get("/bay-schedules", controller.listBaySchedules);
 router.get("/bay-schedule-tasks", controller.listBayScheduleTasks);

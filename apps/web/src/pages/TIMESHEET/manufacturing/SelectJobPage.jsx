@@ -1,33 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardList, MapPin, RefreshCw, Search, Settings2, X } from 'lucide-react';
+import { ClipboardList, Lock, MapPin, RefreshCw, Search, Settings2, Unlock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { goBackOrFallback } from '../../../utils/navigation';
+import { AREA_OPTIONS, BLASTING_AREA_CODE } from '../../../config/manufacturingAreas';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const AREA_STORAGE_KEY = 'mps.manufacturing.timesheet.deviceArea';
 const BAY_STORAGE_KEY = 'mps.manufacturing.timesheet.selectedBay';
+// Changing the device area/bay is foreman-gated. Once the PIN is entered the
+// unlock persists for the browser session (like PasswordPrompt's nfcAdminAuth),
+// so a foreman only types it once per session. Client-side only — adequate for
+// the LAN/tablet trust model, NOT real security.
+const DEVICE_UNLOCK_KEY = 'mps.manufacturing.deviceUnlock';
+const DEVICE_PASSWORD = '12345';
 
-const AREA_OPTIONS = [
-  { areaCode: 'AREA-01', areaName: 'Area 1', bays: ['A38', 'A37', 'A36', 'A35'] },
-  { areaCode: 'AREA-02', areaName: 'Area 2', bays: ['A34', 'A33', 'A32'] },
-  { areaCode: 'AREA-03', areaName: 'Area 3', bays: ['A30', 'A29', 'A28', 'A27'] },
-  { areaCode: 'AREA-04', areaName: 'Area 4', bays: ['A26', 'A25', 'A24', 'A23'] },
-  { areaCode: 'AREA-05', areaName: 'Area 5', bays: ['A22', 'A21', 'A20', 'A19'] },
-  { areaCode: 'AREA-06', areaName: 'Area 6', bays: ['A18', 'A17', 'A16', 'A15'] },
-  { areaCode: 'AREA-07', areaName: 'Area 7', bays: ['A14', 'A13', 'A12', 'A11'] },
-  { areaCode: 'AREA-08', areaName: 'Area 8', bays: ['A9', 'A8', 'A7', 'A6'] },
-  { areaCode: 'AREA-09', areaName: 'Area 9', bays: ['A5', 'A4', 'A3', 'A2'] },
-  { areaCode: 'AREA-10', areaName: 'Area 10', bays: ['A1'] },
-  { areaCode: 'AREA-11', areaName: 'Area 11', bays: ['B38', 'B37', 'B36', 'B35'] },
-  { areaCode: 'AREA-12', areaName: 'Area 12', bays: ['B34', 'B33', 'B32'] },
-  { areaCode: 'AREA-13', areaName: 'Area 13', bays: ['B30', 'B29', 'B28', 'B27'] },
-  { areaCode: 'AREA-14', areaName: 'Area 14', bays: ['B26', 'B25', 'B24', 'B23'] },
-  { areaCode: 'AREA-15', areaName: 'Area 15', bays: ['B22', 'B21', 'B20', 'B19'] },
-  { areaCode: 'AREA-16', areaName: 'Area 16', bays: ['B17', 'B16', 'B15', 'B14'] },
-  { areaCode: 'AREA-17', areaName: 'Area 17', bays: ['B13', 'B12', 'B11', 'B10'] },
-  { areaCode: 'BLASTING', areaName: 'Blasting', bays: ['BP4', 'BP3', 'BP2', 'BP1'] },
-];
+function readDeviceUnlock() {
+  try {
+    return sessionStorage.getItem(DEVICE_UNLOCK_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
 
 function readStoredValue(key) {
   try {
@@ -35,6 +29,19 @@ function readStoredValue(key) {
   } catch {
     return '';
   }
+}
+
+// One-time migration: the blasting area code was renamed 'BLASTING' -> 'AREA-18'
+// (see config/manufacturingAreas.js). Devices with the old value stored would
+// stop matching AREA_OPTIONS and silently show no jobs. Rewrite it on read.
+// AREA-18 carries the identical bays (BP4..BP1), so the stored bay stays valid.
+function readStoredDeviceArea() {
+  const stored = readStoredValue(AREA_STORAGE_KEY);
+  if (stored === 'BLASTING') {
+    writeStoredValue(AREA_STORAGE_KEY, BLASTING_AREA_CODE);
+    return BLASTING_AREA_CODE;
+  }
+  return stored;
 }
 
 function readSessionJson(key) {
@@ -95,13 +102,17 @@ function formatHoursFromMinutes(value) {
 
 export default function ManufacturingSelectJobPage() {
   const navigate = useNavigate();
-  const [deviceAreaCode, setDeviceAreaCode] = useState(() => readStoredValue(AREA_STORAGE_KEY));
+  const [deviceAreaCode, setDeviceAreaCode] = useState(() => readStoredDeviceArea());
   const [selectedBay, setSelectedBay] = useState(() => readStoredValue(BAY_STORAGE_KEY));
   const [sessionWorkcenter, setSessionWorkcenter] = useState(() => readSessionWorkcenter());
   const [searchText, setSearchText] = useState('');
   const [jobs, setJobs] = useState([]);
   const [selectedJob, setSelectedJob] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [deviceUnlocked, setDeviceUnlocked] = useState(() => readDeviceUnlock());
+  const [pendingChange, setPendingChange] = useState(null); // { apply: () => void } stashed until PIN entered
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState('');
 
   const selectedArea = useMemo(
     () => AREA_OPTIONS.find((area) => area.areaCode === deviceAreaCode) || null,
@@ -164,8 +175,8 @@ export default function ManufacturingSelectJobPage() {
     }
   }, [deviceAreaCode, selectedBay]);
 
-  const handleAreaChange = (event) => {
-    const nextArea = event.target.value;
+  // --- Actual device mutations (run only after the foreman gate passes) ---
+  const applyAreaChange = (nextArea) => {
     setDeviceAreaCode(nextArea);
     setSelectedBay('');
     setJobs([]);
@@ -174,20 +185,71 @@ export default function ManufacturingSelectJobPage() {
     if (nextArea) toast.success(`Area device disimpan: ${nextArea}`);
   };
 
-  const handleBayChange = (event) => {
-    const nextBay = event.target.value;
+  const applyBayChange = (nextBay) => {
     setSelectedBay(nextBay);
     setJobs([]);
     writeStoredValue(BAY_STORAGE_KEY, nextBay);
   };
 
-  const resetDeviceArea = () => {
+  const applyResetDeviceArea = () => {
     setDeviceAreaCode('');
     setSelectedBay('');
     setJobs([]);
     writeStoredValue(AREA_STORAGE_KEY, '');
     writeStoredValue(BAY_STORAGE_KEY, '');
     toast.info('Setting area device dihapus');
+  };
+
+  // Foreman gate: apply immediately when unlocked; otherwise stash the change
+  // and open the PIN modal. loadJobs / filter logic is untouched.
+  const guardDeviceChange = (apply) => {
+    if (deviceUnlocked) {
+      apply();
+      return;
+    }
+    setPinInput('');
+    setPinError('');
+    setPendingChange({ apply });
+  };
+
+  const handleAreaChange = (event) => {
+    const nextArea = event.target.value;
+    guardDeviceChange(() => applyAreaChange(nextArea));
+  };
+
+  const handleBayChange = (event) => {
+    const nextBay = event.target.value;
+    guardDeviceChange(() => applyBayChange(nextBay));
+  };
+
+  const resetDeviceArea = () => {
+    guardDeviceChange(applyResetDeviceArea);
+  };
+
+  const submitDevicePin = (event) => {
+    event.preventDefault();
+    if (pinInput === DEVICE_PASSWORD) {
+      try {
+        sessionStorage.setItem(DEVICE_UNLOCK_KEY, 'true');
+      } catch {
+        // sessionStorage can be unavailable in strict browser modes.
+      }
+      setDeviceUnlocked(true);
+      const change = pendingChange;
+      setPendingChange(null);
+      setPinInput('');
+      setPinError('');
+      if (change?.apply) change.apply();
+    } else {
+      setPinError('Password salah, coba lagi');
+      setPinInput('');
+    }
+  };
+
+  const closeDevicePin = () => {
+    setPendingChange(null);
+    setPinInput('');
+    setPinError('');
   };
 
   const handleSelectJob = (job) => {
@@ -246,6 +308,17 @@ export default function ManufacturingSelectJobPage() {
             <span className="inline-flex items-center gap-1.5">
               <Settings2 size={14} className="text-[#0096c7]" />
               Device Area
+              {deviceUnlocked ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                  <Unlock size={11} />
+                  Terbuka
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                  <Lock size={11} />
+                  Terkunci
+                </span>
+              )}
             </span>
             <select value={deviceAreaCode} onChange={handleAreaChange} className={inputClass}>
               <option value="">Pilih area</option>
@@ -391,6 +464,62 @@ export default function ManufacturingSelectJobPage() {
           </tbody>
         </table>
       </div>
+
+      {pendingChange && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 px-0 md:items-center md:px-4">
+          <form
+            onSubmit={submitDevicePin}
+            className="w-full rounded-t-2xl bg-white p-6 shadow-xl md:max-w-sm md:rounded-2xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#caf0f8] text-[#0077b6]">
+                  <Lock size={18} />
+                </span>
+                <div>
+                  <h2 className="text-sm font-extrabold text-slate-800">Ubah Area Device</h2>
+                  <p className="text-[11px] font-semibold text-slate-500">Masukkan password foreman</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeDevicePin}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                aria-label="Tutup"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <input
+              type="password"
+              value={pinInput}
+              onChange={(event) => setPinInput(event.target.value)}
+              placeholder="Password"
+              autoFocus
+              className={`mt-5 w-full ${inputClass}`}
+            />
+
+            {pinError && (
+              <p className="mt-2 text-xs font-semibold text-red-600">{pinError}</p>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeDevicePin}
+                className={btnOutline}
+              >
+                Batal
+              </button>
+              <button type="submit" className={btnPrimary}>
+                <Unlock size={14} />
+                Buka
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

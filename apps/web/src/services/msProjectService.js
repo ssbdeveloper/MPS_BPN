@@ -69,6 +69,16 @@ export async function fetchSowOrderOperations(orderNo) {
   return payload.data || [];
 }
 
+// Task-level source for the bay-reservation picker. Unlike fetchSowOrderOperations
+// (raw `sow` rows, no task_id/project_id), this returns ms_project_task rows that
+// carry the task_id + project_id required to create a TASK-LEVEL bay schedule.
+// Orders never mapped into an MS Project return [] (task-level assign impossible
+// until the order is imported/mapped).
+export async function fetchOrderTasks(orderNo) {
+  const payload = await request(`/ms-project/sow-orders/${encodeURIComponent(orderNo)}/tasks`);
+  return payload.data || [];
+}
+
 export async function mapSowOrderToProjectTasks(projectId, payload) {
   const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/tasks/map-sow-order`, {
     method: 'PUT',
@@ -130,6 +140,7 @@ export default {
   fetchMsProjectRevisions,
   fetchMsProjects,
   fetchMsProjectTasks,
+  fetchOrderTasks,
   fetchSowOrders,
   fetchSowOrderOperations,
   forceCheckinProject,

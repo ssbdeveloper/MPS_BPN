@@ -1,4 +1,4 @@
-import { createElement, useMemo } from 'react';
+import { createElement, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -60,6 +60,11 @@ const ActionButton = ({ icon: Icon, label, helper, tone = 'primary', onClick }) 
 export default function ManufacturingTimesheetMainMenuPage() {
   const navigate = useNavigate();
 
+  const [mode, setMode] = useState(() => {
+    const dk = readSessionJson('datakaryawan');
+    return dk.mode || 'single'; // DB adalah source of truth
+  });
+
   const userData = useMemo(() => {
     const employee = readSessionJson('datakaryawan');
     const activity = readSessionJson('selectedactivity');
@@ -74,9 +79,99 @@ export default function ManufacturingTimesheetMainMenuPage() {
     };
   }, []);
 
-  const handleCheckIn = () => {
-    toast.info('Flow check-in manufacturing akan dibuat di tahap berikutnya');
-    navigate('/select-job');
+  // Persist single/multiple to usernfc — identical contract to salvaging.
+  const handleModeChange = async (checked) => {
+    const newMode = checked ? 'multiple' : 'single';
+    const dk = readSessionJson('datakaryawan');
+
+    if (!dk.snssb) {
+      toast.error('Data karyawan tidak ditemukan');
+      return;
+    }
+
+    setMode(newMode); // optimistic update
+    try {
+      const res = await fetch(`${API_BASE}/usernfc/mode/${dk.snssb}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      sessionStorage.setItem('datakaryawan', JSON.stringify({ ...dk, mode: newMode }));
+      toast.success(`Mode diubah ke ${newMode}`);
+    } catch (err) {
+      setMode(dk.mode || 'single'); // revert UI on failure
+      toast.error('Gagal menyimpan mode ke server');
+      console.error('Failed to persist mode:', err);
+    }
+  };
+
+  // Check-in: mirrors salvaging postdata(), plus persists the manufacturing
+  // bay-reservation link fields onto the timesheet row.
+  const postdata = async () => {
+    const activity = readSessionJson('selectedactivity');
+    const employee = readSessionJson('datakaryawan');
+
+    if (!activity?.ssbr_id && !activity?.order && !activity?.order_no) {
+      toast.error('Belum ada job dipilih. Silakan pilih job dulu.');
+      navigate('/select-job');
+      return;
+    }
+    if (!employee?.snssb) {
+      toast.error('Data karyawan tidak ditemukan');
+      return;
+    }
+
+    try {
+      if (mode === 'single') {
+        const checkoutRes = await fetch(`${API_BASE}/timesheet/checkout`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ datakaryawan: { sn: employee.snssb } }),
+        });
+        const checkedOut = await checkoutRes.json().catch(() => ({}));
+        console.log('Checkout sukses:', checkedOut);
+      }
+
+      const postRes = await fetch(`${API_BASE}/timesheet/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_no: activity.order_no || activity.order,
+          ssbr_id: activity.ssbr_id,
+          part_name: activity.part_name || activity.partname || '',
+          serialnumber: employee.snssb,
+          full_name: employee.full_name,
+          operation_no: activity.operation_no,
+          operation_text: activity.operationtext || activity.operation_text,
+          workcentercode: employee.workcenter,
+          workcenterdescription: employee.machinename,
+          planhours: activity.planhours || null,
+          // Manufacturing bay-reservation link (persisted to new nullable columns).
+          ms_area_code: activity.manufacturing_area_code || null,
+          ms_bay_codes: activity.manufacturing_bay_codes
+            || (activity.manufacturing_bay_code ? [activity.manufacturing_bay_code] : null),
+          ms_task_id: activity.task_id || null,
+          ms_project_id: activity.project_id || null,
+          ms_bay_schedule_id: activity.schedule_id || null,
+        }),
+      });
+
+      if (!postRes.ok) {
+        const error = await postRes.json().catch(() => ({}));
+        console.error('Gagal POST:', error);
+        toast.error('Buat timesheet gagal', { description: error.error || 'Unknown error' });
+        return;
+      }
+
+      const created = await postRes.json();
+      console.log('Timesheet created:', created);
+      toast.success('Timesheet berhasil dibuat!');
+      if (mode === 'single') navigate('/login-timesheet');
+    } catch (err) {
+      console.error('Error postdata:', err);
+      toast.error('Terjadi kesalahan', { description: err.message });
+    }
   };
 
   const handleCheckOut = async () => {
@@ -117,9 +212,33 @@ export default function ManufacturingTimesheetMainMenuPage() {
           <ArrowLeft size={16} />
         </button>
 
-        <div className="text-center">
+        <div className="flex flex-col items-center gap-1">
           <p className="text-sm font-extrabold text-slate-800 md:text-base">Manufacturing Timesheet</p>
-          <p className="text-[10px] font-bold uppercase text-slate-500">Check-in / Check-out</p>
+          <div className="flex items-center gap-2">
+            <span className={`text-xs font-semibold transition-colors duration-200
+                              ${mode === 'single' ? 'text-[#0096c7]' : 'text-slate-400'}`}>
+              Single
+            </span>
+            <label className="relative inline-block h-6 w-11 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mode === 'multiple'}
+                onChange={(e) => handleModeChange(e.target.checked)}
+                className="sr-only"
+              />
+              <span
+                className={`absolute inset-0 rounded-full transition-colors duration-300
+                  ${mode === 'multiple' ? 'bg-[#0096c7]' : 'bg-slate-300'}
+                  before:absolute before:left-0.5 before:top-0.5 before:h-5 before:w-5
+                  before:rounded-full before:bg-white before:shadow-md before:transition-transform before:duration-300
+                  ${mode === 'multiple' ? 'before:translate-x-5' : 'before:translate-x-0'}`}
+              />
+            </label>
+            <span className={`text-xs font-semibold transition-colors duration-200
+                              ${mode === 'multiple' ? 'text-[#0096c7]' : 'text-slate-400'}`}>
+              Multiple
+            </span>
+          </div>
         </div>
 
         <button
@@ -156,7 +275,7 @@ export default function ManufacturingTimesheetMainMenuPage() {
             icon={CheckCircle2}
             label="Check In"
             helper="Mulai pekerjaan"
-            onClick={handleCheckIn}
+            onClick={postdata}
           />
           <ActionButton
             icon={LogOut}

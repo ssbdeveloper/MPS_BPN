@@ -200,6 +200,7 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
     MsSetProjectLockToken ""
     MsSetProjectCalendarId MsItemText(project, "calendar_id")
     MsTrySetObjectTextProperty ActiveProject, "Calendar", MsItemText(project, "calendar_name")
+    MsApplyTaskAreaFieldAliases
 
     For Each item In projectResources
         Set r = MsEnsureResourceFromApi(item)
@@ -218,6 +219,9 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         t.Text2 = MsItemText(item, "operation_no")
         t.Text3 = MsItemText(item, "ssbr_id")
         t.Notes = MsItemText(item, "workcenter")
+        ' Web-authoritative Area/Bay for this task (display-only; never sent back on sync).
+        MsSetTaskArea t, MsItemText(item, "area_code")
+        MsSetTaskBay t, MsItemText(item, "bay_codes")
 
         If MsItemNumber(item, "duration_minutes", 0) > 0 Then t.Duration = CStr(MsItemNumber(item, "duration_minutes", 0)) & "m"
         If MsItemNumber(item, "planned_work_minutes", 0) > 0 Then t.Work = CStr(MsItemNumber(item, "planned_work_minutes", 0)) & "m"

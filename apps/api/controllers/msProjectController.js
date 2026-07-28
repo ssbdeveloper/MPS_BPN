@@ -101,6 +101,11 @@ exports.getSowOrderOperations = route(async (req) => {
   return (res) => success(res, result.rows);
 });
 
+exports.listOrderTasks = route(async (req) => {
+  const result = await service.listOrderTasks(req.params.order_no);
+  return (res) => success(res, result.rows);
+});
+
 exports.mapSowOrderToProjectTasks = route(async (req) => {
   const data = await service.mapSowOrderToProjectTasks(req.params.project_id, req.body || {});
   return (res) => success(res, data, 200, data.summary || {});

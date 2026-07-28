@@ -287,11 +287,28 @@ async function queryProjectPackage(client, projectId) {
       [projectId]
     ),
     client.query(
-      `select *
-       from ms_project_task
-       where project_id = $1
-         and is_active = true
-       order by outline_number nulls last, created_at, task_name`,
+      // Each task carries its web-set area/bay (LEFT JOIN LATERAL to the active
+      // reservation) so the VBA package can display Area/Bay per task. WEB stays
+      // authoritative: sync only reads Text1/2/3, never these columns. bay_codes is
+      // array_to_string(...)'d to a plain string for VBA MsItemText.
+      `select
+         t.*,
+         sched.area_code,
+         sched.area_name,
+         array_to_string(sched.bay_codes, ', ') as bay_codes
+       from ms_project_task t
+       left join lateral (
+         select area_code, area_name, bay_codes
+         from ms_project_bay_schedule s
+         where s.task_id = t.task_id
+           and s.project_id = t.project_id
+           and s.status in ('RESERVED', 'CONFIRMED')
+         order by s.start_date desc, s.created_at desc
+         limit 1
+       ) sched on true
+       where t.project_id = $1
+         and t.is_active = true
+       order by t.outline_number nulls last, t.created_at, t.task_name`,
       [projectId]
     ),
     client.query(
@@ -1229,6 +1246,47 @@ async function getSowOrderOperations(orderNoParam) {
   return { rows: result.rows };
 }
 
+// TASK source for the task-level bay reservation picker. Unlike getSowOrderOperations
+// (raw `sow` rows, NO task_id/project_id), these rows carry task_id + project_id and can
+// therefore drive a task-level ms_project_bay_schedule insert. Only orders already
+// imported/mapped into an MS Project yield tasks here (correct task-level semantics).
+async function listOrderTasks(orderNoParam) {
+  const orderNo = nullableText(orderNoParam);
+  if (!orderNo) {
+    throw new ApiError(400, "INVALID_ORDER_NO", "order_no is required", [{ field: "order_no" }]);
+  }
+
+  const result = await pool().query(
+    `select
+       t.task_id,
+       t.project_id,
+       t.task_name,
+       t.order_no,
+       t.operation_no,
+       t.ssbr_id,
+       t.workcenter,
+       t.outline_number,
+       t.plan_start,
+       t.plan_finish,
+       t.planned_work_minutes,
+       t.duration_minutes
+     from ms_project_task t
+     where ltrim(t.order_no, '0') = ltrim($1, '0')
+       and t.is_active = true
+       and coalesce(t.is_summary, false) = false
+     order by
+       case when nullif(t.operation_no, '') is null then 1 else 0 end,
+       case when t.operation_no ~ '^\\d+$' then t.operation_no::integer end nulls last,
+       t.operation_no nulls last,
+       t.outline_number nulls last,
+       t.created_at,
+       t.task_name`,
+    [orderNo]
+  );
+
+  return { rows: result.rows };
+}
+
 function sortableOperation(value) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
@@ -1686,6 +1744,7 @@ async function listBayScheduleTasks(query = {}) {
         or (
           s.task_id is null
           and ltrim(t.order_no, '0') = ltrim(s.order_no, '0')
+          and (s.project_id is null or t.project_id = s.project_id)
         )
       )
      where ${where.join(" and ")}
@@ -1716,6 +1775,76 @@ async function listBayScheduleTasks(query = {}) {
   };
 }
 
+// Normalize the task-level payload into [{ task_id, project_id|null }]. Accepts either
+// payload.tasks (array of { task_id, project_id? } objects — preferred, project_id known)
+// or payload.task_ids (array of bare uuid strings — project_id resolved server-side).
+// Returns [] when neither is supplied (order-level backward-compat path).
+function normalizeTaskRows(input) {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "tasks must be an array", [{ field: "tasks" }]);
+  }
+  const rows = [];
+  const seen = new Set();
+  input.forEach((entry, index) => {
+    let taskId;
+    let projectId = null;
+    if (typeof entry === "string") {
+      taskId = assertUuid(entry, `task_ids[${index}]`);
+    } else if (entry && typeof entry === "object") {
+      taskId = assertUuid(entry.task_id, `tasks[${index}].task_id`);
+      projectId = optionalUuid(entry.project_id, `tasks[${index}].project_id`);
+    } else {
+      throw new ApiError(400, "INVALID_PAYLOAD", "Each task entry must be a UUID or an object with task_id", [
+        { field: `tasks[${index}]` },
+      ]);
+    }
+    if (seen.has(taskId)) return;
+    seen.add(taskId);
+    rows.push({ task_id: taskId, project_id: projectId });
+  });
+  return rows;
+}
+
+// Resolve (and verify) the owning project of a task. If the caller supplied a project_id,
+// assert the (project_id, task_id) pair exists and is active. Otherwise look it up:
+// task_id is a global PK so exactly one row is expected, but we still guard 0 (404) and
+// the theoretical >1 (400 ambiguous) rather than silently guessing.
+async function resolveTaskProject(client, taskId, providedProjectId) {
+  if (providedProjectId) {
+    const res = await client.query(
+      `select project_id
+       from ms_project_task
+       where task_id = $1
+         and project_id = $2
+         and is_active = true`,
+      [taskId, providedProjectId]
+    );
+    if (!res.rows[0]) {
+      throw new ApiError(404, "TASK_NOT_FOUND", "Project task not found for the provided project_id", [
+        { task_id: taskId, project_id: providedProjectId },
+      ]);
+    }
+    return providedProjectId;
+  }
+  const res = await client.query(
+    `select project_id
+     from ms_project_task
+     where task_id = $1
+       and is_active = true`,
+    [taskId]
+  );
+  if (!res.rows.length) {
+    throw new ApiError(404, "TASK_NOT_FOUND", "Project task not found", [{ task_id: taskId }]);
+  }
+  if (res.rows.length > 1) {
+    throw new ApiError(400, "AMBIGUOUS_TASK", "task_id exists under multiple projects; provide project_id", [
+      { task_id: taskId },
+    ]);
+  }
+  return res.rows[0].project_id;
+}
+
 async function createBaySchedule(body = {}) {
   const payload = ensureObject(body, "payload");
   const orderNo = nullableText(payload.order_no);
@@ -1724,10 +1853,13 @@ async function createBaySchedule(body = {}) {
   const bayCodes = normalizeBayCodes(payload.bay_codes);
   const startDate = normalizeDateOnly(payload.start_date, "start_date");
   const endDate = normalizeDateOnly(payload.end_date, "end_date");
-  const projectId = optionalUuid(payload.project_id, "project_id");
+  let projectId = optionalUuid(payload.project_id, "project_id");
   const taskId = optionalUuid(payload.task_id, "task_id");
   const actor = actorFromBody(payload, "web-manufacturing");
   const notes = nullableText(payload.notes);
+  // Task-level batch: one call reserves N tasks (each -> its own row with task_id +
+  // project_id populated). Empty => legacy order-level behavior (task_id NULL) unchanged.
+  const taskRows = normalizeTaskRows(payload.tasks || payload.task_ids);
 
   if (!orderNo) {
     throw new ApiError(400, "INVALID_PAYLOAD", "order_no is required", [{ field: "order_no" }]);
@@ -1741,7 +1873,7 @@ async function createBaySchedule(body = {}) {
       { field: "end_date", value: endDate },
     ]);
   }
-  if (taskId && !projectId) {
+  if (taskRows.length === 0 && taskId && !projectId) {
     throw new ApiError(400, "INVALID_PAYLOAD", "project_id is required when task_id is provided", [{ field: "project_id" }]);
   }
 
@@ -1756,6 +1888,106 @@ async function createBaySchedule(body = {}) {
       [orderNo]
     );
     const resolvedOrderNo = sowResult.rows[0]?.order_no || orderNo;
+
+    // === TASK-LEVEL branch =================================================
+    // One reservation call places N specific tasks into the SAME bays/dates. The bay
+    // overlap conflict-check runs ONCE (all tasks share the bays), then one insert per
+    // task with task_id + project_id populated. Single audit log for the whole batch.
+    if (taskRows.length > 0) {
+      const conflictResult = await client.query(
+        `select
+           schedule_id,
+           order_no,
+           bay_codes,
+           start_date,
+           end_date,
+           status
+         from ms_project_bay_schedule
+         where status in ('RESERVED', 'CONFIRMED')
+           and bay_codes && $1::text[]
+           and daterange(start_date, end_date, '[]') && daterange($2::date, $3::date, '[]')
+         order by start_date, bay_codes[1]
+         limit 10`,
+        [bayCodes, startDate, endDate]
+      );
+      if (conflictResult.rows.length) {
+        throw new ApiError(409, "BAY_SCHEDULE_CONFLICT", "One or more bays are already reserved for this date range", conflictResult.rows);
+      }
+
+      const inserted = [];
+      for (const taskRow of taskRows) {
+        const resolvedProjectId = await resolveTaskProject(client, taskRow.task_id, taskRow.project_id);
+        const insertResult = await client.query(
+          `insert into ms_project_bay_schedule (
+             order_no,
+             project_id,
+             task_id,
+             area_code,
+             area_name,
+             bay_codes,
+             start_date,
+             end_date,
+             status,
+             notes,
+             created_by,
+             updated_by
+           )
+           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $10)
+           returning *`,
+          [
+            resolvedOrderNo,
+            resolvedProjectId,
+            taskRow.task_id,
+            areaCode,
+            areaName,
+            bayCodes,
+            startDate,
+            endDate,
+            notes,
+            actor,
+          ]
+        );
+        inserted.push(insertResult.rows[0]);
+      }
+
+      await writeAuditLog(client, {
+        projectId: inserted[0]?.project_id || null,
+        action: "BAY_SCHEDULE_RESERVE",
+        actor,
+        details: {
+          schedule_ids: inserted.map((row) => row.schedule_id),
+          task_ids: inserted.map((row) => row.task_id),
+          order_no: resolvedOrderNo,
+          area_code: areaCode,
+          bay_codes: bayCodes,
+          start_date: startDate,
+          end_date: endDate,
+        },
+      });
+
+      await client.query("commit");
+      return { schedules: inserted, count: inserted.length };
+    }
+    // === END TASK-LEVEL branch =============================================
+
+    // When the caller does not pin a project, try to attach the reservation to the
+    // order's MS Project so listBayScheduleTasks can scope the order-fallback join to
+    // it. Only when exactly ONE active project matches the order; otherwise stay NULL.
+    // task_id is intentionally left NULL for order-level reservations (attaching a
+    // single task_id would collapse multi-operation orders to one row downstream).
+    if (!projectId) {
+      const projectMatch = await client.query(
+        `select distinct project_id
+           from ms_project_task
+          where is_active = true
+            and project_id is not null
+            and ltrim(order_no, '0') = ltrim($1, '0')`,
+        [resolvedOrderNo]
+      );
+      if (projectMatch.rows.length === 1) {
+        projectId = projectMatch.rows[0].project_id;
+      }
+    }
 
     if (projectId) {
       const projectResult = await client.query("select project_id from ms_project where project_id = $1", [projectId]);
@@ -3255,6 +3487,7 @@ module.exports = {
   heartbeatProject,
   health,
   getSowOrderOperations,
+  listOrderTasks,
   listBayScheduleTasks,
   listBaySchedules,
   listCalendars,

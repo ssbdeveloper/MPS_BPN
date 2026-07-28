@@ -64,7 +64,7 @@ lewat Hub web (`/ms-project-hub` → Force Check-In).
 `Ms_DebugSaveCurrentProjectForUpload`, `Ms_DebugUploadCurrentProjectFileOnly`,
 `Ms_DebugBuildPayload`.
 
-## Field mapping MS Project (tidak berubah dari v1)
+## Field mapping MS Project
 
 | Data | Field |
 |---|---|
@@ -75,8 +75,28 @@ lewat Hub web (`/ms-project-hub` → Force Check-In).
 | `project calendar_id` | `ProjectSummaryTask.Text26` |
 | `task_id` / `task project_id` / `parent_task_id` / `task calendar_id` | `Task.Text10/11/12/13` |
 | `order_no` / `operation_no` / `ssbr_id` | `Task.Text1/2/3` |
+| **`area_code` (MPS Area)** / **`bay_codes` (MPS Bay)** | **`Task.Text4/5` — read-only (lihat catatan)** |
 | `resource_id` / `resource calendar_id` | `Resource.Text9/8` |
 | `assignment_id` | `Assignment.Text10` |
+
+### Kolom `MPS Area` / `MPS Bay` (Task.Text4 / Text5) — web-authoritative, read-only
+
+Kolom task `Text4` (**MPS Area** = `area_code`, mis. `AREA-05`) dan `Text5`
+(**MPS Bay** = daftar `bay_codes` gabungan koma, mis. `A22, A21`) diisi dari
+package server saat **import/Open** (`ms_import.bas`), berasal dari reservasi
+`ms_project_bay_schedule` per-task di web. Fungsinya: scheduler desktop bisa
+melihat Area/Bay tiap task langsung di MS Project.
+
+- **Sumber kebenaran = WEB.** Kolom ini **display-only**: `ms_serializer.bas` hanya
+  mengirim `Text1/2/3` untuk task, jadi `Text4/Text5` **tidak pernah** dikirim balik
+  saat `Ms_SaveToServer`/sync. Mengedit kolom ini di MS Project **tidak** mengubah
+  Area/Bay di server — akan ditimpa ulang pada import berikutnya.
+- Header kolom di-alias otomatis ke `MPS Area` / `MPS Bay` via
+  `MsApplyTaskAreaFieldAliases` (dipanggil tiap import; idempoten).
+- `Text4/Text5` **tidak** dibersihkan oleh `MsClearAllDatabaseIds` (bukan ID DB;
+  di-refresh tiap import).
+- ⚠️ Jangan menambahkan `Text4/Text5` ke `ms_serializer.bas` — akan meng-clobber
+  Area/Bay yang di-set web (lihat komentar peringatan di `MsTaskJson`).
 
 ## Endpoint yang dipakai (base: `<base_url>` dari config)
 

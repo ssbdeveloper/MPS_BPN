@@ -79,6 +79,40 @@ Public Sub MsSetTaskCalendarId(ByVal t As Object, ByVal calendarId As String)
     t.Text13 = calendarId
 End Sub
 
+' --- Web-authoritative display fields (populated from server package on import) ---
+' Text4 = MPS Area (area_code), Text5 = MPS Bay (comma-joined bay_codes).
+' Display-only: ms_serializer NEVER reads Task.Text4/Text5, so a Save/Sync cannot
+' clobber the web-set Area/Bay back to the server. WEB is the source of truth.
+' Do NOT clear these in MsClearAllDatabaseIds — they are refreshed on every import.
+Public Function MsTaskArea(ByVal t As Object) As String
+    On Error Resume Next
+    MsTaskArea = Trim$(t.Text4)
+    On Error GoTo 0
+End Function
+
+Public Sub MsSetTaskArea(ByVal t As Object, ByVal areaCode As String)
+    t.Text4 = areaCode
+End Sub
+
+Public Function MsTaskBay(ByVal t As Object) As String
+    On Error Resume Next
+    MsTaskBay = Trim$(t.Text5)
+    On Error GoTo 0
+End Function
+
+Public Sub MsSetTaskBay(ByVal t As Object, ByVal bayList As String)
+    t.Text5 = bayList
+End Sub
+
+' Idempotent friendly column headers for the web-set display fields.
+' Safe to call on every import; guarded so a rename failure never breaks import.
+Public Sub MsApplyTaskAreaFieldAliases()
+    On Error Resume Next
+    CustomFieldRename pjCustomTaskText4, "MPS Area"
+    CustomFieldRename pjCustomTaskText5, "MPS Bay"
+    On Error GoTo 0
+End Sub
+
 Public Function MsResourceId(ByVal r As Object) As String
     On Error Resume Next
     MsResourceId = Trim$(r.Text9)
