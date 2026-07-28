@@ -306,11 +306,11 @@ function SapLogPage() {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to send request');
-      toast.success(`${label} — request queued`, {
-        description: 'Queued in the background. Refresh to see changes.',
+      toast.success('Request queued', {
+        description: `${label} — running in the background. Refresh to see changes.`,
       });
     } catch (err) {
-      toast.error(`${label} failed`, { description: err.message });
+      toast.error('Request could not be queued', { description: `${label}: ${err.message}` });
     } finally {
       setActing(false);
     }
