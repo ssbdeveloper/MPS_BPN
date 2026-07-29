@@ -192,4 +192,5 @@ Bug/fragilitas konkret:
   harus konsisten dengan PRD ini, jangan fork. D5 (jam-insentif) = risiko payroll, di luar scope plan ini.
 - Scheduling: [[timesheet/sow Scheduling master plan]] (invarian I3 Plan≠Actual — sync MSP jangan menimpa actual).
 - Runbook: [[operations/MSPROJECT_HUB]].
+- UAT: [[MSPROJECT_MANUFACTURING_UAT_CHECKLIST]] — checklist uji end-to-end fitur §6 (VBA + check-in + area→bay).
 - Ditunda: **(ii) auth-bound VBA** — plan terpisah milik owner.
