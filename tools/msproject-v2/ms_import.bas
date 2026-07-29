@@ -200,7 +200,6 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
     MsSetProjectLockToken ""
     MsSetProjectCalendarId MsItemText(project, "calendar_id")
     MsTrySetObjectTextProperty ActiveProject, "Calendar", MsItemText(project, "calendar_name")
-    MsApplyTaskAreaFieldAliases
 
     For Each item In projectResources
         Set r = MsEnsureResourceFromApi(item)

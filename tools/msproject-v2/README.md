@@ -91,8 +91,11 @@ melihat Area/Bay tiap task langsung di MS Project.
   mengirim `Text1/2/3` untuk task, jadi `Text4/Text5` **tidak pernah** dikirim balik
   saat `Ms_SaveToServer`/sync. Mengedit kolom ini di MS Project **tidak** mengubah
   Area/Bay di server — akan ditimpa ulang pada import berikutnya.
-- Header kolom di-alias otomatis ke `MPS Area` / `MPS Bay` via
-  `MsApplyTaskAreaFieldAliases` (dipanggil tiap import; idempoten).
+- Header kolom default tetap `Text4` / `Text5`. Rename jadi `MPS Area` / `MPS Bay`
+  **manual** di MS Project (klik kanan kolom → Field Settings → Title). Rename via VBA
+  (`CustomFieldRename`) SENGAJA tak dipakai: dengan `Option Explicit` aktif, konstanta
+  `pjCustomTaskText*` yang tak dikenal library membuat modul gagal compile → "Automation error"
+  saat import (versi stabil di `docs/archive` juga tak pernah memakainya).
 - `Text4/Text5` **tidak** dibersihkan oleh `MsClearAllDatabaseIds` (bukan ID DB;
   di-refresh tiap import).
 - ⚠️ Jangan menambahkan `Text4/Text5` ke `ms_serializer.bas` — akan meng-clobber

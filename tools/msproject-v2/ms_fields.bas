@@ -104,14 +104,11 @@ Public Sub MsSetTaskBay(ByVal t As Object, ByVal bayList As String)
     t.Text5 = bayList
 End Sub
 
-' Idempotent friendly column headers for the web-set display fields.
-' Safe to call on every import; guarded so a rename failure never breaks import.
-Public Sub MsApplyTaskAreaFieldAliases()
-    On Error Resume Next
-    CustomFieldRename pjCustomTaskText4, "MPS Area"
-    CustomFieldRename pjCustomTaskText5, "MPS Bay"
-    On Error GoTo 0
-End Sub
+' CATATAN: nilai Text4/Text5 (MPS Area / MPS Bay) di-set langsung via MsSetTaskArea/MsSetTaskBay.
+' JANGAN pakai CustomFieldRename di sini. Versi stabil (docs/archive/additional/ms project) tak pernah
+' memakainya; dengan Option Explicit aktif, konstanta pjCustomTaskText* yang tak dikenal library MS Project
+' membuat modul GAGAL COMPILE -> "Automation error, exception occurred" saat import. Rename header kolom
+' jadi "MPS Area"/"MPS Bay" dilakukan MANUAL di MS Project (klik kanan kolom -> Field Settings -> Title).
 
 Public Function MsResourceId(ByVal r As Object) As String
     On Error Resume Next
