@@ -256,7 +256,7 @@ Public Sub Ms_RefreshCalendarsFromShifts()
     Dim summary As Object
     Dim msg As String
 
-    Set root = MsParseSuccess(MsHttpPost("/calendars/refresh-from-shifts", "{""actor"":""ms-project-vba""}"))
+    Set root = MsParseSuccess(MsHttpPost("/calendars/refresh-from-shifts", "{""actor"":" & MsJsonString(MsCurrentActor()) & "}"))
     Set summary = root("summary")
     msg = "Refresh calendar dari shift selesai." & vbCrLf & _
           "Created: " & CStr(summary("created")) & vbCrLf & _

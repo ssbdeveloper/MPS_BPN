@@ -335,9 +335,9 @@ Public Function MsProjectLockPayload(Optional ByVal includeRevision As Boolean =
     json = json & """project_id"":" & MsJsonString(MsGetProjectId()) & ","
     If includeRevision Then json = json & """last_known_revision_no"":" & CStr(MsGetProjectRevisionNo()) & ","
     json = json & """lock_token"":" & MsJsonString(MsGetProjectLockToken()) & ","
-    json = json & """updated_by"":""ms-project-vba"""
+    json = json & """updated_by"":" & MsJsonString(MsCurrentActor())
     json = json & "},"
-    json = json & """actor"":""ms-project-vba"","
+    json = json & """actor"":" & MsJsonString(MsCurrentActor()) & ","
     json = json & """lock_token"":" & MsJsonString(MsGetProjectLockToken())
     json = json & "}"
     MsProjectLockPayload = json
@@ -383,7 +383,7 @@ Public Sub Ms_CheckOut()
         End If
     End If
 
-    payload = "{""actor"":""ms-project-vba""}"
+    payload = "{""actor"":" & MsJsonString(MsCurrentActor()) & "}"
     Set root = MsParseSuccess(MsHttpPost("/projects/" & projectId & "/checkout", payload))
     MsApplyLockResponse root
     MsgBox "Checkout sukses." & vbCrLf & _

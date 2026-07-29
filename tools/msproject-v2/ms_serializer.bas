@@ -362,7 +362,7 @@ Public Function MsBuildProjectPayload(ByVal isNewProject As Boolean) As String
     json = json & """status"":""ACTIVE""," 
     json = json & """calendar_id"":" & MsJsonNullableString(MsGetProjectCalendarId()) & ","
     json = json & """calendar_name"":" & MsJsonNullableString(MsProjectCalendarName()) & ","
-    json = json & """updated_by"":""ms-project-vba"""
+    json = json & """updated_by"":" & MsJsonString(MsCurrentActor())
     json = json & "},"
     payloadPhase = "project resources"
     json = json & """project_resources"":" & MsResourceJsonArrayFromSheet() & ","
