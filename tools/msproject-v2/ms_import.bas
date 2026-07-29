@@ -152,9 +152,11 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         Exit Sub
     End If
 
-    If MsgBox("Buat file MS Project baru untuk import package ini?", vbQuestion + vbYesNo) = vbYes Then
-        FileNew
-    End If
+    ' No = batal (import ke ActiveProject yang tak dikosongkan bikin Planning Wizard/overwrite
+    ' tersembunyi -> "Not Responding"). Selalu ke file baru; kalau batal, keluar bersih.
+    If MsgBox("Import project ini ke file MS Project BARU?" & vbCrLf & _
+              "(Yes = lanjut, No = batal)", vbQuestion + vbYesNo) <> vbYes Then Exit Sub
+    FileNew
 
     Application.ScreenUpdating = False
     Application.Calculation = pjManual
