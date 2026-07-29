@@ -27,9 +27,10 @@ tags: [domain/msproject, domain/timesheet]
 
 | # | Langkah | Hasil diharapkan | Status | Catatan |
 |---|---|---|---|---|
-| A1 | Alt+F11 → import **semua** `.bas` `tools/msproject-v2/` (JsonConverter wajib; hapus modul v1) | Compile bersih (Debug → Compile VBAProject: tanpa error) | — | |
-| A2 | Tak set Tools→References | Late binding — biarkan default | — | |
-| A3 | `config.ini` di `%APPDATA%\mps-msproject\`: `base_url=https://127.0.0.1:8443/api/ms-project`, `verify_tls=false`, `tz_suffix=+08:00` | Config kebaca | — | |
+| A1 | Alt+F11 → import **semua** `.bas` `tools/msproject-v2/` (JsonConverter wajib; **ms_auth.bas kini modul WAJIB**; hapus modul v1) | Compile bersih (Debug → Compile VBAProject: tanpa error) | — | import modul wiring (ms_sync/ms_serializer/ms_calendars) **tanpa ms_auth = gagal compile** (`MsCurrentActor`/`gCurrentUser` undefined) |
+| A2 | Import **UserForm** `frmLogin` (login) & `frmProjectPicker` (picker Ms_OpenFromServer) | Kedua form muncul di tree VBAProject; compile tetap bersih | — | frmLogin dipakai `Ms_Login`; tanpa form ini macro login gagal |
+| A3 | Tak set Tools→References | Late binding — biarkan default | — | |
+| A4 | `config.ini` di `%APPDATA%\mps-msproject\`: `base_url=https://127.0.0.1:8443/api/ms-project`, `verify_tls=false`, `tz_suffix=+08:00` | Config kebaca | — | login POST ke **sibling** `/api/auth/login` (base_url tanpa `/ms-project`) |
 
 ## B. Konektivitas & lifecycle MS Project (`ms_sync.bas`)
 
@@ -66,6 +67,16 @@ tags: [domain/msproject, domain/timesheet]
 |---|---|---|---|---|
 | E1 | `SELECT ms_task_id, ms_area_code, ms_bay_schedule_id FROM timesheet_transaction ORDER BY tsnumber DESC LIMIT 5;` | Kolom `ms_*` terisi utk check-in manufaktur | — | |
 | E2 | `SELECT status,count(*) FROM ms_project_bay_schedule GROUP BY status;` | Ada `CONFIRMED` setelah check-in | — | flip `RESERVED→CONFIRMED` |
+
+## F. Login & identitas actor (`ms_auth.bas` + `frmLogin`)
+
+| # | Langkah | Hasil diharapkan | Status | Catatan |
+|---|---|---|---|---|
+| F1 | `Ms_Login` → isi user & password valid | MsgBox **"Berhasil login sebagai: <user>"**; `gCurrentUser` terisi | — | POST `/api/auth/login` (sibling, bukan `/ms-project`) |
+| F2 | `Ms_WhoAmI` | Tampil **username** yang sedang login | — | belum login → tampil fallback `ms-project-vba` |
+| F3 | `Ms_CheckOut` lalu buka Hub `/ms-project-hub` | Lock tampil **"Checked out by <user>"** (username login, **bukan** `ms-project-vba`) | — | actor = `MsCurrentActor()` = username login |
+| F4 | Belum login → langsung `Ms_CheckOut` / save | Jalan **tanpa error**; actor **fallback** `ms-project-vba` | — | login opsional; identitas default aman |
+| F5 | `Ms_Login` → password **salah** | `frmLogin` **`lblStatus` merah** (gagal login); `gCurrentUser` tidak berubah | — | actor tetap fallback bila belum pernah login |
 
 ## Bug ditemukan saat UAT
 

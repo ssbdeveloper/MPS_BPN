@@ -1,6 +1,6 @@
 ---
 type: plan
-status: planning
+status: active
 tags: [domain/msproject, domain/timesheet]
 ---
 
@@ -34,15 +34,16 @@ Kerja plan ini = menutup gap yang membuat **kolaborasi & sinkron membingungkan**
 
 | # | Keputusan | Konsekuensi ke plan |
 |---|---|---|
-| **D-A** | **Identitas honor-system**: VBA dari `config.ini` (`user`, seperti `git user.name`), web dari sesi login; keduanya **divalidasi cocok** ke tabel `users`. Tanpa password di VBA. | Fase 1. Cukup untuk akuntabilitas di LAN internal (sejalan `verify_tls=false`, IP Tailscale). |
+| **D-A** | **Identitas auth-bound** (ditingkatkan dari honor-system, **b87ea0d 2026-07-29**): VBA identitas via **LOGIN** (form `frmLogin` + `ms_auth.bas`, verifikasi `POST /api/auth/login` → tabel `users`, argon2id); `MsCurrentActor()` = username login (fallback `"ms-project-vba"`). Web dari sesi login; keduanya **divalidasi** ke tabel `users`. **BUKAN** lagi honor-system `config.ini`. | Fase 1 (identitas SUDAH). Akuntabilitas terverifikasi server, actor tak bisa dipalsukan. |
 | **D-B** | **Web = kontrol lock + visibilitas saja**, BUKAN edit jadwal di web. | Non-goal "no web task editing" [[MSPROJECT_PWA_LITE_PLAN]] **dipertahankan**. Editing tetap di VBA. |
 | **D-C** | **Lock tetap non-expiring** (K2). | **TTL/auto-release TIDAK dikerjakan.** Recovery lock nyangkut = force-checkin, dikompensasi visibilitas identitas (Fase 3). |
 | **D-D** | **Single-writer** (tanpa merge konkuren). | `409` yang ada sudah cukup; yang diperbaiki hanya **UX konflik**-nya. |
 
-**Ditunda (dikerjakan owner lain waktu, plan terpisah):**
+**~~Ditunda~~ → SUDAH DIBANGUN (b87ea0d, 2026-07-29):**
 
-- **(ii) Auth-bound VBA** — login/token di VBA sehingga `actor` diverifikasi server & tak bisa dipalsukan.
-  Lebih aman tapi jauh lebih besar (perlu alur login di VBA). Dipisah dari plan ini secara sadar.
+- **(ii) Auth-bound VBA** — ~~ditunda~~ **TIDAK lagi ditunda — SUDAH DIBANGUN.** Login/token di VBA
+  (`frmLogin` + `ms_auth.bas`, `POST /api/auth/login`, argon2id) sehingga `actor` diverifikasi server &
+  tak bisa dipalsukan. Merealisasikan D-A di atas.
 
 ---
 
@@ -51,7 +52,7 @@ Kerja plan ini = menutup gap yang membuat **kolaborasi & sinkron membingungkan**
 - ❌ Real-time presence / multi-editor konkuren — pertahankan non-goal [[MSPROJECT_PWA_LITE_PLAN]].
 - ❌ TTL / auto-expiring lock (D-C).
 - ❌ Web Gantt / edit task di web (D-B).
-- ❌ Auth-bound VBA (ditunda ke plan owner).
+- ~~❌ Auth-bound VBA (ditunda ke plan owner).~~ → **SUDAH DIBANGUN** (b87ea0d, 2026-07-29) — lihat D-A/§1.
 - ❌ Merge konflik otomatis (D-D).
 
 ---
@@ -76,11 +77,14 @@ Kerja plan ini = menutup gap yang membuat **kolaborasi & sinkron membingungkan**
 
 ## 4. Fase implementasi
 
-### Fase 1 — Identitas nyata (honor-system) · P0-1 · [D-A]
-1. `tools/msproject-v2/config.ini`: tambah `user` (username; opsional `display_name`). Loader `ms_config.bas`.
-2. VBA: kirim `user` sebagai `actor` di checkout/sync/heartbeat/checkin/publish; **buang** string hardcoded.
-3. Web: kirim user login (`authUser`/header `x-user-id`) sebagai `actor` di Map/Bay/Hub; buang `"web-*"`.
-4. Server: resolusi/validasi `actor` → tabel `users` (tolak/tandai jika bukan user dikenal); simpan ke
+### Fase 1 — Identitas nyata · P0-1 · [D-A] — ✅ identitas SUDAH (auth-bound, b87ea0d 2026-07-29)
+1. ✅ **DILAMPAUI honor-system**: identitas VBA kini via **LOGIN** (`frmLogin` + `ms_auth.bas`, `POST /api/auth/login`,
+   argon2id → tabel `users`), bukan `config.ini`/`user`. `Public gCurrentUser`; `MsCurrentActor()` = username login
+   (fallback `"ms-project-vba"`); `Ms_Login/Ms_Logout/Ms_WhoAmI`. `ms_auth.bas` kini modul **WAJIB**.
+2. ✅ VBA kirim `actor` nyata via `MsJsonString(MsCurrentActor())` di checkout/sync/checkin/publish/kalender
+   (wiring 5 titik: `ms_sync`/`ms_serializer`/`ms_calendars`); string hardcoded dibuang.
+3. Web: kirim user login (`authUser`/header `x-user-id`) sebagai `actor` di Map/Bay/Hub; buang `"web-*"`. *(sisa)*
+4. Server: resolusi/validasi `actor` → tabel `users` (login VBA sudah verifikasi ke `users`); simpan ke
    `locked_by` + audit. Plumbing sudah ada.
 - **Acceptance:** Hub menampilkan `checked_out_by` = nama orang asli; audit_log actor = user valid; tak ada lagi `"ms-project-vba"`/`"web-*"` di baris baru.
 
@@ -193,4 +197,4 @@ Bug/fragilitas konkret:
 - Scheduling: [[timesheet/sow Scheduling master plan]] (invarian I3 Plan≠Actual — sync MSP jangan menimpa actual).
 - Runbook: [[operations/MSPROJECT_HUB]].
 - UAT: [[MSPROJECT_MANUFACTURING_UAT_CHECKLIST]] — checklist uji end-to-end fitur §6 (VBA + check-in + area→bay).
-- Ditunda: **(ii) auth-bound VBA** — plan terpisah milik owner.
+- ~~Ditunda: **(ii) auth-bound VBA**~~ → **SUDAH DIBANGUN** (b87ea0d, 2026-07-29): `frmLogin` + `ms_auth.bas`, `POST /api/auth/login` (argon2id), actor→`MsCurrentActor()`.
