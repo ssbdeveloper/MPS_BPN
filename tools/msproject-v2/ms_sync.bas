@@ -353,6 +353,7 @@ End Function
 ' --- Check-out -----------------------------------------------------------------
 Public Sub Ms_CheckOut()
     On Error GoTo ErrHandler
+    If Not MsEnsureLoggedIn() Then Exit Sub
     Dim projectId As String
     Dim payload As String
     Dim root As Object
@@ -397,6 +398,7 @@ End Sub
 ' --- Save to Server (sync metadata + upload .mpp) --------------------------------
 Public Sub Ms_SaveToServer()
     On Error GoTo ErrHandler
+    If Not MsEnsureLoggedIn() Then Exit Sub
     Dim phase As String
     Dim oldCalculation As Long
     phase = "validasi awal"
@@ -466,6 +468,7 @@ End Sub
 ' --- Check-in --------------------------------------------------------------------
 Public Sub Ms_CheckIn()
     On Error GoTo ErrHandler
+    If Not MsEnsureLoggedIn() Then Exit Sub
     Dim projectId As String
     Dim root As Object
 
@@ -490,6 +493,7 @@ End Sub
 ' --- Publish revisi DB -------------------------------------------------------------
 Public Sub Ms_PublishCurrentRevision()
     On Error GoTo ErrHandler
+    If Not MsEnsureLoggedIn() Then Exit Sub
     Dim projectId As String
     Dim root As Object
 
@@ -516,6 +520,7 @@ End Sub
 ' --- Publish project baru -----------------------------------------------------------
 Public Sub Ms_PublishNewProject()
     On Error GoTo ErrHandler
+    If Not MsEnsureLoggedIn() Then Exit Sub
     Dim phase As String
     Dim oldCalculation As Long
     phase = "validasi awal"

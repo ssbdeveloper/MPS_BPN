@@ -58,6 +58,20 @@ Public Sub Ms_WhoAmI()
     End If
 End Sub
 
+' Guard: pastikan sudah login sebelum aksi. Kalau belum, tampilkan form login.
+' Return True kalau (sudah/berhasil) login; False kalau user batal (aksi harus dibatalkan).
+' Panggil di awal tiap aksi tulis: If Not MsEnsureLoggedIn() Then Exit Sub
+Public Function MsEnsureLoggedIn() As Boolean
+    If Len(gCurrentUser) > 0 Then
+        MsEnsureLoggedIn = True
+        Exit Function
+    End If
+    Ms_Login                                  ' tampilkan frmLogin; sukses -> isi gCurrentUser
+    MsEnsureLoggedIn = (Len(gCurrentUser) > 0)
+    If Not MsEnsureLoggedIn Then _
+        MsgBox "Aksi dibatalkan — belum login.", vbExclamation
+End Function
+
 ' Verifikasi kredensial ke /api/auth/login.
 ' True  = sukses (outUser = username terverifikasi).
 ' False = gagal (outMsg = alasan yang bisa ditampilkan ke user).
