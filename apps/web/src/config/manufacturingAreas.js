@@ -30,7 +30,9 @@ export const AREA_OPTIONS = [
   { areaCode: 'AREA-15', areaName: 'Area 15', bays: ['B22', 'B21', 'B20', 'B19'] },
   { areaCode: 'AREA-16', areaName: 'Area 16', bays: ['B17', 'B16', 'B15', 'B14'] },
   { areaCode: 'AREA-17', areaName: 'Area 17', bays: ['B13', 'B12', 'B11', 'B10'] },
-  { areaCode: 'AREA-18', areaName: 'Blasting & Prime', bays: ['BP4', 'BP3', 'BP2', 'BP1'] },
+  // AREA-18: 3 Painting (PT1-3) + 2 Blasting (BL1-2). Kode dibedakan PT vs BL biar
+  // scheduler tahu painting vs blasting — bukan 'BP' seragam seperti dulu.
+  { areaCode: 'AREA-18', areaName: 'Blasting & Prime', bays: ['PT1', 'PT2', 'PT3', 'BL1', 'BL2'] },
 ];
 
 // Map: areaCode -> { areaName, bays }. Derived from AREA_OPTIONS.

@@ -191,6 +191,30 @@ const router = createBrowserRouter([
   {
     path: '/sow-scheduling',
     lazy: page(() => import('../pages/PPC/SowSchedulingPage')),
+    children: [
+      // Varian manufaktur: dispatcher me-render layout (PageHeader + <Outlet/>).
+      // Salvaging me-render halaman utuh tanpa Outlet, jadi child ini diabaikan.
+      {
+        index: true,
+        lazy: page(() => import('../pages/PPC/manufacturing/SchedulingMenuPage')),
+        handle: { title: 'SOW Scheduling', eyebrow: 'Manufacturing' },
+      },
+      {
+        path: 'projects',
+        lazy: page(() => import('../pages/PPC/manufacturing/ProjectBrowserPage')),
+        handle: { title: 'View All Projects', eyebrow: 'Manufacturing' },
+      },
+      {
+        path: 'map',
+        lazy: page(() => import('../pages/PPC/manufacturing/MapSapOperationPage')),
+        handle: { title: 'Map SAP Operations', eyebrow: 'Manufacturing' },
+      },
+      {
+        path: 'area',
+        lazy: page(() => import('../pages/PPC/manufacturing/SchedulingAreaPage')),
+        handle: { title: 'Scheduling Area', eyebrow: 'Manufacturing' },
+      },
+    ],
   },
   {
     path: '/sow-verification',

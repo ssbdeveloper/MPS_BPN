@@ -87,6 +87,16 @@ export async function mapSowOrderToProjectTasks(projectId, payload) {
   return response.data;
 }
 
+// Write planned headcount back onto sow (per-operation). `updates` is an array of
+// { operation_no, people_required }; people_required null clears it. Returns { updated, requested }.
+export async function updateOperationPeople(orderNo, updates) {
+  const response = await request(`/ms-project/sow-orders/${encodeURIComponent(orderNo)}/operations/people`, {
+    method: 'PATCH',
+    body: JSON.stringify({ updates }),
+  });
+  return response.data;
+}
+
 export async function fetchBaySchedules(params = {}) {
   const payload = await request(`/ms-project/bay-schedules${queryString(params)}`);
   return payload.data || [];
@@ -147,4 +157,5 @@ export default {
   mapSowOrderToProjectTasks,
   msProjectFileUrl,
   updateMsProjectStatus,
+  updateOperationPeople,
 };

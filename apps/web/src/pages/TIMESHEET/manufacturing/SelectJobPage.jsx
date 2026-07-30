@@ -34,7 +34,8 @@ function readStoredValue(key) {
 // One-time migration: the blasting area code was renamed 'BLASTING' -> 'AREA-18'
 // (see config/manufacturingAreas.js). Devices with the old value stored would
 // stop matching AREA_OPTIONS and silently show no jobs. Rewrite it on read.
-// AREA-18 carries the identical bays (BP4..BP1), so the stored bay stays valid.
+// (Bays were re-coded BP* -> PT1-3 / BL1-2; a device that had stored a BP* bay must
+// re-pick its bay. The area-code rewrite here is independent of the bay codes.)
 function readStoredDeviceArea() {
   const stored = readStoredValue(AREA_STORAGE_KEY);
   if (stored === 'BLASTING') {

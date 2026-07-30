@@ -106,6 +106,11 @@ exports.listOrderTasks = route(async (req) => {
   return (res) => success(res, result.rows);
 });
 
+exports.updateOperationPeople = route(async (req) => {
+  const data = await service.updateOperationPeople(req.params.order_no, (req.body || {}).updates);
+  return (res) => success(res, data, 200, { updated: data.updated, requested: data.requested });
+});
+
 exports.mapSowOrderToProjectTasks = route(async (req) => {
   const data = await service.mapSowOrderToProjectTasks(req.params.project_id, req.body || {});
   return (res) => success(res, data, 200, data.summary || {});

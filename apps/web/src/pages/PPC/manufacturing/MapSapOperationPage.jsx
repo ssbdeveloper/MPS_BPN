@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  CheckCircle2, ChevronDown, ChevronRight, GitBranch, Loader2, Search, X,
+  AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, FolderSearch,
+  GitBranch, GripVertical, ListTree, Loader2, PackageOpen, RotateCw, Target, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { EmptyState, SearchInput, Skeleton, SkeletonRow } from '../../../components';
 import {
   fetchMsProjects,
   fetchMsProjectTasks,
@@ -76,23 +78,44 @@ function projectStatusClass(project) {
   return 'border-slate-200 bg-slate-100 text-slate-600';
 }
 
-function SearchBox({ value, onChange, placeholder }) {
+/** Inline error + retry — dipakai per panel fetch (bukan toast). */
+function PanelError({ message, onRetry }) {
   return (
-    <div className="flex h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 focus-within:border-[#0096c7] focus-within:ring-2 focus-within:ring-[#00b4d8]">
-      <Search className="h-4 w-4 shrink-0 text-slate-400" />
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-transparent text-sm font-semibold text-slate-800 placeholder-slate-400 outline-none"
-      />
+    <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+      <AlertTriangle className="h-8 w-8 text-red-400" strokeWidth={1.5} />
+      <p className="max-w-xs text-xs text-red-600">{message || 'Terjadi kesalahan saat memuat data.'}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+      >
+        <RotateCw className="h-3.5 w-3.5" />
+        Coba lagi
+      </button>
     </div>
+  );
+}
+
+/** Satu langkah pada stepper alur klik terpandu. */
+function Step({ n, label, value, done, mono }) {
+  return (
+    <li className="flex items-center gap-2">
+      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums ${done ? 'bg-[#0077b6] text-white' : 'bg-slate-100 text-slate-500'}`}>
+        {done ? <Check className="h-3.5 w-3.5" /> : n}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</span>
+        <span className={`block max-w-[200px] truncate text-xs font-semibold ${done ? 'text-slate-800' : 'text-slate-400'} ${mono ? 'font-mono tabular-nums' : ''}`}>
+          {value || 'Belum dipilih'}
+        </span>
+      </span>
+    </li>
   );
 }
 
 function StatusBadge({ project }) {
   return (
-    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${projectStatusClass(project)}`}>
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase ${projectStatusClass(project)}`}>
       {project.checked_out_by ? 'Checked Out' : project.status || 'Draft'}
     </span>
   );
@@ -103,8 +126,8 @@ function ProjectCard({ project, selected, onClick }) {
     <button
       type="button"
       onClick={() => onClick(project)}
-      className={`w-full rounded-xl border bg-white p-3 text-left shadow-sm transition-all hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] ${
-        selected ? 'border-[#0096c7] ring-2 ring-[#90e0ef]' : 'border-slate-200'
+      className={`w-full rounded-xl border bg-white p-3 text-left shadow-sm transition-all hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
+        selected ? 'border-[#0077b6] ring-2 ring-[#90e0ef]' : 'border-slate-200'
       }`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -114,40 +137,37 @@ function ProjectCard({ project, selected, onClick }) {
         </div>
         <StatusBadge project={project} />
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-[10px] font-semibold text-slate-500">
-        <span className="rounded-lg bg-slate-50 px-2 py-1">Rev {project.revision_no || 0}</span>
-        <span className="rounded-lg bg-slate-50 px-2 py-1">Published {project.published_revision_no || '-'}</span>
-        <span className="rounded-lg bg-slate-50 px-2 py-1">{formatDate(project.updated_at)}</span>
+      <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+        <span className="font-semibold tabular-nums">Rev {project.revision_no || 0}</span>
+        <span className="text-slate-300">·</span>
+        <span className="tabular-nums">{formatDate(project.updated_at)}</span>
       </div>
     </button>
   );
 }
 
-function TaskRow({ task, compact = false }) {
-  const indent = compact ? 0 : Math.max(0, Number(task.outline_level || 1) - 1) * 14;
+function TaskRow({ task }) {
   return (
-    <div className="grid grid-cols-[minmax(180px,1fr)_88px_96px_76px] items-center gap-3 border-b border-slate-100 px-3 py-2 text-xs last:border-b-0">
-      <div className="min-w-0" style={{ paddingLeft: indent }}>
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">
-            {task.outline_number || '-'}
-          </span>
-          <span className="truncate font-bold text-slate-800">{task.task_name || '-'}</span>
-        </div>
-        {!compact && (
-          <p className="mt-0.5 truncate text-[10px] text-slate-500">
-            Level {task.outline_level || '-'} - {task.is_summary ? 'Summary task' : 'Detail task'}
-          </p>
-        )}
+    <div className="grid grid-cols-[minmax(160px,1fr)_84px_92px_64px] items-center gap-3 border-b border-slate-100 px-3 py-2 text-xs last:border-b-0">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
+          {task.outline_number || '-'}
+        </span>
+        <span className="truncate font-bold text-slate-800">{task.task_name || '-'}</span>
       </div>
-      <span className="truncate font-mono text-[11px] font-bold text-slate-600">{task.order_no || '-'}</span>
-      <span className="truncate font-mono text-[11px] font-bold text-[#0077b6]">{task.operation_no || '-'}</span>
-      <span className="text-right text-[11px] font-semibold text-slate-500">{formatHoursFromMinutes(task.planned_work_minutes)}</span>
+      <span className="truncate font-mono text-xs font-bold tabular-nums text-slate-600">{task.order_no || '-'}</span>
+      <span className="truncate font-mono text-xs font-bold tabular-nums text-[#0077b6]">{task.operation_no || '-'}</span>
+      <span className="text-right text-xs font-semibold tabular-nums text-slate-500">{formatHoursFromMinutes(task.planned_work_minutes)}</span>
     </div>
   );
 }
 
-function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onSelect, depth = 0 }) {
+/**
+ * TaskTreeNode — chevron & target dipisah TEGAS:
+ *   • chevron (kiri) = expand/collapse saja.
+ *   • klik nama / tombol Target = jadikan target parent (tanpa efek expand).
+ */
+function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggle, onSetTarget, depth = 0 }) {
   const children = childrenByParent.get(task.task_id) || [];
   const expanded = expandedIds.has(task.task_id);
   const selected = selectedId === task.task_id;
@@ -155,38 +175,58 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onSelec
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => onSelect(task, hasChildren)}
-        className={`flex min-h-[44px] w-full items-center gap-2 border-b border-slate-100 px-3 py-2 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#00b4d8] ${
-          selected ? 'bg-[#caf0f8]/70' : 'bg-white'
+      <div
+        className={`group flex items-center gap-1 border-b border-slate-100 pr-2 transition-colors ${
+          selected ? 'bg-[#caf0f8]/70' : 'bg-white hover:bg-slate-50'
         }`}
-        style={{ paddingLeft: 12 + depth * 18 }}
+        style={{ paddingLeft: 8 + depth * 18 }}
       >
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500">
-          {hasChildren ? (
-            <ChevronDown className={`h-4 w-4 transition ${expanded ? '' : '-rotate-90'}`} />
-          ) : (
+        {hasChildren ? (
+          <button
+            type="button"
+            onClick={() => onToggle(task.task_id)}
+            aria-label={expanded ? 'Tutup cabang' : 'Buka cabang'}
+            aria-expanded={expanded}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-200/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]"
+          >
+            <ChevronRight className={`h-4 w-4 transition-transform ${expanded ? 'rotate-90' : ''} motion-reduce:transition-none`} />
+          </button>
+        ) : (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center">
             <span className="h-1.5 w-1.5 rounded-full bg-slate-300" />
-          )}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-600">
-              {task.outline_number || '-'}
-            </span>
-            <span className="truncate text-xs font-extrabold text-slate-800">{task.task_name || '-'}</span>
-          </div>
-          <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-500">
-            {children.length} child task(s){task.operation_no ? ` - Op ${task.operation_no}` : ''}
-          </p>
-        </div>
-        {selected && (
-          <span className="rounded-full border border-[#90e0ef] bg-white px-2 py-0.5 text-[10px] font-extrabold text-[#0077b6]">
-            Target
           </span>
         )}
-      </button>
+
+        <button
+          type="button"
+          onClick={() => onSetTarget(task)}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]"
+        >
+          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
+            {task.outline_number || '-'}
+          </span>
+          <span className="truncate text-xs font-extrabold text-slate-800">{task.task_name || '-'}</span>
+          {task.operation_no && (
+            <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-[#0077b6]">Op {task.operation_no}</span>
+          )}
+        </button>
+
+        {selected ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#0077b6] px-2 py-0.5 text-[11px] font-bold uppercase text-white">
+            <Target className="h-3 w-3" />
+            Target
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSetTarget(task)}
+            className="hidden shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-500 transition hover:border-[#90e0ef] hover:text-[#0077b6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] group-hover:inline-flex"
+          >
+            <Target className="h-3 w-3" />
+            Target
+          </button>
+        )}
+      </div>
       {expanded && children.map((child) => (
         <TaskTreeNode
           key={child.task_id}
@@ -194,7 +234,8 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onSelec
           childrenByParent={childrenByParent}
           expandedIds={expandedIds}
           selectedId={selectedId}
-          onSelect={onSelect}
+          onToggle={onToggle}
+          onSetTarget={onSetTarget}
           depth={depth + 1}
         />
       ))}
@@ -209,23 +250,25 @@ function SowOrderCard({ order, selected, onClick, onDragStart }) {
       draggable
       onDragStart={(event) => onDragStart(event, order)}
       onClick={() => onClick(order)}
-      className={`w-full rounded-xl border bg-white p-3 text-left shadow-sm transition-all hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] ${
-        selected ? 'border-[#0096c7] ring-2 ring-[#90e0ef]' : 'border-slate-200'
+      className={`group flex w-full cursor-grab items-start gap-2 rounded-xl border bg-white p-3 text-left shadow-sm transition-all hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:cursor-grabbing ${
+        selected ? 'border-[#0077b6] ring-2 ring-[#90e0ef]' : 'border-slate-200'
       }`}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate font-mono text-sm font-extrabold text-slate-800">{order.order_no}</p>
-          <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">{order.part_name || order.ssbr_id || '-'}</p>
-        </div>
-        <span className="rounded-full border border-[#90e0ef] bg-[#caf0f8] px-2 py-0.5 text-[10px] font-extrabold text-[#0077b6]">
-          {order.operation_count || 0} ops
+      <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-slate-300 transition-colors group-hover:text-slate-400" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center justify-between gap-2">
+          <span className="truncate font-mono text-sm font-extrabold tabular-nums text-slate-800">{order.order_no}</span>
+          <span className="shrink-0 rounded-full border border-[#90e0ef] bg-[#caf0f8] px-2 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]">
+            {order.operation_count || 0} ops
+          </span>
         </span>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] font-semibold text-slate-500">
-        <span className="rounded-lg bg-slate-50 px-2 py-1">{formatHours(order.total_planhours)}</span>
-        <span className="rounded-lg bg-slate-50 px-2 py-1">{order.workcenter || 'No workcenter'}</span>
-      </div>
+        <span className="mt-0.5 block truncate text-xs font-semibold text-slate-500">{order.part_name || order.ssbr_id || '-'}</span>
+        <span className="mt-1.5 flex items-center gap-2 text-xs text-slate-500">
+          <span className="font-semibold tabular-nums">{formatHours(order.total_planhours)}</span>
+          <span className="text-slate-300">·</span>
+          <span className="truncate">{order.workcenter || 'No workcenter'}</span>
+        </span>
+      </span>
     </button>
   );
 }
@@ -236,62 +279,34 @@ function OperationList({ operations }) {
       {sortByOperationNo(operations).map((operation) => (
         <div key={operation.idsow} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-mono text-xs font-extrabold text-[#0077b6]">Op {operation.operation_no}</span>
-            <span className="text-[10px] font-semibold text-slate-500">{formatHours(operation.planhours)}</span>
+            <span className="font-mono text-xs font-extrabold tabular-nums text-[#0077b6]">Op {operation.operation_no}</span>
+            <span className="text-xs font-semibold tabular-nums text-slate-500">{formatHours(operation.planhours)}</span>
           </div>
           <p className="mt-1 line-clamp-2 text-xs font-bold text-slate-700">{operation.operation_text || '-'}</p>
-          <p className="mt-0.5 truncate text-[10px] text-slate-500">{operation.workcenter || operation.wct_group || '-'}</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">{operation.workcenter || operation.wct_group || '-'}</p>
         </div>
       ))}
     </div>
   );
 }
 
-function SourceSection({ title, subtitle, open, flexMode, loading, onToggle, children }) {
-  return (
-    <section className={`${open ? flexMode : 'flex-none'} flex min-h-0 flex-col overflow-hidden border-b border-slate-200 last:border-b-0`}>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex min-h-[48px] items-center justify-between gap-3 bg-white px-3 py-2 text-left transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#00b4d8]"
-      >
-        <span className="min-w-0">
-          <span className="block truncate text-xs font-extrabold text-slate-800">{title}</span>
-          {subtitle && <span className="block truncate text-[10px] font-semibold text-slate-500">{subtitle}</span>}
-        </span>
-        <span className="flex items-center gap-2">
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-[#0096c7]" />}
-          <ChevronDown className={`h-4 w-4 text-slate-400 transition ${open ? '' : '-rotate-90'}`} />
-        </span>
-      </button>
-      {open && <div className="min-h-0 flex-1 overflow-hidden bg-slate-50">{children}</div>}
-    </section>
-  );
-}
-
 function SelectedProjectBox({ project, onClear }) {
   return (
-    <div className="rounded-xl border border-[#90e0ef] bg-[#caf0f8] p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-extrabold uppercase text-[#0077b6]">Selected Project</p>
-          <h4 className="mt-0.5 truncate text-sm font-extrabold text-slate-800">{project.project_name || '-'}</h4>
-          <p className="mt-1 truncate text-xs font-semibold text-slate-600">{project.description || 'No description'}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClear}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#90e0ef] bg-white text-slate-600 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-          aria-label="Unselect project"
-        >
-          <X className="h-4 w-4" />
-        </button>
+    <div className="flex items-start justify-between gap-3 rounded-xl border border-[#90e0ef] bg-[#caf0f8] p-3">
+      <div className="min-w-0">
+        <h4 className="truncate text-sm font-extrabold text-slate-800">{project.project_name || '-'}</h4>
+        <p className="mt-0.5 truncate text-xs font-semibold text-slate-600">{project.description || 'No description'}</p>
+        <p className="mt-1 text-xs font-semibold tabular-nums text-[#0077b6]">Rev {project.revision_no || 0}</p>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-[10px] font-semibold text-slate-600">
-        <span className="rounded-lg bg-white/80 px-2 py-1">Rev {project.revision_no || 0}</span>
-        <span className="rounded-lg bg-white/80 px-2 py-1">Published {project.published_revision_no || '-'}</span>
-        <span className="rounded-lg bg-white/80 px-2 py-1">{formatDate(project.updated_at)}</span>
-      </div>
+      <button
+        type="button"
+        onClick={onClear}
+        className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-[#90e0ef] bg-white px-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+        aria-label="Ganti project"
+      >
+        <X className="h-3.5 w-3.5" />
+        Ganti
+      </button>
     </div>
   );
 }
@@ -299,63 +314,72 @@ function SelectedProjectBox({ project, onClear }) {
 export default function MapSapOperationPage() {
   const [projects, setProjects] = useState([]);
   const [projectSearch, setProjectSearch] = useState('');
+  const [projectError, setProjectError] = useState(null);
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectTasks, setProjectTasks] = useState([]);
   const [projectLoading, setProjectLoading] = useState(false);
   const [taskLoading, setTaskLoading] = useState(false);
+  const [taskError, setTaskError] = useState(null);
   const [targetParentTask, setTargetParentTask] = useState(null);
   const [expandedTaskIds, setExpandedTaskIds] = useState(() => new Set());
   const [sowOrders, setSowOrders] = useState([]);
   const [sowSearch, setSowSearch] = useState('');
+  const [sowError, setSowError] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [operations, setOperations] = useState([]);
   const [sowLoading, setSowLoading] = useState(false);
   const [operationLoading, setOperationLoading] = useState(false);
+  const [operationError, setOperationError] = useState(null);
   const [mapping, setMapping] = useState(false);
-  const [sourceOpen, setSourceOpen] = useState({ orders: true, operations: true });
+  const [dropActive, setDropActive] = useState(false);
 
   const taskTree = useMemo(() => buildTaskTree(projectTasks), [projectTasks]);
-  const openSourceCount = Number(sourceOpen.orders) + Number(sourceOpen.operations);
-  const sourceFlexMode = openSourceCount === 2 ? 'flex-1 basis-0' : 'flex-1';
+
+  const loadProjects = useCallback(async () => {
+    setProjectLoading(true);
+    setProjectError(null);
+    try {
+      setProjects(await fetchMsProjects({ q: projectSearch, limit: 80 }));
+    } catch (error) {
+      setProjectError(error.message);
+    } finally {
+      setProjectLoading(false);
+    }
+  }, [projectSearch]);
 
   useEffect(() => {
     if (selectedProject) return undefined;
-    const timer = setTimeout(async () => {
-      setProjectLoading(true);
-      try {
-        setProjects(await fetchMsProjects({ q: projectSearch, limit: 80 }));
-      } catch (error) {
-        toast.error('Failed to load projects', { description: error.message });
-      } finally {
-        setProjectLoading(false);
-      }
-    }, 250);
+    const timer = setTimeout(loadProjects, 250);
     return () => clearTimeout(timer);
-  }, [projectSearch, selectedProject]);
+  }, [loadProjects, selectedProject]);
+
+  const loadSowOrders = useCallback(async () => {
+    setSowLoading(true);
+    setSowError(null);
+    try {
+      setSowOrders(await fetchSowOrders({ q: sowSearch, limit: 80 }));
+    } catch (error) {
+      setSowError(error.message);
+    } finally {
+      setSowLoading(false);
+    }
+  }, [sowSearch]);
 
   useEffect(() => {
-    const timer = setTimeout(async () => {
-      setSowLoading(true);
-      try {
-        setSowOrders(await fetchSowOrders({ q: sowSearch, limit: 80 }));
-      } catch (error) {
-        toast.error('Failed to load SOW orders', { description: error.message });
-      } finally {
-        setSowLoading(false);
-      }
-    }, 250);
+    const timer = setTimeout(loadSowOrders, 250);
     return () => clearTimeout(timer);
-  }, [sowSearch]);
+  }, [loadSowOrders]);
 
   const loadProjectTasks = useCallback(async (project) => {
     setSelectedProject(project);
     setTargetParentTask(null);
     setExpandedTaskIds(new Set());
     setTaskLoading(true);
+    setTaskError(null);
     try {
       setProjectTasks(await fetchMsProjectTasks(project.project_id));
     } catch (error) {
-      toast.error('Failed to load project tasks', { description: error.message });
+      setTaskError(error.message);
     } finally {
       setTaskLoading(false);
     }
@@ -365,17 +389,18 @@ export default function MapSapOperationPage() {
     setSelectedProject(null);
     setProjectTasks([]);
     setTargetParentTask(null);
+    setTaskError(null);
     setExpandedTaskIds(new Set());
   }, []);
 
   const loadOperations = useCallback(async (order) => {
     setSelectedOrder(order);
-    setSourceOpen((prev) => ({ ...prev, operations: true }));
     setOperationLoading(true);
+    setOperationError(null);
     try {
       setOperations(await fetchSowOrderOperations(order.order_no));
     } catch (error) {
-      toast.error('Failed to load SOW operations', { description: error.message });
+      setOperationError(error.message);
     } finally {
       setOperationLoading(false);
     }
@@ -424,23 +449,36 @@ export default function MapSapOperationPage() {
     loadOperations(order);
   };
 
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (!dropActive) setDropActive(true);
+  };
+
+  const handleDragLeave = (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    setDropActive(false);
+  };
+
   const handleDrop = (event) => {
     event.preventDefault();
+    setDropActive(false);
     const orderNo = event.dataTransfer.getData('text/plain');
     const order = sowOrders.find((row) => row.order_no === orderNo) || selectedOrder;
     applyMapping(order);
   };
 
-  const handleSelectTargetTask = useCallback((task, hasChildren) => {
+  const toggleTaskExpand = useCallback((taskId) => {
+    setExpandedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const setTargetTask = useCallback((task) => {
     setTargetParentTask(task);
-    if (hasChildren) {
-      setExpandedTaskIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(task.task_id)) next.delete(task.task_id);
-        else next.add(task.task_id);
-        return next;
-      });
-    }
   }, []);
 
   const targetTasks = useMemo(
@@ -448,191 +486,246 @@ export default function MapSapOperationPage() {
     [targetParentTask, taskTree]
   );
 
+  const ready = Boolean(selectedProject && selectedOrder && targetParentTask);
+  const steps = [
+    { n: 1, label: 'Project', value: selectedProject?.project_name, done: Boolean(selectedProject) },
+    {
+      n: 2,
+      label: 'Parent task',
+      value: targetParentTask ? `${targetParentTask.outline_number || '-'} ${targetParentTask.task_name || ''}`.trim() : null,
+      done: Boolean(targetParentTask),
+    },
+    { n: 3, label: 'Order', value: selectedOrder?.order_no, done: Boolean(selectedOrder), mono: true },
+  ];
+
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
-      
+      {/* Alur klik terpandu + aksi utama (juga bisa via drag-and-drop ke pohon) */}
+      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:flex-row xl:items-center xl:justify-between">
+        <ol className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {steps.map((step, index) => (
+            <React.Fragment key={step.n}>
+              {index > 0 && <ArrowRight className="h-4 w-4 shrink-0 text-slate-300" aria-hidden="true" />}
+              <Step {...step} />
+            </React.Fragment>
+          ))}
+        </ol>
+        <div className="flex items-center gap-3">
+          {!ready && (
+            <span className="hidden text-xs text-slate-400 xl:block">Lengkapi 3 langkah, atau seret order ke pohon</span>
+          )}
+          <button
+            type="button"
+            onClick={() => applyMapping()}
+            disabled={mapping || !ready}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none motion-reduce:transform-none"
+          >
+            {mapping ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Map Operations
+          </button>
+        </div>
+      </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,420px)_minmax(0,1fr)]">
-        <section className="flex min-h-[680px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
-          <div className="border-b border-slate-200 px-3 py-3">
-            <p className="text-[10px] font-bold uppercase text-[#0077b6]">Source</p>
-            <h3 className="text-sm font-extrabold text-slate-800">SOW Orders</h3>
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)]">
+        {/* ── SUMBER: SOW Orders ─────────────────────────────── */}
+        <section className="flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Sumber</p>
+              <h3 className="text-sm font-extrabold text-slate-800">SOW Orders</h3>
+            </div>
+            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-500">
+              {sowOrders.length}
+            </span>
           </div>
 
-          <SourceSection
-            title="Order List"
-            subtitle={`${sowOrders.length} order(s) loaded`}
-            open={sourceOpen.orders}
-            flexMode={sourceFlexMode}
-            loading={sowLoading}
-            onToggle={() => setSourceOpen((prev) => ({ ...prev, orders: !prev.orders }))}
-          >
-            <div className="flex h-full min-h-0 flex-col">
-              <div className="border-b border-slate-200 bg-white p-3">
-                <SearchBox value={sowSearch} onChange={setSowSearch} placeholder="Search order..." />
+          <div className="border-b border-slate-200 p-3">
+            <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Cari order / part..." />
+          </div>
+
+          <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
+            {sowLoading ? (
+              Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[74px] w-full rounded-xl" />)
+            ) : sowError ? (
+              <PanelError message={sowError} onRetry={loadSowOrders} />
+            ) : sowOrders.length === 0 ? (
+              <EmptyState
+                icon={PackageOpen}
+                title="Tidak ada order"
+                description="Tidak ada order SOW yang cocok dengan pencarian."
+              />
+            ) : (
+              sowOrders.map((order) => (
+                <SowOrderCard
+                  key={order.order_no}
+                  order={order}
+                  selected={order.order_no === selectedOrder?.order_no}
+                  onClick={loadOperations}
+                  onDragStart={handleDragStart}
+                />
+              ))
+            )}
+          </div>
+
+          {/* Preview operasi order terpilih (konfirmasi langkah 3) */}
+          {selectedOrder && (
+            <div className="border-t border-slate-200 bg-slate-50">
+              <div className="flex items-center justify-between gap-2 px-3 py-2">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                  Operasi · <span className="font-mono tabular-nums text-slate-700">{selectedOrder.order_no}</span>
+                </p>
+                {operationLoading && <Loader2 className="h-4 w-4 animate-spin text-[#00b4d8]" />}
               </div>
-              <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
-                {sowOrders.map((order) => (
-                  <SowOrderCard
-                    key={order.order_no}
-                    order={order}
-                    selected={order.order_no === selectedOrder?.order_no}
-                    onClick={loadOperations}
-                    onDragStart={handleDragStart}
-                  />
-                ))}
-                {!sowLoading && sowOrders.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-8 text-center text-sm font-semibold text-slate-400">
-                    No SOW orders found.
+              <div className="max-h-56 overflow-auto px-3 pb-3">
+                {operationLoading ? (
+                  <div className="space-y-1.5">
+                    {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}
                   </div>
+                ) : operationError ? (
+                  <PanelError message={operationError} onRetry={() => loadOperations(selectedOrder)} />
+                ) : operations.length === 0 ? (
+                  <EmptyState icon={ListTree} title="Tidak ada operasi" description="Order ini belum memiliki operasi." />
+                ) : (
+                  <OperationList operations={operations} />
                 )}
               </div>
             </div>
-          </SourceSection>
-
-          <SourceSection
-            title="Operation Preview"
-            subtitle={selectedOrder ? selectedOrder.order_no : 'Select an order'}
-            open={sourceOpen.operations}
-            flexMode={sourceFlexMode}
-            loading={operationLoading}
-            onToggle={() => setSourceOpen((prev) => ({ ...prev, operations: !prev.operations }))}
-          >
-            <div className="h-full min-h-0 overflow-auto p-3">
-              <OperationList operations={operations} />
-              {!selectedOrder && (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-8 text-center text-sm font-semibold text-slate-400">
-                  Select an order to preview operations.
-                </div>
-              )}
-            </div>
-          </SourceSection>
+          )}
         </section>
 
+        {/* ── TARGET: Project + Task Tree ────────────────────── */}
         <section
-          className="flex min-h-[680px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0"
-          onDragOver={(event) => event.preventDefault()}
+          className={`relative flex min-h-[540px] flex-col overflow-hidden rounded-xl border bg-white shadow-sm transition-colors lg:min-h-0 ${
+            dropActive ? 'border-[#00b4d8] ring-2 ring-[#00b4d8]' : 'border-slate-200'
+          }`}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
+          {dropActive && (
+            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#caf0f8]/60">
+              <span className="rounded-lg border border-[#00b4d8] bg-white px-4 py-2 text-sm font-bold text-[#0077b6] shadow">
+                {targetParentTask
+                  ? `Lepas untuk map ke "${targetParentTask.task_name || 'parent'}"`
+                  : 'Pilih project & parent task dulu'}
+              </span>
+            </div>
+          )}
+
           <div className="border-b border-slate-200 p-3">
-            <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0">
-                
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Target</p>
                 <h3 className="text-sm font-extrabold text-slate-800">Project Tasks</h3>
-            
               </div>
-              <button
-                type="button"
-                onClick={() => applyMapping()}
-                disabled={mapping || !selectedProject || !selectedOrder || !targetParentTask}
-                className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0096c7] px-4 py-2 text-xs font-bold text-white transition-all hover:bg-[#0077b6] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-              >
-                {mapping ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Map Operations
-              </button>
+              {taskLoading && <Loader2 className="h-4 w-4 animate-spin text-[#00b4d8]" />}
             </div>
 
             {selectedProject ? (
               <SelectedProjectBox project={selectedProject} onClear={clearProject} />
             ) : (
-              <SearchBox value={projectSearch} onChange={setProjectSearch} placeholder="Search project..." />
+              <SearchInput value={projectSearch} onChange={setProjectSearch} placeholder="Cari project..." />
             )}
           </div>
 
-          <div className={`grid min-h-0 flex-1 grid-cols-1 overflow-hidden ${selectedProject ? '' : 'lg:grid-cols-[330px_minmax(0,1fr)]'}`}>
-            {!selectedProject && (
-              <div className="min-h-0 space-y-2 overflow-auto border-b border-slate-200 bg-slate-50 p-3 lg:border-b-0 lg:border-r">
-                {projectLoading && (
-                  <div className="flex items-center justify-center gap-2 rounded-lg bg-white px-3 py-6 text-sm font-semibold text-slate-500">
-                    <Loader2 className="h-4 w-4 animate-spin text-[#0096c7]" />
-                    Loading projects
-                  </div>
-                )}
-                {!projectLoading && projects.map((project) => (
-                  <ProjectCard
-                    key={project.project_id}
-                    project={project}
-                    selected={false}
-                    onClick={loadProjectTasks}
-                  />
-                ))}
-                {!projectLoading && projects.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-8 text-center text-sm font-semibold text-slate-400">
-                    No projects found.
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="flex min-h-0 flex-col overflow-hidden">
-              <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="min-w-0">
-                  <p className="truncate text-xs font-extrabold text-slate-800">
-                    {targetParentTask ? `${targetParentTask.outline_number || '-'} ${targetParentTask.task_name || '-'}` : 'No parent selected'}
-                  </p>
-                  <p className="text-[10px] font-semibold text-slate-500">
-                    {targetParentTask
-                      ? `${targetTasks.length} direct child task(s)`
-                      : 'Click a task in the tree to set the target parent'}
-                  </p>
+          {selectedProject ? (
+            <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(280px,1fr)_minmax(300px,1fr)]">
+              {/* Pohon task */}
+              <div className="flex min-h-0 flex-col overflow-hidden border-b border-slate-200 xl:border-b-0 xl:border-r">
+                <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Project Tree</span>
+                  <span className="truncate text-xs text-slate-500">Klik nama = jadikan target</span>
                 </div>
-                {taskLoading && <Loader2 className="h-4 w-4 animate-spin text-[#0096c7]" />}
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {taskLoading ? (
+                    <div className="space-y-1.5 p-2">
+                      {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
+                    </div>
+                  ) : taskError ? (
+                    <PanelError message={taskError} onRetry={() => loadProjectTasks(selectedProject)} />
+                  ) : taskTree.roots.length === 0 ? (
+                    <EmptyState icon={ListTree} title="Tidak ada task" description="Project ini belum memiliki task." />
+                  ) : (
+                    taskTree.roots.map((task) => (
+                      <TaskTreeNode
+                        key={task.task_id}
+                        task={task}
+                        childrenByParent={taskTree.byParent}
+                        expandedIds={expandedTaskIds}
+                        selectedId={targetParentTask?.task_id}
+                        onToggle={toggleTaskExpand}
+                        onSetTarget={setTargetTask}
+                      />
+                    ))
+                  )}
+                </div>
               </div>
 
-              <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(260px,0.92fr)_minmax(320px,1.08fr)]">
-                <div className="min-h-0 overflow-auto border-b border-slate-200 lg:border-b-0 lg:border-r">
-                  <div className="sticky top-0 border-b border-slate-200 bg-[#caf0f8] px-3 py-2 text-[10px] font-extrabold uppercase text-slate-700">
-                    Project Tree
+              {/* Child task dari parent terpilih */}
+              <div className="flex min-h-0 flex-col overflow-hidden">
+                <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Child Tasks</span>
+                    {targetParentTask && (
+                      <span className="text-xs font-semibold tabular-nums text-slate-500">{targetTasks.length}</span>
+                    )}
                   </div>
-                  {selectedProject && taskTree.roots.map((task) => (
-                    <TaskTreeNode
-                      key={task.task_id}
-                      task={task}
-                      childrenByParent={taskTree.byParent}
-                      expandedIds={expandedTaskIds}
-                      selectedId={targetParentTask?.task_id}
-                      onSelect={handleSelectTargetTask}
+                  {targetParentTask && (
+                    <p className="mt-0.5 truncate text-xs font-semibold text-slate-700">
+                      <span className="font-mono tabular-nums text-[#0077b6]">{targetParentTask.outline_number || '-'}</span>{' '}
+                      {targetParentTask.task_name || '-'}
+                    </p>
+                  )}
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {!targetParentTask ? (
+                    <EmptyState
+                      icon={Target}
+                      title="Pilih parent task"
+                      description="Klik nama task di pohon untuk menjadikannya target parent."
                     />
-                  ))}
-                  {selectedProject && !taskLoading && taskTree.roots.length === 0 && (
-                    <div className="px-4 py-10 text-center text-sm font-semibold text-slate-400">
-                      No project tasks found.
-                    </div>
-                  )}
-                  {!selectedProject && (
-                    <div className="px-4 py-10 text-center text-sm font-semibold text-slate-400">
-                      Select a project to browse its task tree.
-                    </div>
-                  )}
-                </div>
-
-                <div className="min-h-0 overflow-auto">
-                  <div className="sticky top-0 grid grid-cols-[minmax(180px,1fr)_88px_96px_76px] gap-3 border-b border-slate-200 bg-[#caf0f8] px-3 py-2 text-[10px] font-extrabold uppercase text-slate-700">
-                    <span>Direct Child Task</span>
-                    <span>Order</span>
-                    <span>Operation</span>
-                    <span className="text-right">Work</span>
-                  </div>
-                  {targetTasks.map((task) => <TaskRow key={task.task_id} task={task} compact />)}
-                  {targetParentTask && !taskLoading && targetTasks.length === 0 && (
-                    <div className="px-4 py-10 text-center text-sm font-semibold text-slate-400">
-                      No child tasks yet. Mapping will create new tasks under this parent.
-                    </div>
-                  )}
-                  {!targetParentTask && (
-                    <div className="px-4 py-10 text-center text-sm font-semibold text-slate-400">
-                      Choose the parent branch from the project tree.
-                    </div>
+                  ) : taskLoading ? (
+                    Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={4} />)
+                  ) : targetTasks.length === 0 ? (
+                    <EmptyState
+                      icon={GitBranch}
+                      title="Belum ada child task"
+                      description="Mapping akan membuat task baru di bawah parent ini."
+                    />
+                  ) : (
+                    <>
+                      <div className="sticky top-0 grid grid-cols-[minmax(160px,1fr)_84px_92px_64px] gap-3 border-b border-slate-200 bg-white px-3 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
+                        <span>Child Task</span>
+                        <span>Order</span>
+                        <span>Operation</span>
+                        <span className="text-right">Work</span>
+                      </div>
+                      {targetTasks.map((task) => <TaskRow key={task.task_id} task={task} />)}
+                    </>
                   )}
                 </div>
-              </div>
-
-              <div className="border-t border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-500">
-                <GitBranch className="mr-1 inline h-3.5 w-3.5 text-[#0077b6]" />
-                Dropped orders update or create direct child tasks under the selected parent.
               </div>
             </div>
-          </div>
+          ) : (
+            /* Belum pilih project → daftar project untuk dipilih */
+            <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
+              {projectLoading ? (
+                Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[68px] w-full rounded-xl" />)
+              ) : projectError ? (
+                <PanelError message={projectError} onRetry={loadProjects} />
+              ) : projects.length === 0 ? (
+                <EmptyState
+                  icon={FolderSearch}
+                  title="Tidak ada project"
+                  description="Tidak ada MS Project yang cocok dengan pencarian."
+                />
+              ) : (
+                projects.map((project) => (
+                  <ProjectCard key={project.project_id} project={project} selected={false} onClick={loadProjectTasks} />
+                ))
+              )}
+            </div>
+          )}
         </section>
       </div>
     </main>

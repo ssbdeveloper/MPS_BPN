@@ -1694,8 +1694,10 @@ CREATE TABLE public.sow (
     progress integer,
     revision_no integer DEFAULT 0 NOT NULL,
     source_op_id bigint,
+    people_required smallint,
     CONSTRAINT chk_sow_actual_progress CHECK (((actual_progress IS NULL) OR ((actual_progress >= (0)::numeric) AND (actual_progress <= (100)::numeric)))),
-    CONSTRAINT chk_sow_progress CHECK (((progress IS NULL) OR ((progress >= 0) AND (progress <= 100))))
+    CONSTRAINT chk_sow_progress CHECK (((progress IS NULL) OR ((progress >= 0) AND (progress <= 100)))),
+    CONSTRAINT sow_people_required_positive CHECK (((people_required IS NULL) OR (people_required > 0)))
 );
 
 

@@ -1269,8 +1269,11 @@ async function listOrderTasks(orderNoParam) {
        t.plan_start,
        t.plan_finish,
        t.planned_work_minutes,
-       t.duration_minutes
+       t.duration_minutes,
+       s.people_required,
+       s.planhours
      from ms_project_task t
+     left join sow s on s.idsow = t.sow_id
      where ltrim(t.order_no, '0') = ltrim($1, '0')
        and t.is_active = true
        and coalesce(t.is_summary, false) = false
@@ -1285,6 +1288,74 @@ async function listOrderTasks(orderNoParam) {
   );
 
   return { rows: result.rows };
+}
+
+// Write per-operation planned headcount back onto public.sow. headcount is a per-operation
+// planning attribute (identity order_no + operation_no), NOT a property of a bay reservation.
+// `updates` = [{ operation_no, people_required }]; people_required null clears it. Each row is
+// updated in one transaction so a bad entry rolls the whole batch back. Returns count updated.
+async function updateOperationPeople(orderNoParam, updatesInput) {
+  const orderNo = nullableText(orderNoParam);
+  if (!orderNo) {
+    throw new ApiError(400, "INVALID_ORDER_NO", "order_no is required", [{ field: "order_no" }]);
+  }
+
+  const updates = ensureArray(updatesInput, "updates");
+  if (updates.length === 0) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "updates must be a non-empty array", [{ field: "updates" }]);
+  }
+
+  const normalized = updates.map((entry, index) => {
+    const row = ensureObject(entry, `updates[${index}]`);
+
+    const operationText = nullableText(row.operation_no);
+    if (!operationText) {
+      throw new ApiError(400, "INVALID_PAYLOAD", "operation_no is required", [{ field: `updates[${index}].operation_no` }]);
+    }
+    const operationNo = Number(operationText);
+    if (!Number.isInteger(operationNo)) {
+      throw new ApiError(400, "INVALID_PAYLOAD", "operation_no must be an integer", [{ field: `updates[${index}].operation_no`, value: operationText }]);
+    }
+
+    const raw = row.people_required;
+    let peopleRequired = null;
+    if (raw !== undefined && raw !== null && raw !== "") {
+      const parsed = Number(raw);
+      if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 32767) {
+        throw new ApiError(400, "INVALID_PAYLOAD", "people_required must be a positive integer or null", [
+          { field: `updates[${index}].people_required`, value: raw },
+        ]);
+      }
+      peopleRequired = parsed;
+    }
+
+    return { operation_no: operationNo, people_required: peopleRequired };
+  });
+
+  const client = await pool().connect();
+  let updated = 0;
+  try {
+    await client.query("begin");
+    for (const item of normalized) {
+      const result = await client.query(
+        `update public.sow
+            set people_required = $1,
+                updated_at = now()
+          where ltrim(order_no, '0') = ltrim($2, '0')
+            and operation_no = $3`,
+        [item.people_required, orderNo, item.operation_no]
+      );
+      updated += result.rowCount;
+    }
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return { updated, requested: normalized.length };
 }
 
 function sortableOperation(value) {
@@ -1636,6 +1707,11 @@ async function listBaySchedules(query = {}) {
        s.task_id,
        t.task_name,
        t.operation_no,
+       t.workcenter,
+       so.people_required,
+       so.planhours,
+       so.part_name,
+       so.customer,
        s.area_code,
        s.area_name,
        s.bay_codes,
@@ -1652,6 +1728,7 @@ async function listBaySchedules(query = {}) {
      left join ms_project_task t
        on t.project_id = s.project_id
       and t.task_id = s.task_id
+     left join sow so on so.idsow = t.sow_id
      where ${where.join(" and ")}
      order by s.start_date, s.area_code, s.bay_codes[1], s.order_no`,
     values
@@ -3502,6 +3579,7 @@ module.exports = {
   refreshResources,
   searchResources,
   syncProject,
+  updateOperationPeople,
   updateProjectStatus,
   uploadProjectFile,
 };
