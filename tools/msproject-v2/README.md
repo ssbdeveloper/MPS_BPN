@@ -37,6 +37,13 @@ File copy         : Ms_CloneAsNewProject lalu Ms_PublishNewProject
 Tandai published  : Ms_PublishCurrentRevision (setelah SaveToServer)
 ```
 
+> **File "dianggap baru" saat checkout?** Identitas project ada di `Text30` (project_id) di dalam `.mpp`.
+> Tombol **Download .mpp** di web = salinan arsip; kalau blob-nya kehilangan id (file lama), `Ms_CheckOut`
+> mengira ini project baru. Untuk edit yang andal pakai **`Ms_OpenFromServer`** (bangun ulang + cap id).
+> Punya file lokal yang kehilangan id -> **`Ms_LinkToServerProject`** (ms_ui): pilih project server, id
+> di-set ulang (+ revision_no), lalu `Ms_CheckOut` jalan normal (bukan Publish New). Simpan file (Ctrl+S)
+> agar tautan menetap.
+
 Lock tidak kedaluwarsa (keputusan 2026-07-07). Lock nyangkut dilepas admin
 lewat Hub web (`/ms-project-hub` → Force Check-In).
 

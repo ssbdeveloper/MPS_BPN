@@ -97,3 +97,89 @@ Public Sub Ms_OpenFromServerForm()
 ErrHandler:
     MsgBox "Open from server (form) gagal: " & Err.Description, vbCritical
 End Sub
+
+' Ms_LinkToServerProject: hubungkan file AKTIF ke project server yang SUDAH ADA.
+' Untuk file yang kehilangan project_id (mis. hasil download .mpp lama) sehingga
+' Ms_CheckOut mengira "project baru". Set project_id + revision_no dari server,
+' kosongkan lock token. TIDAK checkout/save otomatis - itu langkah user berikutnya.
+Public Sub Ms_LinkToServerProject()
+    On Error GoTo ErrHandler
+    Dim root As Object, data As Object, item As Object
+    Dim i As Long, lockText As String
+    Dim frm As frmProjectPicker
+    Dim chosenId As String, chosenName As String
+    Dim chosenRev As Variant
+
+    If ActiveProject Is Nothing Then
+        MsgBox "Buka file MS Project yang mau dihubungkan dulu.", vbExclamation
+        Exit Sub
+    End If
+
+    Set root = MsParseSuccess(MsHttpGet("/projects?limit=30"))
+    Set data = root("data")
+    If data.Count = 0 Then
+        MsgBox "Belum ada project di server untuk dihubungkan.", vbExclamation
+        Exit Sub
+    End If
+
+    Set frm = New frmProjectPicker
+    frm.Caption = "Link file ini ke project server"
+    frm.Confirmed = False
+    frm.SelectedProjectId = ""
+    With frm.lstProjects
+        .Clear
+        .ColumnCount = 6
+        .ColumnWidths = "30 pt;230 pt;55 pt;95 pt;130 pt;0 pt"
+        For i = 1 To data.Count
+            Set item = data(i)
+            lockText = ""
+            If item.Exists("checked_out_by") Then
+                If Not IsNull(item("checked_out_by")) Then
+                    If Len(CStr(item("checked_out_by"))) > 0 Then lockText = "LOCK: " & CStr(item("checked_out_by"))
+                End If
+            End If
+            .AddItem CStr(i)
+            .List(.ListCount - 1, 1) = CStr(item("project_name"))
+            .List(.ListCount - 1, 2) = "rev " & CStr(item("revision_no"))
+            .List(.ListCount - 1, 3) = CStr(item("status"))
+            .List(.ListCount - 1, 4) = lockText
+            .List(.ListCount - 1, 5) = CStr(item("project_id"))
+        Next i
+    End With
+
+    frm.Show vbModal
+    chosenId = ""
+    If frm.Confirmed Then chosenId = frm.SelectedProjectId
+    Unload frm
+    Set frm = Nothing
+    If Len(chosenId) = 0 Then Exit Sub
+
+    ' ambil nama + revision_no dari project yang dipilih
+    chosenName = chosenId
+    chosenRev = 1
+    For i = 1 To data.Count
+        Set item = data(i)
+        If StrComp(CStr(item("project_id")), chosenId, vbTextCompare) = 0 Then
+            chosenName = CStr(item("project_name"))
+            chosenRev = item("revision_no")
+            Exit For
+        End If
+    Next i
+
+    If MsgBox("Hubungkan file AKTIF ke project server:" & vbCrLf & _
+              "  " & chosenName & "  (rev " & CStr(chosenRev) & ")?" & vbCrLf & vbCrLf & _
+              "project_id file akan di-set ke project itu. Setelah ini Ms_CheckOut / " & _
+              "Ms_SaveToServer menuju project tersebut (bukan project baru).", _
+              vbQuestion + vbYesNo, "Link to Server Project") <> vbYes Then Exit Sub
+
+    MsSetProjectId chosenId
+    MsSetProjectRevisionNo chosenRev
+    MsSetProjectLockToken ""
+
+    MsgBox "File terhubung ke: " & chosenName & vbCrLf & _
+           "Project ID: " & chosenId & " (rev " & CStr(chosenRev) & ")" & vbCrLf & vbCrLf & _
+           "Simpan file (Ctrl+S) agar tautan menetap, lalu Ms_CheckOut untuk mulai edit.", vbInformation
+    Exit Sub
+ErrHandler:
+    MsgBox "Link to server project gagal: " & Err.Description, vbCritical
+End Sub
