@@ -419,7 +419,7 @@ function SapLogPage() {
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
                   value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="Search order, employee, SAP message…"
+                  placeholder="Search order, employee, proddataid, SAP message…"
                   className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 transition-all
                     focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
                 />

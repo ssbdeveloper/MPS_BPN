@@ -393,6 +393,7 @@ async function getSapTimesheetStagingLog(req, res) {
         OR sap_error ILIKE $${idx}
         OR payload::text ILIKE $${idx}
         OR sap_response::text ILIKE $${idx}
+        OR id IN (SELECT staging_id FROM public.sap_staging_source WHERE source_row_id ILIKE $${idx})
       )`);
     }
 
@@ -1514,7 +1515,8 @@ async function getSapReconciliationDay(req, res) {
     const day = req.query.date;
     const { rows } = await pool.query(
       `SELECT
-         st.id, st.pernr, st.aufnr, st.vornr, st.lstar, st.zbarcodeid, st.is_productive, st.status,
+         st.id, st.pernr, st.aufnr, st.vornr, st.lstar, st.zbarcodeid, st.is_productive,
+         st.is_correction, st.status,
          round(st.total_seconds/3600.0, 2)::float AS sent_hrs,
          to_char(st.posted_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS posted_at,
          u.full_name,
@@ -1526,7 +1528,19 @@ async function getSapReconciliationDay(req, res) {
          (SELECT bool_or(m.is_stuck)
           FROM public.sap_staging_source src
           JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS has_stuck
+          WHERE src.staging_id = st.id) AS has_stuck,
+         (SELECT COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), ''))
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS operation_text,
+         (SELECT max(m.machineid)
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS machineid,
+         (SELECT max(m.machinename)
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS machinename
        FROM public.sap_timesheet_staging st
        LEFT JOIN public.usernfc u
          ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
