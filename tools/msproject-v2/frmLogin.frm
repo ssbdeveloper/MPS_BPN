@@ -34,6 +34,7 @@ Dim ok As Boolean, uname As String, msg As String
 End Sub
 
 Private Sub UserForm_Initialize()
+      txtPassword.PasswordChar = "*"
       lblStatus.Caption = ""
       If Len(gCurrentUser) > 0 Then txtUsername.text = gCurrentUser
   End Sub
