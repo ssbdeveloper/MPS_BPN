@@ -2,7 +2,7 @@ Attribute VB_Name = "ms_debug"
 Option Explicit
 
 ' =============================================================================
-' ms_debug v2 — macro lanjutan/diagnostik. Bukan bagian alur harian planner.
+' ms_debug v2 - macro lanjutan/diagnostik. Bukan bagian alur harian planner.
 '   Ms_UploadCurrentProjectFile : retry upload .mpp bila metadata sukses tapi file gagal.
 '   Ms_HeartbeatCurrentProject  : cek/refresh lock aktif.
 '   Ms_CheckResourceConflicts   : cek konflik resource lintas project.

@@ -2,7 +2,7 @@ Attribute VB_Name = "ms_config"
 Option Explicit
 
 ' =============================================================================
-' ms_config v2 — konfigurasi dari file eksternal, dengan fallback default.
+' ms_config v2 - konfigurasi dari file eksternal, dengan fallback default.
 '
 ' File config : %APPDATA%\mps-msproject\config.ini
 ' Format      : key=value per baris, baris diawali ';' atau '#' = komentar.
@@ -12,13 +12,13 @@ Option Explicit
 '   verify_tls = false        ' true = WinHttp memverifikasi sertifikat server
 '   tz_suffix  = +08:00       ' timezone tanggal yang dikirim ke server (WITA)
 '
-' Tanpa file config, nilai DEFAULT di bawah yang dipakai — modul tetap jalan.
+' Tanpa file config, nilai DEFAULT di bawah yang dipakai - modul tetap jalan.
 ' =============================================================================
 
 Private Const MS_DEFAULT_BASE_URL As String = "https://100.80.101.53/api/ms-project"
 Private Const MS_DEFAULT_TIMEOUT_MS As Long = 30000
 Private Const MS_DEFAULT_VERIFY_TLS As Boolean = False
-' Server MPS2 berjalan di Asia/Makassar (+08 WITA) — terverifikasi 2026-07-07.
+' Server MPS2 berjalan di Asia/Makassar (+08 WITA) - terverifikasi 2026-07-07.
 ' Versi lama memakai +07:00 (WIB); kalau tanggal lama terlihat bergeser 1 jam,
 ' itu sebabnya. Override lewat config.ini bila plant memakai zona lain.
 Private Const MS_DEFAULT_TZ_SUFFIX As String = "+08:00"

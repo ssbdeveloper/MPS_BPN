@@ -176,7 +176,7 @@ Private Function MsTaskJson(ByVal t As Task, ByVal isNewProject As Boolean) As S
     json = json & """outline_number"":" & MsJsonNullableString(MsObjText(t, "OutlineNumber")) & ","
     ' Tasks emit ONLY Text1/Text2/Text3 (order/op/ssbr) back to the server.
     ' Task.Text4 (MPS Area) and Task.Text5 (MPS Bay) are WEB-AUTHORITATIVE display
-    ' fields set by import — DO NOT add them here, or a Save/Sync would clobber the
+    ' fields set by import - DO NOT add them here, or a Save/Sync would clobber the
     ' web-set Area/Bay. Area/Bay are owned by the web scheduler, not MS Project.
     json = json & """order_no"":" & MsJsonNullableString(MsObjText(t, "Text1")) & ","
     json = json & """operation_no"":" & MsJsonNullableString(MsObjText(t, "Text2")) & ","

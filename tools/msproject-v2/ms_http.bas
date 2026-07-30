@@ -1,7 +1,7 @@
 Attribute VB_Name = "ms_http"
 Option Explicit
 
-' ms_http v2 — perubahan dari v1:
+' ms_http v2 - perubahan dari v1:
 '  - Base URL / timeout / verifikasi TLS / tz suffix dibaca dari ms_config (config.ini).
 '  - Option(4)=13056 (abaikan error sertifikat) hanya dipakai bila verify_tls=false.
 

@@ -2,7 +2,7 @@ Attribute VB_Name = "ms_auth"
 Option Explicit
 
 ' =====================================================================================
-' ms_auth.bas — login + identitas user (ADITIF; realisasi Fase 1 identitas plan).
+' ms_auth.bas - login + identitas user (ADITIF; realisasi Fase 1 identitas plan).
 '
 ' Verifikasi ke API POST /api/auth/login (tabel public.users, argon2id). Username sesi
 ' disimpan -> dipakai sebagai "actor"/"updated_by" saat checkout/sync/checkin/publish
@@ -69,7 +69,7 @@ Public Function MsEnsureLoggedIn() As Boolean
     Ms_Login                                  ' tampilkan frmLogin; sukses -> isi gCurrentUser
     MsEnsureLoggedIn = (Len(gCurrentUser) > 0)
     If Not MsEnsureLoggedIn Then _
-        MsgBox "Aksi dibatalkan — belum login.", vbExclamation
+        MsgBox "Aksi dibatalkan - belum login.", vbExclamation
 End Function
 
 ' Verifikasi kredensial ke /api/auth/login.

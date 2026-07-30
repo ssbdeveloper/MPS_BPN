@@ -83,7 +83,7 @@ End Sub
 ' Text4 = MPS Area (area_code), Text5 = MPS Bay (comma-joined bay_codes).
 ' Display-only: ms_serializer NEVER reads Task.Text4/Text5, so a Save/Sync cannot
 ' clobber the web-set Area/Bay back to the server. WEB is the source of truth.
-' Do NOT clear these in MsClearAllDatabaseIds — they are refreshed on every import.
+' Do NOT clear these in MsClearAllDatabaseIds - they are refreshed on every import.
 Public Function MsTaskArea(ByVal t As Object) As String
     On Error Resume Next
     MsTaskArea = Trim$(t.Text4)

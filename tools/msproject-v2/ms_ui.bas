@@ -2,19 +2,19 @@ Attribute VB_Name = "ms_ui"
 Option Explicit
 
 ' =============================================================================
-' ms_ui — UserForm front-end untuk pemilihan project (ADITIF).
+' ms_ui - UserForm front-end untuk pemilihan project (ADITIF).
 '
 ' Ms_OpenFromServerForm : versi UserForm (tabel) dari Ms_OpenFromServer.
 '   Meniru pola fetch+import ms_sync.Ms_OpenFromServer, tetapi menampilkan
 '   daftar project di frmProjectPicker.lstProjects (bukan InputBox bernomor).
 '
-' Modul ini TIDAK mengubah ms_sync — Ms_OpenFromServer (versi InputBox) tetap
+' Modul ini TIDAK mengubah ms_sync - Ms_OpenFromServer (versi InputBox) tetap
 ' ada dan tetap berfungsi. Keduanya berdiri sendiri.
 '
 ' Kontrak frmProjectPicker (dicocokkan dari code-behind frmProjectPicker.frm):
 '   - ListBox    : lstProjects
 '   - Public     : Confirmed As Boolean, SelectedProjectId As String
-'   - Kolom 5    : project_id (tersembunyi) — cmdOpen_Click meng-set
+'   - Kolom 5    : project_id (tersembunyi) - cmdOpen_Click meng-set
 '                  SelectedProjectId = lstProjects.List(ListIndex, 5)
 '   - Form pakai Me.Hide (bukan Unload) saat Open/Cancel/X, sehingga properti
 '     Confirmed & SelectedProjectId masih terbaca setelah .Show kembali.

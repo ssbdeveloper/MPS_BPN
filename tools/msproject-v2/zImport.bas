@@ -2,13 +2,13 @@ Attribute VB_Name = "zImport"
 Option Explicit
 
 ' =====================================================================================
-' zImport.bas — bootstrap import ulang modul MPS2 ke VBE MS Project.
+' zImport.bas - bootstrap import ulang modul MPS2 ke VBE MS Project.
 '
 ' Prasyarat SEKALI: File > Options > Trust Center > Trust Center Settings > Macro Settings
 '   -> centang "Trust access to the VBA project object model".
 '
 ' Import ulang semua .bas/.cls (MODUL) dari FOLDER, remove-then-import -> ANTI-DUPLIKAT
-' (ms_sync1 dll ikut dibersihkan). Form (.frm) TIDAK disentuh (delikat karena .frx biner) —
+' (ms_sync1 dll ikut dibersihkan). Form (.frm) TIDAK disentuh (delikat karena .frx biner) -
 ' re-import form secara manual bila perlu.
 '
 ' Macro ini melewati dirinya sendiri (zImport), jadi aman disimpan di folder.

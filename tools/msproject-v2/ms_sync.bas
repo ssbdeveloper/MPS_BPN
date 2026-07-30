@@ -2,7 +2,7 @@ Attribute VB_Name = "ms_sync"
 Option Explicit
 
 ' =============================================================================
-' ms_sync v2 — alur utama planner (6 macro + koneksi):
+' ms_sync v2 - alur utama planner (6 macro + koneksi):
 '
 '   Ms_CheckConnection    : tes koneksi API.
 '   Ms_OpenFromServer     : pilih project dari daftar bernomor -> import package.
