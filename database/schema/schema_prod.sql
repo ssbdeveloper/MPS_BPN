@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 15.15
+-- Dumped from database version 15.18
 -- Dumped by pg_dump version 15.0
 
 SET statement_timeout = 0;
@@ -21,6 +21,20 @@ SET row_security = off;
 --
 
 CREATE SCHEMA ews;
+
+
+--
+-- Name: public; Type: SCHEMA; Schema: -; Owner: -
+--
+
+-- *not* creating schema, since initdb creates it
+
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON SCHEMA public IS '';
 
 
 --
@@ -641,27 +655,6 @@ CREATE TABLE ews.issue_log (
 
 
 --
--- Name: TABLE issue_log; Type: COMMENT; Schema: ews; Owner: -
---
-
-COMMENT ON TABLE ews.issue_log IS 'Central EWS issue log across all KPI categories. Generated backend-side; dedup by issue_key per (category, business_date, entity).';
-
-
---
--- Name: COLUMN issue_log.resolution_note; Type: COMMENT; Schema: ews; Owner: -
---
-
-COMMENT ON COLUMN ews.issue_log.resolution_note IS 'Free-text justification / corrective action. Mandatory for any resolved row (see CHECK).';
-
-
---
--- Name: COLUMN issue_log.resolved_by; Type: COMMENT; Schema: ews; Owner: -
---
-
-COMMENT ON COLUMN ews.issue_log.resolved_by IS 'Who closed it: a user id, or ''system'' when the business day rolled over.';
-
-
---
 -- Name: issue_log_id_seq; Type: SEQUENCE; Schema: ews; Owner: -
 --
 
@@ -853,13 +846,6 @@ CREATE TABLE public.usernfc (
     employee_category character varying(10),
     inactive_from date
 );
-
-
---
--- Name: COLUMN usernfc.inactive_from; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.usernfc.inactive_from IS 'First day the operator is NO LONGER counted (resignation effective date). NULL = active. Historical rule: counted when inactive_from IS NULL OR business_date < inactive_from. Read-side only — name/attribute resolution (SAP, ETL, history) must not filter on this.';
 
 
 --
@@ -1416,39 +1402,11 @@ CREATE TABLE public.mch_transaction (
     checkin timestamp with time zone,
     refreshed_at timestamp with time zone,
     finish_job boolean,
-    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR (((status_activitytype)::text = ANY ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)) OR ((NULLIF(btrim((status_activitytype)::text), ''::text) IS NOT NULL) AND ((status_activitytype)::text <> ALL ((ARRAY['M1'::character varying, 'M2'::character varying])::text[])) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL)))) STORED,
+    status_record boolean GENERATED ALWAYS AS (((statusid = ANY (ARRAY[0, 3, 4])) OR (((status_activitytype)::text = ANY (ARRAY[('M1'::character varying)::text, ('M2'::character varying)::text])) AND (NULLIF(btrim((order_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim((operation_no)::text), ''::text) IS NOT NULL) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL) AND (NULLIF(btrim((confirmation_number)::text), ''::text) IS NOT NULL)) OR ((NULLIF(btrim((status_activitytype)::text), ''::text) IS NOT NULL) AND ((status_activitytype)::text <> ALL (ARRAY[('M1'::character varying)::text, ('M2'::character varying)::text])) AND (NULLIF(btrim(sn_employee), ''::text) IS NOT NULL)))) STORED,
     end_effective timestamp without time zone,
     overlap_seconds integer DEFAULT 0 NOT NULL,
     is_stuck boolean DEFAULT false NOT NULL
 );
-
-
---
--- Name: COLUMN mch_transaction.status_record; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.mch_transaction.status_record IS 'TRUE = record layak. statusid 0/3/4 (sah tanpa job), ATAU productive (M1/M2) dgn order+operasi+operator+confirmation, ATAU unproductive (activity type) dgn operator (tanpa confirmation). Basis accuracy_machine + kelayakan SAP (kecuali 0/3/4 dikecualikan staging).';
-
-
---
--- Name: COLUMN mch_transaction.end_effective; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.mch_transaction.end_effective IS 'Akhir interval SETELAH clamp ke start baris berikutnya pada mesin yang sama: LEAST(enddatetime, next_start). SEMUA konsumen (staging SAP, report, OEE) harus memakai kolom ini, bukan enddatetime. Dihitung ulang oleh etl_mch_transaction_v3.py atas kandidat + pendahulunya.';
-
-
---
--- Name: COLUMN mch_transaction.overlap_seconds; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.mch_transaction.overlap_seconds IS 'Detik yang terpotong oleh clamp (enddatetime - end_effective). 0 = baris sehat.';
-
-
---
--- Name: COLUMN mch_transaction.is_stuck; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.mch_transaction.is_stuck IS 'TRUE bila baris ini "nyangkut": intervalnya menabrak baris berikutnya di mesin yang sama. Untuk laporan/alert, bukan untuk menyaring diam-diam.';
 
 
 --
@@ -1465,13 +1423,6 @@ CREATE TABLE public.mch_transaction_override (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mch_transaction_override_something CHECK (((order_no IS NOT NULL) OR (sn_employee IS NOT NULL)))
 );
-
-
---
--- Name: TABLE mch_transaction_override; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.mch_transaction_override IS 'Koreksi manual yang bertahan re-derivasi ETL. Diterapkan oleh etl_mch_transaction_v3 (apply_overrides) di atas hasil derivasi. Lihat migration 20260715_mch_transaction_override.';
 
 
 --
@@ -1499,8 +1450,36 @@ CREATE TABLE public.ms_project (
     created_by text,
     updated_by text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    customer_name text,
+    project_owner text,
+    order_status text,
+    project_status text,
+    published_revision_no integer,
+    last_published_at timestamp with time zone,
+    checked_out_by text,
+    checked_out_at timestamp with time zone,
+    calendar_id uuid,
+    calendar_name text,
+    file_path text,
+    file_name text,
+    file_size bigint,
+    file_uploaded_at timestamp with time zone
 );
+
+
+--
+-- Name: COLUMN ms_project.order_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.ms_project.order_status IS 'OI / FOI';
+
+
+--
+-- Name: COLUMN ms_project.project_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.ms_project.project_status IS 'HOLD, ON PROGRESS, CANCEL, RTD, COMMISIONING, COMPLETE, MTS, MTO';
 
 
 --
@@ -1528,6 +1507,183 @@ CREATE TABLE public.ms_project_assignment (
 
 
 --
+-- Name: ms_project_audit_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_audit_log (
+    audit_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    project_id uuid,
+    action text NOT NULL,
+    actor text,
+    lock_token text,
+    revision_no integer,
+    details jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: ms_project_bay_schedule; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_bay_schedule (
+    schedule_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    order_no text,
+    project_id uuid,
+    task_id uuid,
+    area_code text NOT NULL,
+    area_name text NOT NULL,
+    bay_codes text[] NOT NULL,
+    start_date date NOT NULL,
+    end_date date NOT NULL,
+    status text DEFAULT 'RESERVED'::text NOT NULL,
+    notes text,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    booking_type text DEFAULT 'ORDER'::text NOT NULL,
+    purpose text,
+    schedule_group_id uuid,
+    CONSTRAINT chk_bay_schedule_booking_type CHECK ((booking_type = ANY (ARRAY['ORDER'::text, 'PARKING'::text, 'STORAGE'::text, 'MAINTENANCE'::text, 'OTHER'::text]))),
+    CONSTRAINT chk_bay_schedule_order_or_purpose CHECK ((((booking_type = 'ORDER'::text) AND (order_no IS NOT NULL) AND (btrim(order_no) <> ''::text)) OR ((booking_type <> 'ORDER'::text) AND (purpose IS NOT NULL) AND (btrim(purpose) <> ''::text)))),
+    CONSTRAINT chk_ms_project_bay_schedule_bays_not_empty CHECK ((array_length(bay_codes, 1) > 0)),
+    CONSTRAINT chk_ms_project_bay_schedule_status CHECK ((status = ANY (ARRAY['RESERVED'::text, 'CONFIRMED'::text, 'DONE'::text, 'CANCELLED'::text]))),
+    CONSTRAINT chk_ms_project_bay_schedule_window CHECK ((end_date >= start_date))
+);
+
+
+--
+-- Name: COLUMN ms_project_bay_schedule.booking_type; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.ms_project_bay_schedule.booking_type IS 'Jenis pemakaian bay: ORDER (reservasi job, wajib order_no) atau PARKING/STORAGE/MAINTENANCE/OTHER (booking non-job, wajib purpose). Default ORDER agar baris lama tetap valid.';
+
+
+--
+-- Name: COLUMN ms_project_bay_schedule.purpose; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.ms_project_bay_schedule.purpose IS 'Keterangan tujuan pemakaian bay. WAJIB bila booking_type <> ''ORDER'' (lihat chk_bay_schedule_order_or_purpose); opsional sebagai catatan bebas untuk booking ORDER.';
+
+
+--
+-- Name: COLUMN ms_project_bay_schedule.schedule_group_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.ms_project_bay_schedule.schedule_group_id IS 'Identitas satu reservasi = N baris jadwal (satu per task). Dipakai endpoint PUT/DELETE /ms-project/bay-schedules/group/:schedule_group_id agar ubah & batal jadi atomik satu transaksi. Baris lama di-backfill per kelompok (order_no, start_date, end_date, bay_codes) — kunci yang dulu dirangkai ulang FE sebagai reservationKey.';
+
+
+--
+-- Name: ms_project_calendar; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_calendar (
+    calendar_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    calendar_code text NOT NULL,
+    calendar_name text NOT NULL,
+    calendar_scope text DEFAULT 'BASE'::text NOT NULL,
+    base_calendar_id uuid,
+    calendar_guid uuid,
+    is_enterprise boolean DEFAULT true NOT NULL,
+    is_default boolean DEFAULT false NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    hours_per_day numeric(10,2) DEFAULT 8 NOT NULL,
+    hours_per_week numeric(10,2) DEFAULT 40 NOT NULL,
+    days_per_month numeric(10,2) DEFAULT 20 NOT NULL,
+    default_start_time time without time zone DEFAULT '08:00:00'::time without time zone NOT NULL,
+    default_finish_time time without time zone DEFAULT '17:00:00'::time without time zone NOT NULL,
+    timezone text DEFAULT 'Asia/Jakarta'::text NOT NULL,
+    description text,
+    source_type text DEFAULT 'MPS'::text NOT NULL,
+    source_ref_id text,
+    version_no integer DEFAULT 1 NOT NULL,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_calendar_hours_positive CHECK (((hours_per_day > (0)::numeric) AND (hours_per_week > (0)::numeric) AND (days_per_month > (0)::numeric))),
+    CONSTRAINT chk_ms_project_calendar_scope CHECK ((calendar_scope = ANY (ARRAY['BASE'::text, 'PROJECT'::text, 'RESOURCE'::text, 'TASK'::text]))),
+    CONSTRAINT chk_ms_project_calendar_version_positive CHECK ((version_no > 0))
+);
+
+
+--
+-- Name: ms_project_calendar_exception; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_calendar_exception (
+    exception_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    calendar_id uuid NOT NULL,
+    exception_name text NOT NULL,
+    exception_type text DEFAULT 'NON_WORKING'::text NOT NULL,
+    start_date date NOT NULL,
+    end_date date NOT NULL,
+    recurrence_rule jsonb,
+    priority integer DEFAULT 100 NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_calendar_exception_type CHECK ((exception_type = ANY (ARRAY['WORKING'::text, 'NON_WORKING'::text, 'REDUCED_WORKING'::text]))),
+    CONSTRAINT chk_ms_project_calendar_exception_window CHECK ((end_date >= start_date))
+);
+
+
+--
+-- Name: ms_project_calendar_exception_time; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_calendar_exception_time (
+    exception_time_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    exception_id uuid NOT NULL,
+    segment_no integer DEFAULT 1 NOT NULL,
+    start_time time without time zone NOT NULL,
+    end_time time without time zone NOT NULL,
+    crosses_midnight boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_calendar_exception_time_segment CHECK (((segment_no >= 1) AND (segment_no <= 5)))
+);
+
+
+--
+-- Name: ms_project_calendar_weekday; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_calendar_weekday (
+    calendar_weekday_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    calendar_id uuid NOT NULL,
+    day_of_week integer NOT NULL,
+    day_type text DEFAULT 'WORKING'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_calendar_weekday_dow CHECK (((day_of_week >= 1) AND (day_of_week <= 7))),
+    CONSTRAINT chk_ms_project_calendar_weekday_type CHECK ((day_type = ANY (ARRAY['WORKING'::text, 'NON_WORKING'::text, 'DEFAULT'::text])))
+);
+
+
+--
+-- Name: ms_project_calendar_working_time; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_calendar_working_time (
+    working_time_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    calendar_id uuid NOT NULL,
+    day_of_week integer NOT NULL,
+    segment_no integer DEFAULT 1 NOT NULL,
+    start_time time without time zone NOT NULL,
+    end_time time without time zone NOT NULL,
+    crosses_midnight boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_calendar_working_time_dow CHECK (((day_of_week >= 1) AND (day_of_week <= 7))),
+    CONSTRAINT chk_ms_project_calendar_working_time_segment CHECK (((segment_no >= 1) AND (segment_no <= 5)))
+);
+
+
+--
 -- Name: ms_project_dependency; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1546,6 +1702,38 @@ CREATE TABLE public.ms_project_dependency (
 
 
 --
+-- Name: ms_project_lock; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_lock (
+    lock_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    project_id uuid NOT NULL,
+    lock_token text NOT NULL,
+    locked_by text NOT NULL,
+    locked_at timestamp with time zone DEFAULT now() NOT NULL,
+    heartbeat_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_lock_expiry CHECK ((expires_at > locked_at))
+);
+
+
+--
+-- Name: ms_project_publish; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_publish (
+    publish_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    project_id uuid NOT NULL,
+    revision_no integer NOT NULL,
+    snapshot jsonb NOT NULL,
+    published_by text,
+    published_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: ms_project_resource; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1556,6 +1744,45 @@ CREATE TABLE public.ms_project_resource (
     is_active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: ms_project_resource_availability; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_resource_availability (
+    availability_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    resource_id uuid NOT NULL,
+    available_from date,
+    available_to date,
+    max_units numeric(10,4) DEFAULT 1 NOT NULL,
+    calendar_id uuid,
+    source_type text DEFAULT 'MPS'::text NOT NULL,
+    source_ref_id text,
+    notes text,
+    created_by text,
+    updated_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_resource_availability_units CHECK ((max_units > (0)::numeric)),
+    CONSTRAINT chk_ms_project_resource_availability_window CHECK (((available_to IS NULL) OR (available_from IS NULL) OR (available_to >= available_from)))
+);
+
+
+--
+-- Name: ms_project_revision; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ms_project_revision (
+    revision_id uuid DEFAULT gen_random_uuid() NOT NULL,
+    project_id uuid NOT NULL,
+    revision_no integer NOT NULL,
+    revision_type text NOT NULL,
+    snapshot jsonb NOT NULL,
+    created_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT chk_ms_project_revision_type CHECK ((revision_type = ANY (ARRAY['CREATE'::text, 'SYNC'::text, 'PUBLISH'::text, 'FORCE_CHECKIN'::text])))
 );
 
 
@@ -1589,7 +1816,10 @@ CREATE TABLE public.ms_project_task (
     is_active boolean DEFAULT true NOT NULL,
     local_task_uid text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    calendar_id uuid,
+    calendar_name text,
+    ignore_resource_calendar boolean DEFAULT false NOT NULL
 );
 
 
@@ -1616,6 +1846,8 @@ CREATE TABLE public.ms_resource (
     description text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    calendar_id uuid,
+    calendar_name text,
     CONSTRAINT chk_ms_resource_category CHECK ((resource_category = ANY (ARRAY['PERSON'::text, 'MACHINE'::text, 'WORKCENTER'::text, 'TEAM'::text, 'MATERIAL'::text]))),
     CONSTRAINT chk_ms_resource_max_units_positive CHECK ((max_units > (0)::numeric)),
     CONSTRAINT chk_ms_resource_type CHECK ((resource_type = ANY (ARRAY['WORK'::text, 'MATERIAL'::text, 'COST'::text])))
@@ -1731,8 +1963,48 @@ CREATE TABLE public.timesheet_transaction (
     duration numeric,
     operation_no integer,
     order_no text,
-    modified_at timestamp without time zone DEFAULT now()
+    modified_at timestamp without time zone DEFAULT now(),
+    ms_area_code text,
+    ms_bay_codes text[],
+    ms_task_id uuid,
+    ms_project_id uuid,
+    ms_bay_schedule_id uuid
 );
+
+
+--
+-- Name: COLUMN timesheet_transaction.ms_area_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.timesheet_transaction.ms_area_code IS 'Manufacturing device-area code of the bay reservation this check-in came from (e.g. AREA-18). From selectedactivity.manufacturing_area_code. NULL for salvaging / non-reservation check-ins.';
+
+
+--
+-- Name: COLUMN timesheet_transaction.ms_bay_codes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.timesheet_transaction.ms_bay_codes IS 'Bay codes of the reservation the operator checked in under. From selectedactivity.manufacturing_bay_codes (schedule bays), falling back to [manufacturing_bay_code].';
+
+
+--
+-- Name: COLUMN timesheet_transaction.ms_task_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.timesheet_transaction.ms_task_id IS 'Linked ms_project_task.task_id when the Select Job row resolved to a specific task; NULL for order-level reservations. Type matches ms_project_task PK (uuid).';
+
+
+--
+-- Name: COLUMN timesheet_transaction.ms_project_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.timesheet_transaction.ms_project_id IS 'Linked ms_project.project_id for the reservation/task. Type matches ms_project_task PK (uuid).';
+
+
+--
+-- Name: COLUMN timesheet_transaction.ms_bay_schedule_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.timesheet_transaction.ms_bay_schedule_id IS 'Source ms_project_bay_schedule.schedule_id (the reservation that produced this job). No FK — reservations are cancellable. Used to flip RESERVED -> CONFIRMED on check-in.';
 
 
 --
@@ -2924,6 +3196,34 @@ ALTER TABLE public.ph3_order ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
+-- Name: plant_config; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plant_config (
+    id integer DEFAULT 1 NOT NULL,
+    plant_code text NOT NULL,
+    plant_name text NOT NULL,
+    variant text NOT NULL,
+    timezone text NOT NULL,
+    order_master_table text DEFAULT 'ph3_order'::text NOT NULL,
+    plant_filter text,
+    feature_flags jsonb DEFAULT '{}'::jsonb NOT NULL,
+    sap_rules jsonb DEFAULT '{}'::jsonb NOT NULL,
+    updated_by text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT plant_config_id_check CHECK ((id = 1)),
+    CONSTRAINT plant_config_variant_check CHECK ((variant = ANY (ARRAY['salvaging'::text, 'manufacturing'::text])))
+);
+
+
+--
+-- Name: TABLE plant_config; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.plant_config IS 'Single-row per-plant config: identitas plant + varian + timezone. Diisi via apps/api/scripts/seed_plant_config.js. Lihat docs/deployment/PLANT_CONFIG_VARIANT_DESIGN.md';
+
+
+--
 -- Name: process_category; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3379,13 +3679,6 @@ CREATE TABLE public.sap_staging_source (
 
 
 --
--- Name: TABLE sap_staging_source; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.sap_staging_source IS 'Provenance: bundel staging mana berasal dari record sumber mana (per segmen jam). Dipakai untuk audit + guard anti-double-post di post_sap_staging.py.';
-
-
---
 -- Name: sap_staging_source_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -3448,27 +3741,6 @@ CREATE TABLE public.sap_timesheet_staging (
     CONSTRAINT sap_timesheet_staging_source_system_ck CHECK ((source_system = ANY (ARRAY['TIMESHEET'::text, 'MCH_HOURS'::text]))),
     CONSTRAINT sap_timesheet_staging_status_ck CHECK ((status = ANY (ARRAY['PENDING'::text, 'POSTING'::text, 'POSTED'::text, 'FAILED'::text, 'SKIPPED'::text])))
 );
-
-
---
--- Name: COLUMN sap_timesheet_staging.pernr_origin; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.sap_timesheet_staging.pernr_origin IS 'SN karyawan asli sebelum substitusi Outsource (pernr dipaksa 11009413 untuk Outsource). Audit-only, tidak dikirim ke SAP.';
-
-
---
--- Name: COLUMN sap_timesheet_staging.is_productive; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.sap_timesheet_staging.is_productive IS 'TRUE bila zconf_type M1/M2 (konfirmasi order). FALSE = alokasi aktivitas (LSTAR).';
-
-
---
--- Name: COLUMN sap_timesheet_staging.is_correction; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.sap_timesheet_staging.is_correction IS 'TRUE = bundel koreksi (segmen yang datang setelah hari-kuncinya ter-POST). Di-post MANUAL dari UI, tidak oleh auto-poster. SAP aditif -> menambah jam ke order tanpa storno.';
 
 
 --
@@ -4029,6 +4301,194 @@ ALTER SEQUENCE public.sow_standard_attachments_id_seq OWNED BY public.sow_standa
 
 ALTER TABLE public.sow_standard ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public.sow_standard_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: sow_sub_operation; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sow_sub_operation (
+    id bigint NOT NULL,
+    operation_id integer NOT NULL,
+    order_no character varying(100),
+    title text NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    weight numeric(6,2) DEFAULT 1 NOT NULL,
+    progress smallint DEFAULT 0 NOT NULL,
+    status text DEFAULT 'NOT_STARTED'::text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    msp_task_id uuid,
+    created_by character varying(100),
+    created_at timestamp with time zone DEFAULT now(),
+    updated_by character varying(100),
+    updated_at timestamp with time zone DEFAULT now(),
+    CONSTRAINT sow_sub_operation_progress_check CHECK (((progress >= 0) AND (progress <= 100))),
+    CONSTRAINT sow_sub_operation_status_check CHECK ((status = ANY (ARRAY['NOT_STARTED'::text, 'IN_PROGRESS'::text, 'ON_HOLD'::text, 'DONE'::text])))
+);
+
+
+--
+-- Name: TABLE sow_sub_operation; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sow_sub_operation IS 'Child-task progress fisik per operasi SOW (varian manufaktur). Roll-up ke sow.progress controller-side; tidak pernah ke SAP.';
+
+
+--
+-- Name: COLUMN sow_sub_operation.operation_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_sub_operation.operation_id IS 'FK ke sow.idsow (1 operasi SAP). ON DELETE CASCADE.';
+
+
+--
+-- Name: COLUMN sow_sub_operation.weight; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_sub_operation.weight IS 'Bobot untuk weighted roll-up SUM(progress*weight)/SUM(weight) atas child aktif.';
+
+
+--
+-- Name: COLUMN sow_sub_operation.is_active; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_sub_operation.is_active IS 'Soft-delete: false = dikeluarkan dari roll-up (bukan hapus baris).';
+
+
+--
+-- Name: COLUMN sow_sub_operation.msp_task_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_sub_operation.msp_task_id IS 'Opsional: tautan ke ms_project_task; child tetap web-authoritative.';
+
+
+--
+-- Name: sow_sub_operation_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sow_sub_operation_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sow_sub_operation_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sow_sub_operation_id_seq OWNED BY public.sow_sub_operation.id;
+
+
+--
+-- Name: sow_sub_operation_progress_history; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sow_sub_operation_progress_history (
+    id bigint NOT NULL,
+    sub_operation_id bigint NOT NULL,
+    operation_id integer,
+    order_no character varying(100),
+    progress smallint NOT NULL,
+    issue_description text,
+    image_path character varying(500),
+    created_at timestamp with time zone DEFAULT now(),
+    created_by character varying(100),
+    CONSTRAINT sow_sub_operation_progress_history_progress_check CHECK (((progress >= 0) AND (progress <= 100)))
+);
+
+
+--
+-- Name: TABLE sow_sub_operation_progress_history; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sow_sub_operation_progress_history IS 'Riwayat append-only update progress fisik child-task; foto disimpan ke disk (image_path).';
+
+
+--
+-- Name: sow_sub_operation_progress_history_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.sow_sub_operation_progress_history_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: sow_sub_operation_progress_history_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.sow_sub_operation_progress_history_id_seq OWNED BY public.sow_sub_operation_progress_history.id;
+
+
+--
+-- Name: sow_subcont_mark; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sow_subcont_mark (
+    id bigint NOT NULL,
+    order_no text NOT NULL,
+    operation_no integer NOT NULL,
+    original_workcenter text,
+    note text,
+    marked_by text,
+    marked_at timestamp with time zone DEFAULT now() NOT NULL,
+    unmarked_by text,
+    unmarked_at timestamp with time zone
+);
+
+
+--
+-- Name: TABLE sow_subcont_mark; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sow_subcont_mark IS 'Penanda operasi SOW dikerjakan subcont (D4): jadwal start/finish TETAP ada, tapi jamnya dikeluarkan dari agregasi beban internal lewat predikat NOT EXISTS ber-ltrim. Tabel TERPISAH dari sow dan TANPA FK ke sow(idsow) secara sengaja: saveSowOrderRevision melakukan DELETE+INSERT dengan whitelist 33 kolom EDITABLE_SOW_COLUMNS (sowController.js:27-61), jadi kolom baru apa pun di sow dijamin hilang saat Create Revision (anomali A-01, docs/MFG_PLAN_AREA_PLAN.md) dan idsow berganti tiap revisi. Kunci logis = (ltrim(order_no,''0''), operation_no), bertahan lintas revisi.';
+
+
+--
+-- Name: COLUMN sow_subcont_mark.order_no; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_subcont_mark.order_no IS 'Nomor order SAP apa adanya saat ditandai. Pencocokan SELALU lewat ltrim(order_no,''0'') — konsisten dengan seluruh kodebase (getSowOrderOperations, listBaySchedules, dll).';
+
+
+--
+-- Name: COLUMN sow_subcont_mark.original_workcenter; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_subcont_mark.original_workcenter IS 'Salinan sow.workcenter saat penandaan, untuk audit & pelaporan jam subcont per workcenter asal. HANYA salinan: sow.workcenter TIDAK PERNAH diubah (ETL etl_sync_v2.py:504-513 menimpanya tanpa syarat, jadi menaruh penanda di sana akan hilang diam-diam).';
+
+
+--
+-- Name: COLUMN sow_subcont_mark.marked_by; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_subcont_mark.marked_by IS 'Aktor dari header sesi x-user-name / x-user-id, BUKAN dari body request.';
+
+
+--
+-- Name: COLUMN sow_subcont_mark.unmarked_at; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.sow_subcont_mark.unmarked_at IS 'Soft-unmark: NULL = tanda AKTIF (dipakai predikat eksklusi & index parsial). Baris tidak pernah dihapus supaya riwayat siapa menandai/membatalkan tetap ada.';
+
+
+--
+-- Name: sow_subcont_mark_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.sow_subcont_mark ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.sow_subcont_mark_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -5284,7 +5744,7 @@ CREATE TABLE tools_management.handover_logs (
     CONSTRAINT handover_received_after_request CHECK (((received_at IS NULL) OR (received_at >= requested_at))),
     CONSTRAINT handover_single_from CHECK (((from_field_snssb IS NULL) OR (from_office_user_id IS NULL))),
     CONSTRAINT handover_single_to CHECK (((to_field_snssb IS NULL) OR (to_office_user_id IS NULL))),
-    CONSTRAINT handover_status_check CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'handed_over'::character varying, 'accepted'::character varying, 'rejected'::character varying, 'cancelled'::character varying])::text[]))),
+    CONSTRAINT handover_status_check CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('handed_over'::character varying)::text, ('accepted'::character varying)::text, ('rejected'::character varying)::text, ('cancelled'::character varying)::text]))),
     CONSTRAINT handover_to_required CHECK (((to_field_snssb IS NOT NULL) OR (to_office_user_id IS NOT NULL)))
 );
 
@@ -5336,7 +5796,7 @@ CREATE TABLE tools_management.reservations (
     CONSTRAINT reservations_quantity_positive CHECK ((quantity > (0)::numeric)),
     CONSTRAINT reservations_requester_required CHECK (((requester_field_snssb IS NOT NULL) OR (requester_office_user_id IS NOT NULL))),
     CONSTRAINT reservations_single_requester CHECK (((requester_field_snssb IS NULL) OR (requester_office_user_id IS NULL))),
-    CONSTRAINT reservations_status_check CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'rejected'::character varying, 'cancelled'::character varying, 'expired'::character varying, 'fulfilled'::character varying])::text[]))),
+    CONSTRAINT reservations_status_check CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('approved'::character varying)::text, ('rejected'::character varying)::text, ('cancelled'::character varying)::text, ('expired'::character varying)::text, ('fulfilled'::character varying)::text]))),
     CONSTRAINT reservations_time_valid CHECK ((reserved_until > reserved_from))
 );
 
@@ -5450,8 +5910,8 @@ CREATE TABLE tools_management.tool_status_logs (
     quantity_delta numeric(12,2),
     notes text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT tool_status_logs_availability_check CHECK (((availability_status IS NULL) OR ((availability_status)::text = ANY ((ARRAY['available'::character varying, 'reserved'::character varying, 'borrowed'::character varying, 'handover_pending'::character varying, 'maintenance'::character varying, 'calibration'::character varying, 'broken'::character varying, 'lost'::character varying, 'retired'::character varying])::text[])))),
-    CONSTRAINT tool_status_logs_event_type_check CHECK (((event_type)::text = ANY ((ARRAY['created'::character varying, 'reserved'::character varying, 'reservation_approved'::character varying, 'reservation_rejected'::character varying, 'reservation_cancelled'::character varying, 'reservation_expired'::character varying, 'borrowed'::character varying, 'returned'::character varying, 'handover_requested'::character varying, 'handover_accepted'::character varying, 'handover_rejected'::character varying, 'condition_changed'::character varying, 'maintenance_started'::character varying, 'maintenance_finished'::character varying, 'calibration_started'::character varying, 'calibration_finished'::character varying, 'lost'::character varying, 'retired'::character varying, 'stock_adjusted'::character varying])::text[])))
+    CONSTRAINT tool_status_logs_availability_check CHECK (((availability_status IS NULL) OR ((availability_status)::text = ANY (ARRAY[('available'::character varying)::text, ('reserved'::character varying)::text, ('borrowed'::character varying)::text, ('handover_pending'::character varying)::text, ('maintenance'::character varying)::text, ('calibration'::character varying)::text, ('broken'::character varying)::text, ('lost'::character varying)::text, ('retired'::character varying)::text])))),
+    CONSTRAINT tool_status_logs_event_type_check CHECK (((event_type)::text = ANY (ARRAY[('created'::character varying)::text, ('reserved'::character varying)::text, ('reservation_approved'::character varying)::text, ('reservation_rejected'::character varying)::text, ('reservation_cancelled'::character varying)::text, ('reservation_expired'::character varying)::text, ('borrowed'::character varying)::text, ('returned'::character varying)::text, ('handover_requested'::character varying)::text, ('handover_accepted'::character varying)::text, ('handover_rejected'::character varying)::text, ('condition_changed'::character varying)::text, ('maintenance_started'::character varying)::text, ('maintenance_finished'::character varying)::text, ('calibration_started'::character varying)::text, ('calibration_finished'::character varying)::text, ('lost'::character varying)::text, ('retired'::character varying)::text, ('stock_adjusted'::character varying)::text])))
 );
 
 
@@ -5508,7 +5968,7 @@ CREATE TABLE tools_management.tools (
     retired_at date,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT tools_availability_status_check CHECK (((availability_status)::text = ANY ((ARRAY['available'::character varying, 'reserved'::character varying, 'borrowed'::character varying, 'handover_pending'::character varying, 'maintenance'::character varying, 'calibration'::character varying, 'broken'::character varying, 'lost'::character varying, 'retired'::character varying])::text[]))),
+    CONSTRAINT tools_availability_status_check CHECK (((availability_status)::text = ANY (ARRAY[('available'::character varying)::text, ('reserved'::character varying)::text, ('borrowed'::character varying)::text, ('handover_pending'::character varying)::text, ('maintenance'::character varying)::text, ('calibration'::character varying)::text, ('broken'::character varying)::text, ('lost'::character varying)::text, ('retired'::character varying)::text]))),
     CONSTRAINT tools_quantity_available_valid CHECK (((quantity_available >= (0)::numeric) AND (quantity_available <= quantity_total))),
     CONSTRAINT tools_quantity_total_non_negative CHECK ((quantity_total >= (0)::numeric)),
     CONSTRAINT tools_serialized_quantity_check CHECK (((is_serialized = false) OR (quantity_total = (1)::numeric))),
@@ -5569,7 +6029,7 @@ CREATE TABLE tools_management.transactions (
     CONSTRAINT transactions_quantity_positive CHECK ((quantity > (0)::numeric)),
     CONSTRAINT transactions_return_after_borrow CHECK (((returned_at IS NULL) OR (returned_at >= borrowed_at))),
     CONSTRAINT transactions_single_borrower CHECK (((borrower_field_snssb IS NULL) OR (borrower_office_user_id IS NULL))),
-    CONSTRAINT transactions_status_check CHECK (((status)::text = ANY ((ARRAY['borrowed'::character varying, 'returned'::character varying, 'overdue'::character varying, 'lost'::character varying, 'cancelled'::character varying])::text[])))
+    CONSTRAINT transactions_status_check CHECK (((status)::text = ANY (ARRAY[('borrowed'::character varying)::text, ('returned'::character varying)::text, ('overdue'::character varying)::text, ('lost'::character varying)::text, ('cancelled'::character varying)::text])))
 );
 
 
@@ -5878,6 +6338,20 @@ ALTER TABLE ONLY public.sow_revision_history ALTER COLUMN id SET DEFAULT nextval
 --
 
 ALTER TABLE ONLY public.sow_standard_attachments ALTER COLUMN id SET DEFAULT nextval('public.sow_standard_attachments_id_seq'::regclass);
+
+
+--
+-- Name: sow_sub_operation id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_sub_operation ALTER COLUMN id SET DEFAULT nextval('public.sow_sub_operation_id_seq'::regclass);
+
+
+--
+-- Name: sow_sub_operation_progress_history id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_sub_operation_progress_history ALTER COLUMN id SET DEFAULT nextval('public.sow_sub_operation_progress_history_id_seq'::regclass);
 
 
 --
@@ -6264,21 +6738,6 @@ ALTER TABLE ONLY public.mch_statustypes
 
 
 --
--- Name: mch_transaction mch_transaction_no_overlap; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.mch_transaction
-    ADD CONSTRAINT mch_transaction_no_overlap EXCLUDE USING gist (machineno WITH =, tsrange(startdatetime, end_effective) WITH &&) WHERE (((end_effective IS NOT NULL) AND (end_effective > startdatetime))) DEFERRABLE;
-
-
---
--- Name: CONSTRAINT mch_transaction_no_overlap ON mch_transaction; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON CONSTRAINT mch_transaction_no_overlap ON public.mch_transaction IS 'Satu mesin tidak boleh punya dua interval bersamaan. Menjaga hasil clamp end_effective (lapis 1a/1b). DEFERRABLE: recompute_end_effective memakai SET CONSTRAINTS ALL DEFERRED karena melewati keadaan-antara yang sah. Kalau ini melanggar: cari kenapa end_effective tidak ter-clamp, JANGAN buang constraint-nya.';
-
-
---
 -- Name: mch_transaction_override mch_transaction_override_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6311,6 +6770,94 @@ ALTER TABLE ONLY public.ms_project_assignment
 
 
 --
+-- Name: ms_project_audit_log ms_project_audit_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_audit_log
+    ADD CONSTRAINT ms_project_audit_log_pkey PRIMARY KEY (audit_id);
+
+
+--
+-- Name: ms_project_bay_schedule ms_project_bay_schedule_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_bay_schedule
+    ADD CONSTRAINT ms_project_bay_schedule_pkey PRIMARY KEY (schedule_id);
+
+
+--
+-- Name: ms_project_calendar ms_project_calendar_calendar_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar
+    ADD CONSTRAINT ms_project_calendar_calendar_code_key UNIQUE (calendar_code);
+
+
+--
+-- Name: ms_project_calendar_exception ms_project_calendar_exception_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_exception
+    ADD CONSTRAINT ms_project_calendar_exception_pkey PRIMARY KEY (exception_id);
+
+
+--
+-- Name: ms_project_calendar_exception_time ms_project_calendar_exception_time_exception_id_segment_no_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_exception_time
+    ADD CONSTRAINT ms_project_calendar_exception_time_exception_id_segment_no_key UNIQUE (exception_id, segment_no);
+
+
+--
+-- Name: ms_project_calendar_exception_time ms_project_calendar_exception_time_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_exception_time
+    ADD CONSTRAINT ms_project_calendar_exception_time_pkey PRIMARY KEY (exception_time_id);
+
+
+--
+-- Name: ms_project_calendar ms_project_calendar_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar
+    ADD CONSTRAINT ms_project_calendar_pkey PRIMARY KEY (calendar_id);
+
+
+--
+-- Name: ms_project_calendar_weekday ms_project_calendar_weekday_calendar_id_day_of_week_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_weekday
+    ADD CONSTRAINT ms_project_calendar_weekday_calendar_id_day_of_week_key UNIQUE (calendar_id, day_of_week);
+
+
+--
+-- Name: ms_project_calendar_weekday ms_project_calendar_weekday_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_weekday
+    ADD CONSTRAINT ms_project_calendar_weekday_pkey PRIMARY KEY (calendar_weekday_id);
+
+
+--
+-- Name: ms_project_calendar_working_time ms_project_calendar_working_t_calendar_id_day_of_week_segme_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_working_time
+    ADD CONSTRAINT ms_project_calendar_working_t_calendar_id_day_of_week_segme_key UNIQUE (calendar_id, day_of_week, segment_no);
+
+
+--
+-- Name: ms_project_calendar_working_time ms_project_calendar_working_time_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_working_time
+    ADD CONSTRAINT ms_project_calendar_working_time_pkey PRIMARY KEY (working_time_id);
+
+
+--
 -- Name: ms_project_dependency ms_project_dependency_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6327,11 +6874,59 @@ ALTER TABLE ONLY public.ms_project_dependency
 
 
 --
+-- Name: ms_project_lock ms_project_lock_lock_token_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_lock
+    ADD CONSTRAINT ms_project_lock_lock_token_key UNIQUE (lock_token);
+
+
+--
+-- Name: ms_project_lock ms_project_lock_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_lock
+    ADD CONSTRAINT ms_project_lock_pkey PRIMARY KEY (lock_id);
+
+
+--
+-- Name: ms_project_lock ms_project_lock_project_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_lock
+    ADD CONSTRAINT ms_project_lock_project_id_key UNIQUE (project_id);
+
+
+--
 -- Name: ms_project ms_project_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ms_project
     ADD CONSTRAINT ms_project_pkey PRIMARY KEY (project_id);
+
+
+--
+-- Name: ms_project_publish ms_project_publish_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_publish
+    ADD CONSTRAINT ms_project_publish_pkey PRIMARY KEY (publish_id);
+
+
+--
+-- Name: ms_project_publish ms_project_publish_project_id_revision_no_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_publish
+    ADD CONSTRAINT ms_project_publish_project_id_revision_no_key UNIQUE (project_id, revision_no);
+
+
+--
+-- Name: ms_project_resource_availability ms_project_resource_availability_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_resource_availability
+    ADD CONSTRAINT ms_project_resource_availability_pkey PRIMARY KEY (availability_id);
 
 
 --
@@ -6348,6 +6943,14 @@ ALTER TABLE ONLY public.ms_project_resource
 
 ALTER TABLE ONLY public.ms_project_resource
     ADD CONSTRAINT ms_project_resource_project_id_resource_id_key UNIQUE (project_id, resource_id);
+
+
+--
+-- Name: ms_project_revision ms_project_revision_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_revision
+    ADD CONSTRAINT ms_project_revision_pkey PRIMARY KEY (revision_id);
 
 
 --
@@ -6460,6 +7063,14 @@ ALTER TABLE ONLY public.ph3_order
 
 ALTER TABLE ONLY public.ph3_order
     ADD CONSTRAINT ph3_order_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: plant_config plant_config_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plant_config
+    ADD CONSTRAINT plant_config_pkey PRIMARY KEY (id);
 
 
 --
@@ -6812,6 +7423,30 @@ ALTER TABLE ONLY public.sow_standard_attachments
 
 ALTER TABLE ONLY public.sow_standard
     ADD CONSTRAINT sow_standard_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sow_sub_operation sow_sub_operation_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_sub_operation
+    ADD CONSTRAINT sow_sub_operation_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sow_sub_operation_progress_history sow_sub_operation_progress_history_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_sub_operation_progress_history
+    ADD CONSTRAINT sow_sub_operation_progress_history_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sow_subcont_mark sow_subcont_mark_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_subcont_mark
+    ADD CONSTRAINT sow_subcont_mark_pkey PRIMARY KEY (id);
 
 
 --
@@ -7404,6 +8039,76 @@ CREATE INDEX idx_ms_project_assignment_resource_window ON public.ms_project_assi
 
 
 --
+-- Name: idx_ms_project_audit_action_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_audit_action_created ON public.ms_project_audit_log USING btree (action, created_at DESC);
+
+
+--
+-- Name: idx_ms_project_audit_project_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_audit_project_created ON public.ms_project_audit_log USING btree (project_id, created_at DESC);
+
+
+--
+-- Name: idx_ms_project_bay_schedule_bays; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_bay_schedule_bays ON public.ms_project_bay_schedule USING gin (bay_codes) WHERE (status = ANY (ARRAY['RESERVED'::text, 'CONFIRMED'::text]));
+
+
+--
+-- Name: idx_ms_project_bay_schedule_group; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_bay_schedule_group ON public.ms_project_bay_schedule USING btree (schedule_group_id);
+
+
+--
+-- Name: idx_ms_project_bay_schedule_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_bay_schedule_order ON public.ms_project_bay_schedule USING btree (order_no, start_date DESC);
+
+
+--
+-- Name: idx_ms_project_bay_schedule_window; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_bay_schedule_window ON public.ms_project_bay_schedule USING btree (start_date, end_date) WHERE (status = ANY (ARRAY['RESERVED'::text, 'CONFIRMED'::text]));
+
+
+--
+-- Name: idx_ms_project_calendar_active_scope; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_calendar_active_scope ON public.ms_project_calendar USING btree (is_active, calendar_scope);
+
+
+--
+-- Name: idx_ms_project_calendar_exception_calendar_dates; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_calendar_exception_calendar_dates ON public.ms_project_calendar_exception USING btree (calendar_id, start_date, end_date) WHERE (is_active = true);
+
+
+--
+-- Name: idx_ms_project_calendar_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_calendar_id ON public.ms_project USING btree (calendar_id);
+
+
+--
+-- Name: idx_ms_project_calendar_working_time_calendar_day; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_calendar_working_time_calendar_day ON public.ms_project_calendar_working_time USING btree (calendar_id, day_of_week);
+
+
+--
 -- Name: idx_ms_project_dependency_project; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7411,10 +8116,38 @@ CREATE INDEX idx_ms_project_dependency_project ON public.ms_project_dependency U
 
 
 --
+-- Name: idx_ms_project_lock_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_lock_expiry ON public.ms_project_lock USING btree (expires_at);
+
+
+--
+-- Name: idx_ms_project_publish_project_published; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_publish_project_published ON public.ms_project_publish USING btree (project_id, published_at DESC);
+
+
+--
+-- Name: idx_ms_project_resource_availability_resource_window; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_resource_availability_resource_window ON public.ms_project_resource_availability USING btree (resource_id, available_from, available_to);
+
+
+--
 -- Name: idx_ms_project_resource_project; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ms_project_resource_project ON public.ms_project_resource USING btree (project_id, is_active);
+
+
+--
+-- Name: idx_ms_project_revision_project_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_revision_project_created ON public.ms_project_revision USING btree (project_id, created_at DESC);
 
 
 --
@@ -7432,6 +8165,13 @@ CREATE INDEX idx_ms_project_task_business ON public.ms_project_task USING btree 
 
 
 --
+-- Name: idx_ms_project_task_calendar_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_project_task_calendar_id ON public.ms_project_task USING btree (calendar_id);
+
+
+--
 -- Name: idx_ms_project_task_project; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7443,6 +8183,13 @@ CREATE INDEX idx_ms_project_task_project ON public.ms_project_task USING btree (
 --
 
 CREATE INDEX idx_ms_project_task_window ON public.ms_project_task USING btree (plan_start, plan_finish);
+
+
+--
+-- Name: idx_ms_resource_calendar_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ms_resource_calendar_id ON public.ms_resource USING btree (calendar_id);
 
 
 --
@@ -7796,6 +8543,13 @@ CREATE INDEX idx_sow_machine_capacity_lookup ON public.sow_machine_capacity USIN
 
 
 --
+-- Name: idx_sow_model; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_model ON public.sow USING btree (model);
+
+
+--
 -- Name: idx_sow_operation_status_date; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7863,6 +8617,13 @@ CREATE INDEX idx_sow_overtime_sow ON public.sow_overtime_request USING btree (so
 --
 
 CREATE INDEX idx_sow_overtime_status ON public.sow_overtime_request USING btree (request_status, overtime_date, shift_id, machine_code);
+
+
+--
+-- Name: idx_sow_part_number; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_part_number ON public.sow USING btree (part_number);
 
 
 --
@@ -7943,6 +8704,48 @@ CREATE INDEX idx_sow_std_attach_standard_id ON public.sow_standard_attachments U
 
 
 --
+-- Name: idx_sow_sub_op_prog_hist_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_sub_op_prog_hist_created ON public.sow_sub_operation_progress_history USING btree (created_at DESC);
+
+
+--
+-- Name: idx_sow_sub_op_prog_hist_sub; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_sub_op_prog_hist_sub ON public.sow_sub_operation_progress_history USING btree (sub_operation_id);
+
+
+--
+-- Name: idx_sow_sub_operation_operation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_sub_operation_operation ON public.sow_sub_operation USING btree (operation_id);
+
+
+--
+-- Name: idx_sow_sub_operation_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_sub_operation_order ON public.sow_sub_operation USING btree (order_no);
+
+
+--
+-- Name: idx_sow_subcont_mark_order; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_subcont_mark_order ON public.sow_subcont_mark USING btree (ltrim(order_no, '0'::text)) WHERE (unmarked_at IS NULL);
+
+
+--
+-- Name: idx_sow_sync_modified; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sow_sync_modified ON public.sow USING btree (order_no, operation_no) WHERE (sync = 'modified'::text);
+
+
+--
 -- Name: idx_sow_templates_component_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8020,6 +8823,13 @@ CREATE INDEX idx_timesheet_lookup ON public.timesheet_transaction USING btree (o
 
 
 --
+-- Name: idx_timesheet_modified; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_timesheet_modified ON public.timesheet_transaction USING btree (modified_at);
+
+
+--
 -- Name: idx_timesheet_transaction_order_active; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8041,10 +8851,24 @@ CREATE INDEX idx_timesheet_transaction_order_key_operation_checkin ON public.tim
 
 
 --
+-- Name: idx_timesheet_transaction_order_operation_checkin; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_timesheet_transaction_order_operation_checkin ON public.timesheet_transaction USING btree (order_no, operation_no, longdate_checkin);
+
+
+--
 -- Name: idx_timesheet_transaction_workcenter_active; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_timesheet_transaction_workcenter_active ON public.timesheet_transaction USING btree (workcentercode, longdate_checkout, longdate_checkin DESC);
+
+
+--
+-- Name: idx_ts_component_tracking_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ts_component_tracking_active ON public.timesheet_transaction USING btree (workcentercode, longdate_checkout, longdate_checkin DESC) WHERE (longdate_checkin IS NOT NULL);
 
 
 --
@@ -8090,6 +8914,13 @@ CREATE INDEX idx_ts_order_no_trgm ON public.timesheet_transaction USING gin (ord
 
 
 --
+-- Name: idx_ts_order_wc; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ts_order_wc ON public.timesheet_transaction USING btree (order_no, workcentercode);
+
+
+--
 -- Name: idx_ts_serial_checkin; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8104,10 +8935,24 @@ CREATE INDEX idx_ts_serialnumber ON public.timesheet_transaction USING btree (se
 
 
 --
+-- Name: idx_ts_state_flag; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ts_state_flag ON public.timesheet_transaction USING btree (state_flag);
+
+
+--
 -- Name: idx_ts_validation_date; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_ts_validation_date ON public.timesheet_transaction USING btree (validation_date);
+
+
+--
+-- Name: idx_ts_workcentercode; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ts_workcentercode ON public.timesheet_transaction USING btree (workcentercode);
 
 
 --
@@ -8181,6 +9026,13 @@ CREATE INDEX idx_workcenter_workcenterot ON public.workcenter USING btree (workc
 
 
 --
+-- Name: ix_ts_ms_bay_schedule; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_ts_ms_bay_schedule ON public.timesheet_transaction USING btree (ms_bay_schedule_id) WHERE (ms_bay_schedule_id IS NOT NULL);
+
+
+--
 -- Name: ix_usernfc_inactive_from; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8244,10 +9096,52 @@ CREATE UNIQUE INDEX uq_ms_project_assignment_local_uid ON public.ms_project_assi
 
 
 --
+-- Name: uq_ms_project_calendar_code_ci; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ms_project_calendar_code_ci ON public.ms_project_calendar USING btree (lower(calendar_code));
+
+
+--
+-- Name: uq_ms_project_calendar_guid; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ms_project_calendar_guid ON public.ms_project_calendar USING btree (calendar_guid) WHERE (calendar_guid IS NOT NULL);
+
+
+--
+-- Name: uq_ms_project_calendar_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ms_project_calendar_source ON public.ms_project_calendar USING btree (source_type, source_ref_id) WHERE (source_ref_id IS NOT NULL);
+
+
+--
+-- Name: uq_ms_project_dependency_active_pair; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ms_project_dependency_active_pair ON public.ms_project_dependency USING btree (project_id, predecessor_task_id, successor_task_id, COALESCE(dependency_type, 'FS'::text), COALESCE(lag_minutes, 0)) WHERE (is_active = true);
+
+
+--
 -- Name: uq_ms_project_dependency_local_key; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE UNIQUE INDEX uq_ms_project_dependency_local_key ON public.ms_project_dependency USING btree (project_id, local_dependency_key) WHERE (local_dependency_key IS NOT NULL);
+
+
+--
+-- Name: uq_ms_project_resource_availability_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ms_project_resource_availability_source ON public.ms_project_resource_availability USING btree (resource_id, source_type, source_ref_id) WHERE (source_ref_id IS NOT NULL);
+
+
+--
+-- Name: uq_ms_project_revision_project_no_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ms_project_revision_project_no_type ON public.ms_project_revision USING btree (project_id, revision_no, revision_type);
 
 
 --
@@ -8325,6 +9219,13 @@ CREATE UNIQUE INDEX uq_sow_documentno_default ON public.sow_documentno USING btr
 --
 
 CREATE UNIQUE INDEX uq_sow_standard_component_operation ON public.sow_standard USING btree (component_id, operation_no);
+
+
+--
+-- Name: uq_sow_subcont_mark_active; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_sow_subcont_mark_active ON public.sow_subcont_mark USING btree (ltrim(order_no, '0'::text), operation_no) WHERE (unmarked_at IS NULL);
 
 
 --
@@ -8583,7 +9484,7 @@ CREATE INDEX idx_transactions_expected_return_at ON tools_management.transaction
 -- Name: idx_transactions_open_by_tool; Type: INDEX; Schema: tools_management; Owner: -
 --
 
-CREATE INDEX idx_transactions_open_by_tool ON tools_management.transactions USING btree (tool_id, status) WHERE ((status)::text = ANY ((ARRAY['borrowed'::character varying, 'overdue'::character varying])::text[]));
+CREATE INDEX idx_transactions_open_by_tool ON tools_management.transactions USING btree (tool_id, status) WHERE ((status)::text = ANY (ARRAY[('borrowed'::character varying)::text, ('overdue'::character varying)::text]));
 
 
 --
@@ -8608,20 +9509,6 @@ CREATE INDEX idx_transactions_tool_id ON tools_management.transactions USING btr
 
 
 --
--- Name: sow before_update_set_sync; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER before_update_set_sync BEFORE UPDATE ON public.sow FOR EACH ROW EXECUTE FUNCTION public.trg_set_sync_modified();
-
-
---
--- Name: sow trg_delete_dup_sow; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_delete_dup_sow AFTER INSERT ON public.sow FOR EACH ROW EXECUTE FUNCTION public.fn_delete_dup_sow();
-
-
---
 -- Name: mch_transaction trg_mch_transaction_freeze_posted; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8636,66 +9523,59 @@ CREATE TRIGGER trg_mch_transaction_invalidate_pending AFTER UPDATE ON public.mch
 
 
 --
--- Name: ms_project_assignment trg_ms_project_assignment_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: ms_project_bay_schedule trg_ms_project_bay_schedule_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_ms_project_assignment_updated_at BEFORE UPDATE ON public.ms_project_assignment FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
-
-
---
--- Name: ms_project_dependency trg_ms_project_dependency_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_ms_project_dependency_updated_at BEFORE UPDATE ON public.ms_project_dependency FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
+CREATE TRIGGER trg_ms_project_bay_schedule_updated_at BEFORE UPDATE ON public.ms_project_bay_schedule FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
 
 
 --
--- Name: ms_project_resource trg_ms_project_resource_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: ms_project_calendar_exception_time trg_ms_project_calendar_exception_time_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_ms_project_resource_updated_at BEFORE UPDATE ON public.ms_project_resource FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
-
-
---
--- Name: ms_project_task trg_ms_project_task_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_ms_project_task_updated_at BEFORE UPDATE ON public.ms_project_task FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
+CREATE TRIGGER trg_ms_project_calendar_exception_time_updated_at BEFORE UPDATE ON public.ms_project_calendar_exception_time FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
 
 
 --
--- Name: ms_project trg_ms_project_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: ms_project_calendar_exception trg_ms_project_calendar_exception_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_ms_project_updated_at BEFORE UPDATE ON public.ms_project FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
-
-
---
--- Name: ms_resource trg_ms_resource_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_ms_resource_updated_at BEFORE UPDATE ON public.ms_resource FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
+CREATE TRIGGER trg_ms_project_calendar_exception_updated_at BEFORE UPDATE ON public.ms_project_calendar_exception FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
 
 
 --
--- Name: sow_nnva_base trg_nnva_base_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: ms_project_calendar trg_ms_project_calendar_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_nnva_base_updated_at BEFORE UPDATE ON public.sow_nnva_base FOR EACH ROW EXECUTE FUNCTION public.update_nnva_updated_at();
-
-
---
--- Name: sow_nnva_standard trg_nnva_standard_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_nnva_standard_updated_at BEFORE UPDATE ON public.sow_nnva_standard FOR EACH ROW EXECUTE FUNCTION public.update_nnva_updated_at();
+CREATE TRIGGER trg_ms_project_calendar_updated_at BEFORE UPDATE ON public.ms_project_calendar FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
 
 
 --
--- Name: sow_operationcard trg_opcard_updated_at; Type: TRIGGER; Schema: public; Owner: -
+-- Name: ms_project_calendar_weekday trg_ms_project_calendar_weekday_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
-CREATE TRIGGER trg_opcard_updated_at BEFORE UPDATE ON public.sow_operationcard FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE TRIGGER trg_ms_project_calendar_weekday_updated_at BEFORE UPDATE ON public.ms_project_calendar_weekday FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
+
+
+--
+-- Name: ms_project_calendar_working_time trg_ms_project_calendar_working_time_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_ms_project_calendar_working_time_updated_at BEFORE UPDATE ON public.ms_project_calendar_working_time FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
+
+
+--
+-- Name: ms_project_lock trg_ms_project_lock_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_ms_project_lock_updated_at BEFORE UPDATE ON public.ms_project_lock FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
+
+
+--
+-- Name: ms_project_resource_availability trg_ms_project_resource_availability_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER trg_ms_project_resource_availability_updated_at BEFORE UPDATE ON public.ms_project_resource_availability FOR EACH ROW EXECUTE FUNCTION public.set_ms_project_updated_at();
 
 
 --
@@ -8703,69 +9583,6 @@ CREATE TRIGGER trg_opcard_updated_at BEFORE UPDATE ON public.sow_operationcard F
 --
 
 CREATE TRIGGER trg_sap_staging_mark_segments_posted AFTER UPDATE OF status ON public.sap_timesheet_staging FOR EACH ROW EXECUTE FUNCTION public.sap_staging_mark_segments_posted();
-
-
---
--- Name: timesheet_transaction trg_set_modified_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_set_modified_at BEFORE UPDATE ON public.timesheet_transaction FOR EACH ROW EXECUTE FUNCTION public.set_modified_at();
-
-
---
--- Name: shift_definition trg_shift_definition_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_shift_definition_updated_at BEFORE UPDATE ON public.shift_definition FOR EACH ROW EXECUTE FUNCTION public.set_sow_scheduling_updated_at();
-
-
---
--- Name: sow_machine_capacity trg_sow_machine_capacity_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_sow_machine_capacity_updated_at BEFORE UPDATE ON public.sow_machine_capacity FOR EACH ROW EXECUTE FUNCTION public.set_sow_scheduling_updated_at();
-
-
---
--- Name: sow_overtime_request trg_sow_overtime_request_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_sow_overtime_request_updated_at BEFORE UPDATE ON public.sow_overtime_request FOR EACH ROW EXECUTE FUNCTION public.set_sow_scheduling_updated_at();
-
-
---
--- Name: sow_schedule_batch trg_sow_schedule_batch_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_sow_schedule_batch_updated_at BEFORE UPDATE ON public.sow_schedule_batch FOR EACH ROW EXECUTE FUNCTION public.set_sow_scheduling_updated_at();
-
-
---
--- Name: sow_schedule trg_sow_schedule_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_sow_schedule_updated_at BEFORE UPDATE ON public.sow_schedule FOR EACH ROW EXECUTE FUNCTION public.set_sow_scheduling_updated_at();
-
-
---
--- Name: tts_notifications trg_tts_notif_updated; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER trg_tts_notif_updated BEFORE UPDATE ON public.tts_notifications FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-
-
---
--- Name: operations update_operations_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER update_operations_updated_at BEFORE UPDATE ON public.operations FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-
-
---
--- Name: parts update_parts_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER update_parts_updated_at BEFORE UPDATE ON public.parts FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 
 --
@@ -8908,6 +9725,14 @@ ALTER TABLE ONLY public.ms_project_assignment
 
 
 --
+-- Name: ms_project_bay_schedule fk_ms_project_bay_schedule_task; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_bay_schedule
+    ADD CONSTRAINT fk_ms_project_bay_schedule_task FOREIGN KEY (project_id, task_id) REFERENCES public.ms_project_task(project_id, task_id);
+
+
+--
 -- Name: ms_project_dependency fk_ms_project_dependency_pred_same_project; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8968,7 +9793,7 @@ ALTER TABLE ONLY public.progress_update_history
 --
 
 ALTER TABLE ONLY public.timesheet_transaction
-    ADD CONSTRAINT fk_timesheet_user FOREIGN KEY (serialnumber) REFERENCES public.usernfc(snssb) ON UPDATE CASCADE ON DELETE RESTRICT;
+    ADD CONSTRAINT fk_timesheet_user FOREIGN KEY (serialnumber) REFERENCES public.usernfc(snssb) ON UPDATE CASCADE ON DELETE RESTRICT NOT VALID;
 
 
 --
@@ -8988,11 +9813,107 @@ ALTER TABLE ONLY public.ms_project_assignment
 
 
 --
+-- Name: ms_project_audit_log ms_project_audit_log_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_audit_log
+    ADD CONSTRAINT ms_project_audit_log_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id) ON DELETE SET NULL;
+
+
+--
+-- Name: ms_project_bay_schedule ms_project_bay_schedule_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_bay_schedule
+    ADD CONSTRAINT ms_project_bay_schedule_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id) ON DELETE SET NULL;
+
+
+--
+-- Name: ms_project_calendar ms_project_calendar_base_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar
+    ADD CONSTRAINT ms_project_calendar_base_calendar_id_fkey FOREIGN KEY (base_calendar_id) REFERENCES public.ms_project_calendar(calendar_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: ms_project_calendar_exception ms_project_calendar_exception_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_exception
+    ADD CONSTRAINT ms_project_calendar_exception_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ms_project_calendar_exception_time ms_project_calendar_exception_time_exception_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_exception_time
+    ADD CONSTRAINT ms_project_calendar_exception_time_exception_id_fkey FOREIGN KEY (exception_id) REFERENCES public.ms_project_calendar_exception(exception_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ms_project ms_project_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project
+    ADD CONSTRAINT ms_project_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id);
+
+
+--
+-- Name: ms_project_calendar_weekday ms_project_calendar_weekday_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_weekday
+    ADD CONSTRAINT ms_project_calendar_weekday_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ms_project_calendar_working_time ms_project_calendar_working_time_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_calendar_working_time
+    ADD CONSTRAINT ms_project_calendar_working_time_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id) ON DELETE CASCADE;
+
+
+--
 -- Name: ms_project_dependency ms_project_dependency_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ms_project_dependency
     ADD CONSTRAINT ms_project_dependency_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id);
+
+
+--
+-- Name: ms_project_lock ms_project_lock_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_lock
+    ADD CONSTRAINT ms_project_lock_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ms_project_publish ms_project_publish_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_publish
+    ADD CONSTRAINT ms_project_publish_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ms_project_resource_availability ms_project_resource_availability_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_resource_availability
+    ADD CONSTRAINT ms_project_resource_availability_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id);
+
+
+--
+-- Name: ms_project_resource_availability ms_project_resource_availability_resource_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_resource_availability
+    ADD CONSTRAINT ms_project_resource_availability_resource_id_fkey FOREIGN KEY (resource_id) REFERENCES public.ms_resource(resource_id) ON DELETE CASCADE;
 
 
 --
@@ -9012,11 +9933,35 @@ ALTER TABLE ONLY public.ms_project_resource
 
 
 --
+-- Name: ms_project_revision ms_project_revision_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_revision
+    ADD CONSTRAINT ms_project_revision_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ms_project_task ms_project_task_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_project_task
+    ADD CONSTRAINT ms_project_task_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id);
+
+
+--
 -- Name: ms_project_task ms_project_task_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ms_project_task
     ADD CONSTRAINT ms_project_task_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.ms_project(project_id);
+
+
+--
+-- Name: ms_resource ms_resource_calendar_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ms_resource
+    ADD CONSTRAINT ms_resource_calendar_id_fkey FOREIGN KEY (calendar_id) REFERENCES public.ms_project_calendar(calendar_id);
 
 
 --
@@ -9177,6 +10122,22 @@ ALTER TABLE ONLY public.sow_standard_attachments
 
 ALTER TABLE ONLY public.sow_standard
     ADD CONSTRAINT sow_standard_component_id_fkey FOREIGN KEY (component_id) REFERENCES public.components(component_id);
+
+
+--
+-- Name: sow_sub_operation sow_sub_operation_operation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_sub_operation
+    ADD CONSTRAINT sow_sub_operation_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES public.sow(idsow) ON DELETE CASCADE;
+
+
+--
+-- Name: sow_sub_operation_progress_history sow_sub_operation_progress_history_sub_operation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sow_sub_operation_progress_history
+    ADD CONSTRAINT sow_sub_operation_progress_history_sub_operation_id_fkey FOREIGN KEY (sub_operation_id) REFERENCES public.sow_sub_operation(id) ON DELETE CASCADE;
 
 
 --
