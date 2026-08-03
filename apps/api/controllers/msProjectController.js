@@ -196,7 +196,14 @@ exports.listBayOccupants = route(async (req) => {
 // soft warnings on the 201 response instead of rejecting the reservation.
 exports.createBaySchedule = route(async (req) => {
   const data = await service.createBaySchedule(bodyWithSessionActor(req));
-  return (res) => success(res, data, 201, {}, bayOverlapWarnings(data.overlaps));
+  const warnings = bayOverlapWarnings(data.overlaps);
+  // Operasi yang sama terpilih dua kali lewat project berbeda -> service membuang yang kedua.
+  // Harus terlihat scheduler, kalau tidak ia mengira semua yang dicentang tersimpan.
+  const dropped = Array.isArray(data.dropped_duplicate_operations) ? data.dropped_duplicate_operations : [];
+  if (dropped.length) {
+    warnings.push({ type: "DUPLICATE_OPERATION_DROPPED", operations: dropped });
+  }
+  return (res) => success(res, data, 201, {}, warnings);
 });
 
 exports.cancelBaySchedule = route(async (req) => {

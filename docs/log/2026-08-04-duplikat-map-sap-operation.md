@@ -103,3 +103,46 @@ muncul di beberapa file project.
 [[2026-08-04-rekonsiliasi-ledger-migrasi]]). Aturan unik andalan owner karenanya tidak
 terdokumentasi di kode — layak dibuatkan migrasi retroaktif agar tidak hilang saat setup lingkungan
 baru.
+
+---
+
+## Susulan: duplikat masih terlihat di picker (sore 4 Agu)
+
+Owner melaporkan picker masih ramai. Benar — perbaikan pertama hanya menyembuhkan masalah #1
+(dalam satu project). Yang tersisa 294 × 3 project = 882 baris adalah masalah #2, yang memang
+sengaja belum diputuskan.
+
+### Bukti bahwa ini bukan kosmetik
+
+Kedua reservasi order 1000127752 ternyata **satu reservasi yang sama**:
+
+```
+Project_Rizka_31.07 | group 83cbb090 | {A30} | 31 Jul–6 Agu | op 280 | user 37
+Test                | group 83cbb090 | {A30} | 31 Jul–6 Agu | op 280 | user 37
+```
+
+`schedule_group_id` identik. Artinya scheduler memilih **operasi 280 dua kali** — sekali dari
+`Project_Rizka_31.07`, sekali dari `Test` — karena picker menampilkannya berkali-kali tanpa
+pembeda. Duplikat picker langsung menghasilkan task ganda di dalam satu reservasi.
+
+### Perbaikan tambahan
+
+- `createBaySchedule` cabang task-level kini men-dedupe **per operasi**, bukan hanya per `task_id`.
+  `normalizeTaskRows` tidak cukup: task_id berbeda dari project berbeda membawa operasi yang sama.
+  Yang dibuang dilaporkan sebagai warning `DUPLICATE_OPERATION_DROPPED`, bukan 400 — niat
+  penggunanya jelas, yang salah cuma pilihan gandanya.
+- Controller meneruskan warning itu; `SchedulingAreaPage` memunculkan toast terpisah
+  "Operasi ganda dilewati" dengan daftar nomor operasinya.
+- Data prod: 1 baris reservasi redundan (`df29e754`, op 280 di grup `83cbb090`) DIHAPUS.
+  Reservasinya sendiri utuh — hanya baris keduanya yang hilang.
+
+### Kenapa sisanya tidak ikut dihapus
+
+Ketiga project punya revisi (5 / 4 / 2) dan berstatus ACTIVE — bukan stub kosong. **Dua di
+antaranya memegang reservasi untuk order ini.** Tidak ada penanda teknis mana yang "asli";
+ketiganya bernama seperti project uji coba. Memilih salah satu secara sepihak berisiko membuang
+pemetaan yang sedang dipakai orang.
+
+Keputusan yang dibutuhkan: **project mana yang otoritatif untuk order 1000127752**, atau lebih
+umum — nilai `ms_project.status` mana yang berarti "arsip, jangan tampilkan di picker". Setelah itu
+`listOrderTasks` tinggal menyaringnya dan picker bersih dengan sendirinya, tanpa menghapus apa pun.

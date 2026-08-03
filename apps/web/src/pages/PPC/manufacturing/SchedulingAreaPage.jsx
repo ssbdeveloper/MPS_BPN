@@ -231,7 +231,15 @@ export default function SchedulingAreaPage() {
       // Sejak D3 bay tidak pernah eksklusif: server TIDAK menolak overlap, hanya
       // melaporkan penghuni lain lewat warnings. Kalau toast ini tidak menampilkannya,
       // pencegahan sudah dicabut tapi pemberitahuannya tidak ada — lebih buruk dari 409.
-      const overlap = (result?.warnings || []).find((warning) => warning.type === 'BAY_OVERLAP');
+      const warnings = result?.warnings || [];
+      const overlap = warnings.find((warning) => warning.type === 'BAY_OVERLAP');
+
+      // Operasi yang sama bisa terpilih dua kali kalau order-nya dipetakan ke lebih dari satu
+      // project — task_id-nya beda, operasinya sama. Server membuang yang kedua; kalau toast
+      // diam, scheduler mengira semua yang dicentang tersimpan.
+      const dropped = warnings.find((warning) => warning.type === 'DUPLICATE_OPERATION_DROPPED');
+      const droppedOps = dropped?.operations || [];
+
       if ((overlap?.occupants || []).length > 0) {
         toast.warning('Reservasi tersimpan — bay dipakai bersama', {
           description: `${what} di ${bays}. Sudah ada: ${describeOccupants(overlap)}.`,
@@ -239,6 +247,14 @@ export default function SchedulingAreaPage() {
         });
       } else {
         toast.success('Reservasi tersimpan', { description: `${what} direservasi di ${bays}.` });
+      }
+
+      if (droppedOps.length > 0) {
+        const list = [...new Set(droppedOps.map((row) => row.operation_no))].join(', ');
+        toast.warning('Operasi ganda dilewati', {
+          description: `Operasi ${list} terpilih lebih dari sekali (order ini ada di beberapa project MS Project) — hanya disimpan satu kali.`,
+          duration: 9000,
+        });
       }
       setReservation(null);
       reload();

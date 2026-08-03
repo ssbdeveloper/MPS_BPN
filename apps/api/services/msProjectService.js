@@ -2457,7 +2457,9 @@ async function createBaySchedule(body = {}) {
   const notes = nullableText(payload.notes);
   // Task-level batch: one call reserves N tasks (each -> its own row with task_id +
   // project_id populated). Empty => legacy order-level behavior (task_id NULL) unchanged.
-  const taskRows = isOrderBooking ? normalizeTaskRows(payload.tasks || payload.task_ids) : [];
+  // `let`, bukan `const`: cabang task-level menyaring ulang daftar ini untuk membuang operasi
+  // yang terpilih dua kali lewat project berbeda (lihat komentar di cabang itu).
+  let taskRows = isOrderBooking ? normalizeTaskRows(payload.tasks || payload.task_ids) : [];
   // Satu panggilan createBaySchedule = SATU reservasi = satu schedule_group_id, berapa pun
   // baris task yang dihasilkan. Inilah kunci yang dipakai update/cancel per grup dan dedupe
   // badge di peta (menggantikan reservationKey rakitan di FE).
@@ -2505,6 +2507,37 @@ async function createBaySchedule(body = {}) {
     // per task with task_id + project_id populated. Single audit log for the whole batch.
     if (taskRows.length > 0) {
       const overlaps = await findBayOverlaps(client, { bayCodes, startDate, endDate });
+
+      // normalizeTaskRows hanya men-dedupe per task_id. Satu order yang dipetakan ke BEBERAPA
+      // project punya task_id BERBEDA untuk operasi yang SAMA, jadi scheduler bisa memilih
+      // operasi yang sama dua kali tanpa sadar — picker menampilkannya berkali-kali.
+      // Terjadi nyata di prod: reservasi 83cbb090 (order 1000127752, bay A30) memuat operasi 280
+      // dua kali, satu dari 'Project_Rizka_31.07' dan satu dari 'Test'. Satu bay tidak mungkin
+      // mengerjakan operasi yang sama dua kali dalam satu reservasi, jadi dedupe per operasi di
+      // sini dan laporkan yang dibuang sebagai peringatan (bukan 400 — niat penggunanya jelas).
+      const opResult = await client.query(
+        `select task_id, operation_no from ms_project_task where task_id = any($1::uuid[])`,
+        [taskRows.map((row) => row.task_id)]
+      );
+      const opByTask = new Map(opResult.rows.map((row) => [row.task_id, row.operation_no]));
+      const seenOperation = new Map();
+      const droppedDuplicateOperations = [];
+      const uniqueTaskRows = [];
+      for (const taskRow of taskRows) {
+        const op = opByTask.get(taskRow.task_id);
+        const key = op == null || op === "" ? null : String(op).trim();
+        if (key !== null && seenOperation.has(key)) {
+          droppedDuplicateOperations.push({
+            operation_no: key,
+            kept_task_id: seenOperation.get(key),
+            dropped_task_id: taskRow.task_id,
+          });
+          continue;
+        }
+        if (key !== null) seenOperation.set(key, taskRow.task_id);
+        uniqueTaskRows.push(taskRow);
+      }
+      taskRows = uniqueTaskRows;
 
       const inserted = [];
       for (const taskRow of taskRows) {
@@ -2570,7 +2603,13 @@ async function createBaySchedule(body = {}) {
       });
 
       await client.query("commit");
-      return { schedules: inserted, count: inserted.length, schedule_group_id: scheduleGroupId, overlaps };
+      return {
+        schedules: inserted,
+        count: inserted.length,
+        schedule_group_id: scheduleGroupId,
+        overlaps,
+        dropped_duplicate_operations: droppedDuplicateOperations,
+      };
     }
     // === END TASK-LEVEL branch =============================================
 
