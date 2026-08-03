@@ -52,6 +52,17 @@ async function getOeeSummary(req, res) {
           ROUND(COALESCE(SUM(planhours), 0), 2) AS total_plan_hours
         FROM sow
         WHERE COALESCE(systemstatus, '') NOT IN ('TECO', 'CLSD')
+          -- Phase 6 (D4): total_plan_hours drives the OEE performance ratio, i.e. internal
+          -- workshop load. Operations marked as subcontracted are executed by a vendor, so
+          -- both their plan and actual hours leave this bucket.
+          -- DEPLOY NOTE: public.sow_subcont_mark only exists after migration
+          -- database/migrations/api/20260803b_sow_subcont_mark.sql — migrate first, then deploy.
+          AND NOT EXISTS (
+            SELECT 1 FROM public.sow_subcont_mark scm
+            WHERE ltrim(scm.order_no, '0') = ltrim(sow.order_no, '0')
+              AND scm.operation_no = sow.operation_no
+              AND scm.unmarked_at IS NULL
+          )
       ),
       prev_day AS (
         SELECT
@@ -437,6 +448,14 @@ async function getSnapshot(req, res) {
                 ROUND(COALESCE(SUM(actual_hours),0),2) AS total_actual_hours,
                 ROUND(COALESCE(SUM(planhours),0),2) AS total_plan_hours
               FROM sow WHERE COALESCE(systemstatus,'') NOT IN ('TECO','CLSD')
+                -- Phase 6 (D4): same internal-load bucket as getOeeSummary above; subcontracted
+                -- operations are vendor work. Needs migration 20260803b_sow_subcont_mark.sql.
+                AND NOT EXISTS (
+                  SELECT 1 FROM public.sow_subcont_mark scm
+                  WHERE ltrim(scm.order_no, '0') = ltrim(sow.order_no, '0')
+                    AND scm.operation_no = sow.operation_no
+                    AND scm.unmarked_at IS NULL
+                )
             )
             SELECT l.actual_hours, l.plan_hours,
               ROUND(l.actual_hours / NULLIF(l.plan_hours,0) * 100, 1) AS availability_pct,

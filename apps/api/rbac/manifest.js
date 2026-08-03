@@ -27,6 +27,7 @@ const MANIFEST = [
   { m: 'DELETE', p: '/sow/nnva/base/:id',                     f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/nnva/standard/:id',                 f: 'sow_management', a: W },
   { m: 'POST',   p: '/sow/operationcard/:id',                 f: 'sow_management', a: W },
+  { m: 'POST',   p: '/sow/documentnos',                       f: 'sow_management', a: W }, // A-03, sebelumnya unmapped
   { m: 'POST',   p: '/sow/create',                            f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/history-order/:id/info',            f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/history-order/:id',                 f: 'sow_management', a: W },
@@ -46,6 +47,24 @@ const MANIFEST = [
   { m: 'POST',   p: '/sow',                                   f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/:id',                               f: 'sow_management', a: W },
   { m: 'DELETE', p: '/sow/:id',                               f: 'sow_management', a: W },
+
+  // Sub-operasi / child-task (rollup progress fisik ke sow.progress) — A-03, sebelumnya
+  // unmapped. Semuanya menulis sow_sub_operation + memicu recomputeOperationProgress.
+  // route asli memakai :idsow / :subId; di sini ':id' seperti entri lain (nama param
+  // tidak dipakai saat mencocokkan, hanya jumlah segmennya).
+  { m: 'POST',   p: '/sow/operations/:id/subtasks',           f: 'sow_management', a: W },
+  { m: 'PUT',    p: '/sow/subtasks/:id',                      f: 'sow_management', a: W },
+  { m: 'POST',   p: '/sow/subtasks/:id/progress',             f: 'sow_management', a: W },
+  // Import Excel: commit=false hanya dry-run, TAPI commit=true menulis. Route yang sama
+  // untuk dua-duanya, jadi digating sebagai write (preview ikut butuh izin tulis).
+  { m: 'POST',   p: '/sow/subtasks/import',                   f: 'sow_management', a: W },
+
+  // ---- Penanda subcont (/sow/subcont-marks) — Fase 6 / D4 ----
+  // Feature TERPISAH dari sow_management: menandai operasi mengeluarkan jamnya dari
+  // beban internal (implikasi biaya), jadi tidak boleh ikut izin edit teknis SOW.
+  // route asli: DELETE /sow/subcont-marks/:order_no/:operation_no
+  { m: 'POST',   p: '/sow/subcont-marks',                     f: 'sow_subcont', a: W },
+  { m: 'DELETE', p: '/sow/subcont-marks/:id/:opno',           f: 'sow_subcont', a: W },
 
   // ---- SOW scheduling / shift rules / verification (/sow-schedule) ----
   { m: 'POST',   p: '/sow-schedule/shift-rules',              f: 'shift_rules',      a: W },
@@ -136,26 +155,55 @@ const MANIFEST = [
   { m: 'PATCH',  p: '/tools/handovers/:id/reject',            f: 'tools_management', a: W },
   { m: 'PATCH',  p: '/tools/:id',                             f: 'tools_management', a: W },
 
-  // ---- MS Project admin (/ms-project) ----
-  { m: 'POST',   p: '/ms-project/bay-schedules',                     f: 'ms_project_admin', a: W },
-  { m: 'DELETE', p: '/ms-project/bay-schedules/:id',                 f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/bulk-load',                f: 'ms_project_admin', a: W },
-  { m: 'PUT',    p: '/ms-project/projects/:id/tasks/map-sow-order',  f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects',                          f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/file',                 f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/checkout',             f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/heartbeat',            f: 'ms_project_admin', a: W },
-  { m: 'PUT',    p: '/ms-project/projects/:id/sync',                 f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/publish',             f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/checkin',             f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/force-checkin',       f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/calendars/refresh-from-shifts',     f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/resources/refresh',                 f: 'ms_project_admin', a: W },
-  { m: 'POST',   p: '/ms-project/projects/:id/resources',           f: 'ms_project_admin', a: W },
-  { m: 'DELETE', p: '/ms-project/projects/:id/resources/:rid',      f: 'ms_project_admin', a: W },
+  // ---- MS Project (/ms-project) ----
+  // `ms_project_admin` dipecah jadi 4 feature (Fase 0 / D1) supaya hak booking bay
+  // tidak lagi ikut memberi kendali penuh atas file .mpp (anomali A-04).
+
+  // Bay scheduling (PPC) — reservasi bay + write-back headcount operasi.
+  { m: 'POST',   p: '/ms-project/bay-schedules',                     f: 'bay_scheduling',    a: W },
+  { m: 'DELETE', p: '/ms-project/bay-schedules/:id',                 f: 'bay_scheduling',    a: W },
+  { m: 'PUT',    p: '/ms-project/bay-schedules/group/:id',           f: 'bay_scheduling',    a: W },
+  { m: 'DELETE', p: '/ms-project/bay-schedules/group/:id',           f: 'bay_scheduling',    a: W },
+  // route asli: PATCH /ms-project/sow-orders/:order_no/operations/people (A-03, sebelumnya unmapped)
+  { m: 'PATCH',  p: '/ms-project/sow-orders/:id/operations/people',  f: 'bay_scheduling',    a: W },
+
+  // Mapping operasi SAP -> task MS Project (prasyarat booking, per D2).
+  { m: 'PUT',    p: '/ms-project/projects/:id/tasks/map-sow-order',  f: 'msproject_mapping', a: W },
+
+  // Kolaborasi file .mpp — publish, upload, checkout/checkin, sync, status.
+  { m: 'POST',   p: '/ms-project/projects',                          f: 'msproject_collab',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/bulk-load',                f: 'msproject_collab',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/:id/file',                 f: 'msproject_collab',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/:id/checkout',             f: 'msproject_collab',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/:id/heartbeat',            f: 'msproject_collab',  a: W },
+  { m: 'PUT',    p: '/ms-project/projects/:id/sync',                 f: 'msproject_collab',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/:id/publish',              f: 'msproject_collab',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/:id/checkin',              f: 'msproject_collab',  a: W },
+  { m: 'PUT',    p: '/ms-project/projects/:id/status',               f: 'msproject_collab',  a: W }, // A-03, sebelumnya unmapped
+
+  // Admin scheduling (dipersempit) — merebut lock orang lain, kalender, resource.
+  { m: 'POST',   p: '/ms-project/projects/:id/force-checkin',        f: 'ms_project_admin',  a: W },
+  { m: 'POST',   p: '/ms-project/calendars/refresh-from-shifts',     f: 'ms_project_admin',  a: W },
+  { m: 'POST',   p: '/ms-project/resources/refresh',                 f: 'ms_project_admin',  a: W },
+  { m: 'POST',   p: '/ms-project/projects/:id/resources',            f: 'ms_project_admin',  a: W },
+  { m: 'DELETE', p: '/ms-project/projects/:id/resources/:rid',       f: 'ms_project_admin',  a: W },
 
   // ---- Dashboard maintenance (/dashboard) ----
   { m: 'POST',   p: '/dashboard/refresh-order-matviews',      f: 'dashboard', a: W },
+
+  // Pipeline posting SAP — ter-mount di /dashboard, tapi satu-satunya permukaannya
+  // halaman /sap-log (SapLogPage + ReconciliationPanel + CorrectionsPanel), dan yang
+  // dititipkan adalah antrean sap_ops_request yang dieksekusi ops_worker.py ke SAP.
+  // Karena itu feature-nya `sap_log`, BUKAN `dashboard` (yang read-only untuk semua
+  // role non-admin dan artinya bukan pembeda apa pun). A-03, sebelumnya unmapped.
+  { m: 'POST',   p: '/dashboard/sap-ops/enqueue',             f: 'sap_log', a: W },
+  { m: 'POST',   p: '/dashboard/sap-ops/post-corrections',    f: 'sap_log', a: W },
+  // Koreksi manual satu baris mch_transaction (+ jejak di mch_transaction_override).
+  // Datanya domain jam mesin -> `machine_hours`. CATATAN: UI-nya (MachineHoursMatrix)
+  // hanya dirender di halaman /sap-log, jadi supervisor/foreman yang cuma read-only di
+  // `sap_log` tetap boleh menulis di sini lewat `machine_hours` (FULL). Perlu konfirmasi
+  // owner kalau maunya senada dengan gate halaman.
+  { m: 'POST',   p: '/dashboard/machine-hours-override',      f: 'machine_hours', a: W },
 
   // ---- EWS (/ews) ----
   { m: 'PUT',    p: '/ews/issue-log/:id/resolve',             f: 'ews', a: W },
@@ -167,6 +215,10 @@ const MANIFEST = [
   { m: 'PUT',    p: '/ews/roster/config/workday',             f: 'roster_operator', a: W },
   { m: 'PUT',    p: '/ews/roster/group',                      f: 'roster_operator', a: W },
   { m: 'POST',   p: '/ews/roster/generate',                   f: 'roster_operator', a: W },
+  // Shift-lock R3 — pin operator DAY/NIGHT (INSERT ews.operator_shift_lock) dan
+  // soft-cancel-nya. Domain sama dengan route roster lain. A-03, sebelumnya unmapped.
+  { m: 'POST',   p: '/ews/roster/lock',                       f: 'roster_operator', a: W },
+  { m: 'POST',   p: '/ews/roster/lock/:id/cancel',            f: 'roster_operator', a: W },
 
   // ---- Manage users (/auth) ----
   { m: 'POST',   p: '/auth/users',                            f: 'manage_users', a: W },
@@ -187,6 +239,12 @@ const ALLOWLIST = [
   { m: 'PUT',  p: '/timesheet/checkoutid' },
   // device fleet heartbeat — device anonim, autentikasi via X-Device-Token di controller:
   { m: 'POST', p: '/device-heartbeat' },
+  // POST berbaju BACA — bukan mutasi. getPlanhoursMulti hanya
+  // `SELECT codenumber, planhours FROM sow WHERE codenumber = ANY($1)`; POST dipakai
+  // semata karena daftar codenumber-nya panjang (tidak muat di query string).
+  // Memetakannya sebagai write akan menolak role read-only untuk sekadar membaca,
+  // padahal GET /sow/planhours yang setara TIDAK digating sama sekali di fase ini.
+  { m: 'POST', p: '/sow/planhours/multi' },
 ];
 
 module.exports = { MANIFEST, ALLOWLIST };

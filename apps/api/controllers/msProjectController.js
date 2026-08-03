@@ -60,6 +60,60 @@ function error(res, err) {
   res.status(status).json(response);
 }
 
+// Actor identity ALWAYS comes from the session headers the web app already sends
+// (x-user-name / x-user-id). Never trust `actor` in the request body: it is client
+// supplied and therefore spoofable. Returns null when the session carries no identity,
+// so callers can fall back to the legacy body value.
+function actorOf(req) {
+  const name = req.headers['x-user-name'];
+  const id   = req.headers['x-user-id'];
+  const v = (name && String(name).trim()) || (id && String(id).trim()) || '';
+  return v || null;
+}
+
+// Body with the actor forced from the session. Session WINS over body.
+function bodyWithSessionActor(req) {
+  const body = req.body || {};
+  return { ...body, actor: actorOf(req) ?? body.actor };
+}
+
+// Ringkasan paginasi standar. `total` ikut dikirim HANYA bila service memang menghitungnya,
+// supaya pemanggil tahu daftarnya terpotong `limit` — sebelumnya truncation terjadi diam-diam
+// (temuan review #5). Service yang belum mengirim total tetap menghasilkan summary lama.
+function paginationSummary(result = {}) {
+  const summary = { limit: result.limit, offset: result.offset };
+  if (result.total !== undefined && result.total !== null) {
+    summary.total = Number(result.total);
+  }
+  return summary;
+}
+
+// findBayOverlaps kini mengembalikan { rows, truncated, total } (kontrak §G) supaya pemanggil
+// tahu daftar penghuni dipotong di BAY_OVERLAP_LIMIT. Bentuk lama (array polos) tetap diterima
+// di sini: kalau tidak, peringatan overlap akan HILANG tanpa jejak begitu urutan rilis
+// service/controller tidak sinkron — persis kegagalan senyap yang sedang kita hapus.
+function normalizeOverlaps(overlaps) {
+  if (Array.isArray(overlaps)) {
+    return { rows: overlaps, truncated: false, total: overlaps.length };
+  }
+  const rows = Array.isArray(overlaps?.rows) ? overlaps.rows : [];
+  return {
+    rows,
+    truncated: Boolean(overlaps?.truncated),
+    total: Number.isFinite(Number(overlaps?.total)) && overlaps?.total !== null && overlaps?.total !== undefined
+      ? Number(overlaps.total)
+      : rows.length,
+  };
+}
+
+// Peringatan lunak BAY_OVERLAP (D3: tidak ada bay yang eksklusif, jadi overlap TIDAK pernah
+// menolak reservasi). Daftar kosong = tidak ada penghuni lain = tidak ada warning sama sekali.
+function bayOverlapWarnings(overlaps) {
+  const { rows, truncated, total } = normalizeOverlaps(overlaps);
+  if (!rows.length) return [];
+  return [{ type: "BAY_OVERLAP", occupants: rows, truncated, total }];
+}
+
 function route(handler) {
   return async (req, res) => {
     const startedAt = Date.now();
@@ -93,7 +147,7 @@ exports.listProjectTasks = route(async (req) => {
 
 exports.listSowOrders = route(async (req) => {
   const result = await service.listSowOrders(req.query);
-  return (res) => success(res, result.rows, 200, { limit: result.limit, offset: result.offset });
+  return (res) => success(res, result.rows, 200, paginationSummary(result));
 });
 
 exports.getSowOrderOperations = route(async (req) => {
@@ -116,9 +170,11 @@ exports.mapSowOrderToProjectTasks = route(async (req) => {
   return (res) => success(res, data, 200, data.summary || {});
 });
 
+// Sebelumnya summary tidak dikirim sama sekali sehingga pemanggil tidak pernah tahu daftarnya
+// terpotong `limit` (temuan review #5). Sekarang limit/offset selalu ikut, total bila ada.
 exports.listBaySchedules = route(async (req) => {
   const result = await service.listBaySchedules(req.query);
-  return (res) => success(res, result.rows);
+  return (res) => success(res, result.rows, 200, paginationSummary(result));
 });
 
 exports.listBayScheduleTasks = route(async (req) => {
@@ -126,14 +182,44 @@ exports.listBayScheduleTasks = route(async (req) => {
   return (res) => success(res, result.rows, 200, result.summary || {});
 });
 
+// Bay occupancy preview: who already sits in these bays for this date range.
+// Used by the UI BEFORE submitting a reservation (soft warning, no blocking).
+// data = { rows, truncated, total } (kontrak §G). fetchBayOccupants di web sudah menerima
+// array MAUPUN objek ber-`rows`, jadi bentuk objek ini aman dan sekaligus membawa penanda
+// bahwa daftarnya dipotong BAY_OVERLAP_LIMIT.
+exports.listBayOccupants = route(async (req) => {
+  const data = normalizeOverlaps(await service.listBayOccupants(req.query));
+  return (res) => success(res, data, 200, { count: data.rows.length });
+});
+
+// No 409 anymore (decision D3: no bay is exclusive). Overlaps are reported as
+// soft warnings on the 201 response instead of rejecting the reservation.
 exports.createBaySchedule = route(async (req) => {
-  const data = await service.createBaySchedule(req.body || {});
-  return (res) => success(res, data, 201);
+  const data = await service.createBaySchedule(bodyWithSessionActor(req));
+  return (res) => success(res, data, 201, {}, bayOverlapWarnings(data.overlaps));
 });
 
 exports.cancelBaySchedule = route(async (req) => {
-  const data = await service.cancelBaySchedule(req.params.schedule_id, req.body || {});
+  const data = await service.cancelBaySchedule(req.params.schedule_id, bodyWithSessionActor(req));
   return (res) => success(res, data);
+});
+
+// One reservation = one schedule_group_id = N task rows. Group operations move the
+// whole reservation (dates / bays / task set) in a single transaction.
+// Pindah tanggal bisa membuat reservasi ini bertumpuk dengan penghuni lain, jadi overlap
+// diteruskan sebagai warning dengan pola yang SAMA seperti createBaySchedule. Selama service
+// belum mengembalikan `overlaps`, daftarnya kosong dan tidak ada warning yang dikirim.
+exports.updateBayScheduleGroup = route(async (req) => {
+  const data = await service.updateBayScheduleGroup(req.params.schedule_group_id, bodyWithSessionActor(req));
+  return (res) => success(res, data, 200, { count: data.count }, bayOverlapWarnings(data.overlaps));
+});
+
+exports.cancelBayScheduleGroup = route(async (req) => {
+  const data = await service.cancelBayScheduleGroup(req.params.schedule_group_id, bodyWithSessionActor(req));
+  const cancelled = data.cancelled;
+  return (res) => success(res, data, 200, {
+    cancelled: Array.isArray(cancelled) ? cancelled.length : cancelled ?? 0,
+  });
 });
 
 exports.getProjectPackage = route(async (req) => {

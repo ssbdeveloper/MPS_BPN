@@ -138,6 +138,41 @@ const inferActivityType = ({ id_unprod, activitytype, operation_text, order_no, 
 
 const isUnproductiveRow = (row) => Boolean(inferActivityType(row));
 
+/**
+ * Fase 6 (D4c) — apakah (order_no, operation_no) sedang bertanda subcont?
+ * Kunci order dinormalisasi dengan ltrim(...,'0'), sama seperti seluruh kodebase
+ * (getSowOrderOperations, listBaySchedules).
+ *
+ * CATATAN DEPLOY: public.sow_subcont_mark baru ada setelah migrasi
+ * database/migrations/api/20260803b_sow_subcont_mark.sql dijalankan. Selama tabelnya belum
+ * ada, error 42P01 (undefined_table) diperlakukan sebagai "tidak ada tanda" supaya check-in
+ * operator NFC tidak ikut mati — tanpa tabel memang mustahil ada tanda aktif, jadi ini bukan
+ * kompromi keamanan. Error lain tetap dilempar.
+ */
+const isSubcontMarked = async (orderNo, operationNo) => {
+  const order = normalizeText(orderNo);
+  const operation = Number.parseInt(operationNo, 10);
+  if (!order || !Number.isFinite(operation)) return false;
+  try {
+    const result = await db.query(
+      `SELECT 1
+         FROM public.sow_subcont_mark scm
+        WHERE ltrim(scm.order_no, '0') = ltrim($1, '0')
+          AND scm.operation_no = $2
+          AND scm.unmarked_at IS NULL
+        LIMIT 1`,
+      [order, operation]
+    );
+    return result.rowCount > 0;
+  } catch (err) {
+    if (err && err.code === '42P01') {
+      console.warn('⚠️ sow_subcont_mark belum ada — guard subcont dilewati (jalankan migrasi 20260803b)');
+      return false;
+    }
+    throw err;
+  }
+};
+
 // ============ QUERY HANDLERS ============
 
 /**
@@ -349,6 +384,16 @@ exports.create = async (req, res) => {
     // Validate required fields
     if (!serialnumber || !full_name) {
       return res.status(400).json({ error: 'serialnumber and full_name are required' });
+    }
+
+    // Fase 6 (D4c): operasi yang ditandai dikerjakan subcont tidak boleh di-timesheet internal.
+    // Route POST /timesheet sengaja ada di ALLOWLIST RBAC (terbuka untuk operator NFC), jadi
+    // blokirnya harus logika di controller, bukan izin. Baris non-produktif (unprod) tidak punya
+    // order_no/operation_no sehingga tidak pernah kena guard ini.
+    if (await isSubcontMarked(order_no, operation_no)) {
+      return res.status(409).json({
+        error: 'Operasi ini dikerjakan subcont — tidak bisa di-timesheet internal',
+      });
     }
 
     const PLANT_SSB = process.env.PLANT_SSB;
@@ -1143,6 +1188,17 @@ exports.operatorPerformanceWorkcenters = async (req, res) => {
 /**
  * GET /timesheet/operator-performance/orders
  * Grouped SOW table for Operator Performance.
+ *
+ * Fase 6 (D4) — SENGAJA TIDAK memakai predikat eksklusi subcont, walau rencana
+ * (docs/MFG_PLAN_AREA_PLAN.md §4 Fase 6) menyebut baris ini. Alasannya:
+ *  1. Baris di sini datang dari `metrics` (INNER JOIN ke vw_timesheet_std_performance), jadi
+ *     hanya operasi yang BENAR-BENAR punya timesheet yang muncul. Operasi bertanda subcont
+ *     diblokir dari check-in (D4c), jadi ke depan ia tidak akan pernah masuk ke sini.
+ *  2. Ini laporan retrospektif rencana-vs-aktual, bukan beban internal outstanding. Kalau
+ *     sebuah operasi ditandai subcont SETELAH operator terlanjur kerja, membuang barisnya
+ *     juga akan menghapus elapsed_seconds/std_performance-nya — menyembunyikan jam kerja
+ *     yang nyata. Membuang planhours-nya saja pun merusak rasio (plan dan aktual jadi beda
+ *     cakupan operasi).
  */
 exports.operatorPerformanceOrders = async (req, res) => {
   try {

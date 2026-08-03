@@ -47,9 +47,40 @@ async function getOrderProgress(req, res) {
       where.push("m.total_actual_hours >= m.total_planhours * 0.9 AND m.total_actual_hours < m.total_planhours");
     }
 
+    // Fase 6 (D4): mv_order_plan_vs_actual menjumlahkan SELURUH sow.planhours, termasuk operasi
+    // yang ditandai subcont. Matview tidak bisa diberi predikat eksklusi tanpa DROP+CREATE, jadi
+    // koreksinya dilakukan di sini: jam subcont per order dikurangkan dari total_planhours, dan
+    // actual_pct / is_exceeded dihitung ulang dari nilai yang sudah dikoreksi. Tanpa ini, layar
+    // Order Progress melaporkan beban internal yang berbeda dari endpoint lain untuk order yang sama.
+    // Filter di CTE subcont SENGAJA menyalin filter matview (planhours NOT NULL + non-TECO/CLSD)
+    // supaya tidak mengurangi jam yang memang tidak pernah ikut dijumlahkan.
+    const MV_ADJUSTED = `
+      WITH subcont AS (
+        SELECT ltrim(s.order_no, '0') AS order_key,
+               SUM(COALESCE(s.planhours, 0)) AS subcont_planhours
+          FROM public.sow s
+         WHERE s.planhours IS NOT NULL
+           AND COALESCE(s.systemstatus, '') NOT IN ('TECO', 'CLSD')
+           AND EXISTS (
+                 SELECT 1 FROM public.sow_subcont_mark scm
+                  WHERE ltrim(scm.order_no, '0') = ltrim(s.order_no, '0')
+                    AND scm.operation_no = s.operation_no
+                    AND scm.unmarked_at IS NULL)
+         GROUP BY 1
+      ),
+      mv_adj AS (
+        SELECT v.order_no, v.customer, v.part_name, v.model, v.ssbr_id,
+               v.operation_count, v.weighted_progress, v.total_actual_hours,
+               GREATEST(v.total_planhours - COALESCE(sc.subcont_planhours, 0), 0) AS total_planhours,
+               COALESCE(sc.subcont_planhours, 0) AS total_planhours_subcont,
+               ROUND((v.total_actual_hours / NULLIF(GREATEST(v.total_planhours - COALESCE(sc.subcont_planhours, 0), 0), 0)) * 100, 1) AS actual_pct,
+               (v.total_actual_hours >= GREATEST(v.total_planhours - COALESCE(sc.subcont_planhours, 0), 0)) AS is_exceeded
+          FROM mv_order_plan_vs_actual v
+          LEFT JOIN subcont sc ON sc.order_key = ltrim(v.order_no, '0')
+      )`;
     const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const baseQuery = `SELECT m.* FROM mv_order_plan_vs_actual m ${whereClause}`;
-    const countQuery = `SELECT COUNT(*)::int AS total FROM mv_order_plan_vs_actual m ${whereClause}`;
+    const baseQuery = `${MV_ADJUSTED} SELECT m.* FROM mv_adj m ${whereClause}`;
+    const countQuery = `${MV_ADJUSTED} SELECT COUNT(*)::int AS total FROM mv_adj m ${whereClause}`;
 
     const [totalResult, rowsResult] = await Promise.all([
       pool.query(countQuery),
@@ -258,6 +289,17 @@ async function getOperationsHub(req, res) {
           ROUND(COALESCE(SUM(planhours), 0), 2)::float AS plan_hours
         FROM public.sow
         WHERE COALESCE(systemstatus, '') NOT IN ('TECO', 'CLSD')
+          -- Phase 6 (D4): plan_hours here is internal workshop load per workcenter.
+          -- Operations marked as subcontracted are done by a vendor, so their hours are
+          -- dropped. DEPLOY NOTE: public.sow_subcont_mark only exists after migration
+          -- database/migrations/api/20260803b_sow_subcont_mark.sql — migrate first, then
+          -- deploy, otherwise this endpoint returns 500 (undefined_table).
+          AND NOT EXISTS (
+            SELECT 1 FROM public.sow_subcont_mark scm
+            WHERE ltrim(scm.order_no, '0') = ltrim(sow.order_no, '0')
+              AND scm.operation_no = sow.operation_no
+              AND scm.unmarked_at IS NULL
+          )
         GROUP BY COALESCE(NULLIF(workcenter, ''), 'No Workcenter')
         ORDER BY operation_count DESC
         LIMIT 6
@@ -1124,6 +1166,16 @@ async function getWorkload(req, res) {
       FROM sow
       WHERE systemstatus NOT IN ('TECO', 'CLSD')
         AND workcenter IS NOT NULL
+        -- Phase 6 (D4): total_planhours per workcenter is internal workload. Subcontracted
+        -- operations are executed by a vendor and must not inflate it.
+        -- DEPLOY NOTE: needs migration 20260803b_sow_subcont_mark.sql first — before that
+        -- this endpoint returns 500 (undefined_table).
+        AND NOT EXISTS (
+          SELECT 1 FROM public.sow_subcont_mark scm
+          WHERE ltrim(scm.order_no, '0') = ltrim(sow.order_no, '0')
+            AND scm.operation_no = sow.operation_no
+            AND scm.unmarked_at IS NULL
+        )
       GROUP BY workcenter
       ORDER BY total_planhours DESC
       LIMIT 20

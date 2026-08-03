@@ -89,6 +89,14 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/OrderProgressDashboardPage')),
   },
   {
+    // Foreman-facing physical-progress estimate tool (sub-task rollup).
+    // PIN guard (ProtectedRoute) — same as other foreman pages
+    // (/timesheet-validation, /machine-hours-validation). Guard choice may
+    // need owner confirmation.
+    path: '/progress-update',
+    lazy: protectedPage(() => import('../pages/ProgressUpdatePage')),
+  },
+  {
     path: '/receiving-shipment',
     lazy: page(() => import('../pages/PPC/ReceivingShipmentPage')),
   },
@@ -199,19 +207,22 @@ const router = createBrowserRouter([
         lazy: page(() => import('../pages/PPC/manufacturing/SchedulingMenuPage')),
         handle: { title: 'SOW Scheduling', eyebrow: 'Manufacturing' },
       },
+      // Anak-anak di bawah ini ber-guard per fitur (pecahan `ms_project_admin`):
+      // menu index dan parent sengaja tetap `page()` supaya menu masih bisa dibuka
+      // walau user cuma punya salah satu dari tiga fitur.
       {
         path: 'projects',
-        lazy: page(() => import('../pages/PPC/manufacturing/ProjectBrowserPage')),
+        lazy: guardedPage(() => import('../pages/PPC/manufacturing/ProjectBrowserPage'), 'msproject_collab'),
         handle: { title: 'View All Projects', eyebrow: 'Manufacturing' },
       },
       {
         path: 'map',
-        lazy: page(() => import('../pages/PPC/manufacturing/MapSapOperationPage')),
+        lazy: guardedPage(() => import('../pages/PPC/manufacturing/MapSapOperationPage'), 'msproject_mapping'),
         handle: { title: 'Map SAP Operations', eyebrow: 'Manufacturing' },
       },
       {
         path: 'area',
-        lazy: page(() => import('../pages/PPC/manufacturing/SchedulingAreaPage')),
+        lazy: guardedPage(() => import('../pages/PPC/manufacturing/SchedulingAreaPage'), 'bay_scheduling'),
         handle: { title: 'Scheduling Area', eyebrow: 'Manufacturing' },
       },
     ],

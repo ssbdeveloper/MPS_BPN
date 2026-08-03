@@ -13,9 +13,23 @@ export const FEATURES = {
   ews:                  { id: 'ews',                  label: 'Early Warning',       module: 'Core',      routes: ['/ews'] },
 
   sow_management:       { id: 'sow_management',        label: 'SOW Management',      module: 'PE',        routes: ['/sow-management', '/sow-orders', '/sow-edit'] },
+  // Fase 6 (D4). Penandaan subcont berimplikasi BIAYA, jadi izinnya dipisah dari sow_management
+  // yang mengatur pengeditan teknis SOW. Tanpa route sendiri: kontrolnya hidup di dalam halaman
+  // SOW History. Entri ini tetap wajib ada supaya feature-nya muncul di Manage Users dan bisa
+  // di-assign per orang — cermin dari apps/api/rbac/features.js.
+  sow_subcont:          { id: 'sow_subcont',            label: 'SOW Subcont',         module: 'PE',        routes: [] },
   sow_scheduling:      { id: 'sow_scheduling',        label: 'SOW Scheduling',      module: 'PPC',       routes: ['/sow-scheduling'] },
   shift_rules:          { id: 'shift_rules',           label: 'Shift Capacity',      module: 'PPC',       routes: ['/shift-definition'] },
   roster_operator:      { id: 'roster_operator',       label: 'Roster Operator',     module: 'Timesheet', routes: ['/ews/roster'] },
+  // MS Project / bay scheduling — `ms_project_admin` was one coarse feature covering
+  // bay booking, SAP-operation mapping, .mpp collaboration AND the admin panel. Split
+  // into four so booking rights no longer imply control over the .mpp files.
+  // These three mirror `apps/api/rbac/features.js` — keep both sides identical.
+  // Their routes are longer than '/sow-scheduling', so ROUTE_INDEX (longest first)
+  // resolves them before the parent `sow_scheduling` entry.
+  bay_scheduling:       { id: 'bay_scheduling',        label: 'Bay Scheduling',      module: 'PPC',       routes: ['/sow-scheduling/area'] },
+  msproject_mapping:    { id: 'msproject_mapping',     label: 'MS Project Mapping',  module: 'PPC',       routes: ['/sow-scheduling/map'] },
+  msproject_collab:     { id: 'msproject_collab',      label: 'MS Project Collaboration', module: 'PPC',  routes: ['/sow-scheduling/projects'] },
   ms_project_admin:     { id: 'ms_project_admin',      label: 'MS Project Admin',    module: 'PPC',       routes: ['/ms-project-admin'] },
   component_tracking:   { id: 'component_tracking',    label: 'Component Tracking',  module: 'PPC',       routes: ['/component-tracking'] },
   kanban_board:         { id: 'kanban_board',          label: 'Kanban Board',        module: 'PPC',       routes: ['/kanban-board'] },

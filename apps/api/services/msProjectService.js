@@ -4,6 +4,12 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const MAX_LIMIT = 100;
+// Batas khusus daftar bay schedule: satu reservasi task-level = satu baris per task, jadi
+// peta area bisa butuh ribuan baris sekaligus. Tetap dibatasi supaya tidak unbounded.
+const BAY_SCHEDULE_MAX_LIMIT = 5000;
+// Peringatan lunak, bukan daftar lengkap: cukup tampilkan penghuni pertama supaya panel UI
+// tidak membanjir. Angka dipakai findBayOverlaps (create + endpoint occupants).
+const BAY_OVERLAP_LIMIT = 50;
 const NON_EXPIRING_LOCK_INTERVAL = "100 years";
 const RESOURCE_CATEGORIES = new Set(["PERSON", "MACHINE", "WORKCENTER", "TEAM"]);
 const RESOURCE_REFRESH_SOURCES = new Set(["WORKCENTER", "MACHINE", "EMPLOYEE"]);
@@ -66,10 +72,13 @@ function normalizeUuidArray(values, fieldName) {
   return values.map((value, index) => assertUuid(value, `${fieldName}[${index}]`));
 }
 
-function clampLimit(value, fallback = 50) {
+// `max` dapat dinaikkan per-endpoint. Default tetap MAX_LIMIT (100) supaya seluruh
+// pemanggil lama tidak berubah perilakunya; bay-schedule memakai batas sendiri karena
+// satu reservasi bisa menghasilkan puluhan baris task-level (lihat BAY_SCHEDULE_MAX_LIMIT).
+function clampLimit(value, fallback = 50, max = MAX_LIMIT) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return fallback;
-  return Math.min(MAX_LIMIT, Math.max(1, parsed));
+  return Math.min(max, Math.max(1, parsed));
 }
 
 function clampOffset(value) {
@@ -1164,6 +1173,57 @@ async function listProjectTasks(projectIdParam, query = {}) {
   return { rows: result.rows };
 }
 
+// === listSowOrders — pool order untuk scheduling area (Fase 4) =============================
+// Nilai sah parameter `completion`. 'all' = perilaku lama: tidak memfilter apa pun.
+const SOW_COMPLETION_VALUES = new Set(["all", "unfinished", "finished"]);
+
+// PREDIKAT EKSKLUSI SUBCONT — kontrak Fase 6 §C. Bentuknya HARUS sama di setiap agregasi yang
+// membaca sow.planhours (sowScheduleController, dashboardController, mpsDashboard*, dst.),
+// jadi jangan "dirapikan" jadi join atau IN (...) di sini saja.
+//
+// CATATAN DEPLOY (penting): public.sow_subcont_mark BELUM ADA di prod sampai migrasi
+// database/migrations/api/20260803b_sow_subcont_mark.sql dijalankan (diverifikasi 3 Agu 2026:
+// to_regclass('public.sow_subcont_mark') = NULL). Urutan rilis WAJIB migrasi dulu, baru kode.
+// Kalau dibalik, endpoint ini membalas 500 (42P01 undefined_table) dan pool order ikut mati.
+// Sengaja TIDAK diberi jaring pengaman to_regclass: gagal keras lebih jujur daripada diam-diam
+// melaporkan jam internal yang salah karena tabel penandanya belum ada.
+//
+// KENAPA `filter (where ...)` DAN BUKAN `where`: §C menyuruh menaruh predikat di WHERE. Di query
+// ini WHERE menentukan BARIS HASIL sekaligus operation_count, jadi menaruhnya di sana akan
+// menurunkan operation_count dan MENGHILANGKAN order yang seluruh operasinya bertanda subcont —
+// melanggar syarat backward-compatibility mutlak §E. FILTER menerapkan predikat yang persis
+// sama, tapi hanya pada bucket jam, sehingga jumlah & urutan baris tidak berubah.
+function subcontMarkExistsSql(alias = "s") {
+  return `exists (
+         select 1 from public.sow_subcont_mark scm
+         where ltrim(scm.order_no, '0') = ltrim(${alias}.order_no, '0')
+           and scm.operation_no = ${alias}.operation_no
+           and scm.unmarked_at is null
+       )`;
+}
+
+// KENAPA CTE, bukan subquery korelasi langsung ke tabel sumber: bentuk naifnya
+// (`(select max(order_description) from ph3_order po where ltrim(...) = ltrim(...))` per baris
+// hasil) memaksa seq scan ph3_order — ltrim() mematikan indeks apa pun — untuk SETIAP order.
+// Terukur di prod 3 Agu 2026: 27 ms (query lama) -> 371 ms (bentuk naif) -> 52 ms (bentuk ini).
+// CTE-nya tetap "subquery skalar" seperti syarat §E; yang dilarang §E adalah JOIN ke tabel
+// beranak-banyak yang menggandakan baris, dan itu tidak terjadi di sini (satu baris per order).
+//
+// `as materialized` bukan gaya: tanpa itu Postgres boleh meng-inline CTE ke dalam subquery
+// korelasi dan kita kembali ke seq scan per baris.
+const SOW_ORDER_META_CTE_SQL = `
+  -- Status SAP per order. max() dipakai sebagai peredam yang deterministik kalau suatu saat satu
+  -- order punya order_description berbeda antar baris. Diverifikasi 3 Agu 2026: 0 order punya
+  -- lebih dari satu order_description berbeda (REL 67 order, TECO 33, LKD 15), jadi hari ini
+  -- max() tidak pernah benar-benar memilih.
+  sap as materialized (
+    select ltrim(po.order_no, '0') as order_key,
+           max(po.order_description) as sap_status
+      from public.ph3_order po
+     where po.order_no is not null
+     group by 1
+  )`;
+
 async function listSowOrders(query = {}) {
   const values = [];
   const where = [
@@ -1171,7 +1231,52 @@ async function listSowOrders(query = {}) {
     "trim(s.order_no) <> ''",
     "s.operation_no is not null",
   ];
+  // Predikat per-ORDER (bukan per-baris) hidup di HAVING: di WHERE ia akan dievaluasi 7.344 kali
+  // (sekali per baris sow) alih-alih 115 kali (sekali per grup).
+  const having = [];
   const q = nullableText(query.q);
+
+  // --- Parameter BARU (Fase 4) — semuanya OPSIONAL ----------------------------------------
+  // Tanpa satu pun parameter di bawah, jumlah baris dan urutannya WAJIB identik dengan perilaku
+  // lama: MapSapOperationPage memakai endpoint ini dan justru halaman itulah yang MEMBUAT task
+  // MS Project, jadi memfilter "harus punya task MSP" menciptakan deadlock ayam-telur.
+  const windowStart = query.window_start ? normalizeDateOnly(query.window_start, "window_start") : null;
+  const windowEnd = query.window_end ? normalizeDateOnly(query.window_end, "window_end") : null;
+  if (Boolean(windowStart) !== Boolean(windowEnd)) {
+    throw new ApiError(400, "INVALID_DATE_RANGE", "window_start and window_end must be supplied together", [
+      { field: "window_start", value: query.window_start ?? null },
+      { field: "window_end", value: query.window_end ?? null },
+    ]);
+  }
+  if (windowStart && windowEnd < windowStart) {
+    throw new ApiError(400, "INVALID_DATE_RANGE", "window_end must be on or after window_start", [
+      { field: "window_start", value: windowStart },
+      { field: "window_end", value: windowEnd },
+    ]);
+  }
+
+  const completion = normalizeText(query.completion).toLowerCase() || "all";
+  if (!SOW_COMPLETION_VALUES.has(completion)) {
+    throw new ApiError(400, "INVALID_COMPLETION", "completion must be one of unfinished, finished, all", [
+      { field: "completion", value: query.completion },
+    ]);
+  }
+  const excludeUnknown = toBool(query.exclude_unknown, false) === true;
+
+  // in_window hanya MENGANOTASI, tidak pernah memfilter (keputusan D6: tab, bukan penyembunyian).
+  // Irisan dihitung PER TASK, bukan terhadap selubung earliest..latest order: order yang task-nya
+  // berhenti Juli lalu lanjut September tidak boleh dianggap "di window Agustus" hanya karena
+  // selubungnya melintasi Agustus.
+  let inWindowTasksSql = "0::integer as in_window_tasks";
+  if (windowStart) {
+    values.push(windowStart, windowEnd);
+    const startParam = values.length - 1;
+    const endParam = values.length;
+    inWindowTasksSql = `count(*) filter (
+             where coalesce(t.plan_finish, t.plan_start)::date >= $${startParam}::date
+               and coalesce(t.plan_start, t.plan_finish)::date <= $${endParam}::date
+           )::integer as in_window_tasks`;
+  }
 
   if (q) {
     values.push(`%${q.toLowerCase()}%`);
@@ -1185,12 +1290,66 @@ async function listSowOrders(query = {}) {
     )`);
   }
 
+  // D7 — buang order yang tidak dikenal SAP dari POOL. Catatan hasil verifikasi 3 Agu 2026:
+  // 115 dari 115 order di `sow` ADA di ph3_order, jadi hari ini parameter ini tidak membuang
+  // apa pun. Order phantom A-12 hidup di ms_project_task, bukan di sow, sehingga tidak pernah
+  // masuk pool ini sejak awal. Parameternya tetap disediakan supaya pool tidak bocor kalau
+  // ETL suatu saat memasukkan order yang tidak ada di SAP.
+  if (excludeUnknown) {
+    having.push("exists (select 1 from sap where sap.order_key = ltrim(s.order_no, '0'))");
+  }
+  // D6 — "belum selesai" = REL + LKD, diperlakukan SAMA. TECO = selesai.
+  // Order tanpa baris ph3_order (sap_status NULL) tidak masuk kedua bucket: ia bukan "belum
+  // selesai" dan bukan "selesai", statusnya memang tidak diketahui. Hanya terlihat di 'all'.
+  if (completion === "unfinished") {
+    having.push(`exists (
+      select 1 from sap
+      where sap.order_key = ltrim(s.order_no, '0')
+        and sap.sap_status in ('REL','LKD')
+    )`);
+  } else if (completion === "finished") {
+    having.push(`exists (
+      select 1 from sap
+      where sap.order_key = ltrim(s.order_no, '0')
+        and sap.sap_status not in ('REL','LKD')
+    )`);
+  }
+
   const limit = clampLimit(query.limit, 50);
   const offset = clampOffset(query.offset);
   values.push(limit, offset);
 
+  const subcontMarked = subcontMarkExistsSql("s");
+  const havingSql = having.length ? `having ${having.join("\n       and ")}` : "";
+
   const result = await pool().query(
-    `select
+    `with ${SOW_ORDER_META_CTE_SQL},
+     -- Hanya task aktif non-summary: itu definisi "punya jadwal MS Project" yang dipakai
+     -- listOrderTasks dan form reservasi (D2 mewajibkan reservasi task-level).
+     msp as materialized (
+       select ltrim(t.order_no, '0') as order_key,
+              min(t.plan_start)::date as earliest_plan_start,
+              max(t.plan_finish)::date as latest_plan_finish,
+              ${inWindowTasksSql}
+         from public.ms_project_task t
+        where t.is_active = true
+          and coalesce(t.is_summary, false) = false
+          and t.order_no is not null
+        group by 1
+     ),
+     -- Jumlah RESERVASI, bukan jumlah baris: satu reservasi task-level menghasilkan satu
+     -- baris per task, jadi count(*) membuat badge "N reservasi" di kartu order tidak cocok
+     -- dengan jumlah badge yang benar-benar terlihat di peta (peta men-dedupe per grup).
+     -- Baris warisan tanpa schedule_group_id jatuh ke schedule_id.
+     resv as materialized (
+       select ltrim(bs.order_no, '0') as order_key,
+              count(distinct coalesce(bs.schedule_group_id, bs.schedule_id))::integer as active_reservations
+         from public.ms_project_bay_schedule bs
+        where bs.status <> 'CANCELLED'
+          and bs.order_no is not null
+        group by 1
+     )
+     select
        s.order_no,
        min(s.ssbr_id) as ssbr_id,
        min(s.part_name) as part_name,
@@ -1199,17 +1358,50 @@ async function listSowOrders(query = {}) {
        min(s.customer) as customer,
        min(s.workcenter) as workcenter,
        count(*)::integer as operation_count,
-       coalesce(sum(s.planhours), 0)::numeric(12,2) as total_planhours,
-       max(s.created_by) as created_by
+       coalesce(sum(s.planhours) filter (where not ${subcontMarked}), 0)::numeric(12,2) as total_planhours,
+       coalesce(sum(s.planhours) filter (where ${subcontMarked}), 0)::numeric(12,2) as total_planhours_subcont,
+       (count(*) filter (where ${subcontMarked}))::integer as subcont_ops,
+       max(s.created_by) as created_by,
+       (select sap.sap_status from sap where sap.order_key = ltrim(s.order_no, '0')) as sap_status,
+       coalesce(
+         (select sap.sap_status from sap where sap.order_key = ltrim(s.order_no, '0')) in ('REL','LKD'),
+         false
+       ) as is_unfinished,
+       exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0')) as has_msp_task,
+       (select msp.earliest_plan_start from msp where msp.order_key = ltrim(s.order_no, '0')) as earliest_plan_start,
+       (select msp.latest_plan_finish from msp where msp.order_key = ltrim(s.order_no, '0')) as latest_plan_finish,
+       coalesce((select msp.in_window_tasks from msp where msp.order_key = ltrim(s.order_no, '0')), 0) > 0 as in_window,
+       coalesce((select resv.active_reservations from resv where resv.order_key = ltrim(s.order_no, '0')), 0)::integer as active_reservations,
+       (count(*) over ())::integer as total
      from sow s
      where ${where.join(" and ")}
      group by s.order_no
+     ${havingSql}
      order by max(s.idsow) desc, s.order_no desc
      limit $${values.length - 1} offset $${values.length}`,
     values
   );
 
-  return { rows: result.rows, limit, offset };
+  // `total` ikut menempel di tiap baris karena count(*) over () adalah kolom, bukan metadata.
+  // Dikupas di sini supaya bentuk baris tetap persis daftar kolom kontrak §E.
+  // Batasnya: kalau offset melewati akhir daftar, tidak ada baris sama sekali dan total jadi 0.
+  // Itu bisa diterima — pemanggil berhenti "muat lagi" begitu rows.length < limit.
+  //
+  // earliest_plan_start / latest_plan_finish dilewatkan toDateOnlyString: node-postgres
+  // memulangkan kolom `date` sebagai Date di tengah malam WAKTU LOKAL, sehingga JSON.stringify
+  // mengirimnya sebagai "2026-06-17T17:00:00.000Z" untuk tanggal 18 Juni (Asia/Jakarta = UTC+7)
+  // dan FE yang memotong toISOString() akan meleset satu hari. Kontrak §E menyebut tipe `date`,
+  // jadi kirim string "YYYY-MM-DD" yang tidak bisa disalahartikan.
+  let total = 0;
+  const rows = result.rows.map((row) => {
+    const { total: rowTotal, ...rest } = row;
+    total = rowTotal ?? total;
+    rest.earliest_plan_start = toDateOnlyString(rest.earliest_plan_start);
+    rest.latest_plan_finish = toDateOnlyString(rest.latest_plan_finish);
+    return rest;
+  });
+
+  return { rows, limit, offset, total };
 }
 
 async function getSowOrderOperations(orderNoParam) {
@@ -1388,6 +1580,77 @@ function normalizeDateOnly(value, fieldName) {
   return text;
 }
 
+// === Topologi bay manufaktur (Cikupa) =====================================================
+// SUMBER KEBENARAN: apps/web/src/config/manufacturingAreas.js (konstanta AREA_OPTIONS).
+// Backend tidak boleh mengimpor modul frontend (ESM + bundler-only), jadi daftar di bawah
+// adalah SALINAN MANUAL dan HARUS disinkronkan pada commit yang sama setiap kali AREA_OPTIONS
+// berubah (bay ditambah / dihapus / di-rename).
+//
+// Kenapa divalidasi sama sekali: saat AREA-18 diubah 30 Juli 2026, kode bay BP3/BP4 hilang dari
+// topologi tetapi reservasi yang memakainya tetap tersimpan dan jadi yatim — tidak muncul di
+// peta mana pun (A-16). Regex bentuk (`^[A-Z]{1,3}[0-9]{1,3}$`) tidak bisa menangkap itu karena
+// BP3/BP4 bentuknya sah.
+//
+// Catatan: gudang B1-B8 SENGAJA TIDAK dimasukkan — bay itu tidak ada di AREA_OPTIONS dan
+// diverifikasi tidak pernah dipakai di data prod (`select distinct unnest(bay_codes)
+// from ms_project_bay_schedule` = A24/A27/A28/A29/A30/A35/A36/A37/A38/B34/B36/B37/B38 + BP3/BP4
+// milik satu baris sampah 'codex-smoke-test' bertanggal 2099 yang dibersihkan migrasi Fase 2).
+const MANUFACTURING_BAY_CODES = new Set([
+  // AREA-01 .. AREA-10 (lane A)
+  "A38", "A37", "A36", "A35",
+  "A34", "A33", "A32",
+  "A30", "A29", "A28", "A27",
+  "A26", "A25", "A24", "A23",
+  "A22", "A21", "A20", "A19",
+  "A18", "A17", "A16", "A15",
+  "A14", "A13", "A12", "A11",
+  "A9", "A8", "A7", "A6",
+  "A5", "A4", "A3", "A2",
+  "A1",
+  // AREA-11 .. AREA-17 (lane B)
+  "B38", "B37", "B36", "B35",
+  "B34", "B33", "B32",
+  "B30", "B29", "B28", "B27",
+  "B26", "B25", "B24", "B23",
+  "B22", "B21", "B20", "B19",
+  "B17", "B16", "B15", "B14",
+  "B13", "B12", "B11", "B10",
+  // AREA-18 — Blasting & Prime (3 painting + 2 blasting)
+  "PT1", "PT2", "PT3", "BL1", "BL2",
+]);
+
+// Jenis booking bay. 'ORDER' = reservasi job (butuh order_no); sisanya booking non-job
+// (butuh purpose). Harus cermin CHECK chk_bay_schedule_booking_type di migrasi Fase 2.
+const BAY_BOOKING_TYPES = ["ORDER", "PARKING", "STORAGE", "MAINTENANCE", "OTHER"];
+const BAY_BOOKING_TYPE_SET = new Set(BAY_BOOKING_TYPES);
+
+function normalizeBookingType(value) {
+  const text = normalizeText(value).toUpperCase() || "ORDER";
+  if (!BAY_BOOKING_TYPE_SET.has(text)) {
+    throw new ApiError(
+      400,
+      "INVALID_BOOKING_TYPE",
+      `booking_type must be one of ${BAY_BOOKING_TYPES.join(", ")}`,
+      [{ field: "booking_type", value }]
+    );
+  }
+  return text;
+}
+
+// node-postgres mengembalikan kolom `date` sebagai objek Date di tengah malam WAKTU LOKAL.
+// Memakai toISOString() di sini akan menggeser tanggal satu hari untuk zona waktu positif
+// (Asia/Jakarta = UTC+7), jadi format dari komponen lokal.
+function toDateOnlyString(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return normalizeText(value).slice(0, 10) || null;
+}
+
 function normalizeBayCodes(values) {
   if (!Array.isArray(values) || values.length === 0) {
     throw new ApiError(400, "INVALID_PAYLOAD", "bay_codes must be a non-empty array", [{ field: "bay_codes" }]);
@@ -1399,11 +1662,29 @@ function normalizeBayCodes(values) {
   if (!uniqueCodes.length) {
     throw new ApiError(400, "INVALID_PAYLOAD", "bay_codes must include at least one bay", [{ field: "bay_codes" }]);
   }
-  const invalid = uniqueCodes.filter((code) => !/^[A-Z]{1,3}[0-9]{1,3}$/.test(code));
-  if (invalid.length) {
-    throw new ApiError(400, "INVALID_BAY_CODE", "One or more bay codes are invalid", invalid.map((code) => ({ bay_code: code })));
+  const malformed = uniqueCodes.filter((code) => !/^[A-Z]{1,3}[0-9]{1,3}$/.test(code));
+  if (malformed.length) {
+    throw new ApiError(400, "INVALID_BAY_CODE", "One or more bay codes are invalid", malformed.map((code) => ({ bay_code: code })));
+  }
+  const unknown = uniqueCodes.filter((code) => !MANUFACTURING_BAY_CODES.has(code));
+  if (unknown.length) {
+    throw new ApiError(
+      400,
+      "INVALID_BAY_CODE",
+      "One or more bay codes do not exist in the manufacturing area topology",
+      unknown.map((code) => ({ bay_code: code }))
+    );
   }
   return uniqueCodes;
+}
+
+// Versi lunak untuk endpoint BACA (occupants): hanya normalisasi bentuk, tidak menolak kode di
+// luar topologi. Reservasi warisan bisa saja memakai kode mati; sebuah GET tidak boleh 400 dan
+// membuat panel peringatan okupansi mati total di UI.
+function parseBayCodeList(value) {
+  const raw = Array.isArray(value) ? value : normalizeText(value).split(",");
+  const codes = raw.map((entry) => normalizeText(entry).toUpperCase()).filter(Boolean);
+  return Array.from(new Set(codes));
 }
 
 const TASK_OPERATION_ORDER_SQL = `
@@ -1678,6 +1959,8 @@ async function listBaySchedules(query = {}) {
   const endDate = query.end_date ? normalizeDateOnly(query.end_date, "end_date") : null;
   const status = nullableText(query.status)?.toUpperCase();
   const orderNo = nullableText(query.order_no);
+  const bookingType = query.booking_type ? normalizeBookingType(query.booking_type) : null;
+  const scheduleGroupId = optionalUuid(query.schedule_group_id, "schedule_group_id");
 
   if (startDate) {
     values.push(startDate);
@@ -1697,10 +1980,31 @@ async function listBaySchedules(query = {}) {
     values.push(orderNo);
     where.push(`ltrim(s.order_no, '0') = ltrim($${values.length}, '0')`);
   }
+  if (bookingType) {
+    values.push(bookingType);
+    where.push(`coalesce(s.booking_type, 'ORDER') = $${values.length}`);
+  }
+  if (scheduleGroupId) {
+    values.push(scheduleGroupId);
+    where.push(`s.schedule_group_id = $${values.length}::uuid`);
+  }
 
+  // Sebelumnya query ini unbounded. Batas defaultnya sengaja besar (2000) karena satu
+  // reservasi task-level menghasilkan satu baris per task, jadi 100 (MAX_LIMIT) terlalu kecil
+  // dan akan memotong peta secara senyap.
+  const limit = clampLimit(query.limit, 2000, BAY_SCHEDULE_MAX_LIMIT);
+  const offset = clampOffset(query.offset);
+  values.push(limit, offset);
+
+  // Seluruh join ke ms_project / ms_project_task / sow WAJIB tetap LEFT JOIN: booking non-job
+  // (booking_type <> 'ORDER') tidak punya project_id/task_id/order_no sama sekali, dan inner
+  // join akan membuat barisnya hilang dari peta.
   const result = await pool().query(
     `select
        s.schedule_id,
+       s.schedule_group_id,
+       s.booking_type,
+       s.purpose,
        s.order_no,
        s.project_id,
        p.project_name,
@@ -1712,6 +2016,24 @@ async function listBaySchedules(query = {}) {
        so.planhours,
        so.part_name,
        so.customer,
+       -- D7: apakah order_no reservasi ini dikenal di sow/ph3_order. FE sebelumnya menebak
+       -- lewat "part_name & customer NULL", dan itu SALAH: part_name/customer datang dari
+       -- join lewat t.sow_id, jadi order SAH yang task-nya tidak ber-sow_id ikut tertuduh.
+       -- Booking non-job tidak punya order sama sekali -> dianggap dikenal supaya tidak
+       -- memicu badge "order tidak dikenal".
+       (s.order_no is null
+        or coalesce(s.booking_type, 'ORDER') <> 'ORDER'
+        or exists (select 1 from sow k where ltrim(k.order_no, '0') = ltrim(s.order_no, '0'))
+        or exists (select 1 from ph3_order k where ltrim(k.order_no, '0') = ltrim(s.order_no, '0'))
+       ) as order_known,
+       -- Fase 6: operasi task ini ditandai subcont? Dipakai peta untuk membedakannya secara
+       -- visual dari beban internal. NULL-safe: reservasi order-level (task_id NULL) -> false.
+       (t.operation_no is not null and exists (
+          select 1 from public.sow_subcont_mark scm
+           where ltrim(scm.order_no, '0') = ltrim(s.order_no, '0')
+             and scm.operation_no::text = t.operation_no
+             and scm.unmarked_at is null)
+       ) as is_subcont,
        s.area_code,
        s.area_name,
        s.bay_codes,
@@ -1730,16 +2052,20 @@ async function listBaySchedules(query = {}) {
       and t.task_id = s.task_id
      left join sow so on so.idsow = t.sow_id
      where ${where.join(" and ")}
-     order by s.start_date, s.area_code, s.bay_codes[1], s.order_no`,
+     order by s.start_date, s.area_code, s.bay_codes[1], s.order_no
+     limit $${values.length - 1} offset $${values.length}`,
     values
   );
 
-  return { rows: result.rows };
+  return { rows: result.rows, limit, offset };
 }
 
 async function listBayScheduleTasks(query = {}) {
   const values = [];
-  const where = ["s.status <> 'CANCELLED'"];
+  // Endpoint ini memasok daftar JOB untuk layar operator. Booking non-job (PARKING/STORAGE/
+  // MAINTENANCE/OTHER) bukan pekerjaan dan tidak boleh muncul di sana — cukup terlihat di peta
+  // lewat listBaySchedules. coalesce() defensif untuk baris warisan sebelum migrasi Fase 2.
+  const where = ["s.status <> 'CANCELLED'", "coalesce(s.booking_type, 'ORDER') = 'ORDER'"];
   const areaCode = nullableText(query.area_code)?.toUpperCase();
   const bayCode = nullableText(query.bay_code)?.toUpperCase();
   const workcenter = nullableText(query.workcenter)?.toUpperCase();
@@ -1757,7 +2083,11 @@ async function listBayScheduleTasks(query = {}) {
   }
   if (workcenter) {
     values.push(workcenter);
-    where.push(`upper(coalesce(t.workcenter, '')) = $${values.length}`);
+    // Reservasi ORDER-LEVEL (s.task_id NULL) tidak menunjuk task, jadi t.workcenter-nya NULL.
+    // Filter workcenter TIDAK boleh menghapusnya: kalau dihapus, penanda is_order_level tak
+    // pernah sampai ke layar operator dan bay yang benar-benar terpakai tampak kosong —
+    // justru kebalikan dari tujuan Fase 1 (lihat A-02 di docs/MFG_PLAN_AREA_PLAN.md).
+    where.push(`(s.task_id is null or upper(coalesce(t.workcenter, '')) = $${values.length})`);
   }
   if (startDate) {
     values.push(startDate);
@@ -1781,9 +2111,23 @@ async function listBayScheduleTasks(query = {}) {
     )`);
   }
 
+  // FASE 1 (A-02) — hentikan fan-out reservasi order-level.
+  //
+  // Dulu join ini punya cabang kedua: bila s.task_id IS NULL, baris jadwal dijodohkan ke SETIAP
+  // task aktif yang order_no-nya sama. Akibatnya satu reservasi order-level menempelkan seluruh
+  // task order ke setiap bay yang dipesan order itu — order 1000127649 menampilkan 53 task yang
+  // persis sama di B37, A36, A30-A27, dan A24. Operator di empat bay berbeda melihat daftar job
+  // identik, padahal tak satu pun task itu benar-benar dijadwalkan ke bay tersebut.
+  //
+  // Sekarang join HANYA mengikat pasangan (project_id, task_id) yang eksplisit. Reservasi
+  // order-level dikembalikan sebagai SATU entri dengan kolom task NULL dan is_order_level = true,
+  // supaya UI bisa menandainya ("reservasi order-level, operasi belum dipilih") alih-alih
+  // memalsukan daftar task.
   const result = await pool().query(
     `select
        s.schedule_id,
+       s.schedule_group_id,
+       s.booking_type,
        s.order_no,
        s.project_id as schedule_project_id,
        s.task_id as schedule_task_id,
@@ -1794,6 +2138,7 @@ async function listBayScheduleTasks(query = {}) {
        s.end_date,
        s.status as schedule_status,
        s.notes as schedule_notes,
+       (s.task_id is null) as is_order_level,
        t.task_id,
        t.project_id,
        t.task_name,
@@ -1811,22 +2156,17 @@ async function listBayScheduleTasks(query = {}) {
      from ms_project_bay_schedule s
      left join ms_project_task t
        on t.is_active = true
-      and (
-        (
-          s.project_id is not null
-          and s.task_id is not null
-          and t.project_id = s.project_id
-          and t.task_id = s.task_id
-        )
-        or (
-          s.task_id is null
-          and ltrim(t.order_no, '0') = ltrim(s.order_no, '0')
-          and (s.project_id is null or t.project_id = s.project_id)
-        )
-      )
+      and s.project_id is not null
+      and s.task_id is not null
+      and t.project_id = s.project_id
+      and t.task_id = s.task_id
      where ${where.join(" and ")}
-       and t.task_id is not null
-       and coalesce(t.is_summary, false) = false
+       and (
+         -- reservasi task-level: tetap seperti dulu, satu baris per task nyata
+         (s.task_id is not null and t.task_id is not null and coalesce(t.is_summary, false) = false)
+         -- reservasi order-level: satu entri saja, tanpa task hasil tebakan
+         or s.task_id is null
+       )
      order by
        s.start_date,
        s.area_code,
@@ -1841,13 +2181,17 @@ async function listBayScheduleTasks(query = {}) {
     values
   );
 
+  const orderLevelCount = result.rows.filter((row) => row.is_order_level).length;
+
   return {
     rows: result.rows,
     summary: {
       area_code: areaCode || null,
       bay_code: bayCode || null,
       workcenter: workcenter || null,
-      task_count: result.rows.length,
+      task_count: result.rows.length - orderLevelCount,
+      order_level_count: orderLevelCount,
+      row_count: result.rows.length,
     },
   };
 }
@@ -1922,24 +2266,113 @@ async function resolveTaskProject(client, taskId, providedProjectId) {
   return res.rows[0].project_id;
 }
 
+// Cari reservasi aktif yang beririsan (bay DAN rentang tanggal) dengan kandidat booking.
+//
+// Sebelum D3 hasil fungsi ini dipakai untuk melempar 409 BAY_SCHEDULE_CONFLICT. Sekarang
+// TIDAK memblokir apa pun: hasilnya jadi peringatan lunak (warnings BAY_OVERLAP) di respons
+// 201, dan jadi isi endpoint GET /bay-schedules/occupants. Owner memutuskan tidak ada bay yang
+// eksklusif — termasuk booth PT/BL dan booking non-job.
+//
+// `client` boleh berupa client transaksi (dari pool().connect()) maupun pool itu sendiri,
+// sehingga fungsi ini bisa dipanggil dari dalam createBaySchedule maupun dari endpoint baca.
+// `excludeGroupId` dipakai saat mengubah reservasi yang sudah ada supaya grupnya sendiri tidak
+// dilaporkan bentrok dengan dirinya sendiri.
+//
+// BENTUK KEMBALIAN: { rows, truncated, total } — BUKAN array telanjang.
+// Sebelumnya fungsi ini memotong di BAY_OVERLAP_LIMIT tanpa memberi tanda apa pun, jadi
+// "50 penghuni" dan "50 penghuni pertama dari 300" tidak bisa dibedakan pemanggil, dan UI
+// menampilkan daftar terpotong seolah-olah lengkap. `total` dihitung dengan count terpisah
+// tanpa LIMIT (tabelnya kecil dan predikatnya sama persis, jadi ini query ringan).
+// Dua query dijalankan BERURUTAN, bukan Promise.all: `client` bisa berupa client transaksi dan
+// node-postgres tidak mengizinkan dua query berjalan bersamaan di satu client.
+async function findBayOverlaps(client, { bayCodes, startDate, endDate, excludeGroupId = null } = {}) {
+  const codes = Array.isArray(bayCodes) ? bayCodes.filter(Boolean) : [];
+  if (!codes.length || !startDate || !endDate) return { rows: [], truncated: false, total: 0 };
+
+  const runner = client || pool();
+  const values = [codes, startDate, endDate];
+  let excludeSql = "";
+  if (excludeGroupId) {
+    values.push(excludeGroupId);
+    excludeSql = `and (s.schedule_group_id is null or s.schedule_group_id <> $${values.length}::uuid)`;
+  }
+
+  const whereSql = `s.status <> 'CANCELLED'
+       and s.bay_codes && $1::text[]
+       and daterange(s.start_date, s.end_date, '[]') && daterange($2::date, $3::date, '[]')
+       ${excludeSql}`;
+
+  // Satu RESERVASI = N baris (satu per task). Penghuni bay harus dihitung & ditampilkan
+  // per reservasi, bukan per baris — kalau tidak, satu reservasi 8 task muncul 8 kali di
+  // panel "sudah memakai bay ini" dan angka total ikut menggelembung. Baris warisan yang
+  // belum punya schedule_group_id jatuh ke schedule_id (masing-masing dianggap satu).
+  const groupExpr = "coalesce(s.schedule_group_id, s.schedule_id)";
+
+  const countResult = await runner.query(
+    `select count(distinct ${groupExpr})::integer as total
+     from ms_project_bay_schedule s
+     where ${whereSql}`,
+    values
+  );
+  const total = countResult.rows[0]?.total ?? 0;
+
+  const result = await runner.query(
+    `select * from (
+       select distinct on (${groupExpr})
+         s.schedule_id,
+         s.schedule_group_id,
+         s.order_no,
+         s.booking_type,
+         s.purpose,
+         s.bay_codes,
+         s.start_date,
+         s.end_date,
+         s.status,
+         s.created_by
+       from ms_project_bay_schedule s
+       where ${whereSql}
+       order by ${groupExpr}, s.start_date
+     ) o
+     order by o.start_date, o.bay_codes[1], o.order_no
+     limit ${BAY_OVERLAP_LIMIT}`,
+    values
+  );
+  return { rows: result.rows, truncated: total > result.rows.length, total };
+}
+
 async function createBaySchedule(body = {}) {
   const payload = ensureObject(body, "payload");
-  const orderNo = nullableText(payload.order_no);
+  // booking_type memisahkan reservasi job (ORDER) dari booking non-job (parkir unit, taruh
+  // barang, maintenance). Untuk non-job, order_no/tasks/project_id DIABAIKAN sepenuhnya —
+  // tidak ada order yang perlu diresolusi dan tidak ada task yang perlu divalidasi.
+  const bookingType = normalizeBookingType(payload.booking_type);
+  const isOrderBooking = bookingType === "ORDER";
+  const orderNo = isOrderBooking ? nullableText(payload.order_no) : null;
+  const purpose = nullableText(payload.purpose);
   const areaCode = nullableText(payload.area_code)?.toUpperCase();
   const areaName = nullableText(payload.area_name) || areaCode;
   const bayCodes = normalizeBayCodes(payload.bay_codes);
   const startDate = normalizeDateOnly(payload.start_date, "start_date");
   const endDate = normalizeDateOnly(payload.end_date, "end_date");
-  let projectId = optionalUuid(payload.project_id, "project_id");
-  const taskId = optionalUuid(payload.task_id, "task_id");
+  let projectId = isOrderBooking ? optionalUuid(payload.project_id, "project_id") : null;
+  const taskId = isOrderBooking ? optionalUuid(payload.task_id, "task_id") : null;
   const actor = actorFromBody(payload, "web-manufacturing");
   const notes = nullableText(payload.notes);
   // Task-level batch: one call reserves N tasks (each -> its own row with task_id +
   // project_id populated). Empty => legacy order-level behavior (task_id NULL) unchanged.
-  const taskRows = normalizeTaskRows(payload.tasks || payload.task_ids);
+  const taskRows = isOrderBooking ? normalizeTaskRows(payload.tasks || payload.task_ids) : [];
+  // Satu panggilan createBaySchedule = SATU reservasi = satu schedule_group_id, berapa pun
+  // baris task yang dihasilkan. Inilah kunci yang dipakai update/cancel per grup dan dedupe
+  // badge di peta (menggantikan reservationKey rakitan di FE).
+  const scheduleGroupId = crypto.randomUUID();
 
-  if (!orderNo) {
+  if (isOrderBooking && !orderNo) {
     throw new ApiError(400, "INVALID_PAYLOAD", "order_no is required", [{ field: "order_no" }]);
+  }
+  if (!isOrderBooking && !purpose) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "purpose is required when booking_type is not ORDER", [
+      { field: "purpose", booking_type: bookingType },
+    ]);
   }
   if (!areaCode) {
     throw new ApiError(400, "INVALID_PAYLOAD", "area_code is required", [{ field: "area_code" }]);
@@ -1958,38 +2391,23 @@ async function createBaySchedule(body = {}) {
   try {
     await client.query("begin");
 
-    const sowResult = await client.query(
-      `select min(order_no) as order_no
-       from sow
-       where ltrim(order_no, '0') = ltrim($1, '0')`,
-      [orderNo]
-    );
-    const resolvedOrderNo = sowResult.rows[0]?.order_no || orderNo;
+    let resolvedOrderNo = null;
+    if (isOrderBooking) {
+      const sowResult = await client.query(
+        `select min(order_no) as order_no
+         from sow
+         where ltrim(order_no, '0') = ltrim($1, '0')`,
+        [orderNo]
+      );
+      resolvedOrderNo = sowResult.rows[0]?.order_no || orderNo;
+    }
 
     // === TASK-LEVEL branch =================================================
-    // One reservation call places N specific tasks into the SAME bays/dates. The bay
-    // overlap conflict-check runs ONCE (all tasks share the bays), then one insert per
-    // task with task_id + project_id populated. Single audit log for the whole batch.
+    // One reservation call places N specific tasks into the SAME bays/dates. The overlap
+    // lookup runs ONCE (all tasks share the bays) and is INFORMATIONAL ONLY, then one insert
+    // per task with task_id + project_id populated. Single audit log for the whole batch.
     if (taskRows.length > 0) {
-      const conflictResult = await client.query(
-        `select
-           schedule_id,
-           order_no,
-           bay_codes,
-           start_date,
-           end_date,
-           status
-         from ms_project_bay_schedule
-         where status in ('RESERVED', 'CONFIRMED')
-           and bay_codes && $1::text[]
-           and daterange(start_date, end_date, '[]') && daterange($2::date, $3::date, '[]')
-         order by start_date, bay_codes[1]
-         limit 10`,
-        [bayCodes, startDate, endDate]
-      );
-      if (conflictResult.rows.length) {
-        throw new ApiError(409, "BAY_SCHEDULE_CONFLICT", "One or more bays are already reserved for this date range", conflictResult.rows);
-      }
+      const overlaps = await findBayOverlaps(client, { bayCodes, startDate, endDate });
 
       const inserted = [];
       for (const taskRow of taskRows) {
@@ -2006,10 +2424,13 @@ async function createBaySchedule(body = {}) {
              end_date,
              status,
              notes,
+             booking_type,
+             purpose,
+             schedule_group_id,
              created_by,
              updated_by
            )
-           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $10)
+           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13)
            returning *`,
           [
             resolvedOrderNo,
@@ -2021,6 +2442,9 @@ async function createBaySchedule(body = {}) {
             startDate,
             endDate,
             notes,
+            bookingType,
+            purpose,
+            scheduleGroupId,
             actor,
           ]
         );
@@ -2032,27 +2456,32 @@ async function createBaySchedule(body = {}) {
         action: "BAY_SCHEDULE_RESERVE",
         actor,
         details: {
+          schedule_group_id: scheduleGroupId,
           schedule_ids: inserted.map((row) => row.schedule_id),
           task_ids: inserted.map((row) => row.task_id),
           order_no: resolvedOrderNo,
+          booking_type: bookingType,
           area_code: areaCode,
           bay_codes: bayCodes,
           start_date: startDate,
           end_date: endDate,
+          // total, bukan overlaps.rows.length: audit harus mencatat berapa penghuni yang
+          // SEBENARNYA ada, bukan berapa yang muat di daftar peringatan.
+          overlap_count: overlaps.total,
+          overlap_truncated: overlaps.truncated,
         },
       });
 
       await client.query("commit");
-      return { schedules: inserted, count: inserted.length };
+      return { schedules: inserted, count: inserted.length, schedule_group_id: scheduleGroupId, overlaps };
     }
     // === END TASK-LEVEL branch =============================================
 
     // When the caller does not pin a project, try to attach the reservation to the
-    // order's MS Project so listBayScheduleTasks can scope the order-fallback join to
-    // it. Only when exactly ONE active project matches the order; otherwise stay NULL.
-    // task_id is intentionally left NULL for order-level reservations (attaching a
-    // single task_id would collapse multi-operation orders to one row downstream).
-    if (!projectId) {
+    // order's MS Project so downstream screens can scope it. Only when exactly ONE active
+    // project matches the order; otherwise stay NULL. task_id is intentionally left NULL for
+    // order-level reservations. Booking non-job melewati blok ini seluruhnya — tidak ada order.
+    if (isOrderBooking && !projectId) {
       const projectMatch = await client.query(
         `select distinct project_id
            from ms_project_task
@@ -2086,26 +2515,7 @@ async function createBaySchedule(body = {}) {
       }
     }
 
-    const conflictResult = await client.query(
-      `select
-         schedule_id,
-         order_no,
-         bay_codes,
-         start_date,
-         end_date,
-         status
-       from ms_project_bay_schedule
-       where status in ('RESERVED', 'CONFIRMED')
-         and bay_codes && $1::text[]
-         and daterange(start_date, end_date, '[]') && daterange($2::date, $3::date, '[]')
-       order by start_date, bay_codes[1]
-       limit 10`,
-      [bayCodes, startDate, endDate]
-    );
-
-    if (conflictResult.rows.length) {
-      throw new ApiError(409, "BAY_SCHEDULE_CONFLICT", "One or more bays are already reserved for this date range", conflictResult.rows);
-    }
+    const overlaps = await findBayOverlaps(client, { bayCodes, startDate, endDate });
 
     const insertResult = await client.query(
       `insert into ms_project_bay_schedule (
@@ -2119,10 +2529,13 @@ async function createBaySchedule(body = {}) {
          end_date,
          status,
          notes,
+         booking_type,
+         purpose,
+         schedule_group_id,
          created_by,
          updated_by
        )
-       values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $10)
+       values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13)
        returning *`,
       [
         resolvedOrderNo,
@@ -2134,6 +2547,9 @@ async function createBaySchedule(body = {}) {
         startDate,
         endDate,
         notes,
+        bookingType,
+        purpose,
+        scheduleGroupId,
         actor,
       ]
     );
@@ -2143,17 +2559,403 @@ async function createBaySchedule(body = {}) {
       action: "BAY_SCHEDULE_RESERVE",
       actor,
       details: {
+        schedule_group_id: scheduleGroupId,
         schedule_id: insertResult.rows[0].schedule_id,
         order_no: resolvedOrderNo,
+        booking_type: bookingType,
+        purpose,
         area_code: areaCode,
         bay_codes: bayCodes,
         start_date: startDate,
         end_date: endDate,
+        overlap_count: overlaps.total,
+        overlap_truncated: overlaps.truncated,
       },
     });
 
     await client.query("commit");
-    return insertResult.rows[0];
+    return { ...insertResult.rows[0], schedule_group_id: scheduleGroupId, overlaps };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Penghuni bay pada rentang tertentu — dipakai UI untuk memperingatkan SEBELUM submit
+// (peringatan lunak yang berguna, bukan penyesalan setelah tersimpan). Read-only, tanpa
+// transaksi: pool() diteruskan sebagai client ke findBayOverlaps.
+//
+// Mengembalikan { rows, truncated, total } apa adanya dari findBayOverlaps: panel okupansi
+// harus bisa menulis "menampilkan 50 dari 312" alih-alih memajang 50 baris seolah itu semuanya.
+async function listBayOccupants(query = {}) {
+  const bayCodes = parseBayCodeList(query.bay_codes);
+  if (!bayCodes.length) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "bay_codes is required", [{ field: "bay_codes" }]);
+  }
+  const startDate = normalizeDateOnly(query.start_date, "start_date");
+  const endDate = normalizeDateOnly(query.end_date, "end_date");
+  if (endDate < startDate) {
+    throw new ApiError(400, "INVALID_DATE_RANGE", "end_date must be on or after start_date", [
+      { field: "start_date", value: startDate },
+      { field: "end_date", value: endDate },
+    ]);
+  }
+  const excludeGroupId = optionalUuid(query.exclude_group_id, "exclude_group_id");
+
+  return findBayOverlaps(pool(), { bayCodes, startDate, endDate, excludeGroupId });
+}
+
+// Ambil seluruh baris satu grup reservasi dan kunci barisnya. Dipakai update & cancel per grup
+// supaya keduanya atomik (A-09: pembatalan lama = loop DELETE per schedule_id, non-atomik).
+async function loadBayScheduleGroup(client, groupId) {
+  const result = await client.query(
+    `select *
+     from ms_project_bay_schedule
+     where schedule_group_id = $1::uuid
+     order by created_at, schedule_id
+     for update`,
+    [groupId]
+  );
+  if (!result.rows.length) {
+    throw new ApiError(404, "BAY_SCHEDULE_GROUP_NOT_FOUND", "Bay schedule group not found", [
+      { schedule_group_id: groupId },
+    ]);
+  }
+  return result.rows;
+}
+
+// Ubah SATU reservasi utuh dalam SATU transaksi: rentang tanggal, catatan, tujuan, KODE BAY,
+// dan ISI TASK grup. Field yang tidak dikirim tidak disentuh (undefined != null) — jadi
+// pemanggil lama yang cuma menggeser tanggal tetap berperilaku persis seperti sebelumnya.
+//
+// KENAPA TASK YANG DIBUANG DI-CANCEL, BUKAN DI-DELETE:
+// cancelBayScheduleGroup memakai soft-cancel (status = 'CANCELLED'), bukan DELETE, dan seluruh
+// pembacaan (listBaySchedules, listBayScheduleTasks, findBayOverlaps) sudah menyaring
+// status <> 'CANCELLED'. Menghapus baris di sini akan membuat "hapus satu task" dan "batalkan
+// reservasi" meninggalkan jejak yang berbeda untuk peristiwa yang setara, dan menghilangkan
+// riwayat siapa-kapan yang justru jadi alasan kolom updated_by/updated_at ada. Konsekuensi yang
+// diterima: menambahkan kembali task yang tadi dibuang menghasilkan BARIS BARU (grup yang sama
+// bisa punya satu baris CANCELLED + satu RESERVED untuk task_id yang sama). Itu tidak
+// mengganggu — tidak ada unique constraint pada (schedule_group_id, task_id) dan semua pembaca
+// menyaring CANCELLED — dan justru mempertahankan urutan peristiwanya.
+//
+// Grup ORDER-LEVEL (semua baris aktif task_id NULL) dan booking non-job TIDAK punya isi task;
+// payload `tasks` untuk grup semacam itu DILEWATI, bukan error. Dilaporkan lewat tasks_ignored.
+async function updateBayScheduleGroup(groupIdParam, body = {}) {
+  const groupId = assertUuid(groupIdParam, "schedule_group_id");
+  const payload = ensureObject(body, "payload");
+  const actor = actorFromBody(payload, "web-manufacturing");
+  const hasNotes = payload.notes !== undefined;
+  const hasPurpose = payload.purpose !== undefined;
+  const notes = hasNotes ? nullableText(payload.notes) : null;
+  const purpose = hasPurpose ? nullableText(payload.purpose) : null;
+
+  // Ganti bay: divalidasi dengan normalizeBayCodes yang SAMA dengan createBaySchedule, termasuk
+  // pengecekan terhadap topologi area — tanpa itu update jadi pintu belakang untuk membuat
+  // reservasi yatim ber-kode bay mati, persis kasus BP3/BP4 (A-16).
+  const hasBayCodes = payload.bay_codes !== undefined;
+  const bayCodes = hasBayCodes ? normalizeBayCodes(payload.bay_codes) : null;
+  // area_code/area_name ikut opsional karena memindahkan bay ke area lain tanpa memperbarui
+  // area_code meninggalkan baris yang tidak konsisten. Backend TIDAK bisa menyimpulkan area dari
+  // kode bay: MANUFACTURING_BAY_CODES sengaja datar (salinan manual dari AREA_OPTIONS), tidak
+  // memuat pemetaan bay->area. Jadi pemanggil yang memindahkan bay lintas area WAJIB mengirim
+  // area_code juga.
+  const hasAreaCode = payload.area_code !== undefined;
+  const areaCode = hasAreaCode ? nullableText(payload.area_code)?.toUpperCase() || null : null;
+  if (hasAreaCode && !areaCode) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "area_code cannot be cleared", [{ field: "area_code" }]);
+  }
+  const hasAreaName = payload.area_name !== undefined;
+  const areaName = hasAreaName ? nullableText(payload.area_name) : null;
+
+  const hasTasks = payload.tasks !== undefined || payload.task_ids !== undefined;
+  const taskRows = hasTasks ? normalizeTaskRows(payload.tasks ?? payload.task_ids) : [];
+  // Grup task-level dengan nol task adalah reservasi tanpa isi. Membatalkan seluruh reservasi
+  // punya endpoint sendiri (DELETE .../group/:id) yang menulis audit BAY_SCHEDULE_CANCEL_GROUP;
+  // membiarkan update melakukannya diam-diam akan menyamarkan pembatalan sebagai perubahan.
+  if (hasTasks && taskRows.length === 0) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "tasks cannot be empty; cancel the group instead", [
+      { field: "tasks", schedule_group_id: groupId },
+    ]);
+  }
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const existing = await loadBayScheduleGroup(client, groupId);
+    const active = existing.filter((row) => row.status !== "CANCELLED");
+    if (!active.length) {
+      throw new ApiError(409, "BAY_SCHEDULE_CANCELLED", "Bay schedule group is already cancelled", [
+        { schedule_group_id: groupId },
+      ]);
+    }
+
+    const current = active[0];
+    const startDate =
+      payload.start_date === undefined
+        ? toDateOnlyString(current.start_date)
+        : normalizeDateOnly(payload.start_date, "start_date");
+    const endDate =
+      payload.end_date === undefined
+        ? toDateOnlyString(current.end_date)
+        : normalizeDateOnly(payload.end_date, "end_date");
+    if (endDate < startDate) {
+      throw new ApiError(400, "INVALID_DATE_RANGE", "end_date must be on or after start_date", [
+        { field: "start_date", value: startDate },
+        { field: "end_date", value: endDate },
+      ]);
+    }
+    // Booking non-job wajib punya purpose (CHECK chk_bay_schedule_order_or_purpose). Ditolak di
+    // sini supaya pemanggil dapat 400 yang jelas, bukan 23514 mentah dari Postgres.
+    if (hasPurpose && !purpose && active.some((row) => (row.booking_type || "ORDER") !== "ORDER")) {
+      throw new ApiError(400, "INVALID_PAYLOAD", "purpose cannot be cleared on a non-ORDER booking", [
+        { field: "purpose", schedule_group_id: groupId },
+      ]);
+    }
+
+    const effectiveBayCodes = hasBayCodes ? bayCodes : current.bay_codes;
+    const effectivePurpose = hasPurpose ? purpose : current.purpose ?? null;
+    const effectiveNotes = hasNotes ? notes : current.notes ?? null;
+    const effectiveAreaCode = hasAreaCode ? areaCode : current.area_code;
+    const effectiveAreaName = hasAreaName ? areaName : current.area_name;
+
+    // --- 1. Buang task yang tidak ada lagi di payload ----------------------------------------
+    // Dijalankan SEBELUM update tanggal/bay supaya baris yang dibuang menyimpan nilai apa adanya
+    // saat dibatalkan, bukan nilai baru yang tidak pernah benar-benar berlaku untuknya.
+    //
+    // Grup dianggap task-level bila ada SATU saja baris aktif ber-task_id. Grup order-level dan
+    // booking non-job tidak punya isi task sama sekali, jadi payload tasks-nya DILEWATI (bukan
+    // error) dan dilaporkan lewat tasks_ignored.
+    const isTaskLevelGroup = active.some((row) => row.task_id !== null);
+    const tasksIgnored = hasTasks && !isTaskLevelGroup;
+    const syncTasks = hasTasks && isTaskLevelGroup;
+    const desiredTaskIds = new Set(taskRows.map((row) => row.task_id));
+    const activeTaskRows = active.filter((row) => row.task_id !== null);
+    const activeTaskIds = new Set(activeTaskRows.map((row) => row.task_id));
+    let cancelledTaskIds = [];
+    const addedTaskIds = [];
+
+    if (syncTasks) {
+      const rowsToCancel = activeTaskRows.filter((row) => !desiredTaskIds.has(row.task_id));
+      if (rowsToCancel.length) {
+        const cancelResult = await client.query(
+          `update ms_project_bay_schedule
+           set status = 'CANCELLED',
+               updated_by = $2,
+               updated_at = now()
+           where schedule_id = any($1::uuid[])
+             and status <> 'CANCELLED'
+           returning task_id`,
+          [rowsToCancel.map((row) => row.schedule_id), actor]
+        );
+        cancelledTaskIds = cancelResult.rows.map((row) => row.task_id);
+      }
+    }
+
+    // --- 2. Terapkan tanggal / bay / area / catatan ke baris yang tersisa ---------------------
+    await client.query(
+      `update ms_project_bay_schedule
+       set start_date = $2::date,
+           end_date = $3::date,
+           notes = case when $4::boolean then $5 else notes end,
+           purpose = case when $6::boolean then $7 else purpose end,
+           bay_codes = case when $8::boolean then $9::text[] else bay_codes end,
+           area_code = case when $10::boolean then $11 else area_code end,
+           area_name = case when $12::boolean then $13 else area_name end,
+           updated_by = $14,
+           updated_at = now()
+       where schedule_group_id = $1::uuid
+         and status <> 'CANCELLED'`,
+      [
+        groupId,
+        startDate,
+        endDate,
+        hasNotes,
+        notes,
+        hasPurpose,
+        purpose,
+        hasBayCodes,
+        bayCodes,
+        hasAreaCode,
+        areaCode,
+        hasAreaName,
+        areaName,
+        actor,
+      ]
+    );
+
+    // --- 3. Tambahkan task baru ke grup yang SAMA --------------------------------------------
+    if (syncTasks) {
+      for (const taskRow of taskRows) {
+        if (activeTaskIds.has(taskRow.task_id)) continue;
+        const resolvedProjectId = await resolveTaskProject(client, taskRow.task_id, taskRow.project_id);
+
+        // Penjaga integritas yang TIDAK ada di createBaySchedule (asimetri disengaja):
+        // baris jadwal menyimpan order_no milik GRUP, bukan milik task. Menyisipkan task milik
+        // order lain menghasilkan baris yang mengaku order X padahal task-nya order Y —
+        // salah senyap yang baru ketahuan di layar operator. Task ber-order_no NULL tetap
+        // diizinkan: sebagian task MS Project memang tidak terpetakan ke order mana pun.
+        if (current.order_no) {
+          const owner = await client.query(
+            `select order_no
+             from ms_project_task
+             where task_id = $1 and project_id = $2`,
+            [taskRow.task_id, resolvedProjectId]
+          );
+          const taskOrderNo = owner.rows[0]?.order_no ?? null;
+          if (taskOrderNo && taskOrderNo.replace(/^0+/, "") !== String(current.order_no).replace(/^0+/, "")) {
+            throw new ApiError(400, "TASK_ORDER_MISMATCH", "Task belongs to a different order", [
+              { task_id: taskRow.task_id, task_order_no: taskOrderNo, group_order_no: current.order_no },
+            ]);
+          }
+        }
+
+        await client.query(
+          `insert into ms_project_bay_schedule (
+             order_no,
+             project_id,
+             task_id,
+             area_code,
+             area_name,
+             bay_codes,
+             start_date,
+             end_date,
+             status,
+             notes,
+             booking_type,
+             purpose,
+             schedule_group_id,
+             created_by,
+             updated_by
+           )
+           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13)`,
+          [
+            current.order_no,
+            resolvedProjectId,
+            taskRow.task_id,
+            effectiveAreaCode,
+            effectiveAreaName,
+            effectiveBayCodes,
+            startDate,
+            endDate,
+            effectiveNotes,
+            current.booking_type || "ORDER",
+            effectivePurpose,
+            groupId,
+            actor,
+          ]
+        );
+        addedTaskIds.push(taskRow.task_id);
+      }
+    }
+
+    // Hitung ulang overlap SETELAH bay/tanggal berubah — sama seperti createBaySchedule ini
+    // TIDAK memblokir apa pun (D3), hanya memberi tahu. Grup ini sendiri dikecualikan supaya
+    // barisnya tidak dilaporkan bentrok dengan dirinya sendiri.
+    const overlaps = await findBayOverlaps(client, {
+      bayCodes: effectiveBayCodes,
+      startDate,
+      endDate,
+      excludeGroupId: groupId,
+    });
+
+    // Baris final dibaca ulang: UPDATE di atas tidak melihat baris yang baru di-INSERT, dan
+    // sebagian baris lama mungkin sudah di-CANCEL di langkah sinkronisasi task.
+    const finalRows = await client.query(
+      `select *
+       from ms_project_bay_schedule
+       where schedule_group_id = $1::uuid
+         and status <> 'CANCELLED'
+       order by created_at, schedule_id`,
+      [groupId]
+    );
+
+    await writeAuditLog(client, {
+      projectId: current.project_id || null,
+      action: "BAY_SCHEDULE_UPDATE",
+      actor,
+      details: {
+        schedule_group_id: groupId,
+        schedule_ids: finalRows.rows.map((row) => row.schedule_id),
+        order_no: current.order_no,
+        booking_type: current.booking_type || "ORDER",
+        area_code: effectiveAreaCode,
+        bay_codes: effectiveBayCodes,
+        start_date: startDate,
+        end_date: endDate,
+        notes_changed: hasNotes,
+        purpose_changed: hasPurpose,
+        bay_codes_changed: hasBayCodes,
+        previous_bay_codes: hasBayCodes ? current.bay_codes : undefined,
+        tasks_added: addedTaskIds,
+        tasks_cancelled: cancelledTaskIds,
+        tasks_ignored: tasksIgnored,
+        overlap_count: overlaps.total,
+        overlap_truncated: overlaps.truncated,
+      },
+    });
+
+    await client.query("commit");
+    return {
+      schedules: finalRows.rows,
+      count: finalRows.rows.length,
+      schedule_group_id: groupId,
+      tasks_added: addedTaskIds.length,
+      tasks_cancelled: cancelledTaskIds.length,
+      // true = grup ini order-level / non-job, jadi payload `tasks` sengaja tidak dipakai.
+      tasks_ignored: tasksIgnored,
+      overlaps,
+    };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Batalkan SELURUH baris satu reservasi dalam SATU transaksi (A-09). Idempoten: grup yang sudah
+// batal mengembalikan daftar kosong, bukan error — semantik DELETE.
+async function cancelBayScheduleGroup(groupIdParam, body = {}) {
+  const groupId = assertUuid(groupIdParam, "schedule_group_id");
+  const payload = ensureObject(body, "payload");
+  const actor = actorFromBody(payload, "web-manufacturing");
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const existing = await loadBayScheduleGroup(client, groupId);
+
+    const result = await client.query(
+      `update ms_project_bay_schedule
+       set status = 'CANCELLED',
+           updated_by = $2,
+           updated_at = now()
+       where schedule_group_id = $1::uuid
+         and status <> 'CANCELLED'
+       returning *`,
+      [groupId, actor]
+    );
+
+    await writeAuditLog(client, {
+      projectId: existing[0].project_id || null,
+      action: "BAY_SCHEDULE_CANCEL_GROUP",
+      actor,
+      details: {
+        schedule_group_id: groupId,
+        schedule_ids: result.rows.map((row) => row.schedule_id),
+        order_no: existing[0].order_no,
+        booking_type: existing[0].booking_type || "ORDER",
+        area_code: existing[0].area_code,
+        bay_codes: existing[0].bay_codes,
+        cancelled_count: result.rows.length,
+      },
+    });
+
+    await client.query("commit");
+    return { cancelled: result.rows, count: result.rows.length, schedule_group_id: groupId };
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -2190,7 +2992,9 @@ async function cancelBaySchedule(scheduleIdParam, body = {}) {
       actor,
       details: {
         schedule_id: schedule.schedule_id,
+        schedule_group_id: schedule.schedule_group_id || null,
         order_no: schedule.order_no,
+        booking_type: schedule.booking_type || "ORDER",
         area_code: schedule.area_code,
         bay_codes: schedule.bay_codes,
       },
@@ -3551,10 +4355,12 @@ module.exports = {
   addProjectResources,
   bulkLoadProjectPackages,
   cancelBaySchedule,
+  cancelBayScheduleGroup,
   checkinProject,
   checkoutProject,
   createBaySchedule,
   deactivateProjectResource,
+  findBayOverlaps,
   forceCheckinProject,
   getConflicts,
   getCalendar,
@@ -3565,6 +4371,7 @@ module.exports = {
   health,
   getSowOrderOperations,
   listOrderTasks,
+  listBayOccupants,
   listBayScheduleTasks,
   listBaySchedules,
   listCalendars,
@@ -3579,6 +4386,7 @@ module.exports = {
   refreshResources,
   searchResources,
   syncProject,
+  updateBayScheduleGroup,
   updateOperationPeople,
   updateProjectStatus,
   uploadProjectFile,

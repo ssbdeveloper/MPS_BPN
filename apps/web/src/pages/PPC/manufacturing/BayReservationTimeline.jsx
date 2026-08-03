@@ -1,45 +1,50 @@
 import React, { useMemo } from 'react';
-import { CalendarRange, Users } from 'lucide-react';
+import { CalendarRange, Car, HelpCircle, Tag, Users, Warehouse, Wrench } from 'lucide-react';
 import { EmptyState } from '../../../components';
 import { AREA_OPTIONS } from '../../../config/manufacturingAreas';
+import { bookingTypeOf, dedupeByGroup } from '../../../features/bayScheduling/constants';
 
 /* ──────────────────────────────────────────────────────────────────────────
-   BayReservationTimeline — read-only Gantt of manufacturing bay reservations.
+   BayReservationTimeline — Gantt hanya-baca untuk reservasi bay manufaktur.
 
-   The alternative to the floor map (SchedulingAreaPage): rows = bays (grouped by
-   area, from the shared topology in config/manufacturingAreas), x-axis = one column
-   per day in [rangeStart, rangeEnd]. A reservation renders as a bar on each of its
-   bay rows, clamped to the visible window. Overlapping reservations on the same bay
-   stack onto sub-rows (lanes) so nothing hides behind another bar.
+   Alternatif dari peta lantai (SchedulingAreaPage): baris = bay (dikelompokkan per
+   area dari topologi bersama config/manufacturingAreas), sumbu-x = satu kolom per
+   hari dalam [rangeStart, rangeEnd]. Reservasi dirender sebagai bar di setiap baris
+   bay-nya, dijepit ke window yang terlihat. Reservasi yang beririsan waktunya pada
+   satu bay ditumpuk ke sub-baris (lane) supaya tidak ada yang tertutup.
 
-   VIEW-ONLY: no drag, no drop, no reserve. Clicking a bar calls onSelectSchedule.
+   WINDOW = window RESERVASI (start_date/end_date), BUKAN window task MS Project —
+   pool order memakai kontrol tanggal sendiri (keputusan D6).
+
+   SATU RESERVASI = SATU BAR. `GET /ms-project/bay-schedules` mengembalikan satu
+   BARIS PER TASK, jadi reservasi 6 task dulu menghasilkan 6 bar identik bertumpuk
+   di lane 0..5 — bay tampak enam kali lebih padat daripada kenyataannya. Baris itu
+   sekarang digabung lewat dedupeByGroup() (schedule_group_id, dengan fallback kunci
+   warisan) sebelum ditempatkan.
+
+   HANYA-BACA: tidak ada drag, drop, atau reservasi. Klik bar memanggil
+   onSelectSchedule(entry) — entry hasil dedupe, bentuk yang sama dengan yang
+   diterima ReservationDetailModal.
 
    Props:
-     schedules        Array<{
-                        schedule_id, order_no, bay_codes: string[],
-                        start_date, end_date,           // 'YYYY-MM-DD' strings
-                        status,                          // RESERVED|CONFIRMED|DONE|CANCELLED
-                        created_by, area_name, task_name,
-                        operation_no, people_required, part_name
-                      }>  — a row appears once per bay listed in bay_codes.
-     rangeStart       'YYYY-MM-DD' — first visible day (inclusive).
-     rangeEnd         'YYYY-MM-DD' — last visible day (inclusive).
-     onSelectSchedule (schedule) => void — optional; fired when a bar is clicked.
+     schedules        Array baris jadwal MENTAH (satu baris per task).
+     rangeStart       'YYYY-MM-DD' — hari pertama yang terlihat (inklusif).
+     rangeEnd         'YYYY-MM-DD' — hari terakhir yang terlihat (inklusif).
+     onSelectSchedule (entry) => void — opsional; dipanggil saat bar diklik.
    ────────────────────────────────────────────────────────────────────────── */
 
-const LABEL_W = 168;   // px — sticky bay/area label column
-const DAY_W = 96;      // px — one day column
-const HEADER_H = 52;   // px — sticky day-axis header
-const BAR_H = 24;      // px — reservation bar height
-const BAR_GAP = 4;     // px — vertical gap between stacked lanes
-const ROW_PAD_Y = 6;   // px — vertical padding inside a bay row
+const LABEL_W = 168;   // px — kolom label bay/area yang sticky
+const DAY_W = 96;      // px — lebar satu kolom hari
+const HEADER_H = 52;   // px — header sumbu hari yang sticky
+const BAR_H = 24;      // px — tinggi bar reservasi
+const BAR_GAP = 4;     // px — jarak vertikal antar lane bertumpuk
+const ROW_PAD_Y = 6;   // px — padding vertikal di dalam baris bay
 
 const WEEKDAY = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
-// Status drives colour = meaning only. Gradients darken the left edge (where the
-// order_no label sits) so white text clears WCAG AA on every status; the lighter
-// end only carries the badge chip, which has its own backdrop.
+// Warna = MAKNA status saja. Gradient menggelapkan tepi kiri (tempat label order)
+// supaya teks putih lolos WCAG AA di semua status.
 const STATUS_STYLE = {
   RESERVED: { bg: 'linear-gradient(135deg,#023e8a,#0077b6)', fg: '#ffffff', chipBg: 'rgba(255,255,255,0.22)', label: 'Reserved' },
   CONFIRMED: { bg: 'linear-gradient(135deg,#047857,#059669)', fg: '#ffffff', chipBg: 'rgba(255,255,255,0.22)', label: 'Confirmed' },
@@ -49,7 +54,28 @@ const STATUS_STYLE = {
 const DEFAULT_STATUS = STATUS_STYLE.RESERVED;
 function statusStyle(s) { return STATUS_STYLE[String(s || '').toUpperCase()] || DEFAULT_STATUS; }
 
-/* ── date helpers — parse the given 'YYYY-MM-DD' strings, no Date.now() ─────── */
+// Booking non-job (parkir/simpan/perawatan) dibedakan lewat IKON + label purpose,
+// bukan lewat warna: warna di bar ini sudah dipakai penuh untuk status.
+const NONJOB_ICON = { PARKING: Car, STORAGE: Warehouse, MAINTENANCE: Wrench, OTHER: Tag };
+
+// D7 — reservasi yatim tetap tampil, dengan penanda. Heuristik yang sama dengan
+// ReservationDetailModal: listBaySchedules mengambil part_name/customer lewat LEFT
+// JOIN sow, jadi order yang tidak dikenal datang dengan keduanya NULL. Syarat
+// "booking job" wajib ada — booking non-job memang tidak punya keduanya.
+// Perbaikan sebenarnya = kolom `order_known` dari backend, bukan menebak dari NULL.
+function isUnknownOrder(entry) {
+  if (!bookingTypeOf(entry).isJob) return false;
+  if (!entry.order_no) return false;
+  return !entry.part_name && !entry.customer;
+}
+
+function barLabel(entry) {
+  const type = bookingTypeOf(entry);
+  if (type.isJob) return entry.order_no || '—';
+  return entry.purpose || type.label;
+}
+
+/* ── helper tanggal — parse string 'YYYY-MM-DD' apa adanya, tanpa Date.now() ── */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function dayNumOf(str) {
   if (typeof str !== 'string') return null;
@@ -63,33 +89,39 @@ function partsOf(dayNum) {
   const dt = new Date(dayNum * 86400000);
   return { y: dt.getUTCFullYear(), mon: dt.getUTCMonth(), dd: dt.getUTCDate(), wd: dt.getUTCDay() };
 }
-// today's day-number from wall-clock Y/M/D (for the "today" column marker only).
+// Nomor hari "hari ini" dari jam dinding lokal (hanya untuk penanda kolom today).
 function todayDayNum() {
   const n = new Date();
   return Math.floor(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 86400000);
 }
 
-function barTitle(s, style) {
+const KNOWN_BAYS = new Set(AREA_OPTIONS.flatMap((area) => area.bays));
+
+function barTitle(entry, style) {
+  const type = bookingTypeOf(entry);
   const lines = [
-    s.order_no || '(tanpa order)',
-    s.task_name ? `Task: ${s.task_name}` : null,
-    s.operation_no != null ? `Operasi ${s.operation_no}` : null,
-    s.part_name ? `Part: ${s.part_name}` : null,
-    `${s.start_date || '?'} → ${s.end_date || '?'}`,
-    s.people_required != null && s.people_required !== '' ? `${s.people_required} orang` : null,
+    type.isJob
+      ? (entry.order_no || '(tanpa order)')
+      : `${type.label}${entry.purpose ? ` — ${entry.purpose}` : ''}`,
+    isUnknownOrder(entry) ? 'Order tidak dikenal di data SAP/SOW' : null,
+    entry.part_name ? `Part: ${entry.part_name}` : null,
+    entry.customer ? `Customer: ${entry.customer}` : null,
+    entry.task_count > 0 ? `${entry.task_count} task` : null,
+    `${entry.start_date || '?'} → ${entry.end_date || '?'}`,
+    entry.people_total != null ? `${entry.people_total} orang` : null,
     `Status: ${style.label}`,
-    s.area_name ? `Area: ${s.area_name}` : null,
-    s.created_by ? `Oleh: ${s.created_by}` : null,
+    entry.area_name ? `Area: ${entry.area_name}` : null,
+    entry.created_by ? `Oleh: ${entry.created_by}` : null,
   ];
   return lines.filter(Boolean).join('\n');
 }
 
-/* ── one bay's stacked reservation bars ────────────────────────────────────── */
+/* ── bar reservasi bertumpuk untuk satu bay ────────────────────────────────── */
 function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
   const rowH = ROW_PAD_Y * 2 + Math.max(1, lanes) * BAR_H + Math.max(0, lanes - 1) * BAR_GAP;
   return (
     <div className="flex border-b border-slate-100">
-      {/* sticky bay label */}
+      {/* label bay sticky */}
       <div
         className="sticky left-0 z-20 flex shrink-0 items-center gap-2 border-r border-slate-200 bg-white pl-4 pr-2"
         style={{ width: LABEL_W, height: rowH }}
@@ -97,15 +129,18 @@ function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-slate-300" aria-hidden="true" />
         <span className="truncate font-mono text-xs font-bold tabular-nums text-slate-700">{bay}</span>
         {segs.length > 0 && (
-          <span className="ml-auto shrink-0 rounded-full bg-slate-100 px-1.5 text-[11px] font-bold tabular-nums text-slate-500">
+          <span
+            className="ml-auto shrink-0 rounded-full bg-slate-100 px-1.5 text-[11px] font-bold tabular-nums text-slate-500"
+            title={`${segs.length} reservasi`}
+          >
             {segs.length}
           </span>
         )}
       </div>
 
-      {/* timeline track */}
+      {/* track timeline */}
       <div className="relative shrink-0" style={{ width: numDays * DAY_W, height: rowH }}>
-        {/* day background columns (grid + weekend/today tint) */}
+        {/* kolom latar per hari (grid + tint akhir pekan/hari ini) */}
         <div className="absolute inset-0 flex" aria-hidden="true">
           {Array.from({ length: numDays }, (_, i) => {
             const dn = originNum + i;
@@ -131,24 +166,28 @@ function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
           })}
         </div>
 
-        {/* bars */}
+        {/* bar */}
         {segs.map((seg) => {
-          const s = seg.schedule;
-          const style = statusStyle(s.status);
+          const entry = seg.entry;
+          const style = statusStyle(entry.status);
+          const type = bookingTypeOf(entry);
+          const NonJobIcon = type.isJob ? null : (NONJOB_ICON[type.code] || Tag);
+          const unknown = isUnknownOrder(entry);
           const span = seg.endIdx - seg.startIdx + 1;
           const left = seg.startIdx * DAY_W + 2;
           const width = span * DAY_W - 4;
           const top = ROW_PAD_Y + seg.lane * (BAR_H + BAR_GAP);
           const showChip = span >= 2;
-          const people = s.people_required != null && s.people_required !== '' ? String(s.people_required) : null;
-          const chipText = people || (s.operation_no != null ? `Op ${s.operation_no}` : null);
+          const people = entry.people_total != null ? String(entry.people_total) : null;
+          const chipText = people || (entry.task_count > 1 ? `${entry.task_count} task` : null);
+          const label = barLabel(entry);
           return (
             <button
-              key={`${s.schedule_id}-${bay}-${seg.startIdx}`}
+              key={`${entry.group_key}-${bay}-${seg.startIdx}`}
               type="button"
-              onClick={() => onSelect && onSelect(s)}
-              title={barTitle(s, style)}
-              aria-label={`${s.order_no || 'Reservasi'} di ${bay}, ${s.start_date} sampai ${s.end_date}, status ${style.label}`}
+              onClick={() => onSelect && onSelect(entry)}
+              title={barTitle(entry, style)}
+              aria-label={`${label}${unknown ? ' (order tidak dikenal)' : ''} di ${bay}, ${entry.start_date} sampai ${entry.end_date}, status ${style.label}`}
               className="group absolute flex items-center gap-1 overflow-hidden rounded-md px-2 text-left shadow-sm ring-1 ring-black/10 transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:ring-offset-1 focus-visible:ring-offset-white motion-reduce:transition-none motion-reduce:hover:brightness-100"
               style={{
                 left, width, top, height: BAR_H,
@@ -157,10 +196,12 @@ function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
                 border: style.border ? `1px solid ${style.border}` : undefined,
               }}
             >
+              {NonJobIcon && <NonJobIcon className="h-3 w-3 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
+              {unknown && <HelpCircle className="h-3 w-3 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
               <span
-                className={`truncate font-mono text-xs font-bold tabular-nums ${style.strike ? 'line-through' : ''}`}
+                className={`truncate text-xs font-bold ${type.isJob ? 'font-mono tabular-nums' : ''} ${style.strike ? 'line-through' : ''}`}
               >
-                {s.order_no || '—'}
+                {label}
               </span>
               {showChip && chipText && (
                 <span
@@ -199,37 +240,36 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
   const numDays = rangeValid ? endNum - originNum + 1 : 0;
   const todayNum = todayDayNum();
 
-  // Bucket reservations onto bay rows, clamped to the window, with greedy lane
-  // assignment so overlapping bars never fully cover one another.
-  const { byBay, visibleCount } = useMemo(() => {
+  // Gabungkan baris task -> reservasi, tempatkan ke baris bay (dijepit ke window),
+  // lalu packing lane greedy supaya bar yang beririsan tidak saling menutupi penuh.
+  const { byBay, visibleCount, extraBays } = useMemo(() => {
     const map = new Map();
     const seen = new Set();
-    if (!rangeValid || !Array.isArray(schedules)) return { byBay: map, visibleCount: 0 };
+    if (!rangeValid || !Array.isArray(schedules)) return { byBay: map, visibleCount: 0, extraBays: [] };
 
-    schedules.forEach((s) => {
-      if (!s) return;
-      const start = dayNumOf(s.start_date);
-      const end = dayNumOf(s.end_date);
-      const rawStart = start != null ? start : end;      // tolerate a missing edge
+    dedupeByGroup(schedules).forEach((entry) => {
+      const start = dayNumOf(entry.start_date);
+      const end = dayNumOf(entry.end_date);
+      const rawStart = start != null ? start : end;      // toleran terhadap satu sisi kosong
       const rawEnd = end != null ? end : start;
       if (rawStart == null || rawEnd == null) return;
       const lo = Math.min(rawStart, rawEnd);
       const hi = Math.max(rawStart, rawEnd);
-      if (hi < originNum || lo > endNum) return;          // fully outside the window
+      if (hi < originNum || lo > endNum) return;          // sepenuhnya di luar window
       const startIdx = Math.max(0, lo - originNum);
       const endIdx = Math.min(numDays - 1, hi - originNum);
-      const bays = Array.isArray(s.bay_codes) ? s.bay_codes : [];
+      const bays = Array.isArray(entry.bay_codes) ? entry.bay_codes : [];
       let placed = false;
       bays.forEach((bay) => {
         if (!bay) return;
         placed = true;
         if (!map.has(bay)) map.set(bay, []);
-        map.get(bay).push({ schedule: s, startIdx, endIdx, lane: 0 });
+        map.get(bay).push({ entry, startIdx, endIdx, lane: 0 });
       });
-      if (placed) seen.add(s.schedule_id ?? s);
+      if (placed) seen.add(entry.group_key);
     });
 
-    // greedy lane packing per bay (sub-rows for time-overlapping reservations)
+    // packing lane greedy per bay (sub-baris untuk reservasi yang beririsan waktu)
     map.forEach((segs) => {
       segs.sort((a, b) => a.startIdx - b.startIdx || a.endIdx - b.endIdx);
       const laneEnd = [];
@@ -241,10 +281,14 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
       });
     });
 
-    return { byBay: map, visibleCount: seen.size };
+    // Bay yang tidak ada di topologi (mis. reservasi warisan pada kode bay lama).
+    // Menyembunyikannya membuat bay tampak kosong padahal terpakai — semangat D7.
+    const extras = [...map.keys()].filter((bay) => !KNOWN_BAYS.has(bay)).sort();
+
+    return { byBay: map, visibleCount: seen.size, extraBays: extras };
   }, [schedules, rangeValid, originNum, endNum, numDays]);
 
-  // Guards → shared EmptyState.
+  // Guard → EmptyState bersama.
   if (!rangeValid) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center">
@@ -271,28 +315,65 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
   const boardW = LABEL_W + numDays * DAY_W;
   const laneCountOf = (segs) => (segs.length ? Math.max(...segs.map((x) => x.lane)) + 1 : 1);
 
+  const renderGroup = (key, name, bays) => (
+    <div key={key}>
+      <div className="flex border-b border-[#90e0ef]" style={{ width: boardW, background: '#caf0f8' }}>
+        <div
+          className="sticky left-0 z-20 flex shrink-0 items-center gap-2 px-4 py-1.5"
+          style={{ width: LABEL_W, background: '#caf0f8' }}
+        >
+          <span className="truncate text-xs font-extrabold uppercase tracking-wide text-[#0077b6]">{name}</span>
+          <span className="ml-auto shrink-0 rounded-full bg-white/70 px-1.5 text-[11px] font-bold tabular-nums text-[#023e8a]">
+            {bays.reduce((n, bay) => n + (byBay.get(bay)?.length || 0), 0)}
+          </span>
+        </div>
+      </div>
+      {bays.map((bay) => {
+        const segs = byBay.get(bay) || [];
+        return (
+          <BayRow
+            key={`${key}-${bay}`}
+            bay={bay}
+            segs={segs}
+            lanes={laneCountOf(segs)}
+            numDays={numDays}
+            todayNum={todayNum}
+            originNum={originNum}
+            onSelect={onSelectSchedule}
+          />
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      {/* caption + legend */}
+      {/* caption + legenda */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex items-center gap-2 text-slate-700">
           <CalendarRange className="h-4 w-4 text-[#0077b6]" strokeWidth={2} aria-hidden="true" />
           <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Reservasi Bay</span>
           <span className="font-mono text-xs font-semibold tabular-nums text-slate-600">{rangeStart} → {rangeEnd}</span>
-          <span className="text-xs font-semibold tabular-nums text-slate-400">· {numDays} hari</span>
+          <span className="text-xs font-semibold tabular-nums text-slate-400">· {numDays} hari · {visibleCount} reservasi</span>
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <LegendItem swatch={STATUS_STYLE.RESERVED.bg} text="Reserved" />
           <LegendItem swatch={STATUS_STYLE.CONFIRMED.bg} text="Confirmed" />
           <LegendItem swatch={STATUS_STYLE.DONE.bg} text="Done" />
           <LegendItem swatch={STATUS_STYLE.CANCELLED.bg} strike text="Cancelled" />
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+            <Car className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" /> Booking non-job
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+            <HelpCircle className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" /> Order tidak dikenal
+          </span>
         </div>
       </div>
 
-      {/* board — scrolls both axes; label column + day header stay pinned */}
+      {/* papan — scroll dua sumbu; kolom label + header hari tetap menempel */}
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-slate-300 bg-white shadow-sm">
         <div className="relative" style={{ width: boardW, minWidth: '100%' }}>
-          {/* sticky day-axis header */}
+          {/* header sumbu hari sticky */}
           <div className="sticky top-0 z-30 flex" style={{ height: HEADER_H }}>
             <div
               className="sticky left-0 z-40 flex shrink-0 items-center border-b border-r border-slate-200 bg-slate-50 px-4 text-[11px] font-extrabold uppercase tracking-wide text-slate-500"
@@ -336,45 +417,9 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
             </div>
           </div>
 
-          {/* areas → bays */}
-          {AREA_OPTIONS.map((area) => {
-            const areaCount = area.bays.reduce((n, bay) => n + (byBay.get(bay)?.length || 0), 0);
-            return (
-              <div key={area.areaCode}>
-                {/* area group header band */}
-                <div className="flex border-b border-[#90e0ef]" style={{ width: boardW, background: '#caf0f8' }}>
-                  <div
-                    className="sticky left-0 z-20 flex shrink-0 items-center gap-2 px-4 py-1.5"
-                    style={{ width: LABEL_W, background: '#caf0f8' }}
-                  >
-                    <span className="truncate text-xs font-extrabold uppercase tracking-wide text-[#0077b6]">
-                      {area.areaName}
-                    </span>
-                    <span className="ml-auto shrink-0 rounded-full bg-white/70 px-1.5 text-[11px] font-bold tabular-nums text-[#023e8a]">
-                      {areaCount}
-                    </span>
-                  </div>
-                </div>
-
-                {/* bay rows */}
-                {area.bays.map((bay) => {
-                  const segs = byBay.get(bay) || [];
-                  return (
-                    <BayRow
-                      key={`${area.areaCode}-${bay}`}
-                      bay={bay}
-                      segs={segs}
-                      lanes={laneCountOf(segs)}
-                      numDays={numDays}
-                      todayNum={todayNum}
-                      originNum={originNum}
-                      onSelect={onSelectSchedule}
-                    />
-                  );
-                })}
-              </div>
-            );
-          })}
+          {/* area → bay */}
+          {AREA_OPTIONS.map((area) => renderGroup(area.areaCode, area.areaName, area.bays))}
+          {extraBays.length > 0 && renderGroup('__extra', 'Bay di luar topologi', extraBays)}
         </div>
       </div>
     </div>

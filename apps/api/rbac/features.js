@@ -1,7 +1,8 @@
 // RBAC — backend feature catalog (id + label). Mirror of the ids in
 // apps/web/src/rbac/featureRegistry.js, plus `sow_verification` (daily
-// verification). Used by the permission API to enumerate features. Keep in sync
-// with the FE registry — see RBAC_BACKEND_ENFORCEMENT_PLAN.md §3.
+// verification) and `sow_subcont` (Fase 6). Used by the permission API to
+// enumerate features. Keep in sync with the FE registry —
+// see RBAC_BACKEND_ENFORCEMENT_PLAN.md §3.
 
 const FEATURES = [
   { id: 'operations_hub',       label: 'Operations Hub' },
@@ -11,8 +12,20 @@ const FEATURES = [
   { id: 'sow_management',       label: 'SOW Management' },
   { id: 'sow_scheduling',       label: 'SOW Scheduling' },
   { id: 'sow_verification',     label: 'SOW Verification' },
+  // Penanda subcont (Fase 6 / D4). SENGAJA dipisah dari `sow_management`:
+  // menandai operasi = keputusan biaya (jam keluar dari beban internal), bukan
+  // pengeditan teknis SOW. Tidak didaftarkan di role mana pun -> jatuh ke
+  // `__default__` (administrator full, supervisor/foreman read-only = tetap
+  // ditolak menulis). Owner meng-assign per orang lewat rbac.user_permissions.
+  { id: 'sow_subcont',          label: 'SOW Subcont' },
   { id: 'shift_rules',          label: 'Shift Capacity' },
   { id: 'roster_operator',      label: 'Roster Operator' },
+  // MS Project — dipecah dari `ms_project_admin` (Fase 0 / D1). Tiga id di bawah
+  // baru; `ms_project_admin` dipertahankan tapi DIPERSEMPIT ke force-checkin,
+  // refresh kalender, dan resource. Lihat manifest.js untuk pemetaan route-nya.
+  { id: 'bay_scheduling',       label: 'Bay Scheduling' },
+  { id: 'msproject_mapping',    label: 'MS Project Mapping' },
+  { id: 'msproject_collab',     label: 'MS Project Collaboration' },
   { id: 'ms_project_admin',     label: 'MS Project Admin' },
   { id: 'component_tracking',   label: 'Component Tracking' },
   { id: 'kanban_board',         label: 'Kanban Board' },

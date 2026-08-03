@@ -1,0 +1,255 @@
+import React, { useCallback, useEffect, useId, useRef } from 'react';
+import {
+  Ban, Building2, CalendarRange, Clock, HelpCircle, ListChecks, Loader2, MapPin, Package,
+  Tag, User, Users, X,
+} from 'lucide-react';
+import { bookingTypeOf, formatDate, formatHours, statusStyle } from './constants';
+import useDialogA11y from './useDialogA11y';
+
+// --- Helper LOKAL (tidak ada di kontrak constants.js) ------------------------
+
+function isText(value) {
+  return value != null && String(value).trim() !== '';
+}
+
+// Baris ringkas untuk metadata reservasi (ikon + label + nilai). `icon` diterima
+// sebagai node yang sudah dirender agar dipakai lewat ekspresi JS ({icon}).
+function DetailRow({ icon, label, children }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#caf0f8] text-[#0077b6]">
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+        <div className="text-sm font-semibold text-slate-800">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ReservationDetailModal — detail satu reservasi (read view + batalkan).
+ *
+ * Pindahan dari pages/PPC/manufacturing/SchedulingAreaPage.jsx, ditambah:
+ *   (a) booking_type/purpose untuk booking non-job,
+ *   (b) badge "order tidak dikenal" untuk reservasi yatim (D7),
+ *   (c) tombol batal memanggil onCancel(detail) — orkestrator yang memakai
+ *       detail.schedule_group_id (fallback ke detail.scheduleIds untuk baris warisan).
+ *
+ * Props (nama persis sesuai kontrak komponen):
+ *   detail   – object|null  satu reservasi hasil dedupe per schedule_group_id
+ *   onClose  – () => void
+ *   onCancel – (detail) => void
+ *   busy     – boolean      pembatalan sedang berjalan
+ */
+export default function ReservationDetailModal({ detail, onClose, onCancel, busy }) {
+  const titleId = useId();
+
+  // Identitas onClose distabilkan supaya efek focus-trap tidak dibongkar-pasang tiap
+  // render induk (fokus akan melompat balik ke elemen pertama kalau itu terjadi).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  const stableClose = useCallback(() => { onCloseRef.current?.(); }, []);
+  const dialogRef = useDialogA11y(stableClose);
+
+  if (!detail) return null;
+
+  const style = statusStyle(detail.status);
+  const bays = Array.isArray(detail.bay_codes) ? detail.bay_codes : [];
+  const tasks = Array.isArray(detail.tasks) ? detail.tasks : [];
+
+  // Booking non-job (PARKING/STORAGE/MAINTENANCE/OTHER) tidak punya order maupun task.
+  const bookingType = bookingTypeOf(detail);
+  const isOrderBooking = bookingType.isJob;
+
+  // D7 / A-17: reservasi ORDER yang order_no-nya tidak dikenal (tidak ketemu di
+  // ph3_order/sow) datang tanpa part_name & customer. PENTING: syarat isOrderBooking
+  // wajib ada — booking non-job memang tidak punya keduanya dan BUKAN order yatim.
+  const unknownOrder = isOrderBooking && !isText(detail.part_name) && !isText(detail.customer);
+
+  const heading = isOrderBooking
+    ? (isText(detail.order_no) ? detail.order_no : '(tanpa order)')
+    : (isText(detail.purpose) ? detail.purpose : bookingType.label);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 px-0 backdrop-blur-sm md:items-center md:px-4"
+      onClick={stableClose}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onClick={(event) => event.stopPropagation()}
+        className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl focus:outline-none md:max-w-lg md:rounded-2xl"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">
+                {isOrderBooking ? 'Detail Reservasi' : 'Detail Booking Non-Job'}
+              </p>
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${style.pill}`}>
+                {style.label}
+              </span>
+              {!isOrderBooking && (
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${bookingType.pill}`}>
+                  {bookingType.label}
+                </span>
+              )}
+              {unknownOrder && (
+                <span
+                  title="Order ini tidak ditemukan di data SAP/SOW — bay tetap terpakai."
+                  className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700"
+                >
+                  <HelpCircle className="h-3 w-3" /> Order tidak dikenal
+                </span>
+              )}
+            </div>
+            <h3
+              id={titleId}
+              className={`truncate text-base font-extrabold text-slate-800 ${isOrderBooking ? 'font-mono tabular-nums' : ''}`}
+            >
+              {heading}
+            </h3>
+            {(isText(detail.part_name) || isText(detail.customer)) && (
+              <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                {[detail.part_name, detail.customer].filter(isText).join(' · ')}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={stableClose}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+            aria-label="Tutup"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <DetailRow icon={<MapPin className="h-3.5 w-3.5" />} label="Area / Bay">
+            <span className="block">{detail.area_name || '-'}</span>
+            <span className="font-mono text-xs tabular-nums text-slate-500">{bays.join(', ') || '-'}</span>
+          </DetailRow>
+          <DetailRow icon={<CalendarRange className="h-3.5 w-3.5" />} label="Rentang">
+            <span className="tabular-nums">{formatDate(detail.start_date)} – {formatDate(detail.end_date)}</span>
+          </DetailRow>
+          {!isOrderBooking && (
+            <DetailRow icon={<Tag className="h-3.5 w-3.5" />} label="Jenis / Tujuan">
+              <span className="block">{bookingType.label}</span>
+              <span className="block truncate text-xs font-semibold text-slate-500">
+                {isText(detail.purpose) ? detail.purpose : '-'}
+              </span>
+            </DetailRow>
+          )}
+          {isText(detail.part_name) && (
+            <DetailRow icon={<Package className="h-3.5 w-3.5" />} label="Part">
+              <span className="block truncate">{detail.part_name}</span>
+            </DetailRow>
+          )}
+          {isText(detail.customer) && (
+            <DetailRow icon={<Building2 className="h-3.5 w-3.5" />} label="Customer">
+              <span className="block truncate">{detail.customer}</span>
+            </DetailRow>
+          )}
+          {isText(detail.created_by) && (
+            <DetailRow icon={<User className="h-3.5 w-3.5" />} label="Dibuat oleh">
+              <span className="block truncate">{detail.created_by}</span>
+            </DetailRow>
+          )}
+        </div>
+
+        {unknownOrder && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+            <p className="text-xs font-semibold text-amber-700">
+              Nomor order <span className="font-mono tabular-nums">{detail.order_no || '-'}</span> tidak ditemukan di
+              data SAP/SOW. Reservasi ini tetap ditampilkan karena bay-nya benar-benar terpakai.
+            </p>
+          </div>
+        )}
+
+        {isText(detail.notes) && (
+          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Catatan</p>
+            <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{detail.notes}</p>
+          </div>
+        )}
+
+        {isOrderBooking && tasks.length > 0 && (
+          <div className="mt-5">
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <ListChecks className="h-4 w-4 text-[#0077b6]" />
+              <span className="text-xs font-bold text-slate-700">Task direservasi</span>
+              <span className="rounded-full bg-[#caf0f8] px-2 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]">
+                {tasks.length}
+              </span>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white">
+              {tasks.map((task, index) => {
+                const hasPeople = task.people_required != null && task.people_required !== '';
+                const hasPlan = task.planhours != null && task.planhours !== '' && Number.isFinite(Number(task.planhours));
+                return (
+                  <div
+                    key={task.schedule_id || `${task.task_id}-${index}`}
+                    className="flex items-start justify-between gap-2 border-b border-slate-100 px-3 py-2 last:border-b-0"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-bold uppercase tabular-nums text-slate-600">
+                          Op {task.operation_no || '-'}
+                        </span>
+                        {task.workcenter && (
+                          <span className="rounded bg-[#caf0f8] px-1.5 py-0.5 text-[11px] font-bold uppercase text-[#0077b6]">
+                            {task.workcenter}
+                          </span>
+                        )}
+                        {hasPlan && (
+                          <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold uppercase tabular-nums text-slate-600">
+                            <Clock className="h-3 w-3" />{formatHours(task.planhours)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 truncate text-sm font-semibold text-slate-800">{task.task_name || '-'}</p>
+                    </div>
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold tabular-nums ${
+                        hasPeople ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-100 text-slate-400'
+                      }`}
+                      title="Jumlah orang (people_required)"
+                    >
+                      <Users className="h-3.5 w-3.5" />{hasPeople ? task.people_required : '-'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => onCancel(detail)}
+            disabled={busy}
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Ban className="h-4 w-4" />}
+            Batalkan reservasi
+          </button>
+          <button
+            type="button"
+            onClick={stableClose}
+            className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+          >
+            Tutup
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

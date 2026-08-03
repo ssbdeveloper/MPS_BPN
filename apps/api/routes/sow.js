@@ -32,6 +32,15 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
 });
 
+// ── Sub-task Excel import: keep file in memory (parsed then discarded) ────────
+const uploadMem = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    cb(null, ALLOWED_MIMES.has(file.mimetype));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+});
+
 // ============================================
 // SOW STANDARD — flat list (legacy)
 // ============================================
@@ -94,10 +103,32 @@ router.put("/history-order/:orderNo", controller.saveSowOrderRevision);
 router.get("/revision-history/:orderNo", controller.getSowRevisionHistory);
 
 // ============================================
+// PENANDA SUBCONT (Fase 6 — docs/MFG_PLAN_AREA_PLAN.md §4 Fase 6 / D4)
+// Label saja: workcenter tidak disentuh, jadwal tetap ada, jamnya keluar dari beban internal.
+// WAJIB terdaftar DI ATAS route generic `/:order`, `/:id` di bagian LEGACY paling bawah —
+// kalau tidak, GET /sow/subcont-marks akan tertelan getById dengan order = "subcont-marks".
+// ============================================
+router.get("/subcont-marks", controller.listSowSubcontMarks);
+router.post("/subcont-marks", controller.createSowSubcontMark);
+router.delete("/subcont-marks/:order_no/:operation_no", controller.deleteSowSubcontMark);
+
+// ============================================
 // PROGRESS UPDATE HISTORY
 // ============================================
 router.get("/progress-history/:idsow", controller.getProgressHistory);
 router.post("/progress-history", controller.addProgressUpdate);
+
+// ============================================
+// SUB-OPERATION / CHILD-TASK (manufaktur physical-progress rollup)
+// docs/MFG_SUBOPERATION_PROGRESS_PLAN.md — child progress rolls up to sow.progress
+// ============================================
+router.get("/operations/:idsow/subtasks",     controller.getSubtasks);
+router.post("/operations/:idsow/subtasks",    controller.createSubtask);
+router.put("/subtasks/:subId",                controller.updateSubtask);
+router.post("/subtasks/:subId/progress",      controller.addSubtaskProgress);
+router.get("/subtasks/:subId/progress-history", controller.getSubtaskProgressHistory);
+// Excel import (preview via commit=false, apply via commit=true) — memoryStorage
+router.post("/subtasks/import", uploadMem.single('file'), controller.importSubtasks);
 
 // ============================================
 // PARTS ROUTES (PINDAH KE ATAS!)

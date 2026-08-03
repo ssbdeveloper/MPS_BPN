@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ClipboardList, Lock, MapPin, RefreshCw, Search, Settings2, Unlock, X } from 'lucide-react';
+import { AlertTriangle, ClipboardList, Lock, MapPin, RefreshCw, Search, Settings2, Unlock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { goBackOrFallback } from '../../../utils/navigation';
 import { AREA_OPTIONS, BLASTING_AREA_CODE } from '../../../config/manufacturingAreas';
@@ -101,6 +101,14 @@ function formatHoursFromMinutes(value) {
   return `${hours.toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam`;
 }
 
+// An order-level reservation books a bay for a whole order without pointing at a
+// specific MS Project task, so it has no task name / operation / SSBR to show. The
+// API marks those rows with is_order_level; older API builds omit the column, so
+// only an explicit true counts as order-level.
+function isOrderLevelJob(job) {
+  return job?.is_order_level === true;
+}
+
 export default function ManufacturingSelectJobPage() {
   const navigate = useNavigate();
   const [deviceAreaCode, setDeviceAreaCode] = useState(() => readStoredDeviceArea());
@@ -156,7 +164,12 @@ export default function ManufacturingSelectJobPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.message || `HTTP ${response.status}`);
 
-      const rows = (payload.data || []).filter((job) => sameWorkcenter(job.workcenter, currentWorkcenter));
+      // Reservasi order-level tidak punya workcenter (tidak menunjuk task), jadi filter ulang
+      // di klien harus meloloskannya — kalau tidak, badge order-level jadi kode mati dan bay
+      // yang terpakai tampak kosong bagi operator.
+      const rows = (payload.data || []).filter(
+        (job) => isOrderLevelJob(job) || sameWorkcenter(job.workcenter, currentWorkcenter)
+      );
       setJobs(rows);
       if (!rows.length) {
         toast.info('Tidak ada task aktif untuk area, bay, dan workcenter ini');
@@ -432,7 +445,11 @@ export default function ManufacturingSelectJobPage() {
               </tr>
             ) : (
               jobs.map((job, index) => {
-                const isSelected = selectedJob?.task_id === job.task_id;
+                const isOrderLevel = isOrderLevelJob(job);
+                // Order-level rows share the same (null) task_id, so the schedule must be
+                // part of the comparison or every one of them would highlight at once.
+                const isSelected = selectedJob?.schedule_id === job.schedule_id
+                  && selectedJob?.task_id === job.task_id;
                 const plannedMinutes = Number(job.planned_work_minutes || job.duration_minutes || 0);
 
                 return (
@@ -442,18 +459,32 @@ export default function ManufacturingSelectJobPage() {
                     className={`${isSelected ? 'bg-[#caf0f8]' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} cursor-pointer border-b border-slate-100 transition-colors duration-100 hover:bg-[#ade8f4] active:bg-[#90e0ef]`}
                   >
                     <td className={`${cellBase} text-center`}>
-                      <div className="font-mono font-extrabold text-[#0096c7]">{job.task_order_no || job.order_no}</div>
-                      <div className="mt-0.5 text-[10px] font-semibold text-slate-500">{selectedBay}</div>
+                      <div className="font-mono font-extrabold tabular-nums text-[#0096c7]">{job.task_order_no || job.order_no}</div>
+                      <div className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedBay}</div>
                     </td>
                     <td className={`${cellBase} text-left`}>
-                      <div className="font-semibold leading-snug text-slate-800">{job.task_name || '-'}</div>
-                      {job.outline_number && (
-                        <div className="mt-0.5 text-[10px] font-mono text-slate-400">{job.outline_number}</div>
+                      {isOrderLevel ? (
+                        <>
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700">
+                            <AlertTriangle size={11} />
+                            Order-level
+                          </span>
+                          <div className="mt-1 text-xs font-semibold leading-snug text-amber-700">
+                            Reservasi tingkat order — task belum ditentukan
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-semibold leading-snug text-slate-800">{job.task_name || '-'}</div>
+                          {job.outline_number && (
+                            <div className="mt-0.5 text-[11px] font-mono text-slate-400">{job.outline_number}</div>
+                          )}
+                        </>
                       )}
                     </td>
                     <td className={`${cellBase} text-center font-mono text-slate-700`}>{job.operation_no || '-'}</td>
                     <td className={`${cellBase} text-center font-mono text-slate-700`}>{job.ssbr_id || '-'}</td>
-                    <td className={`${cellBase} text-center text-slate-700`}>{formatHoursFromMinutes(plannedMinutes)}</td>
+                    <td className={`${cellBase} text-center tabular-nums text-slate-700`}>{formatHoursFromMinutes(plannedMinutes)}</td>
                     <td className={`${cellBase} text-center text-slate-700`}>
                       {formatDate(job.start_date)} - {formatDate(job.end_date)}
                     </td>

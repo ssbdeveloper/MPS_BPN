@@ -33,9 +33,14 @@ router.get("/sow-orders/:order_no/operations", controller.getSowOrderOperations)
 router.patch("/sow-orders/:order_no/operations/people", controller.updateOperationPeople);
 router.get("/sow-orders/:order_no/tasks", controller.listOrderTasks);
 
+// NOTE: the literal sub-paths ("/occupants", "/group/:id") MUST stay above
+// "/bay-schedules/:schedule_id", otherwise Express swallows them as a param.
 router.get("/bay-schedules", controller.listBaySchedules);
+router.get("/bay-schedules/occupants", controller.listBayOccupants);
 router.get("/bay-schedule-tasks", controller.listBayScheduleTasks);
 router.post("/bay-schedules", controller.createBaySchedule);
+router.put("/bay-schedules/group/:schedule_group_id", controller.updateBayScheduleGroup);
+router.delete("/bay-schedules/group/:schedule_group_id", controller.cancelBayScheduleGroup);
 router.delete("/bay-schedules/:schedule_id", controller.cancelBaySchedule);
 
 router.get("/projects", controller.listProjects);

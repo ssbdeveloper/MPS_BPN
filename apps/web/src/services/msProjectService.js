@@ -59,9 +59,39 @@ export async function fetchMsProjectTasks(projectId, params = {}) {
   return payload.data || [];
 }
 
-export async function fetchSowOrders(params = {}) {
-  const payload = await request(`/ms-project/sow-orders${queryString(params)}`);
-  return payload.data || [];
+// Paginasi endpoint ini nyata (limit default 50, MAX_LIMIT 100) dan meta-nya
+// dikirim di `summary`, BUKAN di level atas envelope — lihat
+// apps/api/controllers/msProjectController.js:paginationSummary(). Selama ini
+// fetchSowOrders membuang seluruh envelope kecuali `data`, jadi pemanggil tidak
+// pernah tahu daftarnya terpotong (A-10: 80 diminta dari pool 115).
+//
+// Bentuk lama fetchSowOrders (Array) DIPERTAHANKAN dengan sengaja: MapSapOperationPage
+// memakai hasilnya langsung sebagai state array (`setSowOrders(await fetchSowOrders(...))`),
+// jadi mengubahnya jadi objek akan memecah halaman itu tanpa terlihat sampai runtime.
+// Yang butuh meta memanggil fetchSowOrdersPage().
+//
+// `options` diteruskan apa adanya ke fetch -> dipakai untuk { signal } AbortController.
+export async function fetchSowOrdersPage(params = {}, options = {}) {
+  const payload = await request(`/ms-project/sow-orders${queryString(params)}`, options);
+  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const summary = payload.summary || {};
+  const asNumber = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  return {
+    rows,
+    // Tanpa `total` dari server, satu-satunya angka jujur adalah jumlah baris yang
+    // benar-benar diterima — jangan mengarang total yang lebih besar.
+    total: asNumber(summary.total, rows.length),
+    limit: asNumber(summary.limit, rows.length),
+    offset: asNumber(summary.offset, 0),
+  };
+}
+
+export async function fetchSowOrders(params = {}, options = {}) {
+  const page = await fetchSowOrdersPage(params, options);
+  return page.rows;
 }
 
 export async function fetchSowOrderOperations(orderNo) {
@@ -97,23 +127,87 @@ export async function updateOperationPeople(orderNo, updates) {
   return response.data;
 }
 
-export async function fetchBaySchedules(params = {}) {
-  const payload = await request(`/ms-project/bay-schedules${queryString(params)}`);
+// `options` diteruskan ke fetch supaya pemanggil bisa mengirim { signal }
+// AbortController — peta area memuat ulang tiap kali rentang tanggal berubah dan
+// respons lama yang datang belakangan bisa menimpa yang baru.
+export async function fetchBaySchedules(params = {}, options = {}) {
+  const payload = await request(`/ms-project/bay-schedules${queryString(params)}`, options);
   return payload.data || [];
 }
 
+// Penghuni bay pada rentang tanggal tertentu -> dipakai UI untuk peringatan lunak
+// SEBELUM submit reservasi. `params.bay_codes` boleh array (digabung jadi CSV) dan
+// `params.exclude_group_id` dipakai saat mengedit grup agar dirinya sendiri tidak
+// ikut terhitung sebagai penghuni.
+export async function fetchBayOccupants(params = {}) {
+  const { bay_codes: bayCodes, ...rest } = params;
+  const query = {
+    ...rest,
+    bay_codes: Array.isArray(bayCodes) ? bayCodes.join(',') : bayCodes,
+  };
+  const payload = await request(`/ms-project/bay-schedules/occupants${queryString(query)}`);
+  const data = payload.data;
+  // Server memotong daftar di 50 dan mengirim { rows, truncated, total }. Membuang dua flag
+  // itu membuat panel menampilkan "5 penghuni" padahal sebenarnya 60 — dan karena overlap
+  // sekarang murni informasional (D3), informasi yang tidak lengkap merusak satu-satunya
+  // nilai yang tersisa dari fitur ini. Bentuk array lama tetap diterima pemanggil lain.
+  if (Array.isArray(data)) return { rows: data, truncated: false, total: data.length };
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const total = Number(data?.total);
+  return {
+    rows,
+    truncated: Boolean(data?.truncated),
+    total: Number.isFinite(total) ? total : rows.length,
+  };
+}
+
+// Sejak D3 bay TIDAK pernah eksklusif: overlap tidak lagi menghasilkan 409, selalu 201
+// bila payload valid. Penghuni lain dikembalikan sebagai peringatan lunak di
+// `warnings: [{ type: 'BAY_OVERLAP', occupants: [...] }]` (array kosong bila bersih).
+// `warnings` ada di level atas envelope (bukan di `data`), jadi ditempelkan ke hasil
+// di sini. Bentuk lama (isi `response.data`) tetap utuh supaya pemanggil lama aman.
 export async function createBaySchedule(payload) {
   const response = await request('/ms-project/bay-schedules', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
-  return response.data;
+  return {
+    ...(response.data || {}),
+    warnings: Array.isArray(response.warnings) ? response.warnings : [],
+  };
 }
 
+// Aktor TIDAK lagi dikirim di body: backend memaksanya dari sesi lewat header
+// x-user-id/x-user-name yang sudah dipasang authHeaders().
 export async function cancelBaySchedule(scheduleId) {
   const response = await request(`/ms-project/bay-schedules/${encodeURIComponent(scheduleId)}`, {
     method: 'DELETE',
-    body: JSON.stringify({ actor: 'web-manufacturing' }),
+  });
+  return response.data;
+}
+
+// Satu reservasi = satu schedule_group_id (N baris task). Update grup menggeser
+// tanggal / mengganti bay / menambah-hapus task dalam satu transaksi.
+// Server menghitung ulang overlap setelah bay/tanggal berubah dan mengirimnya sebagai
+// warning BAY_OVERLAP di level atas envelope — sama seperti createBaySchedule. Kalau
+// `warnings` dibuang di sini, peringatan lunak D3 hilang persis di jalur yang paling
+// mungkin menciptakan tumpang tindih baru (menggeser reservasi ke bay yang sudah terisi).
+export async function updateBayScheduleGroup(groupId, payload) {
+  const response = await request(`/ms-project/bay-schedules/group/${encodeURIComponent(groupId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return {
+    ...(response.data || {}),
+    warnings: Array.isArray(response.warnings) ? response.warnings : [],
+  };
+}
+
+// Batalkan SELURUH baris satu reservasi sekaligus (atomik di server), pengganti
+// perulangan cancelBaySchedule per schedule_id.
+export async function cancelBayScheduleGroup(groupId) {
+  const response = await request(`/ms-project/bay-schedules/group/${encodeURIComponent(groupId)}`, {
+    method: 'DELETE',
   });
   return response.data;
 }
@@ -145,17 +239,21 @@ export async function updateMsProjectStatus(projectId, status, actor) {
 
 export default {
   cancelBaySchedule,
+  cancelBayScheduleGroup,
   createBaySchedule,
+  fetchBayOccupants,
   fetchBaySchedules,
   fetchMsProjectRevisions,
   fetchMsProjects,
   fetchMsProjectTasks,
   fetchOrderTasks,
   fetchSowOrders,
+  fetchSowOrdersPage,
   fetchSowOrderOperations,
   forceCheckinProject,
   mapSowOrderToProjectTasks,
   msProjectFileUrl,
+  updateBayScheduleGroup,
   updateMsProjectStatus,
   updateOperationPeople,
 };

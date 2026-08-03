@@ -270,6 +270,42 @@ async function fetchSowActivity(client, payload, required = true) {
   return result.rows[0] || null;
 }
 
+// Phase 6 (D4): is this (order, operation) currently marked as subcontracted?
+// Order keys are normalised with ltrim(...,'0') exactly like fetchSowActivity above and the
+// rest of the codebase. Returns false when public.sow_subcont_mark does not exist yet
+// (undefined_table 42P01) — no table means no marks, so nothing can be blocked. That keeps
+// this write path alive if the code lands before migration 20260803b_sow_subcont_mark.sql.
+async function isSubcontMarked(client, orderNo, operationNo) {
+  const order = normalizeText(orderNo);
+  const operation = toInt(operationNo, null);
+  if (!order || operation == null) return false;
+  // SAVEPOINT wajib: pemanggil sudah di dalam transaksi (BEGIN). Tanpa savepoint, error
+  // undefined_table (42P01) MERACUNI transaksi — catch memang mengembalikan false, tapi query
+  // berikutnya gagal dengan 25P02 (current transaction is aborted). Jadi fail-open-nya semu.
+  // Dengan savepoint, rollback-to-savepoint memulihkan transaksi dan fail-open benar-benar jalan.
+  await client.query("savepoint subcont_probe");
+  try {
+    const result = await client.query(
+      `SELECT 1
+         FROM public.sow_subcont_mark scm
+        WHERE ltrim(scm.order_no, '0') = ltrim($1, '0')
+          AND scm.operation_no = $2
+          AND scm.unmarked_at IS NULL
+        LIMIT 1`,
+      [order, operation]
+    );
+    await client.query("release savepoint subcont_probe");
+    return result.rowCount > 0;
+  } catch (err) {
+    await client.query("rollback to savepoint subcont_probe");
+    if (err && err.code === "42P01") {
+      console.warn("sow_subcont_mark belum ada — lewati guard subcont (jalankan migrasi 20260803b)");
+      return false;
+    }
+    throw err;
+  }
+}
+
 function resolveActivityFields(sow, payload) {
   return {
     sow_id: toInt(payload.sow_id, sow?.idsow || null),
@@ -742,10 +778,24 @@ exports.getSowActivities = async (req, res) => {
       LIMIT 1
     ) wc ON true
   `;
+  // Phase 6 (D4): operations marked as subcontracted are executed by a vendor, so their
+  // planhours must not show up as internal workshop load. This list feeds the internal
+  // machine-scheduling pool (remaining_hours below = outstanding internal hours), so a
+  // marked operation is dropped from the pool entirely — count query and data query share
+  // this WHERE, so both stay consistent.
+  // DEPLOY NOTE: public.sow_subcont_mark only exists after migration
+  // database/migrations/api/20260803b_sow_subcont_mark.sql runs. Migrate first, then deploy;
+  // otherwise this endpoint returns 500 (undefined_table).
   let where = `
     WHERE s.order_no IS NOT NULL
       AND trim(s.order_no) <> ''
       AND s.operation_no IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.sow_subcont_mark scm
+        WHERE ltrim(scm.order_no, '0') = ltrim(s.order_no, '0')
+          AND scm.operation_no = s.operation_no
+          AND scm.unmarked_at IS NULL
+      )
   `;
 
   if (search) {
@@ -1293,6 +1343,19 @@ exports.createSchedule = async (req, res) => {
     if (!fields.production_order || fields.operation_no == null) {
       const error = new Error("production_order and operation_no are required");
       error.status = 400;
+      throw error;
+    }
+
+    // Phase 6 (D4): fields.original_planhours (resolveActivityFields) carries sow.planhours into
+    // the over-plan warning below, and the row inserted here consumes internal machine capacity.
+    // A subcontracted operation is executed by a vendor, so it must not take internal capacity at
+    // all — refuse at creation instead of silently booking vendor hours onto a machine. Existing
+    // schedules stay reschedulable/deletable on purpose (no guard in rescheduleSchedule).
+    if (await isSubcontMarked(client, fields.production_order, fields.operation_no)) {
+      const error = new Error(
+        "Operasi ini ditandai dikerjakan subcont — tidak bisa dijadwalkan ke kapasitas mesin internal"
+      );
+      error.status = 409;
       throw error;
     }
 

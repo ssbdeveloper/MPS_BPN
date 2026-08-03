@@ -20,6 +20,13 @@ function normalizeRole(role) {
 }
 
 // role -> { featureId: level, __default__: level }  (mirror of FE + sow_verification)
+//
+// CATATAN Fase 0 / D1 — pemecahan `ms_project_admin`:
+// `bay_scheduling`, `msproject_mapping`, dan `msproject_collab` SENGAJA tidak
+// didaftarkan di role mana pun. Ketiganya jatuh ke `__default__` masing-masing role:
+// administrator FULL_ACCESS, supervisor/foreman READ_ONLY (write butuh full_access →
+// tetap ditolak), warehouse/user NO_ACCESS. Owner meng-assign per orang lewat
+// `rbac.user_permissions`. JANGAN memberi FULL_ACCESS ke role mana pun di sini.
 const PERMISSION_MATRIX = {
   administrator: { [DEFAULT_KEY]: LEVELS.FULL_ACCESS },
 
@@ -32,7 +39,7 @@ const PERMISSION_MATRIX = {
     machine_hours: LEVELS.FULL_ACCESS,
     roster_operator: LEVELS.FULL_ACCESS,
     manage_users: LEVELS.NO_ACCESS,
-    ms_project_admin: LEVELS.NO_ACCESS,
+    ms_project_admin: LEVELS.NO_ACCESS, // dipersempit: force-checkin/kalender/resource saja
   },
 
   foreman: {
@@ -43,7 +50,7 @@ const PERMISSION_MATRIX = {
     machine_hours: LEVELS.FULL_ACCESS,
     roster_operator: LEVELS.FULL_ACCESS,
     manage_users: LEVELS.NO_ACCESS,
-    ms_project_admin: LEVELS.NO_ACCESS,
+    ms_project_admin: LEVELS.NO_ACCESS, // dipersempit: force-checkin/kalender/resource saja
   },
 
   warehouse: {

@@ -208,6 +208,19 @@ const SOW_NNVA_TOTAL_JOIN = `
          GROUP BY sow_standard_id
        ) nnva ON nnva.sow_standard_id = COALESCE(s.source_op_id, standard_match.id)`;
 
+// Kolom turunan is_subcont untuk badge di layar SOW (Fase 6 / keputusan D4).
+// EXISTS, BUKAN JOIN: penanda disimpan sebagai riwayat (tandai → batal → tandai lagi menumpuk
+// beberapa baris untuk operasi yang sama), jadi JOIN akan menggandakan baris sow.
+// Kunci dinormalisasi ltrim(...,'0') persis seperti seluruh kodebase mencocokkan order_no.
+// WAJIB dipakai pada query yang alias tabel sow-nya `s`.
+const SOW_IS_SUBCONT_EXPR = `
+         EXISTS (
+           SELECT 1 FROM public.sow_subcont_mark scm
+           WHERE ltrim(scm.order_no, '0') = ltrim(s.order_no, '0')
+             AND scm.operation_no = s.operation_no
+             AND scm.unmarked_at IS NULL
+         ) AS is_subcont`;
+
 async function enrichSowRowsWithNnva(query, rows) {
   if (!Array.isArray(rows) || rows.length === 0) return rows || [];
   const sourceIds = [...new Set(rows.map((row) => Number(row.source_op_id)).filter(Number.isFinite))];
@@ -253,6 +266,24 @@ async function enrichSowRowsWithNnva(query, rows) {
       nnva_items: row.nnva_items || items,
     };
   });
+}
+
+// Menempelkan is_subcont pada baris yang TIDAK datang dari tabel sow (snapshot JSONB di
+// sow_revision_history), sehingga SOW_IS_SUBCONT_EXPR tidak bisa dipakai.
+// Penanda subcont TIDAK diversi: ia atribut hidup dari (order_no, operation_no), bukan bagian
+// dari isi revisi. Jadi yang ditempelkan adalah status AKTIF saat ini — sengaja sama dengan yang
+// terlihat di revisi terkini, bukan "status pada saat revisi itu dibuat" (tidak pernah direkam).
+async function annotateSubcontFromMarks(orderNo, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
+  const marks = await db.query(
+    `SELECT operation_no
+       FROM public.sow_subcont_mark
+      WHERE ltrim(order_no, '0') = ltrim($1, '0')
+        AND unmarked_at IS NULL`,
+    [orderNo],
+  );
+  const marked = new Set(marks.rows.map((row) => Number(row.operation_no)));
+  return rows.map((row) => ({ ...row, is_subcont: marked.has(Number(row.operation_no)) }));
 }
 
 const OPERATION_CARD_REVISION_ORIGINAL = "Original";
@@ -586,7 +617,8 @@ exports.getSowHistoryRows = async (req, res) => {
          COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
          COALESCE(s.planhours, 0) AS operation_planhours,
          COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
-         COALESCE(s.planhours, 0) AS display_planhours
+         COALESCE(s.planhours, 0) AS display_planhours,
+       ${SOW_IS_SUBCONT_EXPR}
        FROM sow s
        ${SOW_STANDARD_MATCH_JOIN}
        ${SOW_NNVA_TOTAL_JOIN}
@@ -733,10 +765,15 @@ exports.getSowOrderForRevision = async (req, res) => {
         return res.status(404).json({ error: "Revision tidak ditemukan" });
       }
       rows = Array.isArray(history.rows[0]?.after_data) ? history.rows[0].after_data : [];
+      // Snapshot revisi lama tidak menyimpan is_subcont — tempelkan dari penanda yang aktif kini.
+      rows = await annotateSubcontFromMarks(orderNo, rows);
       selectedRevision = requestedRevision;
     } else if (light) {
+      // Editor SowHistoryPage memakai light=1, jadi is_subcont HARUS ada di jalur ini juga
+      // (badge Subcont dirender dari baris editor).
       const result = await db.query(
-        `SELECT s.*
+        `SELECT s.*,
+        ${SOW_IS_SUBCONT_EXPR}
          FROM sow s
          WHERE s.order_no = $1
          ORDER BY s.operation_no ASC NULLS LAST, s.idsow ASC`,
@@ -749,7 +786,8 @@ exports.getSowOrderForRevision = async (req, res) => {
                 COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
                 COALESCE(s.planhours, 0) AS operation_planhours,
                 COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
-                COALESCE(s.planhours, 0) AS display_planhours
+                COALESCE(s.planhours, 0) AS display_planhours,
+        ${SOW_IS_SUBCONT_EXPR}
          FROM sow s
          ${SOW_STANDARD_MATCH_JOIN}
          ${SOW_NNVA_TOTAL_JOIN}
@@ -1014,6 +1052,14 @@ exports.saveSowOrderRevision = async (req, res) => {
     );
     const revisionNo = revision.rows[0]?.next_revision || 1;
 
+    // JANGAN memindahkan penanda subcont ke kolom di tabel `sow`.
+    // Baris di bawah menghapus SELURUH operasi order ini lalu menyisipkannya kembali memakai
+    // whitelist EDITABLE_SOW_COLUMNS (33 kolom, lihat atas file). Konsekuensinya:
+    //   1. kolom baru di `sow` yang tidak masuk whitelist DIJAMIN HILANG tiap Create Revision;
+    //   2. `idsow` mati dan lahir baru tiap revisi, jadi FK ke sow(idsow) juga tidak selamat.
+    // Penanda subcont karena itu hidup di public.sow_subcont_mark dengan kunci LOGIS
+    // (ltrim(order_no,'0'), operation_no) yang tidak ikut dihapus di sini — penanda SELAMAT
+    // melewati Create Revision. Lihat database/migrations/api/20260803b_sow_subcont_mark.sql.
     await client.query(`DELETE FROM sow WHERE order_no = $1`, [orderNo]);
 
     const inserted = [];
@@ -1069,6 +1115,138 @@ exports.getSowRevisionHistory = async (req, res) => {
     res.json(result.rows);
   } catch (err) {
     console.error("getSowRevisionHistory error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// ============================================
+// PENANDA SUBCONT (Fase 6 — docs/MFG_PLAN_AREA_PLAN.md §4 Fase 6, keputusan D4)
+// ============================================
+// Subcont = LABEL saja. Kolom `sow.workcenter` TIDAK PERNAH disentuh di sini (kolom itu cermin
+// ETL SAP dan akan ditimpa tanpa syarat pada sinkron berikutnya), dan workcenter C5100SUB tidak
+// dipakai. Efeknya: jadwal start/finish operasi TETAP ada, tapi jamnya dikeluarkan dari agregasi
+// beban internal lewat predikat NOT EXISTS di controller/service agregasi.
+// Tabel: public.sow_subcont_mark — lihat database/migrations/api/20260803b_sow_subcont_mark.sql.
+
+// Aktor SELALU dari header sesi (x-user-name / x-user-id), TIDAK PERNAH dari body:
+// body dikirim klien dan bisa dipalsukan. null bila sesi tidak membawa identitas.
+function subcontActorOf(req) {
+  const name = req.headers["x-user-name"];
+  const id   = req.headers["x-user-id"];
+  const value = (name && String(name).trim()) || (id && String(id).trim()) || "";
+  return value || null;
+}
+
+function parseSubcontOperationNo(value) {
+  const text = String(value ?? "").trim();
+  if (!text || !/^-?\d+$/.test(text)) return null;
+  const parsed = Number.parseInt(text, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+const SUBCONT_MARK_RETURNING = `id, order_no, operation_no, original_workcenter, note,
+              marked_by, marked_at, unmarked_by, unmarked_at`;
+
+// GET /sow/subcont-marks?order_no=<opsional> — hanya tanda AKTIF (unmarked_at IS NULL).
+// Baris historis (sudah dibatalkan) sengaja tidak dikembalikan: pemanggilnya UI badge.
+exports.listSowSubcontMarks = async (req, res) => {
+  try {
+    const orderNo = String(req.query.order_no ?? "").trim();
+    const params = [];
+    let filter = "";
+    if (orderNo) {
+      params.push(orderNo);
+      filter = ` AND ltrim(scm.order_no, '0') = ltrim($1, '0')`;
+    }
+    const result = await db.query(
+      `SELECT scm.id, scm.order_no, scm.operation_no, scm.original_workcenter,
+              scm.note, scm.marked_by, scm.marked_at
+         FROM public.sow_subcont_mark scm
+        WHERE scm.unmarked_at IS NULL${filter}
+        ORDER BY ltrim(scm.order_no, '0') ASC, scm.operation_no ASC`,
+      params,
+    );
+    res.json({ success: true, data: result.rows });
+  } catch (err) {
+    console.error("listSowSubcontMarks error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/subcont-marks — body { order_no, operation_no, note? }
+// original_workcenter & marked_by TIDAK diambil dari body: yang pertama disalin dari `sow`,
+// yang kedua dari header sesi.
+exports.createSowSubcontMark = async (req, res) => {
+  try {
+    const orderNo = String(req.body?.order_no ?? "").trim();
+    const operationNo = parseSubcontOperationNo(req.body?.operation_no);
+    const rawNote = req.body?.note == null ? "" : String(req.body.note).trim();
+    const note = rawNote || null;
+
+    if (!orderNo) return res.status(400).json({ error: "order_no wajib diisi" });
+    if (operationNo == null) return res.status(400).json({ error: "operation_no wajib diisi (bilangan bulat)" });
+
+    // Tabel penanda SENGAJA tanpa FK ke sow, jadi integritasnya dijaga di sini.
+    // Pencocokan ltrim(...,'0') sama seperti getSowOrderOperations / listBaySchedules.
+    const operation = await db.query(
+      `SELECT s.workcenter
+         FROM public.sow s
+        WHERE ltrim(s.order_no, '0') = ltrim($1, '0')
+          AND s.operation_no = $2
+        ORDER BY s.idsow DESC
+        LIMIT 1`,
+      [orderNo, operationNo],
+    );
+    if (!operation.rows.length) {
+      return res.status(404).json({ error: "Operasi tidak ditemukan di SOW" });
+    }
+
+    const result = await db.query(
+      `INSERT INTO public.sow_subcont_mark
+         (order_no, operation_no, original_workcenter, note, marked_by)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING ${SUBCONT_MARK_RETURNING}`,
+      [orderNo, operationNo, operation.rows[0].workcenter ?? null, note, subcontActorOf(req)],
+    );
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    // Andalkan index unik uq_sow_subcont_mark_active, bukan cek-dulu-lalu-insert: dua request
+    // bersamaan bisa lolos dari cek tapi tidak bisa lolos dari index.
+    if (err.code === "23505") {
+      return res.status(409).json({ error: "Operasi ini sudah ditandai subcont" });
+    }
+    console.error("createSowSubcontMark error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE /sow/subcont-marks/:order_no/:operation_no — soft unmark.
+// Baris TIDAK dihapus supaya riwayat siapa menandai/membatalkan tetap ada; yang diisi hanya
+// unmarked_at/unmarked_by sehingga baris keluar dari index parsial "aktif".
+exports.deleteSowSubcontMark = async (req, res) => {
+  try {
+    const orderNo = String(req.params.order_no ?? "").trim();
+    const operationNo = parseSubcontOperationNo(req.params.operation_no);
+
+    if (!orderNo) return res.status(400).json({ error: "order_no wajib diisi" });
+    if (operationNo == null) return res.status(400).json({ error: "operation_no wajib diisi (bilangan bulat)" });
+
+    const result = await db.query(
+      `UPDATE public.sow_subcont_mark
+          SET unmarked_at = NOW(),
+              unmarked_by = $3
+        WHERE ltrim(order_no, '0') = ltrim($1, '0')
+          AND operation_no = $2
+          AND unmarked_at IS NULL
+       RETURNING ${SUBCONT_MARK_RETURNING}`,
+      [orderNo, operationNo, subcontActorOf(req)],
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "Tanda subcont aktif tidak ditemukan" });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error("deleteSowSubcontMark error:", err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -1170,6 +1348,514 @@ exports.addProgressUpdate = async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+// ============================================================================
+// SUB-OPERATION / CHILD-TASK (manufaktur physical-progress rollup)
+// docs/MFG_SUBOPERATION_PROGRESS_PLAN.md
+// Child tasks live under one sow operation (idsow). Their progress rolls up to
+// sow.progress (weighted avg of active sub-tasks). SAP stays at operation level;
+// sub-tasks NEVER touch operation_no / timesheet / mch.
+// ============================================================================
+
+// Recompute the parent operation's progress from its ACTIVE sub-tasks.
+// sow.progress = round( SUM(progress*weight) / SUM(weight) ) over active rows.
+// Also mirrors the value into sow.actual_progress. Runs on the SAME transaction
+// client as the mutation. If there are 0 active sub-tasks (SUM(weight) NULL/0),
+// it does NOT overwrite sow.progress (leaves the last direct input intact).
+async function recomputeOperationProgress(client, idsow) {
+  const agg = await client.query(
+    `SELECT SUM(progress * weight)::numeric AS weighted,
+            SUM(weight)::numeric           AS total_weight
+       FROM sow_sub_operation
+      WHERE operation_id = $1 AND is_active = true`,
+    [idsow]
+  );
+  const totalWeight = agg.rows[0]?.total_weight;
+  // No active sub-task (or zero total weight) → do not overwrite operation progress.
+  if (totalWeight === null || totalWeight === undefined || Number(totalWeight) === 0) {
+    return;
+  }
+  const weighted = Number(agg.rows[0].weighted) || 0;
+  const rolled = Math.round(weighted / Number(totalWeight));
+  await client.query(
+    `UPDATE sow SET progress = $1, actual_progress = $1 WHERE idsow = $2`,
+    [rolled, idsow]
+  );
+}
+
+// GET /sow/operations/:idsow/subtasks — list active sub-tasks of one operation
+exports.getSubtasks = async (req, res) => {
+  try {
+    const { idsow } = req.params;
+    const result = await db.query(
+      `SELECT id, operation_id, order_no, title, sort_order, weight, progress,
+              status, is_active, msp_task_id,
+              created_by, created_at, updated_by, updated_at
+         FROM sow_sub_operation
+        WHERE operation_id = $1 AND is_active = true
+        ORDER BY sort_order ASC, id ASC`,
+      [idsow]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/operations/:idsow/subtasks — create { title, weight?, sort_order? }
+exports.createSubtask = async (req, res) => {
+  let client;
+  try {
+    const { idsow } = req.params;
+    const { title, weight, sort_order } = req.body || {};
+    const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
+
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ error: 'title wajib diisi' });
+    }
+    let w = 1;
+    if (weight !== undefined && weight !== null && weight !== '') {
+      w = Number(weight);
+      if (isNaN(w) || w <= 0) {
+        return res.status(400).json({ error: 'weight harus lebih besar dari 0' });
+      }
+    }
+    let so = 0;
+    if (sort_order !== undefined && sort_order !== null && sort_order !== '') {
+      so = parseInt(sort_order, 10);
+      if (isNaN(so)) {
+        return res.status(400).json({ error: 'sort_order harus berupa angka' });
+      }
+    }
+
+    client = await pgPool.connect();
+    await client.query('BEGIN');
+
+    // Resolve order_no from the parent operation (denormalized onto sub-task).
+    const opRow = await client.query('SELECT order_no FROM sow WHERE idsow = $1', [idsow]);
+    if (opRow.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Operasi (idsow) tidak ditemukan' });
+    }
+    const orderNo = opRow.rows[0].order_no;
+
+    const inserted = await client.query(
+      `INSERT INTO sow_sub_operation
+         (operation_id, order_no, title, sort_order, weight, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)
+       RETURNING *`,
+      [idsow, orderNo || null, String(title).trim(), so, w, createdBy]
+    );
+
+    await recomputeOperationProgress(client, parseInt(idsow, 10));
+
+    await client.query('COMMIT');
+    res.status(201).json(inserted.rows[0]);
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+};
+
+// PUT /sow/subtasks/:subId — update { title?, weight?, sort_order?, status?, is_active? }
+// Recomputes operation rollup when weight or is_active changes.
+exports.updateSubtask = async (req, res) => {
+  let client;
+  try {
+    const { subId } = req.params;
+    const { title, weight, sort_order, status, is_active } = req.body || {};
+    const updatedBy = req.body?.updated_by || req.body?.created_by || req.headers['x-user-id'] || null;
+
+    const sets = [];
+    const vals = [];
+    let i = 1;
+    let recompute = false;
+
+    if (title !== undefined) {
+      if (!title || !String(title).trim()) {
+        return res.status(400).json({ error: 'title tidak boleh kosong' });
+      }
+      sets.push(`title = $${i++}`); vals.push(String(title).trim());
+    }
+    if (weight !== undefined) {
+      const w = Number(weight);
+      if (isNaN(w) || w <= 0) {
+        return res.status(400).json({ error: 'weight harus lebih besar dari 0' });
+      }
+      sets.push(`weight = $${i++}`); vals.push(w);
+      recompute = true;
+    }
+    if (sort_order !== undefined) {
+      const so = parseInt(sort_order, 10);
+      if (isNaN(so)) {
+        return res.status(400).json({ error: 'sort_order harus berupa angka' });
+      }
+      sets.push(`sort_order = $${i++}`); vals.push(so);
+    }
+    if (status !== undefined) {
+      const allowed = ['NOT_STARTED', 'IN_PROGRESS', 'ON_HOLD', 'DONE'];
+      if (!allowed.includes(status)) {
+        return res.status(400).json({ error: 'status tidak valid' });
+      }
+      sets.push(`status = $${i++}`); vals.push(status);
+    }
+    if (is_active !== undefined) {
+      const active = (is_active === true || is_active === 'true' || is_active === 1 || is_active === '1');
+      sets.push(`is_active = $${i++}`); vals.push(active);
+      recompute = true;
+    }
+
+    if (sets.length === 0) {
+      return res.status(400).json({ error: 'Tidak ada field untuk diupdate' });
+    }
+
+    sets.push(`updated_by = $${i++}`); vals.push(updatedBy);
+    sets.push('updated_at = now()');
+
+    client = await pgPool.connect();
+    await client.query('BEGIN');
+
+    vals.push(subId);
+    const updated = await client.query(
+      `UPDATE sow_sub_operation SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    if (updated.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Sub-task tidak ditemukan' });
+    }
+
+    if (recompute) {
+      await recomputeOperationProgress(client, updated.rows[0].operation_id);
+    }
+
+    await client.query('COMMIT');
+    res.json(updated.rows[0]);
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+};
+
+// POST /sow/subtasks/:subId/progress — add { progress 1-100, issue_description?, image_data? }
+// Client sends image as base64 → server writes JPEG to disk → stores relative path.
+// Inserts history + updates sub-task snapshot + recomputes operation rollup.
+exports.addSubtaskProgress = async (req, res) => {
+  let client;
+  try {
+    const { subId } = req.params;
+    const { progress, issue_description, image_data } = req.body || {};
+    const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
+
+    const prog = parseInt(progress, 10);
+    if (isNaN(prog) || prog < 1 || prog > 100) {
+      return res.status(400).json({ error: 'Progress harus antara 1–100' });
+    }
+
+    client = await pgPool.connect();
+    await client.query('BEGIN');
+
+    const subRow = await client.query(
+      `SELECT id, operation_id, order_no FROM sow_sub_operation WHERE id = $1`,
+      [subId]
+    );
+    if (subRow.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Sub-task tidak ditemukan' });
+    }
+    const operationId = subRow.rows[0].operation_id;
+    const orderNo = subRow.rows[0].order_no;
+
+    // ── Save image to filesystem (mirrors addProgressUpdate) ─────────────────
+    let image_path = null;
+    if (image_data) {
+      const opRow = await client.query(
+        'SELECT operation_no FROM sow WHERE idsow = $1', [operationId]
+      );
+      const opNo    = opRow.rows[0]?.operation_no ?? '00';
+      const safeOrd = (orderNo || 'unknown').replace(/[^\w\-]/g, '_');
+      const safeOp  = String(opNo).replace(/[^\w\-]/g, '_');
+      const safeSub = String(subId).replace(/[^\w\-]/g, '_');
+
+      const uploadsRoot = path.join(__dirname, '../uploads');
+      const dir = path.join(uploadsRoot, 'progress', safeOrd, safeOp, safeSub);
+      fs.mkdirSync(dir, { recursive: true });
+
+      const filename = `${Date.now()}.jpg`;
+      const base64   = image_data.replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(path.join(dir, filename), Buffer.from(base64, 'base64'));
+
+      image_path = `/uploads/progress/${safeOrd}/${safeOp}/${safeSub}/${filename}`;
+    }
+
+    const inserted = await client.query(
+      `INSERT INTO sow_sub_operation_progress_history
+         (sub_operation_id, operation_id, order_no, progress, issue_description, image_path, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [subId, operationId, orderNo || null, prog, issue_description || null, image_path, createdBy]
+    );
+
+    await client.query(
+      `UPDATE sow_sub_operation
+          SET progress = $1, updated_by = $2, updated_at = now()
+        WHERE id = $3`,
+      [prog, createdBy, subId]
+    );
+
+    await recomputeOperationProgress(client, operationId);
+
+    await client.query('COMMIT');
+    res.status(201).json(inserted.rows[0]);
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+};
+
+// GET /sow/subtasks/:subId/progress-history — history for one sub-task (newest first)
+exports.getSubtaskProgressHistory = async (req, res) => {
+  try {
+    const { subId } = req.params;
+    const result = await db.query(
+      `SELECT id, sub_operation_id, operation_id, order_no, progress,
+              issue_description, image_path, created_at, created_by
+         FROM sow_sub_operation_progress_history
+        WHERE sub_operation_id = $1
+        ORDER BY created_at DESC`,
+      [subId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/subtasks/import — Excel bulk upsert of sub-tasks (progress-only).
+// multipart/form-data: file=<.xlsx>, commit="true"|"false".
+//   commit=false → DRY-RUN: compute action per row, NO DB writes.
+//   commit=true  → transaction: upsert valid rows + recompute rollup per op.
+// Response (same shape for both):
+//   { preview: [{ index, order_no, operation_no, title, action, reason? }],
+//     summary: { created, updated, rejected, total } }
+// NEVER touches SAP / timesheet / operation_no — pure sub-task progress.
+exports.importSubtasks = async (req, res) => {
+  let client;
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'File Excel wajib diunggah (field "file")' });
+    }
+    const actor  = req.body?.actor || req.headers['x-user-id'] || null;
+    const commit = req.body?.commit === true || req.body?.commit === 'true' || req.body?.commit === '1';
+
+    // ── Extract a trimmed string from any ExcelJS cell value shape ────────────
+    const cellText = (cell) => {
+      if (!cell) return '';
+      let v = cell.value;
+      if (v === null || v === undefined) return '';
+      if (typeof v === 'object') {
+        if (Array.isArray(v.richText))      v = v.richText.map((t) => t.text).join('');
+        else if (v.result !== undefined)    v = v.result;      // formula
+        else if (v.text !== undefined)      v = v.text;        // hyperlink
+        else if (v instanceof Date)         v = v.toISOString();
+        else                                v = String(v);
+      }
+      return String(v).trim();
+    };
+
+    // ── Load workbook + pick sheet ───────────────────────────────────────────
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(req.file.buffer);
+    const ws = wb.getWorksheet('sub_task') || wb.worksheets[0];
+    if (!ws) {
+      return res.status(400).json({ error: 'Worksheet tidak ditemukan dalam file' });
+    }
+
+    // ── Map header columns (row 1) → column index ────────────────────────────
+    const HEADER_KEYS = ['order_no', 'operation_no', 'title', 'weight', 'sort_order', 'status', 'progress'];
+    const colMap = {};
+    ws.getRow(1).eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      const key = cellText(cell).toLowerCase().replace(/\s+/g, '_');
+      if (HEADER_KEYS.includes(key) && colMap[key] === undefined) colMap[key] = colNumber;
+    });
+    const missing = ['order_no', 'operation_no', 'title'].filter((k) => colMap[k] === undefined);
+    if (missing.length) {
+      return res.status(400).json({ error: `Header kolom wajib tidak ditemukan: ${missing.join(', ')}` });
+    }
+
+    const ALLOWED_STATUS = ['NOT_STARTED', 'IN_PROGRESS', 'ON_HOLD', 'DONE'];
+
+    if (commit) {
+      client = await pgPool.connect();
+      await client.query('BEGIN');
+    }
+    const q = commit ? client : db;
+
+    const preview = [];
+    let created = 0, updated = 0, rejected = 0;
+    const affectedOps = new Set();
+
+    const reject = (index, order_no, operation_no, title, reason) => {
+      preview.push({ index, order_no, operation_no, title, action: 'reject', reason });
+      rejected++;
+    };
+
+    const lastRow = ws.rowCount;
+    for (let r = 2; r <= lastRow; r++) {
+      const row = ws.getRow(r);
+      const get = (key) => (colMap[key] !== undefined ? cellText(row.getCell(colMap[key])) : '');
+
+      const orderNoRaw = get('order_no');
+      const opNoRaw    = get('operation_no');
+      const titleRaw   = get('title');
+      const weightRaw  = get('weight');
+      const sortRaw    = get('sort_order');
+      const statusRaw  = get('status');
+      const progRaw    = get('progress');
+
+      // Skip fully-blank / sample rows (all three key cells empty).
+      if (!orderNoRaw && !opNoRaw && !titleRaw) continue;
+
+      const index = r; // physical Excel row number — stable locator for the user
+
+      // 1) order_no / operation_no must be usable
+      const opNo = parseInt(opNoRaw, 10);
+      if (!orderNoRaw || isNaN(opNo)) {
+        reject(index, orderNoRaw, opNoRaw, titleRaw, 'order_no / operation_no tidak valid');
+        continue;
+      }
+
+      // 2) match parent operation (leading-zero normalized, operation_no is INT)
+      const opRes = await q.query(
+        `SELECT idsow, order_no FROM sow
+          WHERE ltrim(order_no, '0') = ltrim($1, '0') AND operation_no = $2::int
+          LIMIT 1`,
+        [orderNoRaw, opNo]
+      );
+      if (opRes.rows.length === 0) {
+        reject(index, orderNoRaw, opNoRaw, titleRaw, 'Operasi tidak ditemukan');
+        continue;
+      }
+      const op = opRes.rows[0];
+
+      // 3) validations
+      if (!titleRaw) {
+        reject(index, orderNoRaw, opNoRaw, titleRaw, 'title wajib diisi');
+        continue;
+      }
+      let w;
+      if (weightRaw !== '') {
+        w = Number(weightRaw);
+        if (isNaN(w) || w <= 0) {
+          reject(index, orderNoRaw, opNoRaw, titleRaw, 'weight harus lebih besar dari 0');
+          continue;
+        }
+      }
+      let so;
+      if (sortRaw !== '') {
+        so = parseInt(sortRaw, 10);
+        if (isNaN(so)) {
+          reject(index, orderNoRaw, opNoRaw, titleRaw, 'sort_order harus berupa angka');
+          continue;
+        }
+      }
+      let statusVal;
+      if (statusRaw !== '') {
+        statusVal = statusRaw.toUpperCase();
+        if (!ALLOWED_STATUS.includes(statusVal)) {
+          reject(index, orderNoRaw, opNoRaw, titleRaw, 'status tidak valid');
+          continue;
+        }
+      }
+      let progVal;
+      if (progRaw !== '') {
+        const p = Number(progRaw);
+        if (isNaN(p) || p < 0 || p > 100) {
+          reject(index, orderNoRaw, opNoRaw, titleRaw, 'progress harus antara 0–100');
+          continue;
+        }
+        progVal = Math.round(p);
+      }
+
+      // 4) find existing active sub-task by (operation_id, lower(trim(title)))
+      const subRes = await q.query(
+        `SELECT id FROM sow_sub_operation
+          WHERE operation_id = $1 AND lower(trim(title)) = lower(trim($2)) AND is_active = true
+          LIMIT 1`,
+        [op.idsow, titleRaw]
+      );
+      const existing = subRes.rows[0];
+
+      if (existing) {
+        // ── UPDATE: set only the columns the row actually filled ─────────────
+        if (commit) {
+          const sets = [];
+          const vals = [];
+          let i = 1;
+          if (w !== undefined)         { sets.push(`weight = $${i++}`);     vals.push(w); }
+          if (so !== undefined)        { sets.push(`sort_order = $${i++}`); vals.push(so); }
+          if (statusVal !== undefined) { sets.push(`status = $${i++}`);     vals.push(statusVal); }
+          if (progVal !== undefined)   { sets.push(`progress = $${i++}`);   vals.push(progVal); }
+          sets.push(`updated_by = $${i++}`); vals.push(actor);
+          sets.push('updated_at = now()');
+          vals.push(existing.id);
+          await client.query(
+            `UPDATE sow_sub_operation SET ${sets.join(', ')} WHERE id = $${i}`,
+            vals
+          );
+          affectedOps.add(op.idsow);
+        }
+        preview.push({ index, order_no: orderNoRaw, operation_no: opNoRaw, title: titleRaw, action: 'update' });
+        updated++;
+      } else {
+        // ── CREATE: defaults for unfilled optional columns ───────────────────
+        if (commit) {
+          await client.query(
+            `INSERT INTO sow_sub_operation
+               (operation_id, order_no, title, sort_order, weight, progress, status, created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+            [
+              op.idsow,
+              op.order_no || null,
+              titleRaw,
+              so !== undefined ? so : 0,
+              w !== undefined ? w : 1,
+              progVal !== undefined ? progVal : 0,
+              statusVal !== undefined ? statusVal : 'NOT_STARTED',
+              actor,
+            ]
+          );
+          affectedOps.add(op.idsow);
+        }
+        preview.push({ index, order_no: orderNoRaw, operation_no: opNoRaw, title: titleRaw, action: 'create' });
+        created++;
+      }
+    }
+
+    if (commit) {
+      for (const idsow of affectedOps) {
+        await recomputeOperationProgress(client, idsow);
+      }
+      await client.query('COMMIT');
+    }
+
+    res.json({
+      preview,
+      summary: { created, updated, rejected, total: preview.length },
+    });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
   }
 };
 

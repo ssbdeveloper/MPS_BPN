@@ -59,6 +59,18 @@ async function fetchDashboardSnapshot() {
           ROUND(COALESCE(SUM(actual_hours),0),2) AS total_actual_hours,
           ROUND(COALESCE(SUM(planhours),0),2) AS total_plan_hours
         FROM sow WHERE COALESCE(systemstatus,'') NOT IN ('TECO','CLSD')
+          -- Phase 6 (D4): total_plan_hours = internal workshop load feeding the OEE performance
+          -- ratio. Operations marked as subcontracted are vendor work, so they leave this bucket.
+          -- Mirrors mpsDashboardController.getOeeSummary / getSnapshot — keep the three in sync.
+          -- DEPLOY NOTE: public.sow_subcont_mark only exists after migration
+          -- database/migrations/api/20260803b_sow_subcont_mark.sql. Before that this snapshot
+          -- query throws (undefined_table) and the socket pushes an error frame instead of data.
+          AND NOT EXISTS (
+            SELECT 1 FROM public.sow_subcont_mark scm
+            WHERE ltrim(scm.order_no, '0') = ltrim(sow.order_no, '0')
+              AND scm.operation_no = sow.operation_no
+              AND scm.unmarked_at IS NULL
+          )
       )
       SELECT l.actual_hours, l.plan_hours,
         ROUND(l.actual_hours / NULLIF(l.plan_hours,0) * 100, 1) AS availability_pct,
