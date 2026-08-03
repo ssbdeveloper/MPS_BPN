@@ -1,41 +1,18 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import { goBackOrFallback } from '../utils/navigation';
+import Skeleton from '../components/ui/Skeleton';
+import {
+  ModalShell,
+  ProgressUpdatePanel,
+  ProgressBar,
+  SubOperationPanel,
+  computeRollup,
+} from '../features/progress';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const PAGE_SIZE_OPTIONS = [25, 50, 100];
-
-// ─── Compress image via canvas (max 1920px, 80% JPEG — ~300–800 KB) ──────────
-const compressImage = (file) =>
-  new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const MAX = 1920;
-        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width  = Math.round(img.width  * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.80));
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-
-// ─── Format timestamp ─────────────────────────────────────────────────────────
-const fmtTs = (ts) => {
-  try {
-    const d = new Date(ts);
-    return (
-      d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) +
-      ' ' +
-      d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
-    );
-  } catch { return ts || '—'; }
-};
 
 // ─── Highlight search term ────────────────────────────────────────────────────
 const highlight = (text, term) => {
@@ -54,7 +31,7 @@ const highlight = (text, term) => {
   );
 };
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
+// ─── Status badge (order / operation SAP status) ──────────────────────────────
 const StatusBadge = ({ value }) => {
   if (!value) return <span className="text-gray-300 text-[10px]">—</span>;
   const lower = value.toLowerCase();
@@ -84,447 +61,37 @@ const Chevron = ({ open }) => (
   </svg>
 );
 
-// ─── Info row (read-only label+value) ─────────────────────────────────────────
-const InfoRow = ({ label, value }) => (
-  <div className="flex items-start gap-2">
-    <span className="text-[10px] font-semibold text-slate-500 w-24 flex-shrink-0 pt-0.5 uppercase tracking-wide">{label}</span>
-    <span className="text-xs text-slate-800 flex-1 leading-snug">{value || '—'}</span>
-  </div>
-);
-
-// ─── Inline progress bar ──────────────────────────────────────────────────────
-const ProgBar = ({ value, className = '' }) => {
-  const pct = value == null ? null : Math.min(100, Math.max(0, Number(value)));
-  if (pct == null) return <span className="text-slate-300 text-[10px]">—</span>;
-  const color = pct >= 100 ? 'bg-emerald-500' : pct >= 70 ? 'bg-blue-500' : pct >= 40 ? 'bg-amber-500' : 'bg-slate-400';
-  return (
-    <div className={`flex items-center gap-1.5 ${className}`}>
-      <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden min-w-[40px]">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className={`text-[10px] font-bold tabular-nums w-8 text-right flex-shrink-0
-        ${pct >= 100 ? 'text-emerald-600' : pct >= 70 ? 'text-blue-600' : pct >= 40 ? 'text-amber-600' : 'text-slate-500'}`}>
-        {pct}%
-      </span>
-    </div>
-  );
-};
-
-// ─── History card ─────────────────────────────────────────────────────────────
-const HistoryCard = ({ item, isLatest }) => {
-  const [imgOpen, setImgOpen] = useState(false);
-  const imgUrl = item.image_path ? `${API_BASE}/${item.image_path}` : null;
-
-  return (
-    <div className={`rounded-xl border p-3 space-y-2 ${isLatest ? 'border-blue-200 bg-blue-50/60' : 'border-slate-200 bg-white'}`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {isLatest && (
-            <span className="text-[9px] font-bold bg-blue-600 text-white px-1.5 py-0.5 rounded-full uppercase tracking-wide">
-              Latest
-            </span>
-          )}
-          <span className={`text-xl font-black tabular-nums ${
-            item.progress >= 100 ? 'text-emerald-600' :
-            item.progress >= 70  ? 'text-blue-600'    :
-            item.progress >= 40  ? 'text-amber-600'   : 'text-slate-600'
-          }`}>
-            {item.progress}%
-          </span>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {imgUrl && (
-            <button
-              onClick={() => setImgOpen(true)}
-              title="Lihat foto"
-              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-blue-700 transition-colors text-[10px] font-semibold"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-3.5 h-3.5">
-                <path strokeLinecap="round" strokeLinejoin="round"
-                  d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
-              </svg>
-              Foto
-            </button>
-          )}
-          <div className="text-right">
-            <p className="text-[10px] text-slate-500 font-medium leading-tight">{fmtTs(item.created_at)}</p>
-            {item.created_by && (
-              <p className="text-[9px] text-slate-400 italic">{item.created_by}</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <ProgBar value={item.progress} />
-
-      {item.issue_description && (
-        <p className="text-xs text-slate-600 leading-relaxed border-t border-slate-100 pt-2">
-          {item.issue_description}
-        </p>
-      )}
-
-      {/* Image preview overlay */}
-      {imgOpen && imgUrl && (
-        <div
-          className="fixed inset-0 z-[200] bg-black/85 flex items-center justify-center p-4"
-          onClick={() => setImgOpen(false)}
-        >
-          <div className="relative max-w-4xl w-full" onClick={(e) => e.stopPropagation()}>
-            <img
-              src={imgUrl}
-              alt="Dokumentasi"
-              className="w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
-            />
-            <button
-              onClick={() => setImgOpen(false)}
-              className="absolute top-2 right-2 w-9 h-9 bg-black/60 text-white rounded-full
-                         flex items-center justify-center hover:bg-black/80 transition-colors text-lg font-bold"
-            >
-              ×
-            </button>
-            <p className="text-center text-white/60 text-xs mt-3">
-              {fmtTs(item.created_at)}{item.created_by ? ` · ${item.created_by}` : ''}
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ─── Progress Modal ───────────────────────────────────────────────────────────
+// ─── Operation-level progress modal (backward-compatible; 0 sub-task path) ────
 const ProgressModal = ({ op, onClose }) => {
-  const [progress, setProgress]         = useState('');
-  const [issue, setIssue]               = useState('');
-  const [imageData, setImageData]       = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [history, setHistory]           = useState([]);
-  const [histLoading, setHistLoading]   = useState(true);
-  const [submitting, setSubmitting]     = useState(false);
-  const [submitOk, setSubmitOk]         = useState(false);
-  const [error, setError]               = useState('');
-  const [warn, setWarn]                 = useState('');
-  const fileInputRef = useRef(null);
-
-  const lastProgress = history.length > 0 ? history[0].progress : null;
-
-  const loadHistory = useCallback(async () => {
-    setHistLoading(true);
-    try {
-      const res  = await fetch(`${API_BASE}/sow/progress-history/${op.idsow}`);
-      const data = await res.json();
-      setHistory(Array.isArray(data) ? data : []);
-    } catch {
-      setHistory([]);
-    } finally {
-      setHistLoading(false);
-    }
-  }, [op.idsow]);
-
-  useEffect(() => { loadHistory(); }, [loadHistory]);
-
-  // ESC closes modal
-  useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
-
-  const handleProgressChange = (val) => {
-    setProgress(val);
-    setError('');
-    const n = parseInt(val, 10);
-    if (val === '') { setWarn(''); return; }
-    if (isNaN(n) || n < 1 || n > 100) {
-      setWarn('Masukkan angka antara 1 – 100');
-    } else if (lastProgress !== null && n < lastProgress) {
-      setWarn(`Tidak boleh kurang dari progress terakhir (${lastProgress}%)`);
-    } else {
-      setWarn('');
-    }
-  };
-
-  const handleImageChange = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const compressed = await compressImage(file);
-    setImageData(compressed);
-    setImagePreview(compressed);
-    e.target.value = '';
-  };
-
-  const handleSubmit = async () => {
-    const prog = parseInt(progress, 10);
-    if (!progress || isNaN(prog) || prog < 1 || prog > 100) {
-      setError('Masukkan progress yang valid (1 – 100)');
-      return;
-    }
-    if (warn) { setError(warn); return; }
-
-    setSubmitting(true);
-    setError('');
-    try {
-      const res = await fetch(`${API_BASE}/sow/progress-history`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+  const infoRows = [
+    { label: 'Order No',   value: op.order_no },
+    { label: 'Op No',      value: op.operation_no },
+    { label: 'Deskripsi',  value: op.operationtext },
+    { label: 'Workcenter', value: [op.workcenter, op.workcenterdescription].filter(Boolean).join(' – ') },
+    { label: 'Plan Hrs',   value: op.planhours != null ? `${Number(op.planhours).toFixed(2)} hrs` : null },
+    { label: 'Status',     value: <StatusBadge value={op.status} /> },
+  ];
+  return (
+    <ModalShell
+      title="Update Progress Operasi"
+      subtitle={`${op.order_no} · Op ${op.operation_no}${op.workcenter ? ` / ${op.workcenter}` : ''}`}
+      onClose={onClose}
+      size="lg"
+    >
+      <ProgressUpdatePanel
+        historyUrl={`${API_BASE}/sow/progress-history/${op.idsow}`}
+        submitUrl={`${API_BASE}/sow/progress-history`}
+        infoRows={infoRows}
+        successMsg="Progress operasi tersimpan"
+        buildPayload={(prog, issueVal, img) => ({
           operation_id:      op.idsow,
           order_no:          op.order_no,
           progress:          prog,
-          issue_description: issue.trim() || null,
-          image_data:        imageData || null,
-        }),
-      });
-      if (!res.ok) {
-        const j = await res.json();
-        setError(j.error || 'Gagal menyimpan');
-        return;
-      }
-      setProgress('');
-      setIssue('');
-      setImageData(null);
-      setImagePreview(null);
-      setWarn('');
-      setSubmitOk(true);
-      setTimeout(() => setSubmitOk(false), 2500);
-      await loadHistory();
-    } catch (err) {
-      setError('Gagal: ' + err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const canSubmit = progress !== '' && !warn && !submitting;
-
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="relative w-full bg-white flex flex-col overflow-hidden">
-
-        {/* Header */}
-        <header className="flex items-center justify-between bg-blue-900 px-4 py-3 flex-shrink-0 border-b border-blue-800">
-          <div>
-            <h2 className="text-sm font-bold text-white">Update Progress Operasi</h2>
-            <p className="text-[11px] text-blue-300 mt-0.5 font-medium">
-              {op.order_no}
-              <span className="mx-1.5 text-blue-500">·</span>
-              Op {op.operation_no}
-              {op.workcenter && <span className="ml-1.5 text-blue-400">/ {op.workcenter}</span>}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-full text-white/70
-                       hover:text-white hover:bg-white/10 transition-colors"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
-              <path fillRule="evenodd" clipRule="evenodd"
-                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/>
-            </svg>
-          </button>
-        </header>
-
-        {/* Two-panel body */}
-        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
-
-          {/* ── Left: form ─────────────────────────────────────── */}
-          <div className="lg:w-[400px] flex-shrink-0 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200">
-            <div className="p-5 space-y-4">
-
-              {/* Read-only info */}
-              <div className="bg-blue-50 rounded-xl p-4 border border-blue-100 space-y-2.5">
-                <p className="text-[10px] font-bold text-blue-700 uppercase tracking-widest mb-1">Informasi Operasi</p>
-                <InfoRow label="Order No"   value={op.order_no} />
-                <InfoRow label="Op No"      value={op.operation_no} />
-                <InfoRow label="Deskripsi"  value={op.operationtext} />
-                <InfoRow label="Workcenter" value={[op.workcenter, op.workcenterdescription].filter(Boolean).join(' – ')} />
-                <InfoRow label="Plan Hrs"   value={op.planhours != null ? `${Number(op.planhours).toFixed(2)} hrs` : null} />
-                <InfoRow label="Status"     value={<StatusBadge value={op.status} />} />
-                {lastProgress !== null && (
-                  <InfoRow
-                    label="Last Progress"
-                    value={<span className="font-bold text-blue-700 text-sm">{lastProgress}%</span>}
-                  />
-                )}
-              </div>
-
-              {/* Progress input */}
-              <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1.5">
-                  Progress (1 – 100) <span className="text-orange-500">*</span>
-                  <span className="ml-2 font-normal text-slate-400 normal-case">Update progress operasi ini</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    min={1} max={100}
-                    value={progress}
-                    onChange={(e) => handleProgressChange(e.target.value)}
-                    placeholder={lastProgress !== null ? `Terakhir: ${lastProgress}%` : '1 – 100'}
-                    className={`w-full px-3 py-2.5 pr-10 text-sm border rounded-lg focus:outline-none focus:ring-2 transition-all
-                      ${warn
-                        ? 'border-amber-400 focus:ring-amber-400 bg-amber-50'
-                        : 'border-blue-300 focus:ring-blue-500 bg-white'
-                      }`}
-                  />
-                  {progress !== '' && (
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm font-bold text-blue-500 pointer-events-none">
-                      %
-                    </span>
-                  )}
-                </div>
-                {warn && (
-                  <p className="mt-1.5 text-xs text-amber-600 font-medium flex items-center gap-1">
-                    <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 flex-shrink-0">
-                      <path fillRule="evenodd" clipRule="evenodd"
-                        d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"/>
-                    </svg>
-                    {warn}
-                  </p>
-                )}
-              </div>
-
-              {/* Issue / notes */}
-              <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1.5">
-                  Issue / Catatan <span className="font-normal text-slate-400">(opsional)</span>
-                </label>
-                <textarea
-                  value={issue}
-                  onChange={(e) => setIssue(e.target.value)}
-                  rows={3}
-                  placeholder="Deskripsi masalah, kendala, atau catatan tambahan..."
-                  className="w-full px-3 py-2 text-sm text-gray-800 border border-blue-300 rounded-lg
-                             focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white resize-none transition-all"
-                />
-              </div>
-
-              {/* Photo */}
-              <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1.5">
-                  Foto <span className="font-normal text-slate-400">(opsional)</span>
-                </label>
-                <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                {imagePreview ? (
-                  <div className="relative rounded-xl overflow-hidden border border-slate-200">
-                    <img src={imagePreview} alt="Preview" className="w-full h-44 object-cover" />
-                    <button
-                      onClick={() => { setImageData(null); setImagePreview(null); }}
-                      className="absolute top-2 right-2 w-7 h-7 bg-black/60 text-white rounded-full
-                                 flex items-center justify-center hover:bg-black/80 transition-colors text-sm font-bold"
-                    >
-                      ×
-                    </button>
-                    <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/40 to-transparent px-3 py-2">
-                      <p className="text-[10px] text-white/80">Ketuk × untuk hapus foto</p>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full h-24 border-2 border-dashed border-slate-300 rounded-xl
-                               flex flex-col items-center justify-center gap-1.5
-                               text-slate-400 hover:border-blue-400 hover:text-blue-500 hover:bg-blue-50/40
-                               transition-all active:bg-blue-100/60"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-7 h-7">
-                      <path strokeLinecap="round" strokeLinejoin="round"
-                        d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
-                    </svg>
-                    <span className="text-xs font-medium">Ambil Foto / Pilih Gambar</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Error */}
-              {error && (
-                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 flex items-center gap-2">
-                  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-red-500 flex-shrink-0">
-                    <path fillRule="evenodd" clipRule="evenodd"
-                      d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"/>
-                  </svg>
-                  <span className="text-xs text-red-700 font-medium">{error}</span>
-                </div>
-              )}
-
-              {/* Success */}
-              {submitOk && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5 flex items-center gap-2">
-                  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-emerald-500 flex-shrink-0">
-                    <path fillRule="evenodd" clipRule="evenodd"
-                      d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"/>
-                  </svg>
-                  <span className="text-xs text-emerald-700 font-semibold">Progress berhasil disimpan!</span>
-                </div>
-              )}
-
-              {/* Submit button */}
-              <button
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                className={`w-full py-3 text-sm font-bold rounded-xl transition-all
-                  ${canSubmit
-                    ? 'bg-gradient-to-b from-orange-500 to-orange-600 text-white hover:from-orange-600 hover:to-orange-700 active:translate-y-px'
-                    : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                  }`}
-                style={canSubmit ? { boxShadow: '0 4px 0 #c2410c, 0 6px 14px rgba(234,88,12,0.25)' } : {}}
-              >
-                {submitting ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-                    </svg>
-                    Menyimpan...
-                  </span>
-                ) : 'Submit Update'}
-              </button>
-            </div>
-          </div>
-
-          {/* ── Right: history ─────────────────────────────────── */}
-          <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-            <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Riwayat Update</span>
-              {history.length > 0 && (
-                <span className="text-[9px] bg-blue-600 text-white rounded-full px-2 py-0.5 font-bold">
-                  {history.length} catatan
-                </span>
-              )}
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              {histLoading ? (
-                <div className="flex items-center justify-center py-16 gap-3">
-                  <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-xs text-slate-400 font-medium">Memuat riwayat...</span>
-                </div>
-              ) : history.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-slate-300 gap-3">
-                  <svg className="w-14 h-14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1}
-                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
-                  </svg>
-                  <p className="text-xs font-medium text-slate-400">Belum ada riwayat update</p>
-                  <p className="text-[11px] text-slate-300">Submit progress pertama di panel kiri</p>
-                </div>
-              ) : (
-                <div className="p-4 space-y-3">
-                  {history.map((h, i) => (
-                    <HistoryCard key={h.id} item={h} isLatest={i === 0} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+          issue_description: issueVal,
+          image_data:        img,
+        })}
+      />
+    </ModalShell>
   );
 };
 
@@ -533,15 +100,44 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
   const [ops, setOps]         = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
+  const [subState, setSubState]       = useState({}); // { [idsow]: { list, loading, error } }
+  const [expandedOps, setExpandedOps] = useState(new Set());
+
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  const loadSubtasks = useCallback(async (idsow) => {
+    setSubState((prev) => ({ ...prev, [idsow]: { ...(prev[idsow] || {}), loading: true, error: '' } }));
+    try {
+      const res = await fetch(`${API_BASE}/sow/operations/${idsow}/subtasks`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (!mountedRef.current) return;
+      setSubState((prev) => ({ ...prev, [idsow]: { list: Array.isArray(data) ? data : [], loading: false, error: '' } }));
+    } catch {
+      if (!mountedRef.current) return;
+      setSubState((prev) => ({
+        ...prev,
+        [idsow]: { list: prev[idsow]?.list || [], loading: false, error: 'Gagal memuat sub-task' },
+      }));
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError('');
+    setSubState({});
+    setExpandedOps(new Set());
     (async () => {
       try {
         const res  = await fetch(`${API_BASE}/sow/${encodeURIComponent(orderNo)}`);
         if (!res.ok) throw new Error();
         const data = await res.json();
-        if (!cancelled) setOps(Array.isArray(data) ? data : []);
+        if (cancelled) return;
+        const arr = Array.isArray(data) ? data : [];
+        setOps(arr);
+        arr.forEach((o) => loadSubtasks(o.idsow));
       } catch {
         if (!cancelled) setError('Gagal memuat operations');
       } finally {
@@ -549,7 +145,15 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
       }
     })();
     return () => { cancelled = true; };
-  }, [orderNo]);
+  }, [orderNo, loadSubtasks]);
+
+  const toggleOp = useCallback((idsow) => {
+    setExpandedOps((prev) => {
+      const next = new Set(prev);
+      next.has(idsow) ? next.delete(idsow) : next.add(idsow);
+      return next;
+    });
+  }, []);
 
   if (loading)
     return (
@@ -587,48 +191,102 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
                 <th className="px-3 py-2 text-left font-semibold tracking-wide">Deskripsi Operasi</th>
                 <th className="px-3 py-2 text-left w-40 font-semibold tracking-wide">Workcenter</th>
                 <th className="px-3 py-2 text-right w-20 font-semibold tracking-wide">Plan Hrs</th>
+                <th className="px-3 py-2 text-left w-44 font-semibold tracking-wide">Progress</th>
                 <th className="px-3 py-2 text-center w-28 font-semibold tracking-wide">Status</th>
-                <th className="px-3 py-2 text-center w-20 font-semibold tracking-wide">Update</th>
+                <th className="px-3 py-2 text-center w-44 font-semibold tracking-wide">Aksi</th>
               </tr>
             </thead>
             <tbody>
-              {ops.map((op, i) => (
-                <tr
-                  key={op.idsow}
-                  className={`border-b border-slate-100 last:border-0
-                    ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}`}
-                >
-                  <td className="px-3 py-2">
-                    <span className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-blue-100 text-blue-800 font-bold text-[10px]">
-                      {op.operation_no}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-slate-700 leading-snug">{op.operationtext || '—'}</td>
-                  <td className="px-3 py-2">
-                    <span className="font-semibold text-blue-800 block">{op.workcenter || '—'}</span>
-                    {op.workcenterdescription && (
-                      <span className="text-[10px] text-slate-400 block leading-tight">{op.workcenterdescription}</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <span className="font-semibold text-slate-700">
-                      {op.planhours != null ? Number(op.planhours).toFixed(2) : '—'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <StatusBadge value={op.status} />
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <button
-                      onClick={() => onSelectOp(op)}
-                      className="px-3 py-1 text-[10px] font-bold bg-gradient-to-b from-orange-500 to-orange-600 text-white rounded-md transition-all active:translate-y-px"
-                      style={{ boxShadow: '0 3px 0 #c2410c, 0 4px 8px rgba(234,88,12,0.3)' }}
+              {ops.map((op, i) => {
+                const subs        = subState[op.idsow];
+                const subLoading  = !subs || subs.loading;
+                const list        = subs?.list || [];
+                const hasSubs     = list.length > 0;
+                const opExpanded  = expandedOps.has(op.idsow);
+                const displayProg = hasSubs ? computeRollup(list) : (op.progress ?? null);
+                return (
+                  <React.Fragment key={op.idsow}>
+                    <tr
+                      className={`border-b border-slate-100 last:border-0
+                        ${opExpanded ? 'bg-blue-50' : i % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}`}
                     >
-                      Update
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                      <td className="px-3 py-2">
+                        <span className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-blue-100 text-blue-800 font-bold text-[10px]">
+                          {op.operation_no}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-slate-700 leading-snug">{op.operationtext || '—'}</td>
+                      <td className="px-3 py-2">
+                        <span className="font-semibold text-blue-800 block">{op.workcenter || '—'}</span>
+                        {op.workcenterdescription && (
+                          <span className="text-[10px] text-slate-400 block leading-tight">{op.workcenterdescription}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className="font-semibold text-slate-700 tabular-nums">
+                          {op.planhours != null ? Number(op.planhours).toFixed(2) : '—'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        {subLoading ? (
+                          <Skeleton className="h-2.5 w-full" />
+                        ) : (
+                          <div>
+                            <ProgressBar value={displayProg} />
+                            {hasSubs && (
+                              <span className="inline-block mt-1 text-[11px] font-semibold text-[#0077b6] tabular-nums">
+                                {list.length} sub-task
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <StatusBadge value={op.status} />
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => toggleOp(op.idsow)}
+                            aria-expanded={opExpanded}
+                            className="inline-flex items-center gap-1 min-h-[40px] px-2.5 rounded-lg border border-slate-200 bg-white
+                                       text-slate-700 hover:bg-slate-50 hover:border-slate-300 text-xs font-semibold transition-all active:scale-95
+                                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                          >
+                            <Chevron open={opExpanded} />
+                            Sub-task
+                            {hasSubs && <span className="ml-0.5 tabular-nums text-[#0077b6]">({list.length})</span>}
+                          </button>
+                          {subLoading ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-slate-400 motion-reduce:animate-none" />
+                          ) : !hasSubs ? (
+                            <button
+                              onClick={() => onSelectOp(op)}
+                              className="min-h-[40px] px-3 rounded-lg text-xs font-bold text-white bg-[#0077b6] hover:bg-[#023e8a]
+                                         transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                            >
+                              Update
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+
+                    {opExpanded && (
+                      <tr>
+                        <td colSpan={7} className="p-0">
+                          <SubOperationPanel
+                            idsow={op.idsow}
+                            operationNo={op.operation_no}
+                            state={subs}
+                            onRefresh={() => loadSubtasks(op.idsow)}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -786,7 +444,7 @@ const OrderListPage = () => {
 
   useEffect(() => {
     fetchPage(activeSearch, page, limit);
-  }, [activeSearch, page, limit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeSearch, page, limit]);
 
   const fetchPage = async (term, p, lim) => {
     if (abortRef.current) abortRef.current.abort();
@@ -1035,7 +693,7 @@ const OrderListPage = () => {
                             {Number(order.total_planhours).toFixed(1)}
                           </td>
                           <td className="px-3 py-3">
-                            <ProgBar value={order.avg_progress} />
+                            <ProgressBar value={order.avg_progress} />
                           </td>
                           <td className="px-3 py-3 text-center">
                             <StatusBadge value={order.status} />
@@ -1066,7 +724,7 @@ const OrderListPage = () => {
         </section>
       </main>
 
-      {/* ── Progress Modal ───────────────────────────────────────── */}
+      {/* ── Progress Modal (operation-level; 0 sub-task path) ─────── */}
       {modalOp && (
         <ProgressModal
           op={modalOp}

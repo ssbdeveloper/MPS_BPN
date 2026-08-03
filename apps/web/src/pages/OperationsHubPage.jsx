@@ -14,6 +14,7 @@ import {
   Gauge,
   Hammer,
   LayoutDashboard,
+  ListChecks,
   Loader2,
   LogOut,
   ClipboardList,
@@ -55,6 +56,7 @@ const SAP_ENV_STORAGE_KEY = 'operationsHubSapEnv';
 const sidebarItems = [
   { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
   { title: 'Order Progress', icon: BarChart2, path: '/order-progress-dashboard' },
+  { title: 'Update Progress', icon: ListChecks, path: '/progress-update' },
   { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list' },
   { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling' },
   { title: 'Shift Capacity', icon: TimerReset, path: '/shift-definition' },
