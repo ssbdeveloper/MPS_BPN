@@ -1463,8 +1463,15 @@ async function listOrderTasks(orderNoParam) {
        t.planned_work_minutes,
        t.duration_minutes,
        s.people_required,
-       s.planhours
+       s.planhours,
+       -- Satu order boleh dipetakan ke lebih dari satu project (index unik hanya per-project),
+       -- dan fungsi ini TIDAK menyaring per project. Tanpa nama project + penanda ini, scheduler
+       -- melihat operasi yang sama berkali-kali di picker reservasi tanpa cara membedakannya —
+       -- persis gejala yang dilaporkan untuk order 1000127752 (3 project x 294 operasi).
+       p.project_name,
+       (count(*) over (partition by t.operation_no) > 1) as duplicate_across_projects
      from ms_project_task t
+     left join ms_project p on p.project_id = t.project_id
      left join sow s on s.idsow = t.sow_id
      where ltrim(t.order_no, '0') = ltrim($1, '0')
        and t.is_active = true
@@ -1814,14 +1821,82 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
       throw new ApiError(404, "TARGET_TASKS_NOT_FOUND", "No active tasks found for this outline level", [{ outline_level: outlineLevel }]);
     }
 
-    const availableTasks = [...targetTasks];
+    // IDEMPOTENSI (perbaikan 2026-08-04). Sebelum ini, menjalankan Map SAP Operation dua kali
+    // untuk order yang sama di project yang sama menggandakan seluruh set operasi: loop di bawah
+    // hanya melihat task placeholder yang tersisa, dan begitu habis ia meng-INSERT baris baru.
+    // Prod Cikupa: order 1000127752 jadi 4 salinan per operasi (2 di antaranya dari satu project
+    // yang di-map dua kali berjarak 34 detik). Sekarang pemetaan yang SUDAH ADA dimuat lebih dulu
+    // dan dipakai ulang, jadi run kedua hanya menyegarkan nilai — bukan menambah baris.
+    // Index uq_ms_project_task_project_order_op (migrasi 20260804) adalah jaring pengaman
+    // terakhirnya di level database.
+    const existingResult = await client.query(
+      `select task_id, outline_number, task_name, operation_no
+         from ms_project_task
+        where project_id = $1
+          and is_active = true
+          and coalesce(is_summary, false) = false
+          and ltrim(order_no, '0') = ltrim($2, '0')
+          and operation_no is not null`,
+      [projectId, orderNo]
+    );
+    const alreadyMapped = new Map();
+    for (const row of existingResult.rows) {
+      const key = operationKey(row.operation_no);
+      if (!alreadyMapped.has(key)) alreadyMapped.set(key, row);
+    }
+
+    // Task yang sudah memegang operasi order ini TIDAK boleh ikut jadi placeholder kosong yang
+    // bisa dipakai ulang untuk operasi LAIN — kalau ikut, run kedua akan menimpa operasi yang
+    // benar dengan operasi tetangganya.
+    const claimedTaskIds = new Set(existingResult.rows.map((row) => row.task_id));
+    const availableTasks = targetTasks.filter((task) => !claimedTaskIds.has(task.task_id));
     const mapped = [];
     const created = [];
+    const reused = [];
     const lastTargetTask = targetTasks[targetTasks.length - 1] || null;
     const nextOutlineNumber = buildNextOutlineNumberFactory(targetTasks, targetParentTask);
 
     for (const operation of operations) {
       const opKey = operationKey(operation.operation_no);
+
+      // Sudah pernah dipetakan di project ini -> segarkan baris yang ADA, jangan bikin baru.
+      const existing = alreadyMapped.get(opKey);
+      if (existing) {
+        const taskName = nullableText(operation.operation_text) || existing.task_name;
+        await client.query(
+          `update ms_project_task
+              set task_name = $3,
+                  order_no = $4,
+                  operation_no = $5,
+                  ssbr_id = $6,
+                  sow_id = $7,
+                  workcenter = $8,
+                  planned_work_minutes = coalesce($9, planned_work_minutes),
+                  duration_minutes = coalesce($9, duration_minutes),
+                  updated_at = now()
+            where project_id = $1 and task_id = $2`,
+          [
+            projectId,
+            existing.task_id,
+            taskName,
+            operation.order_no,
+            String(operation.operation_no),
+            operation.ssbr_id || null,
+            operation.idsow || null,
+            operation.workcenter || null,
+            minutesFromHours(operation.planhours),
+          ]
+        );
+        reused.push({
+          task_id: existing.task_id,
+          outline_number: existing.outline_number,
+          task_name: taskName,
+          order_no: operation.order_no,
+          operation_no: String(operation.operation_no),
+        });
+        continue;
+      }
+
       let taskIndex = availableTasks.findIndex((task) => operationKey(task.operation_no) === opKey);
       if (taskIndex < 0) taskIndex = 0;
       const task = availableTasks.splice(taskIndex, 1)[0];
@@ -1918,9 +1993,27 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
         target_parent_task_id: targetParentTaskId,
         mapped_count: mapped.length,
         created_count: created.length,
+        reused_count: reused.length,
         untouched_task_count: availableTasks.length,
       },
     });
+
+    // Order yang sama dipetakan ke BEBERAPA project bukan pelanggaran integritas (index unik
+    // hanya berlaku per-project), tapi picker reservasi bay memakai listOrderTasks yang TIDAK
+    // menyaring per project — jadi tiap operasi akan muncul sekali per project dan scheduler
+    // tidak punya cara membedakannya. Kembalikan sebagai peringatan supaya UI bisa memberi tahu.
+    const otherProjects = await client.query(
+      `select t.project_id, p.project_name, count(*)::integer as task_count
+         from ms_project_task t
+         left join ms_project p on p.project_id = t.project_id
+        where t.is_active = true
+          and coalesce(t.is_summary, false) = false
+          and ltrim(t.order_no, '0') = ltrim($1, '0')
+          and t.project_id <> $2
+        group by 1, 2
+        order by 3 desc`,
+      [orderNo, projectId]
+    );
 
     await client.query("commit");
     return {
@@ -1930,6 +2023,8 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
       target_parent_task_id: targetParentTaskId,
       mapped,
       created,
+      reused,
+      also_mapped_in: otherProjects.rows,
       skipped_operations: [],
       untouched_tasks: availableTasks.map((task) => ({
         task_id: task.task_id,
@@ -1940,8 +2035,10 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
       summary: {
         mapped_count: mapped.length,
         created_count: created.length,
+        reused_count: reused.length,
         skipped_operation_count: 0,
         untouched_task_count: availableTasks.length,
+        also_mapped_in_project_count: otherProjects.rowCount,
       },
     };
   } catch (err) {
