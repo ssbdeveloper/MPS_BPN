@@ -14,6 +14,8 @@ const SOW_HISTORY_COLUMNS = `
   operation_text,
   workcenterdescription AS operation_name,
   planhours,
+  va_hours,
+  nnva_hours,
   wct_group,
   workcenter,
   status,
@@ -38,6 +40,8 @@ const EDITABLE_SOW_COLUMNS = [
   "operation_text",
   "workcenterdescription",
   "planhours",
+  "va_hours",
+  "nnva_hours",
   "systemstatus",
   "confirmation",
   "status",
@@ -72,6 +76,11 @@ async function ensureSowRuntimeColumns() {
     await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS revision_no INTEGER NOT NULL DEFAULT 0`);
     await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS source_op_id BIGINT`);
     await db.query(`CREATE INDEX IF NOT EXISTS idx_sow_source_op_id ON public.sow (source_op_id)`);
+    // Rincian planhours. Skema ditambahkan di sini (aditif, nullable) supaya deploy kode yang
+    // mendahului migrasi tidak mematikan jalur tulis SOW. BACKFILL tetap manual lewat
+    // database/migrations/api/20260804c_sow_va_nnva_hours.sql — tanpa itu kolom hanya NULL.
+    await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS va_hours NUMERIC`);
+    await db.query(`ALTER TABLE public.sow ADD COLUMN IF NOT EXISTS nnva_hours NUMERIC`);
     sowRuntimeColumnsReady = true;
   })().finally(() => {
     sowRuntimeColumnsPromise = null;
@@ -116,6 +125,18 @@ function normalizeSowOperation(row, fallbackOrderNo) {
   item.order_no = item.order_no || fallbackOrderNo;
   item.operation_no = item.operation_no === "" || item.operation_no == null ? null : Number(item.operation_no);
   item.planhours = item.planhours === "" || item.planhours == null ? null : Number(item.planhours);
+  item.va_hours = item.va_hours === "" || item.va_hours == null ? null : Number(item.va_hours);
+  item.nnva_hours = item.nnva_hours === "" || item.nnva_hours == null ? null : Number(item.nnva_hours);
+  // planhours adalah TURUNAN dari rincian: dihitung di server dan tidak pernah dipercaya dari
+  // klien selama rinciannya dikirim. Jalur lain yang hanya mengirim planhours (sinkronisasi)
+  // tetap berjalan apa adanya karena cabang ini hanya aktif bila va/nnva ada.
+  if (item.va_hours != null || item.nnva_hours != null) {
+    const va = Number.isFinite(item.va_hours) ? Math.max(0, item.va_hours) : 0;
+    const nnva = Number.isFinite(item.nnva_hours) ? Math.max(0, item.nnva_hours) : 0;
+    item.va_hours = va;
+    item.nnva_hours = nnva;
+    item.planhours = va + nnva;
+  }
   item.weight = item.weight === "" || item.weight == null ? null : Number(item.weight);
   item.actual_progress = item.actual_progress === "" || item.actual_progress == null ? null : Number(item.actual_progress);
   item.actual_hours = item.actual_hours === "" || item.actual_hours == null ? null : Number(item.actual_hours);
@@ -180,33 +201,16 @@ const normalizeOrderNo = (value) => {
   return text ? text.replace(/-/g, '000') : '';
 };
 
-const SOW_STANDARD_MATCH_JOIN = `
-       LEFT JOIN LATERAL (
-         SELECT ss.id
-         FROM public.sow_standard ss
-         LEFT JOIN public.components c ON c.component_id = ss.component_id
-         WHERE s.source_op_id IS NULL
-           AND (
-             regexp_replace(lower(COALESCE(c.part_number, '')), '[^a-z0-9]', '', 'g') =
-             regexp_replace(lower(COALESCE(s.part_number, '')), '[^a-z0-9]', '', 'g')
-             OR (
-               lower(COALESCE(c.model, '')) = lower(COALESCE(s.model, ''))
-               AND lower(COALESCE(c.part_name, '')) = lower(COALESCE(s.part_name, ''))
-             )
-           )
-           AND lower(COALESCE(ss.operation_text, '')) = lower(COALESCE(s.operation_text, ''))
-         ORDER BY
-           (COALESCE(ss.machineid, ss.workcenter, '') = COALESCE(s.workcenter, '')) DESC,
-           ss.id ASC
-         LIMIT 1
-       ) standard_match ON true`;
-
-const SOW_NNVA_TOTAL_JOIN = `
-       LEFT JOIN (
-         SELECT sow_standard_id, SUM(COALESCE(standard_hours, 0)) AS total_nnva_hours
-         FROM sow_nnva_standard
-         GROUP BY sow_standard_id
-       ) nnva ON nnva.sow_standard_id = COALESCE(s.source_op_id, standard_match.id)`;
+// CATATAN: SOW_STANDARD_MATCH_JOIN (LATERAL pencocokan teks fuzzy ke sow_standard) dan
+// SOW_NNVA_TOTAL_JOIN dihapus per 2026-08-04. NNVA sekarang di-snapshot ke kolom
+// sow.nnva_hours saat write, jadi jalur baca tidak perlu meresolusi ulang ke master standar.
+//
+// Alasan dihapus, bukan sekadar tidak dipakai — diukur di produksi (88.996 baris):
+//   * cakupannya hanya 5.617 dari 83.365 baris tanpa source_op_id (6,7%)
+//   * 1.115 dari 3.436 hasil cocoknya (32,5%) menghasilkan VA negatif, versus 2,5% pada jalur
+//     source_op_id — bukti join ini mencocokkan ke standar yang SALAH
+//   * biayanya membuat query SOW history timeout di 88rb baris, yang dulu diakali flag `light`
+// Lihat database/migrations/api/20260804c_sow_va_nnva_hours.sql.
 
 // Kolom turunan is_subcont untuk badge di layar SOW (Fase 6 / keputusan D4).
 // EXISTS, BUKAN JOIN: penanda disimpan sebagai riwayat (tandai → batal → tandai lagi menumpuk
@@ -227,8 +231,10 @@ async function enrichSowRowsWithNnva(query, rows) {
   if (!sourceIds.length) {
     return rows.map((row) => ({
       ...row,
-      operation_planhours: row.operation_planhours ?? row.planhours ?? 0,
-      nnva_planhours: row.nnva_planhours ?? 0,
+      operation_planhours: (row.va_hours == null ? null : Number(row.va_hours))
+        ?? row.operation_planhours ?? row.planhours ?? 0,
+      nnva_planhours: (row.nnva_hours == null ? null : Number(row.nnva_hours))
+        ?? row.nnva_planhours ?? 0,
       display_planhours: row.display_planhours ?? row.planhours ?? 0,
       nnva_items: row.nnva_items || [],
     }));
@@ -256,13 +262,20 @@ async function enrichSowRowsWithNnva(query, rows) {
 
   return rows.map((row) => {
     const items = bySource.get(Number(row.source_op_id)) || [];
-    const nnvaHours = items.reduce((sum, item) => sum + (Number(item.standard_hours) || 0), 0);
-    const operationHours = row.operation_planhours ?? row.planhours ?? 0;
+    // Rincian yang di-snapshot pada baris selalu menang. Penelusuran ke sow_nnva_standard hanya
+    // untuk snapshot revisi LAMA (JSONB di sow_revision_history) yang dibuat sebelum kolom
+    // va_hours/nnva_hours ada — di situ tidak ada rincian yang bisa dipakai.
+    const snapshotNnva = row.nnva_hours == null ? null : Number(row.nnva_hours);
+    const snapshotVa = row.va_hours == null ? null : Number(row.va_hours);
+    const fallbackNnva = items.reduce((sum, item) => sum + (Number(item.standard_hours) || 0), 0);
+    const planHours = row.planhours ?? 0;
+    const nnvaHours = snapshotNnva ?? row.nnva_planhours ?? fallbackNnva;
+    const operationHours = snapshotVa ?? row.operation_planhours ?? planHours;
     return {
       ...row,
       operation_planhours: operationHours,
-      nnva_planhours: row.nnva_planhours ?? nnvaHours,
-      display_planhours: row.display_planhours ?? operationHours,
+      nnva_planhours: nnvaHours,
+      display_planhours: row.display_planhours ?? planHours,
       nnva_items: row.nnva_items || items,
     };
   });
@@ -614,14 +627,12 @@ exports.getSowHistoryRows = async (req, res) => {
     const result = await db.query(
       `SELECT
          ${SOW_HISTORY_COLUMNS.split("\n").map((line) => line.trim()).filter(Boolean).map((column) => `s.${column.replace(/,$/, "")}`).join(",\n         ")},
-         COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
-         COALESCE(s.planhours, 0) AS operation_planhours,
-         COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
+         s.source_op_id,
+         COALESCE(s.va_hours, s.planhours, 0) AS operation_planhours,
+         COALESCE(s.nnva_hours, 0) AS nnva_planhours,
          COALESCE(s.planhours, 0) AS display_planhours,
        ${SOW_IS_SUBCONT_EXPR}
        FROM sow s
-       ${SOW_STANDARD_MATCH_JOIN}
-       ${SOW_NNVA_TOTAL_JOIN}
        ${where}
        ORDER BY s.updated_at ${direction} NULLS LAST, s.order_no ASC, s.operation_no ASC NULLS LAST
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -648,26 +659,52 @@ exports.exportSowHistoryRows = async (req, res) => {
     await ensureSowRuntimeColumns();
     const start = String(req.query.start || req.query.from || "").trim();
     const end = String(req.query.end || req.query.to || "").trim();
+    const ssbrId = String(req.query.ssbr_id || "").trim();
+    const orderNo = String(req.query.order_no || "").trim();
     const direction = String(req.query.direction || "desc").toLowerCase() === "asc" ? "ASC" : "DESC";
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    const isDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const hasIdentifier = Boolean(ssbrId || orderNo);
+    const hasRange = Boolean(start || end);
+
+    // Rentang tanggal wajib HANYA bila tidak ada ssbr_id/order_no — tanpa salah satu filter,
+    // export akan menarik seluruh tabel sow (88rb+ baris di produksi).
+    if (!hasIdentifier && !hasRange) {
+      return res.status(400).json({ error: "kirim rentang start/end, atau ssbr_id / order_no" });
+    }
+    if (hasRange && (!isDate(start) || !isDate(end))) {
       return res.status(400).json({ error: "start dan end wajib format YYYY-MM-DD" });
+    }
+
+    const params = [];
+    const conditions = [];
+    if (hasRange) {
+      params.push(start, end);
+      conditions.push(`s.created_at >= $${params.length - 1}::date`);
+      conditions.push(`s.created_at < ($${params.length}::date + interval '1 day')`);
+    }
+    if (ssbrId) {
+      params.push(ssbrId);
+      conditions.push(`lower(btrim(s.ssbr_id)) = lower(btrim($${params.length}))`);
+    }
+    if (orderNo) {
+      // Dinormalisasi ltrim(...,'0') persis seperti kodebase mencocokkan order_no di tempat lain,
+      // supaya "1000129441" dan "0001000129441" sama-sama ketemu.
+      params.push(orderNo);
+      conditions.push(`ltrim(s.order_no, '0') = ltrim(btrim($${params.length}), '0')`);
     }
 
     const result = await db.query(
       `SELECT
          ${SOW_HISTORY_COLUMNS.split("\n").map((line) => line.trim()).filter(Boolean).map((column) => `s.${column.replace(/,$/, "")}`).join(",\n         ")},
-         COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
-         COALESCE(s.planhours, 0) AS operation_planhours,
-         COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
+         s.source_op_id,
+         COALESCE(s.va_hours, s.planhours, 0) AS operation_planhours,
+         COALESCE(s.nnva_hours, 0) AS nnva_planhours,
          COALESCE(s.planhours, 0) AS display_planhours
        FROM sow s
-       ${SOW_STANDARD_MATCH_JOIN}
-       ${SOW_NNVA_TOTAL_JOIN}
-       WHERE s.created_at >= $1::date
-         AND s.created_at < ($2::date + interval '1 day')
+       WHERE ${conditions.join("\n         AND ")}
        ORDER BY s.updated_at ${direction} NULLS LAST, s.order_no ASC, s.operation_no ASC NULLS LAST`,
-      [start, end],
+      params,
     );
 
     const workbook = new ExcelJS.Workbook();
@@ -680,9 +717,11 @@ exports.exportSowHistoryRows = async (req, res) => {
       { header: "SSBR ID", key: "ssbr_id", width: 18 },
       { header: "Operation Text", key: "operation_text", width: 36 },
       { header: "Operation No", key: "operation_no", width: 14 },
-      { header: "Plan Hours", key: "planhours", width: 16 },
-      { header: "Operation Plan Hours", key: "operation_planhours", width: 18 },
-      { header: "NNVA Plan Hours", key: "nnva_planhours", width: 16 },
+      // operation_planhours = VA (COALESCE ke planhours bila backfill belum jalan), supaya
+      // kolom tetap terisi angka wajar di lingkungan yang migrasinya belum diterapkan.
+      { header: "Plan Hours (VA+NNVA)", key: "planhours", width: 20 },
+      { header: "VA Hours", key: "operation_planhours", width: 14 },
+      { header: "NNVA Hours", key: "nnva_planhours", width: 14 },
       { header: "WCT Group", key: "wct_group", width: 16 },
       { header: "Workcenter", key: "workcenter", width: 16 },
       { header: "Status", key: "status", width: 14 },
@@ -696,7 +735,12 @@ exports.exportSowHistoryRows = async (req, res) => {
     sheet.addRows(result.rows);
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="sow_history_${start}_to_${end}.xlsx"`);
+    // Disanitasi: nilai mentah dari query string tidak boleh masuk header Content-Disposition.
+    const slug = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 40);
+    const fileTag = orderNo ? `order_${slug(orderNo)}`
+      : ssbrId ? `ssbr_${slug(ssbrId)}`
+      : `${slug(start)}_to_${slug(end)}`;
+    res.setHeader("Content-Disposition", `attachment; filename="sow_history_${fileTag}.xlsx"`);
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
@@ -783,14 +827,11 @@ exports.getSowOrderForRevision = async (req, res) => {
     } else {
       const result = await db.query(
         `SELECT s.*,
-                COALESCE(s.source_op_id, standard_match.id) AS source_op_id,
-                COALESCE(s.planhours, 0) AS operation_planhours,
-                COALESCE(nnva.total_nnva_hours, 0) AS nnva_planhours,
+                COALESCE(s.va_hours, s.planhours, 0) AS operation_planhours,
+                COALESCE(s.nnva_hours, 0) AS nnva_planhours,
                 COALESCE(s.planhours, 0) AS display_planhours,
         ${SOW_IS_SUBCONT_EXPR}
          FROM sow s
-         ${SOW_STANDARD_MATCH_JOIN}
-         ${SOW_NNVA_TOTAL_JOIN}
          WHERE s.order_no = $1
          ORDER BY s.operation_no ASC NULLS LAST, s.idsow ASC`,
         [orderNo],
@@ -2628,12 +2669,22 @@ exports.createFromBuilder = async (req, res) => {
         throw new Error('Operation number tidak valid');
       }
 
-      const planhours =
+      let planhours =
         op.planhours !== undefined && op.planhours !== ''
           ? Number.parseFloat(op.planhours)
           : op.std_hours !== undefined && op.std_hours !== ''
             ? Number.parseFloat(op.std_hours)
             : null;
+
+      // Rincian VA/NNVA adalah sumber kebenaran bila dikirim: planhours DIHITUNG ULANG di sini,
+      // tidak dipercaya dari klien. Klien lama yang hanya mengirim planhours tetap jalan
+      // (va/nnva jadi null → kolom rincian dibiarkan kosong, planhours apa adanya).
+      const rawVa = Number.parseFloat(op.va_hours);
+      const rawNnva = Number.parseFloat(op.nnva_hours);
+      const hasBreakdown = Number.isFinite(rawVa) || Number.isFinite(rawNnva);
+      const vaHours = hasBreakdown ? Math.max(0, Number.isFinite(rawVa) ? rawVa : 0) : null;
+      const nnvaHours = hasBreakdown ? Math.max(0, Number.isFinite(rawNnva) ? rawNnva : 0) : null;
+      if (hasBreakdown) planhours = vaHours + nnvaHours;
       const workcenterCode = op.workcenter || op.machineid || null;
       const wctGroup = await resolveWctGroup(query, workcenterCode, op.wct_group || null, op.operation_text);
 
@@ -2659,11 +2710,14 @@ exports.createFromBuilder = async (req, res) => {
             "group",
             category,
             remark,
-            source_op_id
+            source_op_id,
+            va_hours,
+            nnva_hours
           )
           VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22
           )
           ON CONFLICT (order_no, operation_no)
           DO UPDATE SET
@@ -2685,6 +2739,9 @@ exports.createFromBuilder = async (req, res) => {
             category = EXCLUDED.category,
             remark = EXCLUDED.remark,
             source_op_id = EXCLUDED.source_op_id,
+            -- Jangan hapus rincian yang sudah ada bila klien lama mengirim tanpa va/nnva.
+            va_hours = COALESCE(EXCLUDED.va_hours, sow.va_hours),
+            nnva_hours = COALESCE(EXCLUDED.nnva_hours, sow.nnva_hours),
             sync = 'new'
           RETURNING *
         `,
@@ -2709,6 +2766,8 @@ exports.createFromBuilder = async (req, res) => {
           category || null,
           op.remark || remark || null,
           op.source_op_id || null,
+          vaHours,
+          nnvaHours,
         ]
       );
 
@@ -3719,6 +3778,13 @@ exports.getSowStandardByComponent = async (req, res) => {
          ss.std_hours,
          ss.remark,
          ss.source_plant,
+         -- Total NNVA standar, dipakai klien untuk men-snapshot nnva_hours ke baris SOW saat
+         -- operasi ini dipilih. Dikirim MENTAH (tanpa clamp); klien yang membatasi ke std_hours.
+         COALESCE((
+           SELECT SUM(COALESCE(ns.standard_hours, 0))
+           FROM public.sow_nnva_standard ns
+           WHERE ns.sow_standard_id = ss.id
+         ), 0) AS nnva_hours,
          COALESCE(
            json_agg(
              json_build_object(
@@ -3766,6 +3832,7 @@ exports.getSowTemplatesByComponent = async (req, res) => {
                'machineid', ss.machineid,
                'workcenter', ss.workcenter,
                'std_hours', ss.std_hours,
+               'nnva_hours', COALESCE(nn.nnva_h, 0),
                'remark', ss.remark,
                'source_plant', ss.source_plant,
                'line_order', COALESCE(tl.line_order, ss.operation_no)
@@ -3779,6 +3846,12 @@ exports.getSowTemplatesByComponent = async (req, res) => {
        FROM public.sow_templates t
        LEFT JOIN public.sow_template_lines tl ON tl.template_id = t.template_id
        LEFT JOIN public.sow_standard ss ON ss.id = tl.standard_id
+       -- 1:1 dengan ss, jadi tidak menggandakan baris di dalam GROUP BY t.template_id.
+       LEFT JOIN (
+         SELECT sow_standard_id, SUM(COALESCE(standard_hours, 0)) AS nnva_h
+         FROM public.sow_nnva_standard
+         GROUP BY sow_standard_id
+       ) nn ON nn.sow_standard_id = ss.id
        WHERE t.component_id = $1
          AND COALESCE(t.is_active, true) = true
        GROUP BY t.template_id

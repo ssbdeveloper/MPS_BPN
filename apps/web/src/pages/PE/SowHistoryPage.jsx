@@ -129,6 +129,8 @@ export default function SowHistoryPage() {
   const [showExportPanel, setShowExportPanel] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportRange, setExportRange] = useState({ start: todayDate(), end: todayDate() });
+  const [exportMode, setExportMode] = useState('range'); // 'range' | 'ssbr' | 'order'
+  const [exportIdent, setExportIdent] = useState('');
   const [showEditor, setShowEditor] = useState(false);
   const canWrite = useCan('sow_management', 'write'); // gate revision/edit like Create SOW
   // Feature RBAC terpisah: menandai subcont berimplikasi biaya, tidak ikut sow_management.
@@ -229,7 +231,10 @@ export default function SowHistoryPage() {
     try {
       const params = new URLSearchParams();
       if (revisionNo) params.set('revision_no', String(revisionNo));
-      params.set('light', '1'); // skip expensive standard-match/NNVA joins — editor doesn't use them
+      // light=1 kini hanya melewati enrichment nnva_items (editor tidak memakainya).
+      // Join fuzzy standard-match yang dulu mahal sudah dihapus dari jalur baca — VA/NNVA
+      // dibaca dari kolom snapshot sow.va_hours/nnva_hours, jadi jalur non-light pun murah.
+      params.set('light', '1');
       const [data, marks] = await Promise.all([
         request(`/sow/history-order/${encodeURIComponent(orderNo)}?${params.toString()}`),
         fetchSubcontMarks(orderNo),
@@ -382,18 +387,32 @@ export default function SowHistoryPage() {
   };
 
   const exportExcel = async () => {
-    if (!exportRange.start || !exportRange.end) {
-      toast.error('Pilih rentang tanggal created_at');
-      return;
-    }
-    if (exportRange.start > exportRange.end) {
-      toast.error('Tanggal mulai tidak boleh lebih besar dari tanggal akhir');
+    const ident = exportIdent.trim();
+    if (exportMode === 'range') {
+      if (!exportRange.start || !exportRange.end) {
+        toast.error('Pilih rentang tanggal created_at');
+        return;
+      }
+      if (exportRange.start > exportRange.end) {
+        toast.error('Tanggal mulai tidak boleh lebih besar dari tanggal akhir');
+        return;
+      }
+    } else if (!ident) {
+      toast.error(exportMode === 'ssbr' ? 'Isi SSBR ID' : 'Isi Order No');
       return;
     }
 
     setExporting(true);
     try {
-      const params = new URLSearchParams({ start: exportRange.start, end: exportRange.end, direction: sortDirection });
+      const params = new URLSearchParams({ direction: sortDirection });
+      if (exportMode === 'range') {
+        params.set('start', exportRange.start);
+        params.set('end', exportRange.end);
+      } else if (exportMode === 'ssbr') {
+        params.set('ssbr_id', ident);
+      } else {
+        params.set('order_no', ident);
+      }
       const res = await fetch(`${API_BASE}/sow/history-export?${params.toString()}`);
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -403,7 +422,10 @@ export default function SowHistoryPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `sow_history_${exportRange.start}_to_${exportRange.end}.xlsx`;
+      const slug = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 40);
+      a.download = exportMode === 'order' ? `sow_history_order_${slug(ident)}.xlsx`
+        : exportMode === 'ssbr' ? `sow_history_ssbr_${slug(ident)}.xlsx`
+        : `sow_history_${exportRange.start}_to_${exportRange.end}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -471,19 +493,57 @@ export default function SowHistoryPage() {
             <div className="mb-5 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-slate-800">Export SOW History</h3>
-                <p className="text-xs text-slate-500">Pilih rentang tanggal created_at</p>
+                <p className="text-xs text-slate-500">Filter berdasarkan tanggal, SSBR ID, atau Order No</p>
               </div>
               <button onClick={() => setShowExportPanel(false)} className="min-h-[44px] min-w-[44px] rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"><X className="mx-auto h-4 w-4" /></button>
             </div>
             <div className="grid gap-4">
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold text-slate-600">Tanggal Mulai</span>
-                <input type="date" value={exportRange.start} onChange={e => setExportRange(p => ({ ...p, start: e.target.value }))} className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]" />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold text-slate-600">Tanggal Akhir</span>
-                <input type="date" value={exportRange.end} onChange={e => setExportRange(p => ({ ...p, end: e.target.value }))} className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]" />
-              </label>
+              <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1">
+                {[
+                  { key: 'range', label: 'Tanggal' },
+                  { key: 'ssbr', label: 'SSBR ID' },
+                  { key: 'order', label: 'Order No' },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setExportMode(tab.key)}
+                    className={`min-h-[36px] rounded-md px-2 text-xs font-semibold transition-colors ${exportMode === tab.key ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {exportMode === 'range' ? (
+                <>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-600">Tanggal Mulai</span>
+                    <input type="date" value={exportRange.start} onChange={e => setExportRange(p => ({ ...p, start: e.target.value }))} className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]" />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold text-slate-600">Tanggal Akhir</span>
+                    <input type="date" value={exportRange.end} onChange={e => setExportRange(p => ({ ...p, end: e.target.value }))} className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]" />
+                  </label>
+                </>
+              ) : (
+                <label className="block">
+                  <span className="mb-1 block text-xs font-semibold text-slate-600">{exportMode === 'ssbr' ? 'SSBR ID' : 'Order No'}</span>
+                  <input
+                    type="text"
+                    value={exportIdent}
+                    onChange={e => setExportIdent(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !exporting) exportExcel(); }}
+                    placeholder={exportMode === 'ssbr' ? 'contoh: SSBR-12345' : 'contoh: 1000129441'}
+                    className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
+                  />
+                  <span className="mt-1 block text-[11px] text-slate-400">
+                    {exportMode === 'ssbr'
+                      ? 'Cocok persis, tidak peduli huruf besar/kecil.'
+                      : 'Nol di depan diabaikan — 1000129441 sama dengan 0001000129441.'}
+                  </span>
+                </label>
+              )}
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button onClick={() => setShowExportPanel(false)} disabled={exporting} className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Batal</button>

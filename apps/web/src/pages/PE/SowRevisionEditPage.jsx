@@ -7,6 +7,7 @@ import {
   ChecklistPanel,
   ComponentMasterPicker,
   EditPanel,
+  applyOperationEdit,
   OperationCardPreview,
   TravelCardPreview,
   formatTravelCardIssuedAt,
@@ -31,13 +32,26 @@ async function request(path, options) {
 }
 
 function toEditEntry(row, index) {
+  const total = row.planhours ?? row.std_hours ?? '';
+  // Rincian dibaca dari kolom snapshot. Baris lama (sebelum migrasi 20260804c, atau snapshot
+  // revisi JSONB lama) tidak punya rincian — di situ seluruh jam dianggap VA supaya
+  // VA + NNVA tetap sama dengan planhours dan tidak ada jam yang hilang.
+  const nnva = Number.parseFloat(row.nnva_hours);
+  const va = Number.parseFloat(row.va_hours);
+  const totalNum = Number.parseFloat(total);
+  const nnvaHours = Number.isFinite(nnva) ? nnva : 0;
+  const vaHours = Number.isFinite(va)
+    ? va
+    : (Number.isFinite(totalNum) ? totalNum - nnvaHours : '');
   return {
     ...row,
     _key: `sow-${row.idsow || `${row.order_no}-${row.operation_no}-${index}`}`,
     _cardSourceId: row.idsow,
     _srcId: row.source_op_id || null,
     machineid: row.workcenter || row.machineid || '',
-    std_hours: row.planhours ?? row.std_hours ?? '',
+    std_hours: total,
+    va_hours: vaHours,
+    nnva_hours: nnvaHours,
     operation_no: row.operation_no || (index + 1) * 10,
   };
 }
@@ -117,6 +131,8 @@ export default function SowRevisionEditPage() {
   const [documentNos, setDocumentNos] = useState([]);
   const [editOps, setEditOps] = useState([]);
   const [checkedOps, setCheckedOps] = useState(new Set());
+  const [checkedTemplates, setCheckedTemplates] = useState(new Set());
+  const checkedTemplateOpsRef = useRef(new Map()); // template_id → Set of op.id
   const [currentRevision, setCurrentRevision] = useState(0);
   const [selectedRevision, setSelectedRevision] = useState(0);
   const [revisionOptions, setRevisionOptions] = useState([]);
@@ -187,6 +203,8 @@ export default function SowRevisionEditPage() {
       setCurrentRevision(payload.current_revision || 0);
       setSelectedRevision(payload.selected_revision || payload.current_revision || 0);
       setRevisionOptions(payload.revisions || []);
+      setCheckedTemplates(new Set());
+      checkedTemplateOpsRef.current.clear();
       setDirtyCardKeys(new Set());
       setOperationCardImages({});
       setOperationCardPaths({});
@@ -258,8 +276,60 @@ export default function SowRevisionEditPage() {
     });
   }, []);
 
+  // Operation package (template) toggle — pola sama seperti Create SOW, tapi penomoran memakai
+  // allocateRevisionOperationNo supaya operation_no baris revisi yang sudah ada TIDAK berubah.
+  // Renumber ala Create akan memutus pencocokan (order_no, operation_no) di sow_subcont_mark,
+  // sow_operationcard, dan update people_required dari MS Project.
+  const handleToggleTemplate = useCallback((ops, selectAll, templateId) => {
+    const templateOps = Array.isArray(ops) ? ops : [];
+    if (templateOps.length === 0) return;
+
+    setCheckedTemplates((prev) => {
+      const next = new Set(prev);
+      if (selectAll) next.add(templateId);
+      else next.delete(templateId);
+      return next;
+    });
+
+    if (selectAll) {
+      checkedTemplateOpsRef.current.set(templateId, new Set(templateOps.map((op) => op.id)));
+    } else {
+      checkedTemplateOpsRef.current.delete(templateId);
+    }
+
+    // Op yang masih dipegang package lain yang tercentang — jangan ikut dilepas.
+    const remainingTemplateOpIds = new Set();
+    checkedTemplateOpsRef.current.forEach((opSet) => opSet.forEach((id) => remainingTemplateOpIds.add(id)));
+
+    setCheckedOps((prev) => {
+      const next = new Set(prev);
+      if (selectAll) {
+        templateOps.forEach((op) => next.add(op.id));
+      } else {
+        templateOps.forEach((op) => {
+          if (!remainingTemplateOpIds.has(op.id)) next.delete(op.id);
+        });
+      }
+      return next;
+    });
+
+    setEditOps((prev) => {
+      if (selectAll) {
+        const existingIds = new Set(prev.map((item) => item._srcId).filter(Boolean));
+        return templateOps
+          .filter((op) => !existingIds.has(op.id))
+          .reduce((items, op) => [...items, makeEditEntry(op, allocateRevisionOperationNo(items, op))], prev);
+      }
+      return prev.filter((item) => (
+        item._srcId == null
+        || !templateOps.some((op) => op.id === item._srcId)
+        || remainingTemplateOpIds.has(item._srcId)
+      ));
+    });
+  }, []);
+
   const handleEdit = useCallback((key, field, value) => {
-    setEditOps((prev) => prev.map((op) => (op._key === key ? { ...op, [field]: value } : op)));
+    setEditOps((prev) => prev.map((op) => (op._key === key ? applyOperationEdit(op, field, value) : op)));
   }, []);
 
   const handleDelete = useCallback((key, sourceId) => {
@@ -288,6 +358,8 @@ export default function SowRevisionEditPage() {
         operation_text: opData.operation_text,
         machineid: opData.machineid,
         std_hours: opData.std_hours,
+        va_hours: opData.va_hours ?? opData.std_hours,
+        nnva_hours: opData.nnva_hours ?? 0,
         operation_no: allocateRevisionOperationNo(prev, opData),
       }];
       return appended;
@@ -303,6 +375,8 @@ export default function SowRevisionEditPage() {
       model: component.model,
     }));
     setCheckedOps(new Set());
+    setCheckedTemplates(new Set());
+    checkedTemplateOpsRef.current.clear();
     setShowPartPicker(false);
     toast.success('Part diganti. Operation list kiri sudah mengikuti part baru.');
   }, []);
@@ -380,7 +454,10 @@ export default function SowRevisionEditPage() {
           location: cardInfo.location,
           workcenter: op.machineid,
           workcenterdescription: op.workcenterdescription || null,
+          // planhours dihitung ulang di server dari va+nnva (normalizeSowOperation).
           planhours: op.std_hours !== '' ? parseFloat(op.std_hours) : null,
+          va_hours: op.va_hours !== '' && op.va_hours != null ? parseFloat(op.va_hours) : null,
+          nnva_hours: op.nnva_hours != null ? parseFloat(op.nnva_hours) : 0,
           source_op_id: op.source_op_id || op._srcId || null,
         })),
       };
@@ -520,8 +597,10 @@ export default function SowRevisionEditPage() {
                   componentId={selectedPart?.component_id}
                   selectedPart={selectedPart}
                   checked={checkedOps}
+                  checkedTemplates={checkedTemplates}
                   onToggle={handleToggle}
                   onToggleAll={handleToggleAll}
+                  onToggleTemplate={handleToggleTemplate}
                   onResolveComponent={handlePartChange}
                 />
               </div>

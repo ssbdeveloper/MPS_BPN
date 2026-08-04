@@ -1480,7 +1480,11 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
     onAdd({
       operation_text: newOp.operation_text.trim(),
       machineid:      newOp.machineid,
+      // Operasi manual tidak punya link ke master standar, jadi NNVA-nya 0 dan seluruh jam
+      // yang diketik adalah VA. std_hours (total) otomatis sama dengan VA.
       std_hours:      newOp.std_hours,
+      va_hours:       newOp.std_hours,
+      nnva_hours:     0,
       remark:         newOp.remark,
     });
     setNewOp({ operation_text: '', machineid: '', std_hours: '', remark: '' });
@@ -1529,8 +1533,14 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                 <th className="w-[150px] px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">
                   Workcenter
                 </th>
-                <th className="w-[80px] px-2 py-2 text-right font-semibold text-slate-600 whitespace-nowrap">
-                  Std Hrs
+                <th className="w-[72px] px-2 py-2 text-right font-semibold text-slate-600 whitespace-nowrap" title="Value-added hours — jam operasi aslinya">
+                  VA Hrs
+                </th>
+                <th className="w-[62px] px-2 py-2 text-right font-semibold text-slate-500 whitespace-nowrap" title="Non-value-added hours, diambil dari master standar">
+                  NNVA
+                </th>
+                <th className="w-[72px] px-2 py-2 text-right font-semibold text-slate-700 whitespace-nowrap" title="Plan hours = VA + NNVA, dihitung otomatis">
+                  Plan Hrs
                 </th>
                 <th className="w-[130px] px-2 py-2 text-left font-semibold text-slate-600 whitespace-nowrap">
                   Remark
@@ -1598,19 +1608,35 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                       />
                     </td>
 
-                    {/* Std Hours */}
+                    {/* VA Hours — satu-satunya jam yang diinput; Plan Hrs ikut menjumlah */}
                     <td className="px-2 py-1.5">
                       <input
                         type="number"
                         min="0"
                         step="0.01"
-                        value={op.std_hours ?? ''}
-                        onChange={(e) => onEdit(op._key, 'std_hours', e.target.value)}
+                        value={op.va_hours ?? ''}
+                        onChange={(e) => onEdit(op._key, 'va_hours', e.target.value)}
                         placeholder="0.00"
                         className="w-full px-2 py-1.5 bg-white border border-slate-200 text-slate-800
                                    text-right rounded text-xs focus:outline-none focus:ring-1
                                    focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
                       />
+                    </td>
+
+                    {/* NNVA — snapshot dari master standar, tidak diedit di sini */}
+                    <td className="px-2 py-1.5 text-right">
+                      <span className="tabular-nums text-[11px] text-slate-500" title="Diambil dari master standar operasi">
+                        {fmtHours(op.nnva_hours ?? 0)}
+                      </span>
+                    </td>
+
+                    {/* Plan Hours — turunan, read-only */}
+                    <td className="px-2 py-1.5 text-right">
+                      <span className="tabular-nums text-xs font-semibold text-slate-800" title="VA + NNVA">
+                        {fmtHours(
+                          (Number.parseFloat(op.va_hours) || 0) + (Number.parseFloat(op.nnva_hours) || 0)
+                        )}
+                      </span>
                     </td>
 
                     {/* Remark */}
@@ -1682,14 +1708,14 @@ export function EditPanel({ editOps, onEdit, onDelete, onReorder, onAdd, wcData 
                   />
                 </div>
 
-                {/* Std Hours */}
+                {/* VA Hours — operasi manual selalu NNVA 0, jadi VA = total */}
                 <input
                   type="number"
                   min="0"
                   step="0.01"
                   value={newOp.std_hours}
                   onChange={(e) => setNewOp((p) => ({ ...p, std_hours: e.target.value }))}
-                  placeholder="Hrs"
+                  placeholder="VA Hrs"
                   className="w-[72px] px-2.5 py-2 bg-white border border-slate-200 text-slate-800
                              text-right rounded-lg text-xs focus:outline-none
                              focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
@@ -1791,18 +1817,27 @@ export function TravelCardPreview({
   const qrValue  = cardInfo.productionOrder || selectedPart?.part_number || 'TRAVEL-CARD';
   const signatureQrValue = issuedByName || 'SIGNATURE';
 
+  // NNVA total kini SNAPSHOT di baris (op.nnva_hours), bukan lagi diresolusi ulang ke master
+  // standar. nnvaMap tetap di-fetch — tapi hanya untuk NAMA aktivitas pada baris anak kartu.
   const getNnvaTotalForOp = useCallback((op) => {
+    const snapshot = Number.parseFloat(op.nnva_hours);
+    if (Number.isFinite(snapshot)) return snapshot;
+    // Fallback baris lama (snapshot revisi sebelum kolom nnva_hours ada).
     const stdId = op._srcId || op.id;
     return (nnvaMap[stdId] || []).reduce((sum, n) => sum + (parseFloat(n.standard_hours) || 0), 0);
   }, [nnvaMap]);
 
+  // VA dibaca langsung dari rincian yang tersimpan. Clamp Math.max(...,0) yang dulu dipakai
+  // SENGAJA dihapus: ia menyembunyikan baris ber-planhours < NNVA (98 baris di produksi)
+  // sehingga kartu mencetak pemecahan yang tidak menjumlah benar tanpa ada yang sadar.
   const getTravelCardOperationHours = useCallback((op) => {
+    const va = Number.parseFloat(op.va_hours);
+    if (Number.isFinite(va)) return va;
     const operationHours = parseFloat(op.std_hours) || 0;
-    const nnvaHours = getNnvaTotalForOp(op);
-    return Math.max(operationHours - nnvaHours, 0);
+    return operationHours - getNnvaTotalForOp(op);
   }, [getNnvaTotalForOp]);
 
-  // Total stays equal to saved SOW planhours: operation rows are reduced by NNVA child rows.
+  // Total tetap sama dengan planhours SOW tersimpan: baris operasi memuat VA, sisanya baris NNVA.
   const directHrs = editOps.reduce((sum, op) => sum + (parseFloat(op.std_hours) || 0), 0);
   const totalHrs = directHrs;
   const totalHoursDisplay = fmtTravelCardHours(totalHrs);
@@ -2925,7 +2960,7 @@ const SowCreatePage = () => {
   // ── Edit a field in editOps ──
   const handleEdit = useCallback((key, field, value) => {
     setEditOps((prev) =>
-      prev.map((op) => (op._key === key ? { ...op, [field]: value } : op))
+      prev.map((op) => (op._key === key ? applyOperationEdit(op, field, value) : op))
     );
   }, []);
 
@@ -2969,6 +3004,8 @@ const SowCreatePage = () => {
         operation_text: opData.operation_text,
         machineid:      opData.machineid,
         std_hours:      opData.std_hours,
+        va_hours:       opData.va_hours ?? opData.std_hours,
+        nnva_hours:     opData.nnva_hours ?? 0,
         remark:         opData.remark || '',
         operation_no:   getNextOperationNo(prev, opData),
       };
@@ -3009,7 +3046,11 @@ const SowCreatePage = () => {
           operation_no:   op.operation_no,
           operation_text: op.operation_text,
           machineid:      op.machineid,
+          // planhours dikirim untuk kompatibilitas, tapi server MENGHITUNG ULANG dari va+nnva
+          // (normalizeSowOperation) — rincian ini yang jadi sumber kebenarannya.
           planhours:      op.std_hours !== '' ? parseFloat(op.std_hours) : null,
+          va_hours:       op.va_hours !== '' && op.va_hours != null ? parseFloat(op.va_hours) : null,
+          nnva_hours:     op.nnva_hours != null ? parseFloat(op.nnva_hours) : 0,
           remark:         op.remark || null,
           source_op_id:   op._srcId,
         })),
@@ -3551,6 +3592,15 @@ const SowCreatePage = () => {
 
 // ── Helper: build editOp entry from a standard operation ──────────────────────
 export function makeEditEntry(op, operation_no) {
+  const hasHours = op.std_hours != null && op.std_hours !== '';
+  const total = Number.parseFloat(op.std_hours);
+  const totalHours = Number.isFinite(total) ? total : 0;
+  const rawNnva = Number.parseFloat(op.nnva_hours);
+  // Clamp yang sama persis dengan backfill di migrasi 20260804c: NNVA tidak boleh melampaui jam
+  // standar, supaya plan hours SOW baru TETAP identik dengan std_hours. 44 dari 10.982 standar
+  // punya NNVA > std_hours (mis. "Machine ID Seal Seat": std 0 jam, NNVA 3,08 jam) — master data
+  // yang meragukan, jangan sampai menggelembungkan jadwal.
+  const nnva = Number.isFinite(rawNnva) ? Math.min(Math.max(rawNnva, 0), totalHours) : 0;
   return {
     _key:           `std-${op.id}`,
     _isNew:         false,
@@ -3560,9 +3610,24 @@ export function makeEditEntry(op, operation_no) {
     operation_text: op.operation_text,
     machineid:      op.machineid || op.workcenter || '',
     std_hours:      op.std_hours ?? '',
+    va_hours:       hasHours ? totalHours - nnva : '',
+    nnva_hours:     hasHours ? nnva : 0,
     remark:         op.remark ?? '',
     operation_no,
   };
+}
+
+// ── Helper: terapkan satu edit ke operasi, jaga std_hours = va + nnva ──────────
+// std_hours SENGAJA tetap menjadi "total" yang dipakai seluruh kode lama (payload planhours,
+// total travel card), sehingga penambahan input VA tidak menyebar ke seluruh kodebase.
+export function applyOperationEdit(op, field, value) {
+  const next = { ...op, [field]: value };
+  if (field === 'va_hours' || field === 'nnva_hours') {
+    const va = Number.parseFloat(next.va_hours);
+    const nnva = Number.parseFloat(next.nnva_hours);
+    next.std_hours = (Number.isFinite(va) ? va : 0) + (Number.isFinite(nnva) ? nnva : 0);
+  }
+  return next;
 }
 
 export default SowCreatePage;
