@@ -4458,6 +4458,13 @@ exports.getAll = async (req, res) => {
 
 const SUBTASK_STD_HEADERS = ['part_number', 'operation_text', 'operation_no', 'title', 'weight', 'sort_order'];
 
+// Normalisasi teks HARUS identik dengan uq_sow_sub_op_std_active dan trigger
+// seed_sow_sub_operation_from_standard (migrasi 20260804f). btrim saja TIDAK cukup: ia hanya
+// memangkas ujung, sehingga 'CUT AND  BEVEL' tidak pernah cocok dengan 'CUT AND BEVEL'.
+// Di prod Cikupa 91 baris sow.operation_text mengandung spasi ganda.
+const NORM = (col) => `upper(regexp_replace(btrim(${col}), '\s+', ' ', 'g'))`;
+const normText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+
 // Baca teks dari bentuk cell ExcelJS apa pun (richText / formula / hyperlink / Date).
 function stdCellText(cell) {
   if (!cell) return '';
@@ -4482,7 +4489,7 @@ exports.getSubtaskStandards = async (req, res) => {
     const q = String(req.query.q || '').trim();
     if (partNumber) {
       values.push(partNumber);
-      where.push(`upper(btrim(part_number)) = upper(btrim($${values.length}))`);
+      where.push(`${NORM('part_number')} = ${NORM(`$${values.length}`)}`);
     }
     if (q) {
       values.push(`%${q.toLowerCase()}%`);
@@ -4509,10 +4516,10 @@ exports.getSubtaskStandardParts = async (req, res) => {
     const result = await db.query(
       `SELECT std.part_number,
               count(*)::int                                   AS sub_tasks,
-              count(DISTINCT upper(btrim(std.operation_text)))::int AS operations,
+              count(DISTINCT ${NORM('std.operation_text')})::int AS operations,
               max(std.updated_at)                             AS updated_at,
               (SELECT min(s.part_name) FROM sow s
-                WHERE upper(btrim(s.part_number)) = upper(btrim(std.part_number))) AS part_name
+                WHERE ${NORM('s.part_number')} = ${NORM('std.part_number')}) AS part_name
          FROM public.sow_sub_operation_standard std
         WHERE std.is_active = true
         GROUP BY std.part_number
@@ -4616,7 +4623,7 @@ exports.importSubtaskStandards = async (req, res) => {
         if (!Number.isFinite(operationNo)) { rejectRow('operation_no harus berupa angka'); continue; }
       }
 
-      const dupKey = [partNumber, operationText, title].map((v) => v.trim().toUpperCase()).join('|');
+      const dupKey = [partNumber, operationText, title].map(normText).join('|');
       if (seenInFile.has(dupKey)) { rejectRow('duplikat di dalam file ini'); continue; }
       seenInFile.add(dupKey);
 
@@ -4624,8 +4631,8 @@ exports.importSubtaskStandards = async (req, res) => {
       // order berikutnya mungkin memakainya. Tapi user harus tahu standarnya belum akan cocok.
       const known = await q.query(
         `SELECT 1 FROM sow
-           WHERE upper(btrim(part_number)) = upper(btrim($1))
-             AND upper(btrim(operation_text)) = upper(btrim($2))
+           WHERE ${NORM('part_number')} = ${NORM('$1')}
+             AND ${NORM('operation_text')} = ${NORM('$2')}
            LIMIT 1`,
         [partNumber, operationText],
       );
@@ -4634,9 +4641,9 @@ exports.importSubtaskStandards = async (req, res) => {
       const existing = await q.query(
         `SELECT id FROM public.sow_sub_operation_standard
           WHERE is_active = true
-            AND upper(btrim(part_number)) = upper(btrim($1))
-            AND upper(btrim(operation_text)) = upper(btrim($2))
-            AND upper(btrim(title)) = upper(btrim($3))
+            AND ${NORM('part_number')} = ${NORM('$1')}
+            AND ${NORM('operation_text')} = ${NORM('$2')}
+            AND ${NORM('title')} = ${NORM('$3')}
           LIMIT 1`,
         [partNumber, operationText, title],
       );
