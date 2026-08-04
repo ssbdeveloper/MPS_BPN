@@ -35,18 +35,100 @@ export const AREA_OPTIONS = [
   { areaCode: 'AREA-18', areaName: 'Blasting & Prime', bays: ['PT1', 'PT2', 'PT3', 'BL1', 'BL2'] },
 ];
 
-// Map: areaCode -> { areaName, bays }. Derived from AREA_OPTIONS.
+// Canonical blasting area code. SelectJobPage's old value was 'BLASTING'.
+export const BLASTING_AREA_CODE = 'AREA-18';
+
+/* ── Zona bay: Edge & Center ──────────────────────────────────────────────────
+   Tiap bay strip di lane dibelah JALAN sungguhan jadi dua zona. Edge = sisi
+   terluar (menempel dinding), Center = sisi yang menghadap aisle utama. Karena
+   LANE_A di atas dan LANE_B di bawah, urutan visualnya bercermin:
+
+     ═════════ dinding ═════════
+       LANE_A  EDGE
+       ──────── jalan ────────
+       LANE_A  CENTER
+     ═════ aisle utama ═════
+       LANE_B  CENTER
+       ──────── jalan ────────
+       LANE_B  EDGE
+     ═════════ dinding ═════════
+
+   Pembagian ini VERTIKAL: jumlah KOLOM peta tidak berubah (tetap 38 per lane),
+   yang bertambah adalah baris di dalam tiap kolom. Peta tingkat 1 tetap muat
+   tanpa scroll horizontal.
+
+   SUFIKS TANPA SPASI ('A38C', bukan 'A38 Center') disengaja. Kode ini masuk ke
+   ms_project_bay_schedule.bay_codes (text[]), query `bay_codes && $1::text[]`,
+   dan CSV timesheet_transaction.ms_bay_codes. Identifier berspasi mengundang
+   kelas bug yang sama dengan operation_text: 91 baris prod pernah gagal cocok
+   hanya karena spasi ganda. Label tampilan tetap 'A38 Center'.
+
+   AREA-18 (Blasting & Prime) TIDAK dibagi — booth adalah ruang tertutup, bukan
+   strip lantai yang dilewati jalan (keputusan owner 2026-08-04).             */
+
+export const BAY_ZONES = [
+  { key: 'EDGE', suffix: 'E', label: 'Edge' },
+  { key: 'CENTER', suffix: 'C', label: 'Center' },
+];
+
+export const ZONE_BY_KEY = BAY_ZONES.reduce((acc, zone) => {
+  acc[zone.key] = zone;
+  return acc;
+}, {});
+
+export function isZonedArea(areaCode) {
+  return areaCode !== BLASTING_AREA_CODE;
+}
+
+// Kode bay lengkap dari kode kolom + zona. Area tak berzona mengembalikan kode apa adanya.
+export function bayCode(base, zoneKey) {
+  const zone = ZONE_BY_KEY[zoneKey];
+  return zone ? `${base}${zone.suffix}` : base;
+}
+
+// 'A38C' -> { base: 'A38', zoneKey: 'CENTER' }. Kode tak berzona -> zoneKey null.
+export function splitBayCode(code) {
+  const text = String(code || '').trim().toUpperCase();
+  const match = /^([A-Z]{1,3}[0-9]{1,3})([CE])$/.exec(text);
+  if (!match) return { base: text, zoneKey: null };
+  const zone = BAY_ZONES.find((z) => z.suffix === match[2]);
+  return { base: match[1], zoneKey: zone ? zone.key : null };
+}
+
+// Label manusia: 'A38C' -> 'A38 Center'. Dipakai UI, JANGAN disimpan ke database.
+export function bayLabel(code) {
+  const { base, zoneKey } = splitBayCode(code);
+  return zoneKey ? `${base} ${ZONE_BY_KEY[zoneKey].label}` : base;
+}
+
+// Urutan zona dari ATAS ke BAWAH untuk sebuah lane. Lane bawah bercermin supaya
+// Edge selalu berada di sisi dinding, bukan sekadar "yang di atas".
+export function zoneOrderFor(laneLabel) {
+  return laneLabel === 'bottom' ? ['CENTER', 'EDGE'] : ['EDGE', 'CENTER'];
+}
+
+// Seluruh kode bay yang sah untuk satu area (sudah berzona bila areanya berzona).
+export function bayCodesOf(areaCode) {
+  const area = MANUFACTURING_AREAS[areaCode];
+  if (!area) return [];
+  if (!isZonedArea(areaCode)) return [...area.bays];
+  return area.bays.flatMap((base) => BAY_ZONES.map((zone) => bayCode(base, zone.key)));
+}
+
+// Map: areaCode -> { areaName, bays }. `bays` = kode KOLOM (tanpa zona);
+// pakai bayCodesOf() kalau butuh daftar kode bay yang sebenarnya.
 export const MANUFACTURING_AREAS = AREA_OPTIONS.reduce((acc, { areaCode, areaName, bays }) => {
   acc[areaCode] = { areaName, bays };
   return acc;
 }, {});
 
-// Canonical blasting area code. SelectJobPage's old value was 'BLASTING'.
-export const BLASTING_AREA_CODE = 'AREA-18';
+// Seluruh kode bay sah di pabrik — dipakai validasi dan pengecekan drift.
+export const ALL_BAY_CODES = AREA_OPTIONS.flatMap((area) => bayCodesOf(area.areaCode));
 
-// Full area definition ({ areaCode, areaName, bays }) for a code, or null.
+// Full area definition untuk sebuah kode, atau null. `bays` tetap kode kolom;
+// `zoned` memberi tahu pemanggil apakah kolomnya perlu dibelah dua.
 export function areaDef(code) {
   const area = MANUFACTURING_AREAS[code];
   if (!area) return null;
-  return { areaCode: code, areaName: area.areaName, bays: area.bays };
+  return { areaCode: code, areaName: area.areaName, bays: area.bays, zoned: isZonedArea(code) };
 }

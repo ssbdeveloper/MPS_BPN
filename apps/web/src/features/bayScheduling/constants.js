@@ -9,6 +9,13 @@
 
 import { areaDef } from '../../config/manufacturingAreas';
 
+// Helper zona bay (Edge/Center) di-re-export dari topologi supaya komponen fitur ini
+// punya SATU sumber impor. Definisinya tetap di config/manufacturingAreas.js — file itu
+// juga dipakai layar operator, jadi tidak boleh bergantung pada folder features/.
+export {
+  BAY_ZONES, ZONE_BY_KEY, bayCode, bayLabel, splitBayCode, zoneOrderFor, isZonedArea, bayCodesOf,
+} from '../../config/manufacturingAreas';
+
 /* ── Topologi lantai ─────────────────────────────────────────────────────────
    Nama area + daftar bay berasal dari config/manufacturingAreas.js (satu sumber
    bersama dengan SelectJobPage timesheet). Yang lokal di sini HANYA metadata

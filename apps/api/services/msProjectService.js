@@ -1602,27 +1602,51 @@ function normalizeDateOnly(value, fieldName) {
 // diverifikasi tidak pernah dipakai di data prod (`select distinct unnest(bay_codes)
 // from ms_project_bay_schedule` = A24/A27/A28/A29/A30/A35/A36/A37/A38/B34/B36/B37/B38 + BP3/BP4
 // milik satu baris sampah 'codex-smoke-test' bertanggal 2099 yang dibersihkan migrasi Fase 2).
+// Kode bay sah. DUPLIKAT MANUAL dari apps/web/src/config/manufacturingAreas.js — backend tidak
+// boleh mengimpor file frontend, jadi keduanya harus disinkronkan bersamaan.
+//
+// Tiap bay lane dibelah jalan sungguhan jadi dua zona: sufiks E = Edge (sisi dinding),
+// C = Center (sisi aisle utama). Sufiks TANPA SPASI disengaja — kode ini masuk ke
+// bay_codes text[], query `&&`, dan CSV timesheet; identifier berspasi mengundang bug
+// pencocokan yang sama seperti yang sudah terjadi pada operation_text.
+//
+// AREA-18 (booth blasting/painting) TIDAK berzona: ruang tertutup, bukan strip lantai.
 const MANUFACTURING_BAY_CODES = new Set([
-  // AREA-01 .. AREA-10 (lane A)
-  "A38", "A37", "A36", "A35",
-  "A34", "A33", "A32",
-  "A30", "A29", "A28", "A27",
-  "A26", "A25", "A24", "A23",
-  "A22", "A21", "A20", "A19",
-  "A18", "A17", "A16", "A15",
-  "A14", "A13", "A12", "A11",
-  "A9", "A8", "A7", "A6",
-  "A5", "A4", "A3", "A2",
-  "A1",
-  // AREA-11 .. AREA-17 (lane B)
-  "B38", "B37", "B36", "B35",
-  "B34", "B33", "B32",
-  "B30", "B29", "B28", "B27",
-  "B26", "B25", "B24", "B23",
-  "B22", "B21", "B20", "B19",
-  "B17", "B16", "B15", "B14",
-  "B13", "B12", "B11", "B10",
-  // AREA-18 — Blasting & Prime (3 painting + 2 blasting)
+  // AREA-01 — Area 1
+  "A38E", "A38C", "A37E", "A37C", "A36E", "A36C", "A35E", "A35C",
+  // AREA-02 — Area 2
+  "A34E", "A34C", "A33E", "A33C", "A32E", "A32C",
+  // AREA-03 — Area 3
+  "A30E", "A30C", "A29E", "A29C", "A28E", "A28C", "A27E", "A27C",
+  // AREA-04 — Area 4
+  "A26E", "A26C", "A25E", "A25C", "A24E", "A24C", "A23E", "A23C",
+  // AREA-05 — Area 5
+  "A22E", "A22C", "A21E", "A21C", "A20E", "A20C", "A19E", "A19C",
+  // AREA-06 — Area 6
+  "A18E", "A18C", "A17E", "A17C", "A16E", "A16C", "A15E", "A15C",
+  // AREA-07 — Area 7
+  "A14E", "A14C", "A13E", "A13C", "A12E", "A12C", "A11E", "A11C",
+  // AREA-08 — Area 8
+  "A9E", "A9C", "A8E", "A8C", "A7E", "A7C", "A6E", "A6C",
+  // AREA-09 — Area 9
+  "A5E", "A5C", "A4E", "A4C", "A3E", "A3C", "A2E", "A2C",
+  // AREA-10 — Area 10
+  "A1E", "A1C",
+  // AREA-11 — Area 11
+  "B38E", "B38C", "B37E", "B37C", "B36E", "B36C", "B35E", "B35C",
+  // AREA-12 — Area 12
+  "B34E", "B34C", "B33E", "B33C", "B32E", "B32C",
+  // AREA-13 — Area 13
+  "B30E", "B30C", "B29E", "B29C", "B28E", "B28C", "B27E", "B27C",
+  // AREA-14 — Area 14
+  "B26E", "B26C", "B25E", "B25C", "B24E", "B24C", "B23E", "B23C",
+  // AREA-15 — Area 15
+  "B22E", "B22C", "B21E", "B21C", "B20E", "B20C", "B19E", "B19C",
+  // AREA-16 — Area 16
+  "B17E", "B17C", "B16E", "B16C", "B15E", "B15C", "B14E", "B14C",
+  // AREA-17 — Area 17
+  "B13E", "B13C", "B12E", "B12C", "B11E", "B11C", "B10E", "B10C",
+  // AREA-18 — Blasting & Prime
   "PT1", "PT2", "PT3", "BL1", "BL2",
 ]);
 
@@ -1669,7 +1693,8 @@ function normalizeBayCodes(values) {
   if (!uniqueCodes.length) {
     throw new ApiError(400, "INVALID_PAYLOAD", "bay_codes must include at least one bay", [{ field: "bay_codes" }]);
   }
-  const malformed = uniqueCodes.filter((code) => !/^[A-Z]{1,3}[0-9]{1,3}$/.test(code));
+  // Sufiks zona [CE] opsional: bay lane berzona (A38C), booth AREA-18 tidak (PT1).
+  const malformed = uniqueCodes.filter((code) => !/^[A-Z]{1,3}[0-9]{1,3}[CE]?$/.test(code));
   if (malformed.length) {
     throw new ApiError(400, "INVALID_BAY_CODE", "One or more bay codes are invalid", malformed.map((code) => ({ bay_code: code })));
   }

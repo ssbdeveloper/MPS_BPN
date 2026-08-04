@@ -19,7 +19,10 @@
 
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { MapPin, Warehouse } from 'lucide-react';
-import { ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, formatDate, groupKeyOf, plural } from './constants';
+import {
+  ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, bayCode, bayLabel, formatDate, groupKeyOf,
+  plural, zoneOrderFor,
+} from './constants';
 
 // Skala okupansi memakai tangga SEQUENTIAL biru korporat
 // (#caf0f8 -> #90e0ef -> #00b4d8). Warna status (amber/emerald/slate/red) sengaja
@@ -77,14 +80,14 @@ function countBay(rows) {
 
 // Sel bay. React.memo WAJIB: satu render peta menyentuh ~79 sel, dan sebagian besar
 // perubahan state (mis. pindah area terpilih) tidak mengubah angka satu sel pun.
-const BayMiniCell = React.memo(function BayMiniCell({ bayCode, reservations, activities, withCode }) {
+const BayMiniCell = React.memo(function BayMiniCell({ code, reservations, activities, withCode }) {
   const tone = OCCUPANCY[Math.min(reservations, OCCUPANCY.length - 1)];
   const occupied = reservations > 0;
 
   return (
     <div
       aria-hidden="true"
-      title={`Bay ${bayCode} — ${plural(reservations, 'reservation')}, ${plural(activities, 'activity', 'activities')}`}
+      title={`${bayLabel(code)} — ${plural(reservations, 'reservation')}, ${plural(activities, 'activity', 'activities')}`}
       className={`flex min-w-0 items-center justify-center overflow-hidden rounded ${
         withCode ? 'h-7 gap-1 px-1' : 'h-9 flex-col'
       } ${tone.dashed ? 'border border-dashed' : 'border'}`}
@@ -92,7 +95,7 @@ const BayMiniCell = React.memo(function BayMiniCell({ bayCode, reservations, act
     >
       {withCode && (
         <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide tabular-nums text-slate-500">
-          {bayCode}
+          {code}
         </span>
       )}
       {occupied && (
@@ -120,21 +123,37 @@ const BayMiniCell = React.memo(function BayMiniCell({ bayCode, reservations, act
 const AreaBlock = React.memo(function AreaBlock({
   area, schedulesByBay, cursorDate, selected, onSelect, layout,
 }) {
-  const cells = useMemo(
-    () => area.bays.map((bayCode) => ({ bayCode, ...countBay(schedulesByBay?.get(bayCode)) })),
-    [area, schedulesByBay],
-  );
+  // Bay lane dibelah JALAN jadi dua zona; tiap zona satu deret sel di kolom yang SAMA,
+  // jadi jumlah kolom peta tidak bertambah. Urutan zona bercermin antar lane supaya Edge
+  // selalu di sisi dinding (lihat zoneOrderFor). AREA-18 tidak berzona -> satu deret.
+  const rows = useMemo(() => {
+    if (!area.zoned) {
+      return [{
+        zoneKey: null,
+        cells: area.bays.map((base) => ({ code: base, ...countBay(schedulesByBay?.get(base)) })),
+      }];
+    }
+    return zoneOrderFor(layout).map((zoneKey) => ({
+      zoneKey,
+      cells: area.bays.map((base) => {
+        const code = bayCode(base, zoneKey);
+        return { code, ...countBay(schedulesByBay?.get(code)) };
+      }),
+    }));
+  }, [area, schedulesByBay, layout]);
 
   const totals = useMemo(
-    () => cells.reduce(
+    () => rows.flatMap((row) => row.cells).reduce(
       (acc, cell) => ({
         reservations: acc.reservations + cell.reservations,
         activities: acc.activities + cell.activities,
       }),
       { reservations: 0, activities: 0 },
     ),
-    [cells],
+    [rows],
   );
+
+  const bayCount = rows.reduce((acc, row) => acc + row.cells.length, 0);
 
   const handleClick = useCallback(() => onSelect(area.areaCode), [onSelect, area.areaCode]);
 
@@ -155,22 +174,26 @@ const AreaBlock = React.memo(function AreaBlock({
   );
 
   const gridNode = (
-    <div
-      className={isAside ? 'grid gap-1' : 'grid gap-px'}
-      style={
-        isAside
-          ? undefined
-          : { gridTemplateColumns: `repeat(${area.bays.length}, minmax(0, 1fr))` }
-      }
-    >
-      {cells.map((cell) => (
-        <BayMiniCell
-          key={cell.bayCode}
-          bayCode={cell.bayCode}
-          reservations={cell.reservations}
-          activities={cell.activities}
-          withCode={isAside}
-        />
+    <div className="flex flex-col gap-px">
+      {rows.map((row, index) => (
+        <React.Fragment key={row.zoneKey || 'single'}>
+          {/* Garis JALAN antar zona — jalan sungguhan di lantai, bukan hiasan. */}
+          {index > 0 && <span aria-hidden="true" className="my-px h-0.5 w-full rounded bg-slate-300" />}
+          <div
+            className={isAside ? 'grid gap-1' : 'grid gap-px'}
+            style={isAside ? undefined : { gridTemplateColumns: `repeat(${area.bays.length}, minmax(0, 1fr))` }}
+          >
+            {row.cells.map((cell) => (
+              <BayMiniCell
+                key={cell.code}
+                code={cell.code}
+                reservations={cell.reservations}
+                activities={cell.activities}
+                withCode={isAside}
+              />
+            ))}
+          </div>
+        </React.Fragment>
       ))}
     </div>
   );
@@ -182,7 +205,7 @@ const AreaBlock = React.memo(function AreaBlock({
       aria-pressed={selected}
       title={area.areaName}
       aria-label={
-        `${area.areaName}: ${plural(area.bays.length, 'bay')}, ${totals.reservations} reservations, `
+        `${area.areaName}: ${plural(bayCount, 'bay')}, ${totals.reservations} reservations, `
         + `${totals.activities} activities on ${formatDate(cursorDate)}`
       }
       className={`flex min-w-0 flex-col gap-0.5 rounded-lg border p-0.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
@@ -321,6 +344,21 @@ export default function FloorMapOverview({ schedulesByBay, cursorDate, selectedA
       {/* Lantai. Dua lane 38 kolom + aside Blasting & Prime. Semua kolom 1fr, jadi
           tidak ada jalur overflow horizontal pada lebar viewport mana pun. */}
       <div className="flex min-w-0 items-stretch gap-2">
+        {/* AREA-18 di KIRI, sesuai denah lantai. Rombakan Fase 5 sempat memindahkannya ke
+            kanan; halaman lama merender blok ini SEBELUM kedua lane. 5 booth (3 painting +
+            2 blasting) tidak sejajar dengan grid 38 kolom, jadi berdiri sendiri.
+            Booth TIDAK dibagi Edge/Center: ruang tertutup, bukan strip lantai. */}
+        <div className="w-[136px] shrink-0">
+          <AreaBlock
+            area={BLASTING_AREA}
+            schedulesByBay={schedulesByBay}
+            cursorDate={cursorDate}
+            selected={selectedAreaCode === BLASTING_AREA.areaCode}
+            onSelect={handleSelectArea}
+            layout="aside"
+          />
+        </div>
+
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <Lane
             items={LANE_A}
@@ -342,19 +380,6 @@ export default function FloorMapOverview({ schedulesByBay, cursorDate, selectedA
             cursorDate={cursorDate}
             selectedAreaCode={selectedAreaCode}
             onSelectArea={handleSelectArea}
-          />
-        </div>
-
-        {/* AREA-18 tetap berdiri sendiri di kanan seperti denah aslinya: 5 booth
-            (3 painting + 2 blasting) yang tidak sejajar dengan grid 38 kolom. */}
-        <div className="w-[136px] shrink-0">
-          <AreaBlock
-            area={BLASTING_AREA}
-            schedulesByBay={schedulesByBay}
-            cursorDate={cursorDate}
-            selected={selectedAreaCode === BLASTING_AREA.areaCode}
-            onSelect={handleSelectArea}
-            layout="aside"
           />
         </div>
       </div>

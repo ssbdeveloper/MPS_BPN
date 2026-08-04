@@ -8,6 +8,7 @@ import { fetchBayOccupants, fetchOrderTasks, updateOperationPeople } from '../..
 import { Skeleton } from '../../components';
 import {
   NONJOB_BOOKING_TYPES, addDaysText, bookingTypeOf, formatDate, formatHours, statusStyle, todayText,
+  bayCode as makeBayCode, splitBayCode,
 } from './constants';
 import useDialogA11y from './useDialogA11y';
 
@@ -266,14 +267,22 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   const dialogRef = useDialogA11y(stableClose);
 
   // --- Bay terpilih: mulai dari bayCode, ambil N bay berikutnya dalam area ----
-  const bayIndex = Math.max(0, area.bays.indexOf(bayCode));
-  const maxBayCount = Math.max(1, area.bays.length - bayIndex);
+  // Perluasan multi-bay bergerak menyamping DALAM ZONA YANG SAMA. Sebuah unit yang
+  // menempati 3 bay berdiri di sisi lantai yang sama — melompat dari Center ke Edge
+  // berarti menyeberangi jalan, yang mustahil untuk satu unit.
+  const zoneBays = useMemo(() => {
+    if (!area?.zoned) return area?.bays || [];
+    const { zoneKey } = splitBayCode(bayCode);
+    return (area.bays || []).map((base) => makeBayCode(base, zoneKey || 'CENTER'));
+  }, [area, bayCode]);
+  const bayIndex = Math.max(0, zoneBays.indexOf(bayCode));
+  const maxBayCount = Math.max(1, zoneBays.length - bayIndex);
   // Di-clamp saat render (bukan lewat efek) supaya ganti bay ke ujung area tidak
   // sempat menghasilkan daftar bay yang lebih pendek dari angka di select.
   const effectiveBayCount = Math.min(Math.max(1, Number(bayCount) || 1), maxBayCount);
   const selectedBays = useMemo(
-    () => area.bays.slice(bayIndex, bayIndex + effectiveBayCount),
-    [area.bays, bayIndex, effectiveBayCount],
+    () => zoneBays.slice(bayIndex, bayIndex + effectiveBayCount),
+    [zoneBays, bayIndex, effectiveBayCount],
   );
   const bayCodesKey = selectedBays.join(',');
 

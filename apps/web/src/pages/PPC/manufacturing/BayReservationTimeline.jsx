@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { CalendarRange, Car, HelpCircle, Tag, Users, Warehouse, Wrench } from 'lucide-react';
 import { EmptyState } from '../../../components';
-import { AREA_OPTIONS } from '../../../config/manufacturingAreas';
+import { AREA_OPTIONS, bayCodesOf, bayLabel } from '../../../config/manufacturingAreas';
 import { bookingTypeOf, dedupeByGroup, plural } from '../../../features/bayScheduling/constants';
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -95,7 +95,9 @@ function todayDayNum() {
   return Math.floor(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()) / 86400000);
 }
 
-const KNOWN_BAYS = new Set(AREA_OPTIONS.flatMap((area) => area.bays));
+// Kode bay lengkap (sudah berzona) — kalau memakai area.bays yang kode KOLOM, seluruh
+// reservasi akan jatuh ke grup 'Unmapped bays'.
+const KNOWN_BAYS = new Set(AREA_OPTIONS.flatMap((area) => bayCodesOf(area.areaCode)));
 
 function barTitle(entry, style) {
   const type = bookingTypeOf(entry);
@@ -129,7 +131,10 @@ function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
         style={{ width: LABEL_W, height: rowH }}
       >
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-slate-300" aria-hidden="true" />
-        <span className="truncate font-mono text-xs font-bold tabular-nums text-slate-700">{bay}</span>
+        {/* Label manusia: A38C -> "A38 Center". Kode mentah tetap dipakai sebagai kunci data. */}
+        <span title={bayLabel(bay)} className="truncate font-mono text-xs font-bold tabular-nums text-slate-700">
+          {bayLabel(bay)}
+        </span>
         {segs.length > 0 && (
           <span
             className="ml-auto shrink-0 rounded-full bg-slate-100 px-1.5 text-[11px] font-bold tabular-nums text-slate-500"
@@ -420,7 +425,7 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
           </div>
 
           {/* area → bay */}
-          {AREA_OPTIONS.map((area) => renderGroup(area.areaCode, area.areaName, area.bays))}
+          {AREA_OPTIONS.map((area) => renderGroup(area.areaCode, area.areaName, bayCodesOf(area.areaCode)))}
           {extraBays.length > 0 && renderGroup('__extra', 'Unmapped bays', extraBays)}
         </div>
       </div>

@@ -5,6 +5,10 @@ import {
 import {
   BOOKING_TYPES,
   RESERVATION_STATUS,
+  ZONE_BY_KEY,
+  bayCode as makeBayCode,
+  splitBayCode,
+  zoneOrderFor,
   dedupeByGroup,
   formatDate,
   groupKeyOf,
@@ -315,7 +319,9 @@ const BayDetailCell = memo(function BayDetailCell({
       style={stateStyle}
     >
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="font-mono text-xs font-extrabold uppercase tabular-nums text-slate-700">{bayCode}</span>
+        <span className="font-mono text-xs font-extrabold uppercase tabular-nums text-slate-700">
+          {splitBayCode(bayCode).base}
+        </span>
         <span
           className={`rounded-full px-1.5 text-[11px] font-bold uppercase tracking-wide tabular-nums ${
             occupied ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-100 text-slate-400'
@@ -348,7 +354,19 @@ const BayDetailCell = memo(function BayDetailCell({
 export default function BayAreaDetail({
   area, schedulesByBay, cursorDate, selectedBay, onSelectBay, onOpenDetail, onDropOrder, onBack,
 }) {
-  const bays = useMemo(() => (Array.isArray(area?.bays) ? area.bays : []), [area]);
+  // Bay lane dibelah jalan jadi dua zona; tiap zona jadi seksi sendiri supaya scheduler
+  // melihat pembagian fisiknya, bukan 8 kotak berderet tanpa makna. AREA-18 tidak berzona.
+  const zoneRows = useMemo(() => {
+    const bases = Array.isArray(area?.bays) ? area.bays : [];
+    if (!area?.zoned) return [{ zoneKey: null, label: null, codes: bases }];
+    return zoneOrderFor(area.label).map((zoneKey) => ({
+      zoneKey,
+      label: ZONE_BY_KEY[zoneKey].label,
+      codes: bases.map((base) => makeBayCode(base, zoneKey)),
+    }));
+  }, [area]);
+
+  const bays = useMemo(() => zoneRows.flatMap((row) => row.codes), [zoneRows]);
 
   // Ringkasan area pada tanggal kursor: reservasi unik (dedupe lintas bay — satu
   // reservasi yang memakai 3 bay dihitung SEKALI) + jumlah baris aktivitas/task.
@@ -405,24 +423,42 @@ export default function BayAreaDetail({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div
-          className="grid gap-3"
-          style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}
-        >
-          {bays.map((bayCode) => (
-            <BayDetailCell
-              key={bayCode}
-              area={area}
-              bayCode={bayCode}
-              schedules={schedulesByBay?.get(bayCode) || EMPTY_SCHEDULES}
-              cursorDate={cursorDate}
-              selected={selectedBay === bayCode}
-              onSelectBay={onSelectBay}
-              onOpenDetail={onOpenDetail}
-              onDropOrder={onDropOrder}
-            />
-          ))}
-        </div>
+        {zoneRows.map((row, index) => (
+          <section key={row.zoneKey || 'single'}>
+            {row.label && (
+              <div className="mb-2 flex items-center gap-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-500">{row.label}</span>
+                <span aria-hidden="true" className="h-px flex-1 bg-slate-200" />
+              </div>
+            )}
+            <div
+              className="grid gap-3"
+              style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}
+            >
+              {row.codes.map((code) => (
+                <BayDetailCell
+                  key={code}
+                  area={area}
+                  bayCode={code}
+                  schedules={schedulesByBay?.get(code) || EMPTY_SCHEDULES}
+                  cursorDate={cursorDate}
+                  selected={selectedBay === code}
+                  onSelectBay={onSelectBay}
+                  onOpenDetail={onOpenDetail}
+                  onDropOrder={onDropOrder}
+                />
+              ))}
+            </div>
+            {/* Garis JALAN: pemisah fisik di lantai antara Edge dan Center. */}
+            {index < zoneRows.length - 1 && (
+              <div className="my-4 flex items-center gap-2" aria-hidden="true">
+                <span className="h-0.5 flex-1 rounded bg-slate-300" />
+                <span className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-400">Road</span>
+                <span className="h-0.5 flex-1 rounded bg-slate-300" />
+              </div>
+            )}
+          </section>
+        ))}
       </div>
 
       <p className="text-xs text-slate-500">

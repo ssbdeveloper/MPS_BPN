@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ClipboardList, Lock, MapPin, RefreshCw, Search, Settings2, Unlock, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { goBackOrFallback } from '../../../utils/navigation';
-import { AREA_OPTIONS, BLASTING_AREA_CODE } from '../../../config/manufacturingAreas';
+import { AREA_OPTIONS, BLASTING_AREA_CODE, bayCodesOf, bayLabel } from '../../../config/manufacturingAreas';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const AREA_STORAGE_KEY = 'mps.manufacturing.timesheet.deviceArea';
@@ -129,7 +129,9 @@ export default function ManufacturingSelectJobPage() {
   );
 
   useEffect(() => {
-    if (!selectedArea || !selectedArea.bays.includes(selectedBay)) {
+    // bayCodesOf = kode LENGKAP berzona (A38E/A38C). selectedArea.bays hanya kode kolom,
+    // jadi memakainya di sini akan menganggap setiap bay tersimpan tidak valid.
+    if (!selectedArea || !bayCodesOf(selectedArea.areaCode).includes(selectedBay)) {
       setSelectedBay('');
       writeStoredValue(BAY_STORAGE_KEY, '');
       setJobs([]);
@@ -356,8 +358,8 @@ export default function ManufacturingSelectJobPage() {
               className={`${inputClass} disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60`}
             >
               <option value="">Pilih bay</option>
-              {(selectedArea?.bays || []).map((bayCode) => (
-                <option key={bayCode} value={bayCode}>{bayCode}</option>
+              {(selectedArea ? bayCodesOf(selectedArea.areaCode) : []).map((code) => (
+                <option key={code} value={code}>{bayLabel(code)}</option>
               ))}
             </select>
           </label>
