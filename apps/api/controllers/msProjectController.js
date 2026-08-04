@@ -181,11 +181,6 @@ exports.mapSowOperationToTask = route(async (req) => {
   return (res) => success(res, data);
 });
 
-exports.mapSowOrderToProjectTasks = route(async (req) => {
-  const data = await service.mapSowOrderToProjectTasks(req.params.project_id, req.body || {});
-  return (res) => success(res, data, 200, data.summary || {});
-});
-
 // Sebelumnya summary tidak dikirim sama sekali sehingga pemanggil tidak pernah tahu daftarnya
 // terpotong `limit` (temuan review #5). Sekarang limit/offset selalu ikut, total bila ada.
 exports.listBaySchedules = route(async (req) => {

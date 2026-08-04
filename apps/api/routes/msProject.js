@@ -47,7 +47,6 @@ router.get("/projects", controller.listProjects);
 router.post("/projects/bulk-load", controller.bulkLoadProjects);
 router.get("/projects/:project_id/tasks", controller.listProjectTasks);
 router.put("/projects/:project_id/tasks/map-operation", controller.mapSowOperationToTask);
-router.put("/projects/:project_id/tasks/map-sow-order", controller.mapSowOrderToProjectTasks);
 router.get("/projects/:project_id/package", controller.getProjectPackage);
 router.post("/projects", controller.publishProject);
 router.post("/projects/:project_id/file", upload.single("file"), controller.uploadProjectFile);
