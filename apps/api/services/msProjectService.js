@@ -1850,6 +1850,55 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
     // benar dengan operasi tetangganya.
     const claimedTaskIds = new Set(existingResult.rows.map((row) => row.task_id));
     const availableTasks = targetTasks.filter((task) => !claimedTaskIds.has(task.task_id));
+
+    // Sejak migrasi 20260804b, (order_no, operation_no) unik GLOBAL — satu order hanya boleh
+    // punya satu set task aktif di seluruh database. Tanpa penanganan di sini, memetakan order
+    // yang sudah ada di project lain akan gagal dengan 23505 mentah yang tidak bisa ditindaklanjuti
+    // pengguna. Jadi: deteksi lebih dulu, tolak dengan pesan yang menyebut project-nya, dan
+    // sediakan takeover eksplisit untuk memindahkan pemetaan beserta reservasinya.
+    const elsewhere = await client.query(
+      `select t.project_id, p.project_name, count(*)::integer as task_count
+         from ms_project_task t
+         left join ms_project p on p.project_id = t.project_id
+        where t.is_active = true
+          and coalesce(t.is_summary, false) = false
+          and t.operation_no is not null
+          and ltrim(t.order_no, '0') = ltrim($1, '0')
+          and t.project_id <> $2
+        group by 1, 2
+        order by 3 desc`,
+      [orderNo, projectId]
+    );
+
+    const takeover = payload.takeover === true || payload.takeover === "true";
+    if (elsewhere.rows.length > 0 && !takeover) {
+      throw new ApiError(
+        409,
+        "ORDER_MAPPED_ELSEWHERE",
+        `Order ini sudah dipetakan di project lain: ${elsewhere.rows.map((r) => r.project_name || r.project_id).join(", ")}. ` +
+          "Satu order hanya boleh dipetakan ke satu project. Kirim takeover=true untuk memindahkan pemetaannya ke project ini.",
+        elsewhere.rows
+      );
+    }
+
+    // takeover: lepaskan pemetaan lama SEBELUM memetakan ulang, kalau tidak index unik global
+    // menolak insert/update di bawah. Reservasi yang menempel di task lama di-repoint setelah
+    // pemetaan baru selesai (task barunya belum ada pada titik ini).
+    let takenOverTaskIds = [];
+    if (elsewhere.rows.length > 0 && takeover) {
+      const released = await client.query(
+        `update ms_project_task
+            set is_active = false, updated_at = now()
+          where is_active = true
+            and coalesce(is_summary, false) = false
+            and operation_no is not null
+            and ltrim(order_no, '0') = ltrim($1, '0')
+            and project_id <> $2
+        returning task_id, operation_no`,
+        [orderNo, projectId]
+      );
+      takenOverTaskIds = released.rows;
+    }
     const mapped = [];
     const created = [];
     const reused = [];
@@ -1983,6 +2032,46 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
       [projectId, actor]
     );
 
+    // Repoint reservasi yang tadinya menempel di task project lama ke task dengan operasi yang
+    // sama di project ini. Dilakukan SETELAH pemetaan supaya task tujuannya sudah ada.
+    let repointedReservations = 0;
+    if (takenOverTaskIds.length > 0) {
+      const repointed = await client.query(
+        `update ms_project_bay_schedule b
+            set task_id = k.task_id, project_id = k.project_id, updated_at = now()
+           from ms_project_task old
+           join ms_project_task k
+             on k.is_active = true
+            and coalesce(k.is_summary, false) = false
+            and k.project_id = $2
+            and ltrim(k.order_no, '0') = ltrim($1, '0')
+            and k.operation_no = old.operation_no
+          where b.task_id = old.task_id
+            and old.task_id = any($3::uuid[])
+        returning b.schedule_id`,
+        [orderNo, projectId, takenOverTaskIds.map((row) => row.task_id)]
+      );
+      repointedReservations = repointed.rowCount;
+
+      // Reservasi yang operasinya tidak punya padanan di project baru akan menggantung di task
+      // non-aktif. Lebih baik gagal keras di sini daripada meninggalkan bay yang tampak kosong.
+      const dangling = await client.query(
+        `select count(*)::integer as n
+           from ms_project_bay_schedule b
+           join ms_project_task t on t.task_id = b.task_id
+          where b.status <> 'CANCELLED' and t.is_active = false`,
+        []
+      );
+      if (dangling.rows[0]?.n > 0) {
+        throw new ApiError(
+          409,
+          "TAKEOVER_WOULD_ORPHAN_RESERVATION",
+          `Takeover dibatalkan: ${dangling.rows[0].n} reservasi bay menunjuk operasi yang tidak ada di project tujuan.`,
+          [{ order_no: orderNo, target_project_id: projectId }]
+        );
+      }
+    }
+
     await writeAuditLog(client, {
       projectId,
       action: "MAP_SOW_ORDER",
@@ -1994,6 +2083,8 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
         mapped_count: mapped.length,
         created_count: created.length,
         reused_count: reused.length,
+        taken_over_task_count: takenOverTaskIds.length,
+        repointed_reservation_count: repointedReservations,
         untouched_task_count: availableTasks.length,
       },
     });
@@ -2036,6 +2127,8 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
         mapped_count: mapped.length,
         created_count: created.length,
         reused_count: reused.length,
+        taken_over_task_count: takenOverTaskIds.length,
+        repointed_reservation_count: repointedReservations,
         skipped_operation_count: 0,
         untouched_task_count: availableTasks.length,
         also_mapped_in_project_count: otherProjects.rowCount,

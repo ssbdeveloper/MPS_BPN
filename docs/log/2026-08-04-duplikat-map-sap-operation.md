@@ -146,3 +146,53 @@ pemetaan yang sedang dipakai orang.
 Keputusan yang dibutuhkan: **project mana yang otoritatif untuk order 1000127752**, atau lebih
 umum — nilai `ms_project.status` mana yang berarti "arsip, jangan tampilkan di picker". Setelah itu
 `listOrderTasks` tinggal menyaringnya dan picker bersih dengan sendirinya, tanpa menghapus apa pun.
+
+---
+
+## Penyelesaian: keunikan dinaikkan jadi GLOBAL (malam 4 Agu)
+
+Keputusan owner: **satu `(order_no, operation_no)` = satu task, apa pun project-nya.** Prod masih
+dummy sehingga schedule boleh dihapus; `public.ph3_order` tidak boleh disentuh (dan tidak disentuh).
+
+### Pembersihan data
+
+Dedupe dilakukan **per (order, operasi)**, bukan dengan membuang project kalah bulat-bulat —
+operasi yang hanya ada di project kalah bukan duplikat dan tetap dipertahankan. Prioritas baris
+yang dipertahankan:
+
+1. task yang sedang dipakai reservasi bay (jangan pernah membuat reservasi menggantung)
+2. project "pemenang" order itu (paling banyak dipakai reservasi, lalu paling lengkap, lalu terbaru)
+3. `created_at` tertua
+
+Hasil: **897 task aktif = 897 pasangan unik (1:1)**, 610 baris dinonaktifkan, **0 reservasi
+menggantung**, 0 baris `ph3_order`/`sow` tersentuh.
+
+Picker untuk 1000127752 sekarang: `Test` — 294 baris, 294 operasi unik, satu project.
+
+### Pengaman permanen
+
+Migrasi `20260804b_ms_project_task_unique_order_op_global.sql`: index lama per-project di-DROP,
+diganti `uq_ms_project_task_order_op` pada `(ltrim(order_no,'0'), operation_no)` untuk baris aktif
+non-summary. Diuji: INSERT operasi yang sama ke project **lain** kini ditolak `23505`.
+
+### Konsekuensi alur kerja — dan penanganannya
+
+Dengan keunikan global, memetakan order yang sudah ada di project lain akan gagal. Supaya tidak
+muncul sebagai `23505` mentah, `mapSowOrderToProjectTasks` sekarang:
+
+- mendeteksi pemetaan di project lain **sebelum** bekerja, dan menolak
+  **409 `ORDER_MAPPED_ELSEWHERE`** dengan menyebut nama project-nya;
+- menerima `takeover: true` untuk memindahkan pemetaan: task lama dinonaktifkan, pemetaan baru
+  dibuat, lalu reservasi bay yang menempel di-repoint ke task dengan operasi yang sama;
+- membatalkan takeover dengan **409 `TAKEOVER_WOULD_ORPHAN_RESERVATION`** kalau ada reservasi yang
+  operasinya tidak punya padanan di project tujuan — lebih baik gagal keras daripada meninggalkan
+  bay yang tampak kosong padahal terpakai.
+
+Ringkasan respons menambah `taken_over_task_count` dan `repointed_reservation_count`.
+
+### Status pertanyaan lama
+
+Pertanyaan "project mana yang otoritatif" **tidak lagi menghalangi** — aturan global memilihkannya
+secara deterministik, dan konflik berikutnya ditolak dengan pesan yang bisa ditindaklanjuti.
+Pembersihan project uji coba (11 project, semua ACTIVE) tetap layak dilakukan, tapi kini sekadar
+kerapian, bukan syarat agar picker benar.
