@@ -71,10 +71,20 @@ function actorOf(req) {
   return v || null;
 }
 
+// ID user dari sesi, untuk kolom ber-FK ke public.users. Header x-user-id dikirim
+// authHeaders() di FE. Non-numerik (mis. aktor job/skrip) -> null, dan barisnya cukup
+// mengandalkan kolom teks.
+function actorIdOf(req) {
+  const parsed = Number.parseInt(req.headers['x-user-id'], 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 // Body with the actor forced from the session. Session WINS over body.
+// actor_user_id TIDAK pernah diambil dari body: itu justru celah yang ditutup — teks bebas
+// di body sempat membuat id user bocor ke kolom created_by dan tampil sebagai angka di UI.
 function bodyWithSessionActor(req) {
   const body = req.body || {};
-  return { ...body, actor: actorOf(req) ?? body.actor };
+  return { ...body, actor: actorOf(req) ?? body.actor, actor_user_id: actorIdOf(req) };
 }
 
 // Ringkasan paginasi standar. `total` ikut dikirim HANYA bila service memang menghitungnya,

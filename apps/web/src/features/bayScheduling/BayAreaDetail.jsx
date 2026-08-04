@@ -96,6 +96,12 @@ function isSubcont(schedule) {
   return schedule?.is_subcont === true;
 }
 
+// created_by_name sudah di-resolve backend lewat FK ke users; created_by hanya cadangan
+// untuk aktor non-user (job/skrip) dan baris warisan.
+function actorName(schedule) {
+  return schedule?.created_by_name || schedule?.created_by || null;
+}
+
 function bayCountOf(schedule) {
   return Array.isArray(schedule?.bay_codes) ? schedule.bay_codes.length : 0;
 }
@@ -188,10 +194,10 @@ const ScheduleBadge = memo(function ScheduleBadge({ schedule, onOpenDetail }) {
             </span>
           )}
 
-          {schedule.created_by && (
-            <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500" title={String(schedule.created_by)}>
+          {actorName(schedule) && (
+            <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500" title={actorName(schedule)}>
               <User className="h-3 w-3 shrink-0" />
-              <span className="truncate">{schedule.created_by}</span>
+              <span className="truncate">{actorName(schedule)}</span>
             </span>
           )}
 

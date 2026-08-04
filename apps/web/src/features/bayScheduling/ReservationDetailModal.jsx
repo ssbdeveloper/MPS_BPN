@@ -154,9 +154,9 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
               <span className="block truncate">{detail.customer}</span>
             </DetailRow>
           )}
-          {isText(detail.created_by) && (
+          {isText(detail.created_by_name || detail.created_by) && (
             <DetailRow icon={<User className="h-3.5 w-3.5" />} label="Created by">
-              <span className="block truncate">{detail.created_by}</span>
+              <span className="block truncate">{detail.created_by_name || detail.created_by}</span>
             </DetailRow>
           )}
         </div>

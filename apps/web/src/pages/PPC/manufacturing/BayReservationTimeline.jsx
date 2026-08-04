@@ -111,7 +111,9 @@ function barTitle(entry, style) {
     entry.people_total != null ? `Headcount: ${entry.people_total}` : null,
     `Status: ${style.label}`,
     entry.area_name ? `Area: ${entry.area_name}` : null,
-    entry.created_by ? `By: ${entry.created_by}` : null,
+    entry.created_by_name || entry.created_by
+      ? `By: ${entry.created_by_name || entry.created_by}`
+      : null,
   ];
   return lines.filter(Boolean).join('\n');
 }

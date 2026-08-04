@@ -2234,9 +2234,17 @@ async function listBaySchedules(query = {}) {
        s.notes,
        s.created_by,
        s.updated_by,
+       -- Nama di-resolve dari FK, teks lama hanya cadangan untuk aktor non-user (job/skrip).
+       -- Sebelumnya UI menampilkan isi created_by apa adanya, dan itu sempat berupa ID user
+       -- ('37') karena helper lama mengirim String(user.id) sebagai aktor.
+       coalesce(cu.name, s.created_by) as created_by_name,
+       coalesce(uu.name, s.updated_by) as updated_by_name,
+       s.created_by_user_id,
        s.created_at,
        s.updated_at
      from ms_project_bay_schedule s
+     left join users cu on cu.id = s.created_by_user_id
+     left join users uu on uu.id = s.updated_by_user_id
      left join ms_project p on p.project_id = s.project_id
      left join ms_project_task t
        on t.project_id = s.project_id
@@ -2548,6 +2556,9 @@ async function createBaySchedule(body = {}) {
   let projectId = isOrderBooking ? optionalUuid(payload.project_id, "project_id") : null;
   const taskId = isOrderBooking ? optionalUuid(payload.task_id, "task_id") : null;
   const actor = actorFromBody(payload, "web-manufacturing");
+  // ID user dari sesi (dipasang controller). null untuk aktor non-user seperti job/skrip —
+  // barisnya cukup mengandalkan kolom teks created_by.
+  const actorUserId = Number.isInteger(payload.actor_user_id) ? payload.actor_user_id : null;
   const notes = nullableText(payload.notes);
   // Task-level batch: one call reserves N tasks (each -> its own row with task_id +
   // project_id populated). Empty => legacy order-level behavior (task_id NULL) unchanged.
@@ -2652,9 +2663,11 @@ async function createBaySchedule(body = {}) {
              purpose,
              schedule_group_id,
              created_by,
-             updated_by
+             updated_by,
+             created_by_user_id,
+             updated_by_user_id
            )
-           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13)
+           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13, $14, $14)
            returning *`,
           [
             resolvedOrderNo,
@@ -2670,6 +2683,7 @@ async function createBaySchedule(body = {}) {
             purpose,
             scheduleGroupId,
             actor,
+            actorUserId,
           ]
         );
         inserted.push(insertResult.rows[0]);
@@ -2763,9 +2777,11 @@ async function createBaySchedule(body = {}) {
          purpose,
          schedule_group_id,
          created_by,
-         updated_by
+         updated_by,
+         created_by_user_id,
+         updated_by_user_id
        )
-       values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13)
+       values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13, $14, $14)
        returning *`,
       [
         resolvedOrderNo,
@@ -2781,6 +2797,7 @@ async function createBaySchedule(body = {}) {
         purpose,
         scheduleGroupId,
         actor,
+        actorUserId,
       ]
     );
 
@@ -2877,6 +2894,9 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
   const groupId = assertUuid(groupIdParam, "schedule_group_id");
   const payload = ensureObject(body, "payload");
   const actor = actorFromBody(payload, "web-manufacturing");
+  // ID user dari sesi (dipasang controller). null untuk aktor non-user seperti job/skrip —
+  // barisnya cukup mengandalkan kolom teks created_by.
+  const actorUserId = Number.isInteger(payload.actor_user_id) ? payload.actor_user_id : null;
   const hasNotes = payload.notes !== undefined;
   const hasPurpose = payload.purpose !== undefined;
   const notes = hasNotes ? nullableText(payload.notes) : null;
@@ -2974,11 +2994,12 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
           `update ms_project_bay_schedule
            set status = 'CANCELLED',
                updated_by = $2,
+               updated_by_user_id = $3,
                updated_at = now()
            where schedule_id = any($1::uuid[])
              and status <> 'CANCELLED'
            returning task_id`,
-          [rowsToCancel.map((row) => row.schedule_id), actor]
+          [rowsToCancel.map((row) => row.schedule_id), actor, actorUserId]
         );
         cancelledTaskIds = cancelResult.rows.map((row) => row.task_id);
       }
@@ -2995,6 +3016,7 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
            area_code = case when $10::boolean then $11 else area_code end,
            area_name = case when $12::boolean then $13 else area_name end,
            updated_by = $14,
+           updated_by_user_id = $15,
            updated_at = now()
        where schedule_group_id = $1::uuid
          and status <> 'CANCELLED'`,
@@ -3013,6 +3035,7 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
         hasAreaName,
         areaName,
         actor,
+        actorUserId,
       ]
     );
 
@@ -3058,9 +3081,11 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
              purpose,
              schedule_group_id,
              created_by,
-             updated_by
+             updated_by,
+             created_by_user_id,
+             updated_by_user_id
            )
-           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13)`,
+           values ($1, $2, $3, $4, $5, $6::text[], $7::date, $8::date, 'RESERVED', $9, $10, $11, $12::uuid, $13, $13, $14, $14)`,
           [
             current.order_no,
             resolvedProjectId,
@@ -3075,6 +3100,7 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
             effectivePurpose,
             groupId,
             actor,
+            actorUserId,
           ]
         );
         addedTaskIds.push(taskRow.task_id);
@@ -3152,6 +3178,9 @@ async function cancelBayScheduleGroup(groupIdParam, body = {}) {
   const groupId = assertUuid(groupIdParam, "schedule_group_id");
   const payload = ensureObject(body, "payload");
   const actor = actorFromBody(payload, "web-manufacturing");
+  // ID user dari sesi (dipasang controller). null untuk aktor non-user seperti job/skrip —
+  // barisnya cukup mengandalkan kolom teks created_by.
+  const actorUserId = Number.isInteger(payload.actor_user_id) ? payload.actor_user_id : null;
 
   const client = await pool().connect();
   try {
@@ -3162,11 +3191,12 @@ async function cancelBayScheduleGroup(groupIdParam, body = {}) {
       `update ms_project_bay_schedule
        set status = 'CANCELLED',
            updated_by = $2,
+           updated_by_user_id = $3,
            updated_at = now()
        where schedule_group_id = $1::uuid
          and status <> 'CANCELLED'
        returning *`,
-      [groupId, actor]
+      [groupId, actor, actorUserId]
     );
 
     await writeAuditLog(client, {
@@ -3205,11 +3235,12 @@ async function cancelBaySchedule(scheduleIdParam, body = {}) {
       `update ms_project_bay_schedule
        set status = 'CANCELLED',
            updated_by = $2,
+           updated_by_user_id = $3,
            updated_at = now()
        where schedule_id = $1
          and status <> 'CANCELLED'
        returning *`,
-      [scheduleId, actor]
+      [scheduleId, actor, actorUserId]
     );
     const schedule = result.rows[0];
     if (!schedule) {

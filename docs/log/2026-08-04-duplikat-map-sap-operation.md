@@ -196,3 +196,11 @@ Pertanyaan "project mana yang otoritatif" **tidak lagi menghalangi** — aturan 
 secara deterministik, dan konflik berikutnya ditolak dengan pesan yang bisa ditindaklanjuti.
 Pembersihan project uji coba (11 project, semua ACTIVE) tetap layak dilakukan, tapi kini sekadar
 kerapian, bukan syarat agar picker benar.
+
+---
+
+## Terkait: angka "37" di kolom created by
+
+Owner melaporkan reservasi bay menampilkan `37`, bukan nama user. Bukan bug aktif — itu data
+lama. Rinciannya dan perbaikan permanennya ada di
+[[2026-08-04-created-by-id-bocor-ke-ui]].

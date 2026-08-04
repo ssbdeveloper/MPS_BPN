@@ -164,7 +164,9 @@ const OccupantRow = memo(function OccupantRow({ occupant }) {
         <p className="mt-0.5 flex items-center gap-1 text-xs tabular-nums text-slate-500">
           <CalendarRange className="h-3 w-3 shrink-0" />
           {formatDate(occupant.start_date)} – {formatDate(occupant.end_date)}
-          {occupant.created_by ? <span className="truncate"> · {occupant.created_by}</span> : null}
+          {(occupant.created_by_name || occupant.created_by)
+            ? <span className="truncate"> · {occupant.created_by_name || occupant.created_by}</span>
+            : null}
         </p>
       </div>
       <span className="shrink-0 font-mono text-xs tabular-nums text-slate-500">{bays.join(', ') || '-'}</span>
