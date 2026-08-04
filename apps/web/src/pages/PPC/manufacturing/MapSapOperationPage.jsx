@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ChevronRight, FolderSearch, GitBranch, GripVertical, ListTree,
-  Loader2, PackageOpen, RotateCw, Target, X,
+  AlertTriangle, CalendarRange, ChevronRight, Factory, FolderSearch, GripVertical,
+  ListTree, Loader2, PackageOpen, Replace, RotateCw, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { EmptyState, SearchInput, Skeleton, SkeletonRow } from '../../../components';
+import { EmptyState, SearchInput, Skeleton } from '../../../components';
 import {
   fetchMsProjects,
   fetchMsProjectTasks,
@@ -24,12 +24,6 @@ function formatHours(value) {
   const hours = Number(value);
   if (!Number.isFinite(hours)) return '-';
   return `${hours.toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
-}
-
-function formatHoursFromMinutes(value) {
-  const minutes = Number(value);
-  if (!Number.isFinite(minutes)) return '-';
-  return `${(minutes / 60).toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
 }
 
 function operationSortValue(value) {
@@ -129,31 +123,14 @@ function ProjectCard({ project, selected, onClick }) {
   );
 }
 
-function TaskRow({ task }) {
-  return (
-    <div className="grid grid-cols-[minmax(160px,1fr)_84px_92px_64px] items-center gap-3 border-b border-slate-100 px-3 py-2 text-xs last:border-b-0">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
-          {task.outline_number || '-'}
-        </span>
-        <span className="truncate font-bold text-slate-800">{task.task_name || '-'}</span>
-      </div>
-      <span className="truncate font-mono text-xs font-bold tabular-nums text-slate-600">{task.order_no || '-'}</span>
-      <span className="truncate font-mono text-xs font-bold tabular-nums text-[#0077b6]">{task.operation_no || '-'}</span>
-      <span className="text-right text-xs font-semibold tabular-nums text-slate-500">{formatHoursFromMinutes(task.planned_work_minutes)}</span>
-    </div>
-  );
-}
-
 /**
  * TaskTreeNode — chevron & target dipisah TEGAS:
  *   • chevron (kiri) = expand/collapse saja.
  *   • klik nama / tombol Target = jadikan target parent (tanpa efek expand).
  */
-function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggle, onInspect, onDropOperation, depth = 0 }) {
+function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOperation, depth = 0 }) {
   const children = childrenByParent.get(task.task_id) || [];
   const expanded = expandedIds.has(task.task_id);
-  const selected = selectedId === task.task_id;
   const hasChildren = children.length > 0;
   const [dragOver, setDragOver] = useState(false);
 
@@ -174,9 +151,7 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
         className={`group flex items-center gap-1 border-b border-slate-100 pr-2 transition-colors ${
-          dragOver
-            ? 'bg-[#caf0f8] ring-2 ring-inset ring-[#00b4d8]'
-            : selected ? 'bg-[#caf0f8]/70' : 'bg-white hover:bg-slate-50'
+          dragOver ? 'bg-[#caf0f8] ring-2 ring-inset ring-[#00b4d8]' : 'bg-white hover:bg-slate-50'
         }`}
         style={{ paddingLeft: 8 + depth * 18 }}
       >
@@ -196,35 +171,36 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
           </span>
         )}
 
-        <button
-          type="button"
-          onClick={() => onInspect(task)}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]"
-        >
-          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
-            {task.outline_number || '-'}
-          </span>
-          <span className="truncate text-xs font-extrabold text-slate-800">{task.task_name || '-'}</span>
-          {task.operation_no && (
-            <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-[#0077b6]">Op {task.operation_no}</span>
+        <div className="min-w-0 flex-1 py-1.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
+              {task.outline_number || '-'}
+            </span>
+            <span className="truncate text-xs font-extrabold text-slate-800">{task.task_name || '-'}</span>
+            {task.operation_no && (
+              <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-[#0077b6]">Op {task.operation_no}</span>
+            )}
+          </div>
+          {/* Baris meta: workcenter DITULIS oleh mapping (dari sow.workcenter); plan start/finish
+              TIDAK — itu milik file MS Project, jadi task yang baru dipetakan wajar kosong. */}
+          {(task.workcenter || task.plan_start || task.plan_finish) && (
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
+              {task.workcenter && (
+                <span className="inline-flex items-center gap-1 truncate">
+                  <Factory className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
+                  <span className="truncate font-semibold">{task.workcenter}</span>
+                </span>
+              )}
+              {(task.plan_start || task.plan_finish) && (
+                <span className="inline-flex items-center gap-1 tabular-nums">
+                  <CalendarRange className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
+                  {formatDate(task.plan_start)} – {formatDate(task.plan_finish)}
+                </span>
+              )}
+            </div>
           )}
-        </button>
+        </div>
 
-        {selected ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#0077b6] px-2 py-0.5 text-[11px] font-bold uppercase text-white">
-            <Target className="h-3 w-3" />
-            Selected
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => onInspect(task)}
-            className="hidden shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-500 transition hover:border-[#90e0ef] hover:text-[#0077b6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] group-hover:inline-flex"
-          >
-            <Target className="h-3 w-3" />
-            Select
-          </button>
-        )}
       </div>
       {expanded && children.map((child) => (
         <TaskTreeNode
@@ -232,9 +208,7 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
           task={child}
           childrenByParent={childrenByParent}
           expandedIds={expandedIds}
-          selectedId={selectedId}
           onToggle={onToggle}
-          onInspect={onInspect}
           onDropOperation={onDropOperation}
           depth={depth + 1}
         />
@@ -385,6 +359,67 @@ function mappingErrorText(error) {
   return { title: 'Mapping failed', description: text || 'Unknown error' };
 }
 
+// Konfirmasi menimpa pemetaan yang sudah ada. Sengaja DIALOG, bukan action-toast: toast
+// menghilang sendiri, sedangkan ini keputusan yang menghapus pemetaan operasi lain.
+function ReplaceDialog({ prompt, busy, onCancel, onConfirm }) {
+  useEffect(() => {
+    if (!prompt) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') onCancel(); };
+    document.addEventListener('keydown', onKey, true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      document.body.style.overflow = prev;
+    };
+  }, [prompt, onCancel]);
+
+  if (!prompt) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" onClick={onCancel}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={prompt.title}
+        onClick={(event) => event.stopPropagation()}
+        className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"
+      >
+        <div className="flex items-start gap-3">
+          <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+            <AlertTriangle className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-extrabold text-slate-800">{prompt.title}</h3>
+            <p className="mt-1 text-xs text-slate-600">{prompt.description}</p>
+            <p className="mt-2 text-xs font-semibold text-slate-700">
+              Replace with op {prompt.dragged.operation_no} of {prompt.dragged.order_no}?
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex min-h-[44px] items-center rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            autoFocus
+            onClick={onConfirm}
+            disabled={busy}
+            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-amber-600 px-4 text-sm font-bold text-white transition hover:bg-amber-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Replace className="h-4 w-4" />}
+            Replace
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MapSapOperationPage() {
   const [projects, setProjects] = useState([]);
   const [projectSearch, setProjectSearch] = useState('');
@@ -394,7 +429,6 @@ export default function MapSapOperationPage() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskError, setTaskError] = useState(null);
-  const [inspectedTask, setInspectedTask] = useState(null);
   const [expandedTaskIds, setExpandedTaskIds] = useState(() => new Set());
   const [sowOrders, setSowOrders] = useState([]);
   const [sowSearch, setSowSearch] = useState('');
@@ -407,6 +441,8 @@ export default function MapSapOperationPage() {
   const [mapping, setMapping] = useState(false);
   // Panel kiri dua tingkat: 'orders' (pilih order) -> 'operations' (tarik satu per satu).
   const [sourceView, setSourceView] = useState('orders');
+  // { dragged, task, asChild, title, description } saat backend menolak 409 yang bisa ditimpa.
+  const [replacePrompt, setReplacePrompt] = useState(null);
 
   const taskTree = useMemo(() => buildTaskTree(projectTasks), [projectTasks]);
 
@@ -447,7 +483,6 @@ export default function MapSapOperationPage() {
 
   const loadProjectTasks = useCallback(async (project) => {
     setSelectedProject(project);
-    setInspectedTask(null);
     setExpandedTaskIds(new Set());
     setTaskLoading(true);
     setTaskError(null);
@@ -463,7 +498,6 @@ export default function MapSapOperationPage() {
   const clearProject = useCallback(() => {
     setSelectedProject(null);
     setProjectTasks([]);
-    setInspectedTask(null);
     setTaskError(null);
     setExpandedTaskIds(new Set());
   }, []);
@@ -513,12 +547,10 @@ export default function MapSapOperationPage() {
         && (error.code === 'ORDER_MAPPED_ELSEWHERE' || error.code === 'TARGET_TASK_OCCUPIED');
       if (canReplace) {
         // Menimpa pemetaan yang sudah ada adalah keputusan user, bukan default —
-        // diam-diam menimpanya menghilangkan pemetaan yang benar tanpa jejak.
-        toast.warning(title, {
-          description,
-          duration: 10000,
-          action: { label: 'Replace', onClick: () => mapOneOperation(dragged, task, asChild, true) },
-        });
+        // diam-diam menimpanya menghilangkan pemetaan yang benar tanpa jejak. Dialog,
+        // bukan toast: toast bisa keburu hilang sebelum dibaca, dan ini keputusan yang
+        // menghapus pemetaan orang lain.
+        setReplacePrompt({ dragged, task, asChild, title, description });
       } else {
         toast.error(title, { description });
       }
@@ -540,6 +572,15 @@ export default function MapSapOperationPage() {
     mapOneOperation(dragged, task, hasChildren, false);
   }, [selectedProject, mapOneOperation]);
 
+  const handleReplaceCancel = useCallback(() => setReplacePrompt(null), []);
+
+  const handleReplaceConfirm = useCallback(() => {
+    if (!replacePrompt) return;
+    const { dragged, task, asChild } = replacePrompt;
+    setReplacePrompt(null);
+    mapOneOperation(dragged, task, asChild, true);
+  }, [replacePrompt, mapOneOperation]);
+
   const toggleTaskExpand = useCallback((taskId) => {
     setExpandedTaskIds((prev) => {
       const next = new Set(prev);
@@ -548,15 +589,6 @@ export default function MapSapOperationPage() {
       return next;
     });
   }, []);
-
-  const inspectTask = useCallback((task) => {
-    setInspectedTask(task);
-  }, []);
-
-  const inspectedChildren = useMemo(
-    () => inspectedTask ? sortByOperationNo(taskTree.byParent.get(inspectedTask.task_id) || []) : [],
-    [inspectedTask, taskTree]
-  );
 
   // Operasi order terpilih yang sudah punya task di project ini -> ditandai di kartunya
   // supaya planner tahu mana yang belum ditaruh tanpa menyisir pohon.
@@ -693,7 +725,7 @@ export default function MapSapOperationPage() {
           </div>
 
           {selectedProject ? (
-            <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(280px,1fr)_minmax(300px,1fr)]">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {/* Pohon task */}
               <div className="flex min-h-0 flex-col overflow-hidden border-b border-slate-200 xl:border-b-0 xl:border-r">
                 <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
@@ -717,58 +749,13 @@ export default function MapSapOperationPage() {
                         task={task}
                         childrenByParent={taskTree.byParent}
                         expandedIds={expandedTaskIds}
-                        selectedId={inspectedTask?.task_id}
                         onToggle={toggleTaskExpand}
-                        onInspect={inspectTask}
                       />
                     ))
                   )}
                 </div>
               </div>
 
-              {/* Child task dari parent terpilih */}
-              <div className="flex min-h-0 flex-col overflow-hidden">
-                <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Child Tasks</span>
-                    {inspectedTask && (
-                      <span className="text-xs font-semibold tabular-nums text-slate-500">{inspectedChildren.length}</span>
-                    )}
-                  </div>
-                  {inspectedTask && (
-                    <p className="mt-0.5 truncate text-xs font-semibold text-slate-700">
-                      <span className="font-mono tabular-nums text-[#0077b6]">{inspectedTask.outline_number || '-'}</span>{' '}
-                      {inspectedTask.task_name || '-'}
-                    </p>
-                  )}
-                </div>
-                <div className="min-h-0 flex-1 overflow-auto">
-                  {!inspectedTask ? (
-                    <EmptyState
-                      icon={Target}
-                      title="Select a task"
-                    />
-                  ) : taskLoading ? (
-                    Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={4} />)
-                  ) : inspectedChildren.length === 0 ? (
-                    <EmptyState
-                      icon={GitBranch}
-                      title="No child tasks"
-                      description="Drop an operation here to add one."
-                    />
-                  ) : (
-                    <>
-                      <div className="sticky top-0 grid grid-cols-[minmax(160px,1fr)_84px_92px_64px] gap-3 border-b border-slate-200 bg-white px-3 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-500">
-                        <span>Child Task</span>
-                        <span>Order</span>
-                        <span>Operation</span>
-                        <span className="text-right">Work</span>
-                      </div>
-                      {inspectedChildren.map((task) => <TaskRow key={task.task_id} task={task} />)}
-                    </>
-                  )}
-                </div>
-              </div>
             </div>
           ) : (
             /* Belum pilih project → daftar project untuk dipilih */
@@ -792,6 +779,13 @@ export default function MapSapOperationPage() {
           )}
         </section>
       </div>
+
+      <ReplaceDialog
+        prompt={replacePrompt}
+        busy={mapping}
+        onCancel={handleReplaceCancel}
+        onConfirm={handleReplaceConfirm}
+      />
     </main>
   );
 }
