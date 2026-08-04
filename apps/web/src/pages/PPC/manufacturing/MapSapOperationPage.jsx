@@ -10,6 +10,7 @@ import {
   fetchMsProjectTasks,
   fetchSowOrderOperations,
   fetchSowOrders,
+  mapSowOperationToTask,
   mapSowOrderToProjectTasks,
 } from '../../../services/msProjectService';
 
@@ -167,17 +168,33 @@ function TaskRow({ task }) {
  *   • chevron (kiri) = expand/collapse saja.
  *   • klik nama / tombol Target = jadikan target parent (tanpa efek expand).
  */
-function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggle, onSetTarget, depth = 0 }) {
+function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggle, onSetTarget, onDropOperation, depth = 0 }) {
   const children = childrenByParent.get(task.task_id) || [];
   const expanded = expandedIds.has(task.task_id);
   const selected = selectedId === task.task_id;
   const hasChildren = children.length > 0;
+  const [dragOver, setDragOver] = useState(false);
+
+  // Node dengan anak = summary: operasi tidak di-assign KE node itu, tapi dibuat sebagai
+  // anaknya. Node daun langsung menerima operasinya. Backend menolak assign ke summary,
+  // jadi pilihan ini dibuat di sini supaya user tidak pernah melihat error itu.
+  const handleDrop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOver(false);
+    onDropOperation(task, hasChildren, event);
+  };
 
   return (
     <div>
       <div
+        onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
         className={`group flex items-center gap-1 border-b border-slate-100 pr-2 transition-colors ${
-          selected ? 'bg-[#caf0f8]/70' : 'bg-white hover:bg-slate-50'
+          dragOver
+            ? 'bg-[#caf0f8] ring-2 ring-inset ring-[#00b4d8]'
+            : selected ? 'bg-[#caf0f8]/70' : 'bg-white hover:bg-slate-50'
         }`}
         style={{ paddingLeft: 8 + depth * 18 }}
       >
@@ -236,6 +253,7 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
           selectedId={selectedId}
           onToggle={onToggle}
           onSetTarget={onSetTarget}
+          onDropOperation={onDropOperation}
           depth={depth + 1}
         />
       ))}
@@ -273,18 +291,52 @@ function SowOrderCard({ order, selected, onClick, onDragStart }) {
   );
 }
 
-function OperationList({ operations }) {
+// Satu operasi = satu kartu yang bisa ditarik. Sebelumnya mapping borongan memaksa SELURUH
+// operasi satu order masuk ke satu outline level; planner sering menyusun WBS dengan parent
+// berbeda per kelompok operasi, jadi sekarang tiap operasi ditaruh sendiri-sendiri.
+function OperationCard({ operation, mappedTask, onDragStart }) {
+  const mapped = Boolean(mappedTask);
+  return (
+    <div
+      draggable
+      onDragStart={(event) => onDragStart(event, operation)}
+      className={`cursor-grab rounded-lg border bg-white px-3 py-2 shadow-sm transition-colors active:cursor-grabbing ${
+        mapped ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200 hover:border-[#90e0ef] hover:bg-slate-50'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5">
+          <GripVertical className="h-3.5 w-3.5 shrink-0 text-slate-300" aria-hidden="true" />
+          <span className="font-mono text-xs font-extrabold tabular-nums text-[#0077b6]">Op {operation.operation_no}</span>
+        </span>
+        <span className="text-xs font-semibold tabular-nums text-slate-500">{formatHours(operation.planhours)}</span>
+      </div>
+      <p className="mt-1 line-clamp-2 text-xs font-bold text-slate-700">{operation.operation_text || '-'}</p>
+      <div className="mt-0.5 flex items-center justify-between gap-2">
+        <p className="truncate text-xs text-slate-500">{operation.workcenter || operation.wct_group || '-'}</p>
+        {mapped && (
+          <span
+            title={mappedTask.task_name || undefined}
+            className="shrink-0 rounded-full border border-emerald-200 bg-emerald-100 px-1.5 text-[11px] font-bold uppercase tracking-wide text-emerald-700"
+          >
+            {mappedTask.outline_number || 'Mapped'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OperationList({ operations, mappedByOperation, onDragStart }) {
   return (
     <div className="space-y-1.5">
       {sortByOperationNo(operations).map((operation) => (
-        <div key={operation.idsow} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-mono text-xs font-extrabold tabular-nums text-[#0077b6]">Op {operation.operation_no}</span>
-            <span className="text-xs font-semibold tabular-nums text-slate-500">{formatHours(operation.planhours)}</span>
-          </div>
-          <p className="mt-1 line-clamp-2 text-xs font-bold text-slate-700">{operation.operation_text || '-'}</p>
-          <p className="mt-0.5 truncate text-xs text-slate-500">{operation.workcenter || operation.wct_group || '-'}</p>
-        </div>
+        <OperationCard
+          key={operation.idsow}
+          operation={operation}
+          mappedTask={mappedByOperation.get(String(operation.operation_no))}
+          onDragStart={onDragStart}
+        />
       ))}
     </div>
   );
@@ -349,6 +401,15 @@ function mappingErrorText(error) {
         : 'One order maps to one project.',
     };
   }
+  if (code === 'TARGET_TASK_OCCUPIED') {
+    const held = details[0] || {};
+    return {
+      title: 'Task already used',
+      description: held.operation_no
+        ? `That node holds order ${held.order_no} op ${held.operation_no}.`
+        : 'That node already holds another operation.',
+    };
+  }
   if (code === 'TAKEOVER_WOULD_ORPHAN_RESERVATION') {
     return {
       title: 'Takeover cancelled',
@@ -379,6 +440,8 @@ export default function MapSapOperationPage() {
   const [operationError, setOperationError] = useState(null);
   const [mapping, setMapping] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  // Panel kiri dua tingkat: 'orders' (pilih order) -> 'operations' (tarik satu per satu).
+  const [sourceView, setSourceView] = useState('orders');
 
   const taskTree = useMemo(() => buildTaskTree(projectTasks), [projectTasks]);
 
@@ -442,6 +505,7 @@ export default function MapSapOperationPage() {
 
   const loadOperations = useCallback(async (order) => {
     setSelectedOrder(order);
+    setSourceView('operations');
     setOperationLoading(true);
     setOperationError(null);
     try {
@@ -495,6 +559,64 @@ export default function MapSapOperationPage() {
     loadOperations(order);
   };
 
+  // Satu operasi dibawa sebagai JSON; node tujuan yang menentukan assign vs buat-anak.
+  const handleOperationDragStart = useCallback((event, operation) => {
+    if (!selectedOrder) return;
+    event.dataTransfer.effectAllowed = 'copy';
+    event.dataTransfer.setData('application/json', JSON.stringify({
+      order_no: selectedOrder.order_no,
+      operation_no: String(operation.operation_no),
+    }));
+    event.dataTransfer.setData('text/plain', `Op ${operation.operation_no}`);
+  }, [selectedOrder]);
+
+  const mapOneOperation = useCallback(async (dragged, task, asChild, takeover) => {
+    setMapping(true);
+    try {
+      const result = await mapSowOperationToTask(selectedProject.project_id, {
+        order_no: dragged.order_no,
+        operation_no: dragged.operation_no,
+        ...(asChild ? { target_parent_task_id: task.task_id } : { target_task_id: task.task_id }),
+        ...(takeover ? { takeover: true } : {}),
+      });
+      toast.success(`Op ${dragged.operation_no} mapped`, {
+        description: [result.task?.outline_number, result.task?.task_name].filter(Boolean).join(' · ') || undefined,
+      });
+      setProjectTasks(await fetchMsProjectTasks(selectedProject.project_id));
+      if (asChild) setExpandedTaskIds((prev) => new Set([...prev, task.task_id]));
+    } catch (error) {
+      const { title, description } = mappingErrorText(error);
+      const canReplace = !takeover
+        && (error.code === 'ORDER_MAPPED_ELSEWHERE' || error.code === 'TARGET_TASK_OCCUPIED');
+      if (canReplace) {
+        // Menimpa pemetaan yang sudah ada adalah keputusan user, bukan default —
+        // diam-diam menimpanya menghilangkan pemetaan yang benar tanpa jejak.
+        toast.warning(title, {
+          description,
+          duration: 10000,
+          action: { label: 'Replace', onClick: () => mapOneOperation(dragged, task, asChild, true) },
+        });
+      } else {
+        toast.error(title, { description });
+      }
+    } finally {
+      setMapping(false);
+    }
+  }, [selectedProject]);
+
+  const handleDropOperation = useCallback((task, hasChildren, event) => {
+    const raw = event.dataTransfer?.getData('application/json');
+    if (!raw) return;
+    let dragged = null;
+    try { dragged = JSON.parse(raw); } catch { return; }
+    if (!dragged?.order_no || dragged.operation_no == null) return;
+    if (!selectedProject) {
+      toast.error('Choose a target project first');
+      return;
+    }
+    mapOneOperation(dragged, task, hasChildren, false);
+  }, [selectedProject, mapOneOperation]);
+
   const handleDragOver = (event) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
@@ -531,6 +653,20 @@ export default function MapSapOperationPage() {
     () => targetParentTask ? sortByOperationNo(taskTree.byParent.get(targetParentTask.task_id) || []) : [],
     [targetParentTask, taskTree]
   );
+
+  // Operasi order terpilih yang sudah punya task di project ini -> ditandai di kartunya
+  // supaya planner tahu mana yang belum ditaruh tanpa menyisir pohon.
+  const mappedByOperation = useMemo(() => {
+    const map = new Map();
+    if (!selectedOrder) return map;
+    const key = String(selectedOrder.order_no).replace(/^0+/, '');
+    projectTasks.forEach((task) => {
+      if (!task.operation_no || !task.order_no) return;
+      if (String(task.order_no).replace(/^0+/, '') !== key) return;
+      map.set(String(task.operation_no), task);
+    });
+    return map;
+  }, [projectTasks, selectedOrder]);
 
   const ready = Boolean(selectedProject && selectedOrder && targetParentTask);
   const steps = [
@@ -575,67 +711,100 @@ export default function MapSapOperationPage() {
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)]">
         {/* ── SUMBER: SOW Orders ─────────────────────────────── */}
         <section className="flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
-          <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Source</p>
-              <h3 className="text-sm font-extrabold text-slate-800">SOW Orders</h3>
-            </div>
-            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-500">
-              {sowOrders.length}
-            </span>
-          </div>
-
-          <div className="border-b border-slate-200 p-3">
-            <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Search order or part" />
-          </div>
-
-          <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
-            {sowLoading ? (
-              Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[74px] w-full rounded-xl" />)
-            ) : sowError ? (
-              <PanelError message={sowError} onRetry={loadSowOrders} />
-            ) : sowOrders.length === 0 ? (
-              <EmptyState
-                icon={PackageOpen}
-                title="No orders"
-                description="No SOW order matches this search."
-              />
-            ) : (
-              sowOrders.map((order) => (
-                <SowOrderCard
-                  key={order.order_no}
-                  order={order}
-                  selected={order.order_no === selectedOrder?.order_no}
-                  onClick={loadOperations}
-                  onDragStart={handleDragStart}
-                />
-              ))
-            )}
-          </div>
-
-          {/* Preview operasi order terpilih (konfirmasi langkah 3) */}
-          {selectedOrder && (
-            <div className="border-t border-slate-200 bg-slate-50">
-              <div className="flex items-center justify-between gap-2 px-3 py-2">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                  Operations · <span className="font-mono tabular-nums text-slate-700">{selectedOrder.order_no}</span>
-                </p>
-                {operationLoading && <Loader2 className="h-4 w-4 animate-spin text-[#00b4d8]" />}
+          {/* Panel kiri DUA TINGKAT. Tingkat 1 memilih order; begitu terpilih, daftar order
+              disembunyikan dan digantikan daftar operasinya, karena yang ditarik ke pohon
+              adalah operasi SATU PER SATU — bukan seluruh order sekaligus. */}
+          {sourceView === 'orders' ? (
+            <>
+              <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Source</p>
+                  <h3 className="text-sm font-extrabold text-slate-800">SOW orders</h3>
+                </div>
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-500">
+                  {sowOrders.length}
+                </span>
               </div>
-              <div className="max-h-56 overflow-auto px-3 pb-3">
+
+              <div className="border-b border-slate-200 p-3">
+                <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Search order or part" />
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
+                {sowLoading ? (
+                  Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[74px] w-full rounded-xl" />)
+                ) : sowError ? (
+                  <PanelError message={sowError} onRetry={loadSowOrders} />
+                ) : sowOrders.length === 0 ? (
+                  <EmptyState
+                    icon={PackageOpen}
+                    title="No orders"
+                    description="No SOW order matches this search."
+                  />
+                ) : (
+                  sowOrders.map((order) => (
+                    <SowOrderCard
+                      key={order.order_no}
+                      order={order}
+                      selected={order.order_no === selectedOrder?.order_no}
+                      onClick={loadOperations}
+                      onDragStart={handleDragStart}
+                    />
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 border-b border-slate-200 px-2 py-2">
+                <button
+                  type="button"
+                  onClick={() => setSourceView('orders')}
+                  className="inline-flex min-h-[44px] shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                >
+                  <ChevronRight className="h-4 w-4 rotate-180" aria-hidden="true" />
+                  Back
+                </button>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-mono text-sm font-extrabold tabular-nums text-slate-800">
+                    {selectedOrder?.order_no || '-'}
+                  </p>
+                  <p className="truncate text-xs text-slate-500">
+                    {selectedOrder?.part_name || selectedOrder?.ssbr_id || '-'}
+                  </p>
+                </div>
                 {operationLoading ? (
-                  <div className="space-y-1.5">
-                    {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}
-                  </div>
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#00b4d8]" />
+                ) : (
+                  <span
+                    title="Operations already mapped in this project"
+                    className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-500"
+                  >
+                    {mappedByOperation.size}/{operations.length}
+                  </span>
+                )}
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-1.5 overflow-auto bg-slate-50 p-3">
+                {operationLoading ? (
+                  Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[76px] w-full rounded-lg" />)
                 ) : operationError ? (
                   <PanelError message={operationError} onRetry={() => loadOperations(selectedOrder)} />
                 ) : operations.length === 0 ? (
                   <EmptyState icon={ListTree} title="No operations" />
                 ) : (
-                  <OperationList operations={operations} />
+                  <OperationList
+                    operations={operations}
+                    mappedByOperation={mappedByOperation}
+                    onDragStart={handleOperationDragStart}
+                  />
                 )}
               </div>
-            </div>
+
+              <p className="border-t border-slate-200 px-3 py-2 text-xs text-slate-500">
+                Drag one operation onto a node. Leaf node = assign, parent node = add as child.
+              </p>
+            </>
           )}
         </section>
 
@@ -694,6 +863,7 @@ export default function MapSapOperationPage() {
                   ) : (
                     taskTree.roots.map((task) => (
                       <TaskTreeNode
+                        onDropOperation={handleDropOperation}
                         key={task.task_id}
                         task={task}
                         childrenByParent={taskTree.byParent}

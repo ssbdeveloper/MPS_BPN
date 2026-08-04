@@ -169,6 +169,7 @@ const MANIFEST = [
 
   // Mapping operasi SAP -> task MS Project (prasyarat booking, per D2).
   { m: 'PUT',    p: '/ms-project/projects/:id/tasks/map-sow-order',  f: 'msproject_mapping', a: W },
+  { m: 'PUT',    p: '/ms-project/projects/:id/tasks/map-operation',  f: 'msproject_mapping', a: W },
 
   // Kolaborasi file .mpp — publish, upload, checkout/checkin, sync, status.
   { m: 'POST',   p: '/ms-project/projects',                          f: 'msproject_collab',  a: W },

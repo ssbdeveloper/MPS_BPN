@@ -116,6 +116,19 @@ export async function fetchOrderTasks(orderNo) {
   return payload.data || [];
 }
 
+// Satu operasi -> satu node. Kirim SALAH SATU: target_task_id (assign ke task yang ada)
+// atau target_parent_task_id (buat anak baru di bawah node itu).
+// 409 yang mungkin muncul: ORDER_MAPPED_ELSEWHERE (operasi sudah dipetakan di project lain),
+// TARGET_TASK_OCCUPIED (node tujuan sudah memegang operasi lain). Keduanya bisa dilewati
+// dengan takeover: true.
+export async function mapSowOperationToTask(projectId, payload) {
+  const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/tasks/map-operation`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
 export async function mapSowOrderToProjectTasks(projectId, payload) {
   const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/tasks/map-sow-order`, {
     method: 'PUT',
@@ -258,6 +271,7 @@ export default {
   fetchSowOrdersPage,
   fetchSowOrderOperations,
   forceCheckinProject,
+  mapSowOperationToTask,
   mapSowOrderToProjectTasks,
   msProjectFileUrl,
   updateBayScheduleGroup,

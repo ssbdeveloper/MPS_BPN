@@ -1729,6 +1729,199 @@ function buildNextOutlineNumberFactory(tasks, parentTask = null) {
   };
 }
 
+// Petakan SATU operasi SAP ke SATU target di project — bukan seluruh order sekaligus.
+//
+// mapSowOrderToProjectTasks memaksa seluruh operasi satu order masuk ke SATU outline level /
+// parent yang sama. Di lapangan planner sering menyusun WBS dengan parent berbeda-beda per
+// kelompok operasi, jadi mapping borongan memaksa mereka merapikan ulang setelahnya.
+// Fungsi ini melayani drag satu operasi ke satu node yang dituju.
+//
+// Dua bentuk target, saling eksklusif:
+//   target_task_id        -> ASSIGN operasi ke task yang SUDAH ADA (placeholder di-rename)
+//   target_parent_task_id -> BUAT task baru sebagai anak node itu
+//
+// Menghormati uq_ms_project_task_order_op (unik GLOBAL): satu (order, operasi) = satu task
+// aktif. Memetakan ulang operasi yang sudah ada = MEMINDAHKAN, bukan menggandakan.
+async function mapSowOperationToTask(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const orderNo = nullableText(body.order_no);
+  const operationNo = nullableText(body.operation_no);
+  const targetTaskId = optionalUuid(body.target_task_id, "target_task_id");
+  const targetParentTaskId = optionalUuid(body.target_parent_task_id, "target_parent_task_id");
+  const takeover = body.takeover === true || body.takeover === "true";
+  const actor = actorFromBody(body, "web-manufacturing");
+
+  if (!orderNo) throw new ApiError(400, "INVALID_PAYLOAD", "order_no is required", [{ field: "order_no" }]);
+  if (!operationNo) throw new ApiError(400, "INVALID_PAYLOAD", "operation_no is required", [{ field: "operation_no" }]);
+  if (!targetTaskId && !targetParentTaskId) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "target_task_id or target_parent_task_id is required", [
+      { field: "target_task_id" }, { field: "target_parent_task_id" },
+    ]);
+  }
+  if (targetTaskId && targetParentTaskId) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "Send either target_task_id or target_parent_task_id, not both", []);
+  }
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+
+    const projectResult = await client.query("select * from ms_project where project_id = $1 for update", [projectId]);
+    if (!projectResult.rows[0]) throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+
+    const opResult = await client.query(
+      `select idsow, order_no, operation_no, operation_text, ssbr_id, workcenter, planhours
+         from sow
+        where ltrim(order_no, '0') = ltrim($1, '0') and operation_no::text = $2
+        limit 1`,
+      [orderNo, operationNo]
+    );
+    const operation = opResult.rows[0];
+    if (!operation) {
+      throw new ApiError(404, "SOW_OPERATION_NOT_FOUND", "Operation not found for this order", [
+        { order_no: orderNo, operation_no: operationNo },
+      ]);
+    }
+
+    // Sudah dipetakan di mana pun? Index unik GLOBAL, jadi ini harus dibereskan lebih dulu.
+    const existingResult = await client.query(
+      `select t.task_id, t.project_id, p.project_name
+         from ms_project_task t
+         left join ms_project p on p.project_id = t.project_id
+        where t.is_active = true and coalesce(t.is_summary, false) = false
+          and ltrim(t.order_no, '0') = ltrim($1, '0') and t.operation_no = $2`,
+      [orderNo, String(operation.operation_no)]
+    );
+    const existing = existingResult.rows[0] || null;
+    if (existing && existing.project_id !== projectId && !takeover) {
+      throw new ApiError(409, "ORDER_MAPPED_ELSEWHERE",
+        `This operation is already mapped in ${existing.project_name || existing.project_id}.`,
+        existingResult.rows);
+    }
+
+    const taskName = nullableText(operation.operation_text) || `Operation ${operation.operation_no}`;
+    const workMinutes = minutesFromHours(operation.planhours);
+    let resultTask = null;
+    let replaced = null;
+
+    if (targetTaskId) {
+      const targetResult = await client.query(
+        `select task_id, task_name, outline_number, order_no, operation_no, coalesce(is_summary,false) as is_summary
+           from ms_project_task
+          where project_id = $1 and task_id = $2 and is_active = true`,
+        [projectId, targetTaskId]
+      );
+      const target = targetResult.rows[0];
+      if (!target) throw new ApiError(404, "TASK_NOT_FOUND", "Target task not found in this project", [{ task_id: targetTaskId }]);
+      if (target.is_summary) {
+        throw new ApiError(400, "TARGET_IS_SUMMARY",
+          "That is a summary task. Drop onto it to create a child instead of assigning to it.", [{ task_id: targetTaskId }]);
+      }
+
+      // Target sudah memegang operasi LAIN -> jangan timpa diam-diam; menimpa berarti
+      // menghilangkan pemetaan yang sudah benar tanpa jejak.
+      const holdsOther = target.order_no && target.operation_no
+        && !(String(target.operation_no) === String(operation.operation_no)
+             && String(target.order_no).replace(/^0+/, "") === String(operation.order_no).replace(/^0+/, ""));
+      if (holdsOther && !takeover) {
+        throw new ApiError(409, "TARGET_TASK_OCCUPIED",
+          `That task already holds order ${target.order_no} operation ${target.operation_no}.`,
+          [{ task_id: target.task_id, order_no: target.order_no, operation_no: target.operation_no }]);
+      }
+      if (holdsOther) replaced = { order_no: target.order_no, operation_no: target.operation_no };
+
+      // Pemetaan lama di task LAIN dilepas dulu, kalau tidak index unik global menolak update.
+      if (existing && existing.task_id !== targetTaskId) {
+        await client.query(
+          "update ms_project_task set is_active = false, updated_at = now() where task_id = $1",
+          [existing.task_id]
+        );
+      }
+
+      const updated = await client.query(
+        `update ms_project_task
+            set task_name = $3, order_no = $4, operation_no = $5, ssbr_id = $6, sow_id = $7,
+                workcenter = $8,
+                planned_work_minutes = coalesce($9, planned_work_minutes),
+                duration_minutes = coalesce($9, duration_minutes),
+                updated_at = now()
+          where project_id = $1 and task_id = $2
+        returning task_id, task_name, outline_number, order_no, operation_no`,
+        [projectId, targetTaskId, taskName, operation.order_no, String(operation.operation_no),
+         operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null, workMinutes]
+      );
+      resultTask = updated.rows[0];
+    } else {
+      const parentResult = await client.query(
+        `select task_id, outline_level, outline_number
+           from ms_project_task
+          where project_id = $1 and task_id = $2 and is_active = true`,
+        [projectId, targetParentTaskId]
+      );
+      const parent = parentResult.rows[0];
+      if (!parent) throw new ApiError(404, "TASK_NOT_FOUND", "Target parent task not found in this project", [{ task_id: targetParentTaskId }]);
+
+      const siblingsResult = await client.query(
+        `select outline_number from ms_project_task
+          where project_id = $1 and parent_task_id = $2 and is_active = true
+          order by ${TASK_OPERATION_ORDER_SQL}`,
+        [projectId, parent.task_id]
+      );
+      const nextOutline = buildNextOutlineNumberFactory(siblingsResult.rows, parent);
+
+      if (existing) {
+        await client.query(
+          "update ms_project_task set is_active = false, updated_at = now() where task_id = $1",
+          [existing.task_id]
+        );
+      }
+
+      const inserted = await client.query(
+        `insert into ms_project_task (
+           project_id, parent_task_id, task_name, outline_level, outline_number,
+           order_no, operation_no, ssbr_id, sow_id, workcenter,
+           duration_minutes, planned_work_minutes, is_summary, is_active
+         )
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, false, true)
+         returning task_id, task_name, outline_number, order_no, operation_no`,
+        [projectId, parent.task_id, taskName,
+         Number.isFinite(Number(parent.outline_level)) ? Number(parent.outline_level) + 1 : null,
+         nextOutline(), operation.order_no, String(operation.operation_no),
+         operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null, workMinutes]
+      );
+      resultTask = inserted.rows[0];
+    }
+
+    await writeAuditLog(client, {
+      projectId,
+      action: "MAP_SOW_OPERATION",
+      actor,
+      details: {
+        order_no: operation.order_no,
+        operation_no: String(operation.operation_no),
+        task_id: resultTask?.task_id,
+        moved_from_task_id: existing && existing.task_id !== resultTask?.task_id ? existing.task_id : null,
+        replaced,
+      },
+    });
+
+    await client.query("commit");
+    return {
+      project_id: projectId,
+      task: resultTask,
+      moved_from: existing && existing.task_id !== resultTask?.task_id
+        ? { task_id: existing.task_id, project_id: existing.project_id, project_name: existing.project_name }
+        : null,
+      replaced,
+    };
+  } catch (err) {
+    await client.query("rollback");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const orderNo = nullableText(body.order_no);
@@ -4640,6 +4833,7 @@ module.exports = {
   listProjectTasks,
   listProjects,
   listSowOrders,
+  mapSowOperationToTask,
   mapSowOrderToProjectTasks,
   publishCurrentRevision,
   publishProject,

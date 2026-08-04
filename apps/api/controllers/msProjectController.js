@@ -175,6 +175,12 @@ exports.updateOperationPeople = route(async (req) => {
   return (res) => success(res, data, 200, { updated: data.updated, requested: data.requested });
 });
 
+// Satu operasi -> satu node. Aktor dipaksa dari sesi seperti jalur bay-schedule.
+exports.mapSowOperationToTask = route(async (req) => {
+  const data = await service.mapSowOperationToTask(req.params.project_id, bodyWithSessionActor(req));
+  return (res) => success(res, data);
+});
+
 exports.mapSowOrderToProjectTasks = route(async (req) => {
   const data = await service.mapSowOrderToProjectTasks(req.params.project_id, req.body || {});
   return (res) => success(res, data, 200, data.summary || {});
