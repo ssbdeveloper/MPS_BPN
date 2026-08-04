@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, CalendarRange, ChevronRight, Factory, FolderSearch, GripVertical,
-  ListTree, Loader2, PackageOpen, Replace, RotateCw, X,
+  AlertTriangle, ChevronRight, FolderSearch, GripVertical, ListTree, Loader2,
+  PackageOpen, Replace, RotateCw, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { EmptyState, SearchInput, Skeleton } from '../../../components';
@@ -65,6 +65,14 @@ function buildTaskTree(tasks = []) {
 
   return { roots, byParent };
 }
+
+// Satu sumber lebar kolom untuk header DAN baris. Dipisah = pasti melenceng.
+// text-xs, tanggal 'dd Mon yyyy' butuh ~70px -> kolom 88px cukup dengan padding.
+const TREE_COLS = 'grid-cols-[minmax(0,1fr)_52px_104px_88px_88px]';
+
+// Sel kosong ditulis eksplisit '—', bukan dibiarkan kosong: justru lubang datanya yang
+// perlu terlihat (di prod, 307 task level-2 hanya 13 yang punya plan date).
+const DASH = '—';
 
 function projectStatusClass(project) {
   if (project.checked_out_by) return 'border-amber-200 bg-amber-50 text-amber-700';
@@ -150,11 +158,12 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOpe
         onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
-        className={`group flex items-center gap-1 border-b border-slate-100 pr-2 transition-colors ${
+        className={`group grid ${TREE_COLS} items-center gap-2 border-b border-slate-100 px-2 transition-colors ${
           dragOver ? 'bg-[#caf0f8] ring-2 ring-inset ring-[#00b4d8]' : 'bg-white hover:bg-slate-50'
         }`}
-        style={{ paddingLeft: 8 + depth * 18 }}
       >
+        {/* Indentasi HANYA pada kolom nama — kolom meta tetap sejajar di semua kedalaman. */}
+        <div className="flex min-w-0 items-center gap-1" style={{ paddingLeft: depth * 18 }}>
         {hasChildren ? (
           <button
             type="button"
@@ -171,36 +180,28 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOpe
           </span>
         )}
 
-        <div className="min-w-0 flex-1 py-1.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
-              {task.outline_number || '-'}
-            </span>
-            <span className="truncate text-xs font-extrabold text-slate-800">{task.task_name || '-'}</span>
-            {task.operation_no && (
-              <span className="shrink-0 font-mono text-xs font-bold tabular-nums text-[#0077b6]">Op {task.operation_no}</span>
-            )}
-          </div>
-          {/* Baris meta: workcenter DITULIS oleh mapping (dari sow.workcenter); plan start/finish
-              TIDAK — itu milik file MS Project, jadi task yang baru dipetakan wajar kosong. */}
-          {(task.workcenter || task.plan_start || task.plan_finish) && (
-            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
-              {task.workcenter && (
-                <span className="inline-flex items-center gap-1 truncate">
-                  <Factory className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
-                  <span className="truncate font-semibold">{task.workcenter}</span>
-                </span>
-              )}
-              {(task.plan_start || task.plan_finish) && (
-                <span className="inline-flex items-center gap-1 tabular-nums">
-                  <CalendarRange className="h-3 w-3 shrink-0 text-slate-400" aria-hidden="true" />
-                  {formatDate(task.plan_start)} – {formatDate(task.plan_finish)}
-                </span>
-              )}
-            </div>
-          )}
+          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
+            {task.outline_number || '-'}
+          </span>
+          <span className="truncate py-2 text-xs font-extrabold text-slate-800" title={task.task_name || undefined}>
+            {task.task_name || '-'}
+          </span>
         </div>
 
+        <span className="truncate font-mono text-xs font-bold tabular-nums text-[#0077b6]">
+          {task.operation_no || DASH}
+        </span>
+        {/* workcenter DITULIS oleh mapping (dari sow.workcenter); plan start/finish TIDAK —
+            itu milik file MS Project, jadi task yang baru dipetakan wajar kosong di sini. */}
+        <span className="truncate text-xs font-semibold text-slate-600" title={task.workcenter || undefined}>
+          {task.workcenter || DASH}
+        </span>
+        <span className="truncate text-xs tabular-nums text-slate-500">
+          {task.plan_start ? formatDate(task.plan_start) : DASH}
+        </span>
+        <span className="truncate text-xs tabular-nums text-slate-500">
+          {task.plan_finish ? formatDate(task.plan_finish) : DASH}
+        </span>
       </div>
       {expanded && children.map((child) => (
         <TaskTreeNode
@@ -728,11 +729,22 @@ export default function MapSapOperationPage() {
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {/* Pohon task */}
               <div className="flex min-h-0 flex-col overflow-hidden border-b border-slate-200 xl:border-b-0 xl:border-r">
-                <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Project Tree</span>
-                  <span className="truncate text-xs text-slate-500">Click a name to set target</span>
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
+                  <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Project tree</span>
+                  <span className="truncate text-xs text-slate-500">Drop an operation on a row</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
+                  {/* Header kolom ikut men-scroll secara horizontal bersama barisnya karena
+                      berada di dalam kontainer yang sama dan memakai TREE_COLS yang sama. */}
+                  {!taskLoading && !taskError && taskTree.roots.length > 0 && (
+                    <div className={`sticky top-0 z-10 grid ${TREE_COLS} items-center gap-2 border-b border-slate-200 bg-white px-2 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-500`}>
+                      <span>Task</span>
+                      <span>Op</span>
+                      <span>Workcenter</span>
+                      <span>Start</span>
+                      <span>Finish</span>
+                    </div>
+                  )}
                   {taskLoading ? (
                     <div className="space-y-1.5 p-2">
                       {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
