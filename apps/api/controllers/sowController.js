@@ -4446,3 +4446,230 @@ exports.getAll = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// ============================================================================================
+// STANDAR SUB-TASK PER OPERASI (per part_number)
+//
+// Dicocokkan ke sow lewat (part_number, operation_text) — BUKAN operation_no. Untuk part yang
+// sama, nomor operasi bergeser antar order (SB10972: 15 order, 4 pola penomoran), sedangkan
+// teks operasinya stabil (SB30081: 78 dari 79 teks muncul di SEMUA order). Lihat migrasi
+// 20260804d_sow_sub_operation_standard.sql.
+// ============================================================================================
+
+const SUBTASK_STD_HEADERS = ['part_number', 'operation_text', 'operation_no', 'title', 'weight', 'sort_order'];
+
+// Baca teks dari bentuk cell ExcelJS apa pun (richText / formula / hyperlink / Date).
+function stdCellText(cell) {
+  if (!cell) return '';
+  let v = cell.value;
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) v = v.richText.map((t) => t.text).join('');
+    else if (v.result !== undefined) v = v.result;
+    else if (v.text !== undefined) v = v.text;
+    else if (v instanceof Date) v = v.toISOString();
+    else v = String(v);
+  }
+  return String(v).trim();
+}
+
+// GET /sow/subtask-standards?part_number=&q=
+exports.getSubtaskStandards = async (req, res) => {
+  try {
+    const values = [];
+    const where = ['is_active = true'];
+    const partNumber = String(req.query.part_number || '').trim();
+    const q = String(req.query.q || '').trim();
+    if (partNumber) {
+      values.push(partNumber);
+      where.push(`upper(btrim(part_number)) = upper(btrim($${values.length}))`);
+    }
+    if (q) {
+      values.push(`%${q.toLowerCase()}%`);
+      where.push(`(lower(operation_text) like $${values.length} or lower(title) like $${values.length}
+                   or lower(part_number) like $${values.length})`);
+    }
+    const result = await db.query(
+      `SELECT id, part_number, operation_text, operation_no, title, sort_order, weight,
+              created_by, created_at, updated_by, updated_at
+         FROM public.sow_sub_operation_standard
+        WHERE ${where.join(' AND ')}
+        ORDER BY part_number, operation_no NULLS LAST, operation_text, sort_order, id`,
+      values,
+    );
+    res.json({ data: result.rows, total: result.rowCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /sow/subtask-standards/parts — ringkasan per part untuk daftar di UI
+exports.getSubtaskStandardParts = async (req, res) => {
+  try {
+    const result = await db.query(
+      `SELECT std.part_number,
+              count(*)::int                                   AS sub_tasks,
+              count(DISTINCT upper(btrim(std.operation_text)))::int AS operations,
+              max(std.updated_at)                             AS updated_at,
+              (SELECT min(s.part_name) FROM sow s
+                WHERE upper(btrim(s.part_number)) = upper(btrim(std.part_number))) AS part_name
+         FROM public.sow_sub_operation_standard std
+        WHERE std.is_active = true
+        GROUP BY std.part_number
+        ORDER BY std.part_number`,
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE /sow/subtask-standards/:id — nonaktifkan (bisa dibalik), bukan hapus fisik
+exports.deleteSubtaskStandard = async (req, res) => {
+  try {
+    const actor = req.headers['x-user-name'] || req.headers['x-user-id'] || null;
+    const result = await db.query(
+      `UPDATE public.sow_sub_operation_standard
+          SET is_active = false, updated_by = $2, updated_at = now()
+        WHERE id = $1 AND is_active = true
+        RETURNING id`,
+      [req.params.id, actor],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: 'Standard sub-task tidak ditemukan' });
+    res.json({ deleted: result.rowCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /sow/subtask-standards/import — unggah Excel. commit=false (default) = PREVIEW saja.
+exports.importSubtaskStandards = async (req, res) => {
+  let client;
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'File Excel wajib diunggah (field "file")' });
+    }
+    const actor = req.headers['x-user-name'] || req.headers['x-user-id'] || req.body?.actor || null;
+    const commit = req.body?.commit === true || req.body?.commit === 'true' || req.body?.commit === '1';
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(req.file.buffer);
+    const ws = wb.getWorksheet('sub_task_standard') || wb.worksheets[0];
+    if (!ws) return res.status(400).json({ error: 'Worksheet tidak ditemukan dalam file' });
+
+    const colMap = {};
+    ws.getRow(1).eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      const key = stdCellText(cell).toLowerCase().replace(/\s+/g, '_');
+      if (SUBTASK_STD_HEADERS.includes(key) && colMap[key] === undefined) colMap[key] = colNumber;
+    });
+    const missing = ['part_number', 'operation_text', 'title'].filter((k) => colMap[k] === undefined);
+    if (missing.length) {
+      return res.status(400).json({ error: `Header kolom wajib tidak ditemukan: ${missing.join(', ')}` });
+    }
+
+    if (commit) {
+      client = await pgPool.connect();
+      await client.query('BEGIN');
+    }
+    const q = commit ? client : db;
+
+    const preview = [];
+    let created = 0; let updated = 0; let rejected = 0;
+    // Duplikat DI DALAM file harus ditangkap di sini: unique index hanya menjaga baris yang
+    // sudah tersimpan, dan pada mode preview tidak ada satu pun baris ditulis.
+    const seenInFile = new Set();
+
+    for (let r = 2; r <= ws.rowCount; r += 1) {
+      const row = ws.getRow(r);
+      const get = (key) => (colMap[key] !== undefined ? stdCellText(row.getCell(colMap[key])) : '');
+      const partNumber = get('part_number');
+      const operationText = get('operation_text');
+      const title = get('title');
+      const weightRaw = get('weight');
+      const sortRaw = get('sort_order');
+      const opNoRaw = get('operation_no');
+
+      if (!partNumber && !operationText && !title) continue; // baris kosong
+
+      const push = (action, reason) => {
+        preview.push({ row: r, part_number: partNumber, operation_text: operationText, title, action, reason });
+      };
+      const rejectRow = (reason) => { push('reject', reason); rejected += 1; };
+
+      if (!partNumber) { rejectRow('part_number wajib diisi'); continue; }
+      if (!operationText) { rejectRow('operation_text wajib diisi'); continue; }
+      if (!title) { rejectRow('title wajib diisi'); continue; }
+
+      let weight = 1;
+      if (weightRaw !== '') {
+        weight = Number(weightRaw);
+        if (!Number.isFinite(weight) || weight <= 0) { rejectRow('weight harus lebih besar dari 0'); continue; }
+      }
+      let sortOrder = r - 2;
+      if (sortRaw !== '') {
+        sortOrder = parseInt(sortRaw, 10);
+        if (!Number.isFinite(sortOrder)) { rejectRow('sort_order harus berupa angka'); continue; }
+      }
+      let operationNo = null;
+      if (opNoRaw !== '') {
+        operationNo = parseInt(opNoRaw, 10);
+        if (!Number.isFinite(operationNo)) { rejectRow('operation_no harus berupa angka'); continue; }
+      }
+
+      const dupKey = [partNumber, operationText, title].map((v) => v.trim().toUpperCase()).join('|');
+      if (seenInFile.has(dupKey)) { rejectRow('duplikat di dalam file ini'); continue; }
+      seenInFile.add(dupKey);
+
+      // Peringatan (BUKAN penolakan): teks operasi yang tidak dikenal tetap boleh disimpan —
+      // order berikutnya mungkin memakainya. Tapi user harus tahu standarnya belum akan cocok.
+      const known = await q.query(
+        `SELECT 1 FROM sow
+           WHERE upper(btrim(part_number)) = upper(btrim($1))
+             AND upper(btrim(operation_text)) = upper(btrim($2))
+           LIMIT 1`,
+        [partNumber, operationText],
+      );
+      const warn = known.rowCount ? null : 'operation_text belum pernah muncul untuk part ini';
+
+      const existing = await q.query(
+        `SELECT id FROM public.sow_sub_operation_standard
+          WHERE is_active = true
+            AND upper(btrim(part_number)) = upper(btrim($1))
+            AND upper(btrim(operation_text)) = upper(btrim($2))
+            AND upper(btrim(title)) = upper(btrim($3))
+          LIMIT 1`,
+        [partNumber, operationText, title],
+      );
+
+      if (existing.rowCount) {
+        if (commit) {
+          await q.query(
+            `UPDATE public.sow_sub_operation_standard
+                SET operation_no = $2, weight = $3, sort_order = $4, updated_by = $5, updated_at = now()
+              WHERE id = $1`,
+            [existing.rows[0].id, operationNo, weight, sortOrder, actor],
+          );
+        }
+        push('update', warn); updated += 1;
+      } else {
+        if (commit) {
+          await q.query(
+            `INSERT INTO public.sow_sub_operation_standard
+               (part_number, operation_text, operation_no, title, weight, sort_order, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [partNumber, operationText, operationNo, title, weight, sortOrder, actor],
+          );
+        }
+        push('create', warn); created += 1;
+      }
+    }
+
+    if (commit) await client.query('COMMIT');
+    res.json({ commit, summary: { created, updated, rejected, total: created + updated + rejected }, preview });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+};

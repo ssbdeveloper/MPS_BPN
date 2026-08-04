@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate, Outlet, useLocation } from 'react-router-dom';
-import { List, PlusCircle, Clock, ChevronLeft } from 'lucide-react';
+import { List, PlusCircle, Clock, ChevronLeft, ListTree } from 'lucide-react';
 import { useCan } from '../../rbac';
+import { isManufacturing } from '../../config/appVariant';
 
 const navItems = [
   {
@@ -23,13 +24,25 @@ const navItems = [
     path: '/sow-management/history',
     description: 'Riwayat perubahan SOW',
   },
+  // Khusus manufaktur: standar sub-task per operasi, dipakai ulang lintas order satu part.
+  // Varian salvaging tidak memakai sub-task, jadi menu ini disembunyikan di sana.
+  {
+    label: 'Sub-task Standard',
+    icon: ListTree,
+    path: '/sow-management/subtask-standard',
+    description: 'Sub-task standar per operasi (per part number)',
+    manufacturingOnly: true,
+  },
 ];
 
 const SowManagementPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const canWriteSow = useCan('sow_management', 'write');
-  const visibleNavItems = navItems.filter((item) => !item.requiresWrite || canWriteSow);
+  const manufacturing = isManufacturing();
+  const visibleNavItems = navItems.filter(
+    (item) => (!item.requiresWrite || canWriteSow) && (!item.manufacturingOnly || manufacturing),
+  );
 
   return (
     <div className="h-screen h-dvh w-screen flex flex-col bg-slate-50">

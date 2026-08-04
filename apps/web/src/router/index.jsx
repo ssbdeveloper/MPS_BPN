@@ -297,6 +297,10 @@ const router = createBrowserRouter([
         lazy: page(() => import('../pages/PE/SowCreatePage')),
       },
       {
+        path: 'subtask-standard',
+        lazy: page(() => import('../pages/PE/SubTaskStandardPage')),
+      },
+      {
         path: 'history',
         lazy: page(() => import('../pages/PE/SowHistoryPage')),
       },

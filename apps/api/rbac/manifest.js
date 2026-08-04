@@ -58,6 +58,8 @@ const MANIFEST = [
   // Import Excel: commit=false hanya dry-run, TAPI commit=true menulis. Route yang sama
   // untuk dua-duanya, jadi digating sebagai write (preview ikut butuh izin tulis).
   { m: 'POST',   p: '/sow/subtasks/import',                   f: 'sow_management', a: W },
+  { m: 'POST',   p: '/sow/subtask-standards/import',         f: 'sow_management', a: W },
+  { m: 'DELETE', p: '/sow/subtask-standards/:id',            f: 'sow_management', a: W },
 
   // ---- Penanda subcont (/sow/subcont-marks) — Fase 6 / D4 ----
   // Feature TERPISAH dari sow_management: menandai operasi mengeluarkan jamnya dari

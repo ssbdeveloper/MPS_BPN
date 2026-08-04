@@ -130,6 +130,12 @@ router.get("/subtasks/:subId/progress-history", controller.getSubtaskProgressHis
 // Excel import (preview via commit=false, apply via commit=true) — memoryStorage
 router.post("/subtasks/import", uploadMem.single('file'), controller.importSubtasks);
 
+// ── Standar sub-task per operasi (per part_number) ───────────────────────────
+router.get("/subtask-standards",              controller.getSubtaskStandards);
+router.get("/subtask-standards/parts",        controller.getSubtaskStandardParts);
+router.post("/subtask-standards/import",      uploadMem.single('file'), controller.importSubtaskStandards);
+router.delete("/subtask-standards/:id",       controller.deleteSubtaskStandard);
+
 // ============================================
 // PARTS ROUTES (PINDAH KE ATAS!)
 // ============================================
