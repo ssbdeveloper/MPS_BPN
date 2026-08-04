@@ -39,7 +39,7 @@ const SELECT_CLS = `w-full px-3 py-2 bg-white border border-slate-200 text-slate
 
 const EMPTY_OP = {
   operation_no: '', operation_text: '', machineid: '',
-  workcenter: '', std_hours: '', source_plant: '', remark: '',
+  workcenter: '', std_hours: '', va_hours: '', source_plant: '', remark: '',
 };
 
 // ─── useWorkcenterData: fetch once, memo derived lists ────────────────────────
@@ -72,9 +72,30 @@ function useWorkcenterData() {
 
 // ─── OperationFormModal ───────────────────────────────────────────────────────
 function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
-  const [form, setForm]       = useState(mode === 'edit' ? { ...initial } : { ...EMPTY_OP });
+  const [form, setForm]       = useState(mode === 'edit' ? { ...EMPTY_OP, ...initial } : { ...EMPTY_OP });
   const [saving, setSaving]   = useState(false);
   const [formErr, setFormErr] = useState(null);
+
+  // NNVA hidup di NnvaPanel yang menyimpan sendiri; totalnya dilaporkan ke atas supaya
+  // Std Hours (= VA + NNVA) bisa ditampilkan hidup di form ini.
+  const [nnvaTotal, setNnvaTotal] = useState(0);
+  const vaSeededRef = useRef(false);
+
+  const handleNnvaTotal = useCallback((total) => {
+    setNnvaTotal(total);
+    // Baris lama bisa punya va_hours NULL (dibuat sebelum migrasi 20260804d). Sekali saja,
+    // turunkan VA dari total tersimpan: VA = std_hours - NNVA, tidak pernah negatif.
+    if (vaSeededRef.current) return;
+    vaSeededRef.current = true;
+    setForm((p) => {
+      if (p.va_hours !== '' && p.va_hours != null) return p;
+      const std = Number.parseFloat(p.std_hours);
+      return { ...p, va_hours: Number.isFinite(std) ? Math.max(0, std - total) : '' };
+    });
+  }, []);
+
+  const vaNumber   = Number.parseFloat(form.va_hours) || 0;
+  const totalHours = vaNumber + nnvaTotal;
 
   // Workcenter dropdown data
   const { groupnames, workcentersByGroup, loading: wcLoading } = useWorkcenterData();
@@ -289,12 +310,28 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Std Hours</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                    VA Hours
+                    <span className="ml-1 font-normal text-slate-400">(jam operasi asli)</span>
+                  </label>
                   <input
-                    value={form.std_hours} onChange={set('std_hours')}
+                    value={form.va_hours ?? ''} onChange={set('va_hours')}
                     type="number" min="0" step="0.01"
                     className={INPUT_CLS}
                   />
+                </div>
+              </div>
+
+              {/* Total = VA + NNVA. Read-only: hanya VA yang diinput, NNVA dari panel di bawah. */}
+              <div className="mt-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="text-[11px] text-slate-500">
+                  VA <span className="font-mono font-semibold text-slate-700">{fmtHours(vaNumber)}</span>
+                  <span className="mx-1.5 text-slate-300">+</span>
+                  NNVA <span className="font-mono font-semibold text-slate-700">{fmtHours(nnvaTotal)}</span>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Std Hours (total)</div>
+                  <div className="font-mono text-sm font-bold tabular-nums text-slate-800">{fmtHours(totalHours)}</div>
                 </div>
               </div>
 
@@ -372,7 +409,7 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
 
             {/* ── NNVA section (edit only) ── */}
             {mode === 'edit' && (
-              <NnvaPanel standardId={initial.id} />
+              <NnvaPanel standardId={initial.id} onTotalChange={handleNnvaTotal} />
             )}
 
             {/* ── Attachment section (edit only) ── */}
@@ -628,11 +665,21 @@ function OperationFormModal({ mode, initial, componentId, onClose, onSaved }) {
 }
 
 // ─── NnvaPanel (inline, for OperationFormModal) ─────────────────────────────
-function NnvaPanel({ standardId }) {
+function NnvaPanel({ standardId, onTotalChange }) {
   const [nnvaBase, setNnvaBase] = useState([]);
   const [selected, setSelected] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Laporkan total NNVA ke induk setiap kali berubah, supaya Std Hours di form ikut hidup.
+  // WAJIB menunggu `loading` selesai: saat mount `selected` masih {} sehingga totalnya 0, dan
+  // induk akan menurunkan VA = std_hours - 0 (salah untuk operasi yang punya NNVA).
+  useEffect(() => {
+    if (loading || typeof onTotalChange !== 'function') return;
+    const total = Object.values(selected)
+      .reduce((sum, item) => sum + (Number.parseFloat(item?.standard_hours) || 0), 0);
+    onTotalChange(total);
+  }, [loading, selected, onTotalChange]);
 
   useEffect(() => {
     setLoading(true);

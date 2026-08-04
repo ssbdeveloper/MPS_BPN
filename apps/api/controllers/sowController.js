@@ -3776,6 +3776,7 @@ exports.getSowStandardByComponent = async (req, res) => {
          ss.machineid,
          ss.workcenter,
          ss.std_hours,
+         ss.va_hours,
          ss.remark,
          ss.source_plant,
          -- Total NNVA standar, dipakai klien untuk men-snapshot nnva_hours ke baris SOW saat
@@ -4008,15 +4009,20 @@ exports.getSowStandardById = async (req, res) => {
 // POST create new operation under a component
 exports.createSowStandardOperation = async (req, res) => {
   try {
-    const { component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark } = req.body;
+    const { component_id, operation_no, operation_text, machineid, workcenter, std_hours, va_hours, source_plant, remark } = req.body;
     if (!component_id || !operation_no || !operation_text) {
       return res.status(400).json({ error: 'component_id, operation_no, dan operation_text wajib diisi' });
     }
+    // Operasi baru belum punya baris NNVA, jadi total = VA. NNVA ditambahkan setelahnya lewat
+    // PUT /sow/nnva/standard/:id, yang menghitung ulang std_hours.
+    const rawVa = Number.parseFloat(va_hours);
+    const vaValue = Number.isFinite(rawVa) ? Math.max(0, rawVa) : null;
+    const totalHours = vaValue != null ? vaValue : (std_hours || null);
     const result = await db.query(
-      `INSERT INTO sow_standard (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO sow_standard (component_id, operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark, va_hours)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
-      [component_id, operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null, remark || null]
+      [component_id, operation_no, operation_text, machineid || null, workcenter || null, totalHours, source_plant || null, remark || null, vaValue]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -4025,16 +4031,37 @@ exports.createSowStandardOperation = async (req, res) => {
 };
 
 // PUT update operation
+// Total NNVA satu operasi standar. Dipakai untuk menghitung ulang std_hours (= va + nnva).
+async function getNnvaTotalForStandard(query, standardId) {
+  const result = await query(
+    `SELECT COALESCE(SUM(COALESCE(standard_hours, 0)), 0)::float AS total
+       FROM public.sow_nnva_standard WHERE sow_standard_id = $1`,
+    [standardId],
+  );
+  return Number(result.rows[0]?.total) || 0;
+}
+
 exports.updateSowStandardOperation = async (req, res) => {
   try {
     const { id } = req.params;
-    const { operation_no, operation_text, machineid, workcenter, std_hours, source_plant, remark } = req.body;
+    const { operation_no, operation_text, machineid, workcenter, std_hours, va_hours, source_plant, remark } = req.body;
+
+    // va_hours adalah sumber kebenaran bila dikirim: std_hours DIHITUNG di sini, tidak dipercaya
+    // dari klien. Pemanggil lama yang hanya mengirim std_hours tetap jalan apa adanya.
+    const rawVa = Number.parseFloat(va_hours);
+    const hasVa = Number.isFinite(rawVa);
+    const vaValue = hasVa ? Math.max(0, rawVa) : null;
+    const totalHours = hasVa
+      ? vaValue + await getNnvaTotalForStandard(db.query.bind(db), id)
+      : (std_hours || null);
+
     const result = await db.query(
       `UPDATE sow_standard
-       SET operation_no=$1, operation_text=$2, machineid=$3, workcenter=$4, std_hours=$5, source_plant=$6, remark=$7
+       SET operation_no=$1, operation_text=$2, machineid=$3, workcenter=$4, std_hours=$5, source_plant=$6, remark=$7,
+           va_hours = COALESCE($9, va_hours)
        WHERE id=$8
        RETURNING *`,
-      [operation_no, operation_text, machineid || null, workcenter || null, std_hours || null, source_plant || null, remark || null, id]
+      [operation_no, operation_text, machineid || null, workcenter || null, totalHours, source_plant || null, remark || null, id, vaValue]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Not found' });
     res.json(result.rows[0]);
@@ -4372,6 +4399,18 @@ exports.saveNnvaToStandard = async (req, res) => {
       );
       inserted.push(result.rows[0]);
     }
+
+    // std_hours master TURUNAN: va_hours + total NNVA yang baru. Tanpa ini, mengedit NNVA akan
+    // membuat total di master melenceng dari rinciannya. Baris lama yang va_hours-nya masih
+    // NULL (migrasi 20260804d belum jalan) sengaja dibiarkan — std_hours tidak diutak-atik.
+    await client.query(
+      `UPDATE sow_standard
+          SET std_hours = va_hours + COALESCE((
+                SELECT SUM(COALESCE(standard_hours, 0))
+                  FROM sow_nnva_standard WHERE sow_standard_id = $1), 0)
+        WHERE id = $1 AND va_hours IS NOT NULL`,
+      [standardId],
+    );
 
     await client.query("COMMIT");
 
