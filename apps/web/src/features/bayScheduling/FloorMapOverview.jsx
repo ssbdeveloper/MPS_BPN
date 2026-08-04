@@ -19,7 +19,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { MapPin, Warehouse } from 'lucide-react';
-import { ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, formatDate, groupKeyOf } from './constants';
+import { ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, formatDate, groupKeyOf, plural } from './constants';
 
 // Skala okupansi memakai tangga SEQUENTIAL biru korporat
 // (#caf0f8 -> #90e0ef -> #00b4d8). Warna status (amber/emerald/slate/red) sengaja
@@ -84,7 +84,7 @@ const BayMiniCell = React.memo(function BayMiniCell({ bayCode, reservations, act
   return (
     <div
       aria-hidden="true"
-      title={`Bay ${bayCode} — ${reservations} reservasi, ${activities} aktivitas`}
+      title={`Bay ${bayCode} — ${plural(reservations, 'reservation')}, ${plural(activities, 'activity', 'activities')}`}
       className={`flex min-w-0 items-center justify-center overflow-hidden rounded ${
         withCode ? 'h-7 gap-1 px-1' : 'h-9 flex-col'
       } ${tone.dashed ? 'border border-dashed' : 'border'}`}
@@ -182,8 +182,8 @@ const AreaBlock = React.memo(function AreaBlock({
       aria-pressed={selected}
       title={area.areaName}
       aria-label={
-        `${area.areaName}: ${area.bays.length} bay, ${totals.reservations} reservasi, `
-        + `${totals.activities} aktivitas pada ${formatDate(cursorDate)}`
+        `${area.areaName}: ${plural(area.bays.length, 'bay')}, ${totals.reservations} reservations, `
+        + `${totals.activities} activities on ${formatDate(cursorDate)}`
       }
       className={`flex min-w-0 flex-col gap-0.5 rounded-lg border p-0.5 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
         selected
@@ -217,17 +217,14 @@ const WarehouseBlock = React.memo(function WarehouseBlock({ bays }) {
       className="flex min-w-0 flex-col justify-end gap-0.5 rounded-lg border border-transparent p-0.5"
       style={{ gridColumn: `span ${bays.length}` }}
     >
-      <div
-        className="flex h-9 min-w-0 items-center justify-center gap-1 rounded border border-slate-200 bg-slate-100 px-1"
-        title="Gudang B1–B8 — tidak dapat dipesan"
-      >
+      <div className="flex h-9 min-w-0 items-center justify-center gap-1 rounded border border-slate-200 bg-slate-100 px-1">
         <Warehouse className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
         <span className="truncate text-[11px] font-semibold uppercase tracking-wide tabular-nums text-slate-500">
-          Gudang B1–B8
+          Warehouse B1–B8
         </span>
       </div>
       <span className="block h-4 truncate text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-        Tidak dipesan
+        Not bookable
       </span>
     </div>
   );
@@ -297,7 +294,7 @@ export default function FloorMapOverview({ schedulesByBay, cursorDate, selectedA
 
   return (
     <section
-      aria-label="Peta lantai — ringkasan area"
+      aria-label="Floor map"
       className="flex min-w-0 flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -311,17 +308,15 @@ export default function FloorMapOverview({ schedulesByBay, cursorDate, selectedA
           </span>
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">Cikupa Layout</p>
-            <h3 className="truncate text-sm font-extrabold text-slate-800">Ringkasan Area</h3>
+            <h3 className="truncate text-sm font-extrabold text-slate-800">Area summary</h3>
           </div>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#90e0ef] bg-[#caf0f8] px-2 py-1 text-xs font-bold tabular-nums text-[#023e8a]">
-          Per {formatDate(cursorDate)}
+          As of {formatDate(cursorDate)}
         </span>
       </div>
 
-      <p className="text-xs text-slate-500">
-        Klik satu area untuk membuka detail bay, penghuni, dan drag-and-drop order.
-      </p>
+      <p className="text-xs text-slate-500">Select an area to see its bays.</p>
 
       {/* Lantai. Dua lane 38 kolom + aside Blasting & Prime. Semua kolom 1fr, jadi
           tidak ada jalur overflow horizontal pada lebar viewport mana pun. */}
@@ -365,20 +360,20 @@ export default function FloorMapOverview({ schedulesByBay, cursorDate, selectedA
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-slate-200 pt-2 text-xs font-medium text-slate-600">
-        <LegendSwatch tone={OCCUPANCY[0]} label="Kosong" />
-        <LegendSwatch tone={OCCUPANCY[1]} label="1 reservasi" />
-        <LegendSwatch tone={OCCUPANCY[2]} label="2 reservasi" />
-        <LegendSwatch tone={OCCUPANCY[3]} label="3+ reservasi" />
+        <LegendSwatch tone={OCCUPANCY[0]} label="Free" />
+        <LegendSwatch tone={OCCUPANCY[1]} label="1 reservation" />
+        <LegendSwatch tone={OCCUPANCY[2]} label="2 reservations" />
+        <LegendSwatch tone={OCCUPANCY[3]} label="3+ reservations" />
         <span className="inline-flex items-center gap-1.5">
-          <span className="h-3 w-4 shrink-0 rounded border border-slate-200 bg-slate-100" /> Gudang (tidak dipesan)
+          <span className="h-3 w-4 shrink-0 rounded border border-slate-200 bg-slate-100" /> Warehouse
         </span>
         <span className="text-slate-500">
-          Angka: <span className="font-extrabold text-slate-800">reservasi</span> /{' '}
-          <span className="font-normal text-slate-800">aktivitas</span>
+          Numbers: <span className="font-extrabold text-slate-800">reservations</span> /{' '}
+          <span className="font-normal text-slate-800">activities</span>
         </span>
         <span className="inline-flex items-center gap-1.5">
           <MapPin className="h-3.5 w-3.5 text-[#0077b6]" aria-hidden="true" />
-          <span className="tabular-nums">{ALL_AREAS.length}</span> area
+          <span className="tabular-nums">{ALL_AREAS.length}</span> areas
         </span>
       </div>
     </section>

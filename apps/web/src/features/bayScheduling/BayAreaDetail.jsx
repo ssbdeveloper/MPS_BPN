@@ -9,6 +9,7 @@ import {
   formatDate,
   groupKeyOf,
   isActiveOn,
+  plural,
 } from './constants';
 
 // BayAreaDetail — TINGKAT 2 peta bay (D5).
@@ -130,14 +131,14 @@ const ScheduleBadge = memo(function ScheduleBadge({ schedule, onOpenDetail }) {
 
   const title = nonJob ? typeLabel : schedule.order_no;
   const ariaLabel = nonJob
-    ? `Detail booking ${typeLabel}${schedule.purpose ? ` — ${schedule.purpose}` : ''} (${style.label}), ${range}`
-    : `Detail reservasi ${schedule.order_no} (${style.label}), ${range}`;
+    ? `${typeLabel}${schedule.purpose ? ` — ${schedule.purpose}` : ''}, ${style.label}, ${range}`
+    : `Order ${schedule.order_no}, ${style.label}, ${range}`;
 
   return (
     <button
       type="button"
       onClick={handleClick}
-      title={`${title} — ${style.label}`}
+      title={title}
       aria-label={ariaLabel}
       className={`block w-full overflow-hidden rounded-lg border text-left shadow-sm transition hover:shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
         nonJob
@@ -183,7 +184,7 @@ const ScheduleBadge = memo(function ScheduleBadge({ schedule, onOpenDetail }) {
           {unknown && (
             <span className="mt-1 inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700">
               <AlertTriangle className="h-3 w-3 shrink-0" />
-              Order tidak dikenal
+              Unknown order
             </span>
           )}
 
@@ -204,14 +205,14 @@ const ScheduleBadge = memo(function ScheduleBadge({ schedule, onOpenDetail }) {
               {hasPeople && (
                 <span
                   className="inline-flex items-center gap-1 rounded bg-[#caf0f8] px-1.5 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]"
-                  title="Jumlah orang (people_required)"
+                  title="Headcount"
                 >
                   <Users className="h-3 w-3" />{people}
                 </span>
               )}
               {bays > 1 && (
                 <span className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-xs font-bold tabular-nums text-slate-600">
-                  {bays} bay
+                  {bays} bays
                 </span>
               )}
               {subcont && (
@@ -296,8 +297,8 @@ const BayDetailCell = memo(function BayDetailCell({
       tabIndex={0}
       aria-pressed={selected}
       aria-label={occupied
-        ? `Bay ${bayCode} — ${reservations.length} reservasi aktif`
-        : `Bay ${bayCode} — kosong`}
+        ? `Bay ${bayCode}, ${plural(reservations.length, 'reservation')}`
+        : `Bay ${bayCode}, free`}
       onClick={selectBay}
       onKeyDown={handleKeyDown}
       onDragEnter={handleDragOver}
@@ -314,7 +315,7 @@ const BayDetailCell = memo(function BayDetailCell({
             occupied ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-100 text-slate-400'
           }`}
         >
-          {reservations.length} res
+          {reservations.length === 1 ? '1 reservation' : `${plural(reservations.length, 'reservation')}`}
         </span>
       </div>
 
@@ -326,8 +327,8 @@ const BayDetailCell = memo(function BayDetailCell({
         </div>
       ) : (
         <div className="pointer-events-none flex flex-1 select-none flex-col items-center justify-center gap-1 text-center">
-          <span className="text-xs font-semibold text-slate-400">Bay kosong</span>
-          <span className="text-xs text-slate-400">Tarik order ke sini atau klik untuk memilih</span>
+          <span className="text-xs font-semibold text-slate-400">Free</span>
+          <span className="text-xs text-slate-400">Drop an order here</span>
         </div>
       )}
     </div>
@@ -371,7 +372,7 @@ export default function BayAreaDetail({
             className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
           >
             <ArrowLeft className="h-4 w-4" />
-            Semua area
+            Back
           </button>
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">{area.areaCode}</p>
@@ -382,17 +383,17 @@ export default function BayAreaDetail({
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2 py-1 text-xs font-semibold tabular-nums text-slate-600">
             <LayoutGrid className="h-3.5 w-3.5 text-slate-400" />
-            {bays.length} bay
+            {plural(bays.length, 'bay')}
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#caf0f8] px-2 py-1 text-xs font-bold tabular-nums text-[#0077b6]">
-            {summary.reservations} reservasi · {summary.activities} aktivitas
+            {plural(summary.reservations, 'reservation')} · {plural(summary.activities, 'activity', 'activities')}
           </span>
           <span
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold tabular-nums text-slate-600"
-            title="Reservasi yang ditampilkan = yang aktif pada tanggal ini"
+            title="Showing reservations active on this date"
           >
             <CalendarRange className="h-3.5 w-3.5 text-[#0077b6]" />
-            Per {formatDate(cursorDate)}
+            As of {formatDate(cursorDate)}
           </span>
         </div>
       </header>
@@ -419,8 +420,7 @@ export default function BayAreaDetail({
       </div>
 
       <p className="text-xs text-slate-500">
-        Klik bay untuk memilihnya (bay terisi tetap bisa dipilih — sejak D3 tidak ada bay eksklusif),
-        atau tarik order dari panel kiri ke bay. Klik badge untuk membuka detail reservasi.
+        Drag an order onto any bay — bays can be shared. Click a badge for details.
       </p>
     </section>
   );

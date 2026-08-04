@@ -17,19 +17,19 @@ function formatDate(value) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function formatHours(value) {
   const hours = Number(value);
   if (!Number.isFinite(hours)) return '-';
-  return `${hours.toLocaleString('id-ID', { maximumFractionDigits: 2 })}h`;
+  return `${hours.toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
 }
 
 function formatHoursFromMinutes(value) {
   const minutes = Number(value);
   if (!Number.isFinite(minutes)) return '-';
-  return `${(minutes / 60).toLocaleString('id-ID', { maximumFractionDigits: 2 })}h`;
+  return `${(minutes / 60).toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
 }
 
 function operationSortValue(value) {
@@ -83,14 +83,14 @@ function PanelError({ message, onRetry }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
       <AlertTriangle className="h-8 w-8 text-red-400" strokeWidth={1.5} />
-      <p className="max-w-xs text-xs text-red-600">{message || 'Terjadi kesalahan saat memuat data.'}</p>
+      <p className="max-w-xs text-xs text-red-600">{message || 'Failed to load data.'}</p>
       <button
         type="button"
         onClick={onRetry}
         className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
       >
         <RotateCw className="h-3.5 w-3.5" />
-        Coba lagi
+        Retry
       </button>
     </div>
   );
@@ -106,7 +106,7 @@ function Step({ n, label, value, done, mono }) {
       <span className="min-w-0">
         <span className="block text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</span>
         <span className={`block max-w-[200px] truncate text-xs font-semibold ${done ? 'text-slate-800' : 'text-slate-400'} ${mono ? 'font-mono tabular-nums' : ''}`}>
-          {value || 'Belum dipilih'}
+          {value || 'Not selected'}
         </span>
       </span>
     </li>
@@ -185,7 +185,7 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
           <button
             type="button"
             onClick={() => onToggle(task.task_id)}
-            aria-label={expanded ? 'Tutup cabang' : 'Buka cabang'}
+            aria-label={expanded ? 'Collapse branch' : 'Expand branch'}
             aria-expanded={expanded}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-200/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]"
           >
@@ -302,13 +302,60 @@ function SelectedProjectBox({ project, onClear }) {
         type="button"
         onClick={onClear}
         className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-[#90e0ef] bg-white px-2.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
-        aria-label="Ganti project"
+        aria-label="Change project"
       >
         <X className="h-3.5 w-3.5" />
-        Ganti
+        Change
       </button>
     </div>
   );
+}
+
+/**
+ * Ringkasan hasil mapping -> satu baris fakta. Hanya angka yang > 0 yang ikut,
+ * supaya baris tidak penuh "0 ...".
+ */
+function mappingSummaryText(summary = {}) {
+  const moved = Number(summary.repointed_reservation_count) || 0;
+  return [
+    Number(summary.mapped_count) > 0 && `${summary.mapped_count} updated`,
+    Number(summary.created_count) > 0 && `${summary.created_count} created`,
+    Number(summary.reused_count) > 0 && `${summary.reused_count} reused`,
+    Number(summary.taken_over_task_count) > 0 && `${summary.taken_over_task_count} taken over`,
+    moved > 0 && `${moved} reservation${moved > 1 ? 's' : ''} moved`,
+  ].filter(Boolean).join(' · ');
+}
+
+/**
+ * Backend menolak order yang sudah dipetakan di project lain (409 ORDER_MAPPED_ELSEWHERE)
+ * dan takeover yang akan menggantungkan reservasi (409 TAKEOVER_WOULD_ORPHAN_RESERVATION),
+ * tapi services/msProjectService.js hanya melempar Error(message) — code-nya hilang dan
+ * pesannya masih Bahasa Indonesia. Jadi dua kasus itu dikenali dari isi pesannya.
+ */
+// Dipilih berdasarkan `error.code` dari backend, BUKAN potongan teks pesan. Versi pertama
+// mencocokkan kalimat Indonesia dan langsung jadi kode mati begitu pesan backend diterjemahkan.
+// `details` untuk ORDER_MAPPED_ELSEWHERE berisi baris { project_id, project_name, task_count }.
+function mappingErrorText(error) {
+  const code = error?.code;
+  const details = Array.isArray(error?.details) ? error.details : [];
+  const text = String(error?.message || '');
+
+  if (code === 'ORDER_MAPPED_ELSEWHERE') {
+    const names = details.map((row) => row.project_name || row.project_id).filter(Boolean);
+    return {
+      title: 'Order already mapped elsewhere',
+      description: names.length
+        ? `Already in ${names.join(', ')}. One order maps to one project.`
+        : 'One order maps to one project.',
+    };
+  }
+  if (code === 'TAKEOVER_WOULD_ORPHAN_RESERVATION') {
+    return {
+      title: 'Takeover cancelled',
+      description: 'Some bay reservations point to operations missing from this project.',
+    };
+  }
+  return { title: 'Mapping failed', description: text || 'Unknown error' };
 }
 
 export default function MapSapOperationPage() {
@@ -427,17 +474,16 @@ export default function MapSapOperationPage() {
         target_parent_task_id: targetParentTask.task_id,
         actor: 'web-manufacturing',
       });
-      const mappedCount = result.summary?.mapped_count || 0;
-      const createdCount = result.summary?.created_count || 0;
-      toast.success('SOW operations mapped', {
-        description: `${mappedCount} task(s) updated, ${createdCount} task(s) created.`,
+      toast.success('Operations mapped', {
+        description: mappingSummaryText(result.summary) || 'Nothing changed',
       });
       const refreshedTasks = await fetchMsProjectTasks(selectedProject.project_id);
       setProjectTasks(refreshedTasks);
       setExpandedTaskIds((prev) => new Set([...prev, targetParentTask.task_id]));
       setTargetParentTask(refreshedTasks.find((task) => task.task_id === targetParentTask.task_id) || targetParentTask);
     } catch (error) {
-      toast.error('Mapping failed', { description: error.message });
+      const { title, description } = mappingErrorText(error);
+      toast.error(title, { description });
     } finally {
       setMapping(false);
     }
@@ -512,7 +558,7 @@ export default function MapSapOperationPage() {
         </ol>
         <div className="flex items-center gap-3">
           {!ready && (
-            <span className="hidden text-xs text-slate-400 xl:block">Lengkapi 3 langkah, atau seret order ke pohon</span>
+            <span className="hidden text-xs text-slate-400 xl:block">Complete the 3 steps, or drag an order onto the tree</span>
           )}
           <button
             type="button"
@@ -531,7 +577,7 @@ export default function MapSapOperationPage() {
         <section className="flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
           <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-3 py-2.5">
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Sumber</p>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Source</p>
               <h3 className="text-sm font-extrabold text-slate-800">SOW Orders</h3>
             </div>
             <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-slate-500">
@@ -540,7 +586,7 @@ export default function MapSapOperationPage() {
           </div>
 
           <div className="border-b border-slate-200 p-3">
-            <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Cari order / part..." />
+            <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Search order or part" />
           </div>
 
           <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
@@ -551,8 +597,8 @@ export default function MapSapOperationPage() {
             ) : sowOrders.length === 0 ? (
               <EmptyState
                 icon={PackageOpen}
-                title="Tidak ada order"
-                description="Tidak ada order SOW yang cocok dengan pencarian."
+                title="No orders"
+                description="No SOW order matches this search."
               />
             ) : (
               sowOrders.map((order) => (
@@ -572,7 +618,7 @@ export default function MapSapOperationPage() {
             <div className="border-t border-slate-200 bg-slate-50">
               <div className="flex items-center justify-between gap-2 px-3 py-2">
                 <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                  Operasi · <span className="font-mono tabular-nums text-slate-700">{selectedOrder.order_no}</span>
+                  Operations · <span className="font-mono tabular-nums text-slate-700">{selectedOrder.order_no}</span>
                 </p>
                 {operationLoading && <Loader2 className="h-4 w-4 animate-spin text-[#00b4d8]" />}
               </div>
@@ -584,7 +630,7 @@ export default function MapSapOperationPage() {
                 ) : operationError ? (
                   <PanelError message={operationError} onRetry={() => loadOperations(selectedOrder)} />
                 ) : operations.length === 0 ? (
-                  <EmptyState icon={ListTree} title="Tidak ada operasi" description="Order ini belum memiliki operasi." />
+                  <EmptyState icon={ListTree} title="No operations" />
                 ) : (
                   <OperationList operations={operations} />
                 )}
@@ -606,8 +652,8 @@ export default function MapSapOperationPage() {
             <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#caf0f8]/60">
               <span className="rounded-lg border border-[#00b4d8] bg-white px-4 py-2 text-sm font-bold text-[#0077b6] shadow">
                 {targetParentTask
-                  ? `Lepas untuk map ke "${targetParentTask.task_name || 'parent'}"`
-                  : 'Pilih project & parent task dulu'}
+                  ? `Drop to map into "${targetParentTask.task_name || 'parent'}"`
+                  : 'Select a project and parent task first'}
               </span>
             </div>
           )}
@@ -624,7 +670,7 @@ export default function MapSapOperationPage() {
             {selectedProject ? (
               <SelectedProjectBox project={selectedProject} onClear={clearProject} />
             ) : (
-              <SearchInput value={projectSearch} onChange={setProjectSearch} placeholder="Cari project..." />
+              <SearchInput value={projectSearch} onChange={setProjectSearch} placeholder="Search project" />
             )}
           </div>
 
@@ -634,7 +680,7 @@ export default function MapSapOperationPage() {
               <div className="flex min-h-0 flex-col overflow-hidden border-b border-slate-200 xl:border-b-0 xl:border-r">
                 <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
                   <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Project Tree</span>
-                  <span className="truncate text-xs text-slate-500">Klik nama = jadikan target</span>
+                  <span className="truncate text-xs text-slate-500">Click a name to set target</span>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
                   {taskLoading ? (
@@ -644,7 +690,7 @@ export default function MapSapOperationPage() {
                   ) : taskError ? (
                     <PanelError message={taskError} onRetry={() => loadProjectTasks(selectedProject)} />
                   ) : taskTree.roots.length === 0 ? (
-                    <EmptyState icon={ListTree} title="Tidak ada task" description="Project ini belum memiliki task." />
+                    <EmptyState icon={ListTree} title="No tasks" />
                   ) : (
                     taskTree.roots.map((task) => (
                       <TaskTreeNode
@@ -681,16 +727,15 @@ export default function MapSapOperationPage() {
                   {!targetParentTask ? (
                     <EmptyState
                       icon={Target}
-                      title="Pilih parent task"
-                      description="Klik nama task di pohon untuk menjadikannya target parent."
+                      title="Select a parent task"
                     />
                   ) : taskLoading ? (
                     Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={4} />)
                   ) : targetTasks.length === 0 ? (
                     <EmptyState
                       icon={GitBranch}
-                      title="Belum ada child task"
-                      description="Mapping akan membuat task baru di bawah parent ini."
+                      title="No child tasks"
+                      description="Mapping will create new tasks here."
                     />
                   ) : (
                     <>
@@ -716,8 +761,8 @@ export default function MapSapOperationPage() {
               ) : projects.length === 0 ? (
                 <EmptyState
                   icon={FolderSearch}
-                  title="Tidak ada project"
-                  description="Tidak ada MS Project yang cocok dengan pencarian."
+                  title="No projects"
+                  description="No MS Project matches this search."
                 />
               ) : (
                 projects.map((project) => (

@@ -1870,13 +1870,14 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
       [orderNo, projectId]
     );
 
-    const takeover = payload.takeover === true || payload.takeover === "true";
+    // Parameter fungsi ini bernama `body`, bukan `payload` — tidak ada `payload` di scope ini.
+    const takeover = body.takeover === true || body.takeover === "true";
     if (elsewhere.rows.length > 0 && !takeover) {
       throw new ApiError(
         409,
         "ORDER_MAPPED_ELSEWHERE",
-        `Order ini sudah dipetakan di project lain: ${elsewhere.rows.map((r) => r.project_name || r.project_id).join(", ")}. ` +
-          "Satu order hanya boleh dipetakan ke satu project. Kirim takeover=true untuk memindahkan pemetaannya ke project ini.",
+        `Order already mapped to another project: ${elsewhere.rows.map((r) => r.project_name || r.project_id).join(", ")}. ` +
+          "Send takeover=true to move the mapping to this project.",
         elsewhere.rows
       );
     }
@@ -2066,7 +2067,7 @@ async function mapSowOrderToProjectTasks(projectIdParam, body = {}) {
         throw new ApiError(
           409,
           "TAKEOVER_WOULD_ORPHAN_RESERVATION",
-          `Takeover dibatalkan: ${dangling.rows[0].n} reservasi bay menunjuk operasi yang tidak ada di project tujuan.`,
+          `Takeover cancelled: ${dangling.rows[0].n} bay reservations point to operations missing from the target project.`,
           [{ order_no: orderNo, target_project_id: projectId }]
         );
       }

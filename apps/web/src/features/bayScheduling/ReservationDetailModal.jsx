@@ -69,7 +69,7 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
   const unknownOrder = isOrderBooking && !isText(detail.part_name) && !isText(detail.customer);
 
   const heading = isOrderBooking
-    ? (isText(detail.order_no) ? detail.order_no : '(tanpa order)')
+    ? (isText(detail.order_no) ? detail.order_no : '(no order)')
     : (isText(detail.purpose) ? detail.purpose : bookingType.label);
 
   return (
@@ -90,7 +90,7 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">
-                {isOrderBooking ? 'Detail Reservasi' : 'Detail Booking Non-Job'}
+                {isOrderBooking ? 'Reservation' : 'Non-job booking'}
               </p>
               <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${style.pill}`}>
                 {style.label}
@@ -101,11 +101,8 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
                 </span>
               )}
               {unknownOrder && (
-                <span
-                  title="Order ini tidak ditemukan di data SAP/SOW — bay tetap terpakai."
-                  className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700"
-                >
-                  <HelpCircle className="h-3 w-3" /> Order tidak dikenal
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700">
+                  <HelpCircle className="h-3 w-3" /> Unknown order
                 </span>
               )}
             </div>
@@ -125,7 +122,7 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
             type="button"
             onClick={stableClose}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-            aria-label="Tutup"
+            aria-label="Close"
           >
             <X className="h-4 w-4" />
           </button>
@@ -136,11 +133,11 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
             <span className="block">{detail.area_name || '-'}</span>
             <span className="font-mono text-xs tabular-nums text-slate-500">{bays.join(', ') || '-'}</span>
           </DetailRow>
-          <DetailRow icon={<CalendarRange className="h-3.5 w-3.5" />} label="Rentang">
+          <DetailRow icon={<CalendarRange className="h-3.5 w-3.5" />} label="Start / End">
             <span className="tabular-nums">{formatDate(detail.start_date)} – {formatDate(detail.end_date)}</span>
           </DetailRow>
           {!isOrderBooking && (
-            <DetailRow icon={<Tag className="h-3.5 w-3.5" />} label="Jenis / Tujuan">
+            <DetailRow icon={<Tag className="h-3.5 w-3.5" />} label="Type / Purpose">
               <span className="block">{bookingType.label}</span>
               <span className="block truncate text-xs font-semibold text-slate-500">
                 {isText(detail.purpose) ? detail.purpose : '-'}
@@ -158,7 +155,7 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
             </DetailRow>
           )}
           {isText(detail.created_by) && (
-            <DetailRow icon={<User className="h-3.5 w-3.5" />} label="Dibuat oleh">
+            <DetailRow icon={<User className="h-3.5 w-3.5" />} label="Created by">
               <span className="block truncate">{detail.created_by}</span>
             </DetailRow>
           )}
@@ -167,15 +164,15 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
         {unknownOrder && (
           <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
             <p className="text-xs font-semibold text-amber-700">
-              Nomor order <span className="font-mono tabular-nums">{detail.order_no || '-'}</span> tidak ditemukan di
-              data SAP/SOW. Reservasi ini tetap ditampilkan karena bay-nya benar-benar terpakai.
+              Order <span className="font-mono tabular-nums">{detail.order_no || '-'}</span> not found in SAP/SOW
+              data — the bay is still in use.
             </p>
           </div>
         )}
 
         {isText(detail.notes) && (
           <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Catatan</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Notes</p>
             <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{detail.notes}</p>
           </div>
         )}
@@ -184,7 +181,7 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
           <div className="mt-5">
             <div className="mb-1.5 flex items-center gap-1.5">
               <ListChecks className="h-4 w-4 text-[#0077b6]" />
-              <span className="text-xs font-bold text-slate-700">Task direservasi</span>
+              <span className="text-xs font-bold text-slate-700">Reserved tasks</span>
               <span className="rounded-full bg-[#caf0f8] px-2 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]">
                 {tasks.length}
               </span>
@@ -220,7 +217,7 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
                       className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold tabular-nums ${
                         hasPeople ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-100 text-slate-400'
                       }`}
-                      title="Jumlah orang (people_required)"
+                      title="Headcount"
                     >
                       <Users className="h-3.5 w-3.5" />{hasPeople ? task.people_required : '-'}
                     </span>
@@ -239,14 +236,14 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
             className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Ban className="h-4 w-4" />}
-            Batalkan reservasi
+            Cancel reservation
           </button>
           <button
             type="button"
             onClick={stableClose}
             className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
           >
-            Tutup
+            Close
           </button>
         </div>
       </div>

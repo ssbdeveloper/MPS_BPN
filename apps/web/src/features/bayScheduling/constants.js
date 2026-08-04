@@ -85,35 +85,35 @@ export function statusStyle(status) {
 export const BOOKING_TYPES = {
   ORDER: {
     code: 'ORDER',
-    label: 'Job / Order',
+    label: 'Job order',
     isJob: true,
     requiresPurpose: false,
     pill: 'bg-[#caf0f8] text-[#0077b6] border-[#90e0ef]',
   },
   PARKING: {
     code: 'PARKING',
-    label: 'Parkir unit',
+    label: 'Parking',
     isJob: false,
     requiresPurpose: true,
     pill: 'bg-slate-100 text-slate-700 border-slate-300',
   },
   STORAGE: {
     code: 'STORAGE',
-    label: 'Simpan barang',
+    label: 'Storage',
     isJob: false,
     requiresPurpose: true,
     pill: 'bg-slate-100 text-slate-700 border-slate-300',
   },
   MAINTENANCE: {
     code: 'MAINTENANCE',
-    label: 'Perawatan',
+    label: 'Maintenance',
     isJob: false,
     requiresPurpose: true,
     pill: 'bg-slate-100 text-slate-700 border-slate-300',
   },
   OTHER: {
     code: 'OTHER',
-    label: 'Lain-lain',
+    label: 'Other',
     isJob: false,
     requiresPurpose: true,
     pill: 'bg-slate-100 text-slate-700 border-slate-300',
@@ -171,12 +171,21 @@ export function addDaysText(dateText, days) {
   return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
 }
 
+// Penjamakan Inggris untuk angka yang TAMPIL. Tanpa satu helper bersama, sebagian tempat
+// memberi penjaga tunggal dan sebagian tidak — di layar yang sama muncul "1 reservation"
+// di sel bay dan "1 reservations" di header area. AREA-10 memang hanya punya satu bay,
+// jadi kasus n === 1 bukan teori.
+export function plural(count, singular, pluralForm) {
+  const n = Number(count) || 0;
+  return `${n} ${n === 1 ? singular : pluralForm || `${singular}s`}`;
+}
+
 export function formatDate(value) {
   if (!value) return '-';
   const text = dateKey(value);
   const date = new Date(`${text}T00:00:00`);
   if (Number.isNaN(date.getTime())) return text;
-  return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
 // Berbeda tipis dari versi lama: null / '' sekarang jadi '-', bukan '0h'.
@@ -186,7 +195,7 @@ export function formatHours(value) {
   if (value == null || value === '') return '-';
   const hours = Number(value);
   if (!Number.isFinite(hours)) return '-';
-  return `${hours.toLocaleString('id-ID', { maximumFractionDigits: 2 })}h`;
+  return `${hours.toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
 }
 
 /* ── Kursor tanggal (A-08) ───────────────────────────────────────────────── */

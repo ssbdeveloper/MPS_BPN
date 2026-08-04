@@ -18,13 +18,13 @@ function formatDate(value) {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function formatHoursFromMinutes(value) {
   const minutes = Number(value);
   if (!Number.isFinite(minutes)) return '-';
-  return `${(minutes / 60).toLocaleString('id-ID', { maximumFractionDigits: 2 })}h`;
+  return `${(minutes / 60).toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
 }
 
 function operationSortValue(value) {
@@ -64,7 +64,7 @@ function FetchError({ message, onRetry }) {
     <div className="m-3 flex flex-col items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-6 py-10 text-center">
       <AlertTriangle className="h-8 w-8 text-red-500" strokeWidth={1.5} />
       <div>
-        <p className="text-sm font-semibold text-red-700">Gagal memuat data</p>
+        <p className="text-sm font-semibold text-red-700">Failed to load data</p>
         {message && <p className="mt-1 text-xs text-red-600">{message}</p>}
       </div>
       <button
@@ -76,7 +76,7 @@ function FetchError({ message, onRetry }) {
                    active:scale-95 motion-reduce:transition-none motion-reduce:transform-none"
       >
         <RotateCw className="h-3.5 w-3.5" />
-        Coba lagi
+        Retry
       </button>
     </div>
   );
@@ -116,7 +116,7 @@ function ProjectCard({ project, selected, onClick }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-extrabold text-slate-800">{project.project_name || '-'}</p>
-          <p className="mt-0.5 truncate text-xs text-slate-500">{project.description || 'Tanpa deskripsi'}</p>
+          <p className="mt-0.5 truncate text-xs text-slate-500">{project.description || 'No description'}</p>
         </div>
         <StatusBadge project={project} />
       </div>
@@ -155,9 +155,9 @@ function ProjectTaskPanel({ project, tasks, loading, error, onRetry }) {
     <section className="flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Task Proyek</p>
+          <p className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Tasks</p>
           <h2 className="truncate text-sm font-extrabold text-slate-800">
-            {project?.project_name || 'Belum ada proyek dipilih'}
+            {project?.project_name || 'No project selected'}
           </h2>
         </div>
       </div>
@@ -167,8 +167,8 @@ function ProjectTaskPanel({ project, tasks, loading, error, onRetry }) {
           <div className="sticky top-0 z-10 grid grid-cols-[minmax(220px,1fr)_96px_104px_92px] gap-3 border-b border-slate-200 bg-[#caf0f8] px-3 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-700">
             <span>Task</span>
             <span>Order</span>
-            <span>Operasi</span>
-            <span className="text-right">Jam</span>
+            <span>Operation</span>
+            <span className="text-right">Hours</span>
           </div>
         )}
 
@@ -183,14 +183,12 @@ function ProjectTaskPanel({ project, tasks, loading, error, onRetry }) {
         ) : !project ? (
           <EmptyState
             icon={MousePointerClick}
-            title="Pilih proyek"
-            description="Pilih proyek di panel kiri untuk melihat daftar task-nya."
+            title="Select a project"
           />
         ) : tasks.length === 0 ? (
           <EmptyState
             icon={ListTree}
-            title="Tidak ada task"
-            description="Proyek ini belum memiliki task."
+            title="No tasks"
           />
         ) : (
           sortByOperationNo(tasks).map((task) => <TaskRow key={task.task_id} task={task} />)
@@ -223,7 +221,7 @@ export default function ProjectBrowserPage() {
           setTasks([]);
         }
       } catch (error) {
-        setProjectsError(error.message || 'Tidak dapat memuat daftar proyek.');
+        setProjectsError(error.message || 'Could not load the project list.');
       } finally {
         setLoadingProjects(false);
       }
@@ -238,7 +236,7 @@ export default function ProjectBrowserPage() {
     try {
       setTasks(await fetchMsProjectTasks(project.project_id));
     } catch (error) {
-      setTasksError(error.message || 'Tidak dapat memuat task proyek.');
+      setTasksError(error.message || 'Could not load project tasks.');
     } finally {
       setLoadingTasks(false);
     }
@@ -256,7 +254,7 @@ export default function ProjectBrowserPage() {
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder="Cari proyek..."
+              placeholder="Search projects..."
               className="w-full"
             />
           </div>
@@ -268,12 +266,7 @@ export default function ProjectBrowserPage() {
             ) : projects.length === 0 ? (
               <EmptyState
                 icon={FolderSearch}
-                title={search ? 'Proyek tidak ditemukan' : 'Belum ada proyek'}
-                description={
-                  search
-                    ? `Tidak ada proyek yang cocok dengan "${search}".`
-                    : 'Belum ada proyek MS Project yang tersedia.'
-                }
+                title={search ? 'No projects found' : 'No projects yet'}
                 action={
                   search ? (
                     <button
@@ -284,7 +277,7 @@ export default function ProjectBrowserPage() {
                                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
                                  active:scale-95 motion-reduce:transition-none motion-reduce:transform-none"
                     >
-                      Hapus pencarian
+                      Clear search
                     </button>
                   ) : undefined
                 }

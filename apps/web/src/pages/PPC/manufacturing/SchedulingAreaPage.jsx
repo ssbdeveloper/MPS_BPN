@@ -25,7 +25,7 @@ import {
 import { Skeleton } from '../../../components';
 import {
   AREA_BY_CODE, BayAreaDetail, FloorMapOverview, OrderPanel, ReservationDetailModal,
-  ReservationPanel, addDaysText, bookingTypeOf, dateKey, dedupeByGroup, formatDate,
+  ReservationPanel, addDaysText, bookingTypeOf, dateKey, dedupeByGroup,
   groupKeyOf, todayText, useBaySchedules, useSowOrders,
 } from '../../../features/bayScheduling';
 import BayReservationTimeline from './BayReservationTimeline';
@@ -77,13 +77,13 @@ function describeOccupants(overlap) {
   const labels = [...new Set(
     rows.map((row) => row.order_no || row.purpose || bookingTypeOf(row).label).filter(Boolean),
   )];
-  if (labels.length === 0) return 'reservasi lain';
+  if (labels.length === 0) return 'other reservations';
   const head = labels.slice(0, 3).join(', ');
   const rest = labels.length - 3;
   const total = Number(overlap?.total);
-  const text = rest > 0 ? `${head}, +${rest} lainnya` : head;
+  const text = rest > 0 ? `${head}, +${rest} more` : head;
   return overlap?.truncated && Number.isFinite(total) && total > rows.length
-    ? `${text} (dari ${total} penghuni)`
+    ? `${text} (of ${total})`
     : text;
 }
 
@@ -97,7 +97,7 @@ function InlineError({ message, onRetry }) {
         onClick={onRetry}
         className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
       >
-        <RefreshCw className="h-3.5 w-3.5" /> Coba lagi
+        <RefreshCw className="h-3.5 w-3.5" /> Retry
       </button>
     </div>
   );
@@ -205,13 +205,11 @@ export default function SchedulingAreaPage() {
     setSelectedBay(bayCode);
     const order = readDraggedOrder(event) || selectedOrderRef.current;
     if (!order) {
-      toast.error('Pilih atau tarik order dulu', { description: 'Bay dipilih, tapi belum ada order yang ditarik.' });
+      toast.error('Select an order first');
       return;
     }
     if (!order.has_msp_task) {
-      toast.error('Order belum punya task MS Project', {
-        description: 'Map operasi SAP-nya dulu di menu Map SAP Operations agar bisa dibooking.',
-      });
+      toast.error('Order not mapped to MS Project');
       return;
     }
     setSelectedOrder(order);
@@ -224,8 +222,9 @@ export default function SchedulingAreaPage() {
     try {
       const result = await createBaySchedule(payload);
       const bays = (payload.bay_codes || []).join(', ');
+      const taskCount = Array.isArray(payload.tasks) ? payload.tasks.length : 0;
       const what = payload.booking_type === 'ORDER'
-        ? `${Array.isArray(payload.tasks) ? payload.tasks.length : 0} task`
+        ? `${taskCount} task${taskCount === 1 ? '' : 's'}`
         : bookingTypeOf(payload).label;
 
       // Sejak D3 bay tidak pernah eksklusif: server TIDAK menolak overlap, hanya
@@ -241,25 +240,25 @@ export default function SchedulingAreaPage() {
       const droppedOps = dropped?.operations || [];
 
       if ((overlap?.occupants || []).length > 0) {
-        toast.warning('Reservasi tersimpan — bay dipakai bersama', {
-          description: `${what} di ${bays}. Sudah ada: ${describeOccupants(overlap)}.`,
+        toast.warning('Reservation saved — bay is shared', {
+          description: `${what} · ${bays} · with ${describeOccupants(overlap)}`,
           duration: 8000,
         });
       } else {
-        toast.success('Reservasi tersimpan', { description: `${what} direservasi di ${bays}.` });
+        toast.success('Reservation saved', { description: `${what} · ${bays}` });
       }
 
       if (droppedOps.length > 0) {
         const list = [...new Set(droppedOps.map((row) => row.operation_no))].join(', ');
-        toast.warning('Operasi ganda dilewati', {
-          description: `Operasi ${list} terpilih lebih dari sekali (order ini ada di beberapa project MS Project) — hanya disimpan satu kali.`,
+        toast.warning('Duplicate operation skipped', {
+          description: `Operation ${list} · in more than one project, saved once`,
           duration: 9000,
         });
       }
       setReservation(null);
       reload();
     } catch (err) {
-      toast.error('Reservasi gagal', { description: err.message });
+      toast.error('Reservation failed', { description: err.message });
     } finally {
       setSaving(false);
     }
@@ -282,13 +281,13 @@ export default function SchedulingAreaPage() {
           await cancelBaySchedule(id);
         }
       }
-      toast.success('Reservasi dibatalkan', {
+      toast.success('Reservation cancelled', {
         description: target.order_no || target.purpose || bookingTypeOf(target).label,
       });
       setDetail(null);
       reload();
     } catch (err) {
-      toast.error('Gagal membatalkan', { description: err.message });
+      toast.error('Failed to cancel', { description: err.message });
     } finally {
       setSaving(false);
     }
@@ -325,18 +324,18 @@ export default function SchedulingAreaPage() {
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
             <p className="min-w-0 text-xs text-slate-600">
               {selectedBay
-                ? <>Bay <span className="font-mono font-bold tabular-nums text-slate-900">{selectedBay}</span> dipilih{selectedOrder ? <> · order <span className="font-mono font-bold tabular-nums text-slate-900">{selectedOrder.order_no}</span></> : null}.</>
-                : 'Klik salah satu bay untuk memilihnya, lalu buat reservasi order atau booking non-job.'}
+                ? <>Bay <span className="font-mono font-bold tabular-nums text-slate-900">{selectedBay}</span>{selectedOrder ? <> · order <span className="font-mono font-bold tabular-nums text-slate-900">{selectedOrder.order_no}</span></> : null}</>
+                : 'Select a bay first'}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 disabled={!selectedBay || !selectedOrder}
                 onClick={() => setReservation({ mode: 'ORDER', bayCode: selectedBay, order: selectedOrder })}
-                title={!selectedOrder ? 'Pilih order di panel kiri dulu' : undefined}
+                title={!selectedOrder ? 'Select an order first' : undefined}
                 className={`${ACTION_BTN} bg-[#0077b6] text-white hover:bg-[#023e8a]`}
               >
-                <PackagePlus className="h-4 w-4" /> Reservasi order
+                <PackagePlus className="h-4 w-4" /> Reserve order
               </button>
               {/* Fase 3 — booking di luar job (parkir unit / taruh barang). Tidak butuh
                   order maupun task; hanya jenis booking + tujuan yang wajib. */}
@@ -346,7 +345,7 @@ export default function SchedulingAreaPage() {
                 onClick={() => setReservation({ mode: 'NONJOB', bayCode: selectedBay, order: null })}
                 className={`${ACTION_BTN} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50`}
               >
-                <ParkingSquare className="h-4 w-4" /> Booking non-job
+                <ParkingSquare className="h-4 w-4" /> Non-job booking
               </button>
             </div>
           </div>
@@ -378,14 +377,14 @@ export default function SchedulingAreaPage() {
     <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
       <section className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Tampilan bay">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="View">
             <button
               type="button"
               onClick={() => setViewMode('map')}
               aria-pressed={viewMode === 'map'}
               className={`${TOGGLE_BASE} ${viewMode === 'map' ? 'bg-[#0077b6] text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50'}`}
             >
-              <LayoutGrid className="h-3.5 w-3.5" /> Peta
+              <LayoutGrid className="h-3.5 w-3.5" /> Map
             </button>
             <button
               type="button"
@@ -402,9 +401,9 @@ export default function SchedulingAreaPage() {
           {viewMode === 'map' && (
             <div className="flex items-end gap-1.5">
               <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Peta per tanggal
+                Map date
                 <span className="flex items-center gap-1.5">
-                  <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= range.start} aria-label="Hari sebelumnya" className={STEP_BTN}>
+                  <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= range.start} aria-label="Previous day" className={STEP_BTN}>
                     <ChevronLeft className="h-4 w-4" />
                   </button>
                   <input
@@ -413,10 +412,10 @@ export default function SchedulingAreaPage() {
                     min={range.start}
                     max={range.end}
                     onChange={(event) => setCursorDate(event.target.value)}
-                    aria-label="Tanggal kursor peta"
+                    aria-label="Map date"
                     className={DATE_INPUT}
                   />
-                  <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= range.end} aria-label="Hari berikutnya" className={STEP_BTN}>
+                  <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= range.end} aria-label="Next day" className={STEP_BTN}>
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </span>
@@ -426,7 +425,7 @@ export default function SchedulingAreaPage() {
                 onClick={() => setCursorDate(today)}
                 className="min-h-[32px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
               >
-                Hari ini
+                Today
               </button>
             </div>
           )}
@@ -434,14 +433,14 @@ export default function SchedulingAreaPage() {
           {/* Window RESERVASI — terpisah dari window task MSP milik pool order (D6). */}
           <div className="flex flex-wrap items-end gap-1.5">
             <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Reservasi dari
+              From
               <input type="date" value={range.start} min={bounds.min} max={bounds.max} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
             </label>
             <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Sampai
+              To
               <input type="date" value={range.end} min={range.start} max={maxEnd} onChange={(event) => applyRange(range.start, event.target.value)} className={DATE_INPUT} />
             </label>
-            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Preset rentang reservasi">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Range presets">
               {RANGE_PRESETS.map((days) => (
                 <button
                   key={days}
@@ -449,7 +448,7 @@ export default function SchedulingAreaPage() {
                   onClick={() => applyRange(today, addDaysText(today, days - 1))}
                   className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
                 >
-                  {days} hari
+                  {days} days
                 </button>
               ))}
             </div>
@@ -461,10 +460,10 @@ export default function SchedulingAreaPage() {
             </button>
           </div>
         </div>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs tabular-nums text-slate-500">
           {viewMode === 'timeline'
-            ? `Timeline hanya-baca — klik bar untuk detail reservasi. Rentang maksimum ${MAX_RANGE_DAYS} hari.`
-            : `Peta menampilkan reservasi yang aktif pada ${formatDate(cursorDate)}; data diambil untuk rentang ${range.start} → ${range.end}.`}
+            ? `Read-only · max ${MAX_RANGE_DAYS} days`
+            : 'Map shows reservations active on the selected date'}
         </p>
       </section>
 

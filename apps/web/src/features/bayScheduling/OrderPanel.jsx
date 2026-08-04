@@ -5,7 +5,7 @@ import {
   Package, RefreshCw,
 } from 'lucide-react';
 import { EmptyState, SearchInput, Skeleton } from '../../components';
-import { formatDate, formatHours } from './constants';
+import { formatDate, formatHours, plural } from './constants';
 
 // ── Pool order (Fase 4 sisi UI + keputusan D6) ────────────────────────────────
 // Panel ini SENGAJA memegang state input pencariannya sendiri. Akar keluhan "berat"
@@ -19,33 +19,33 @@ import { formatDate, formatHours } from './constants';
 const SEARCH_PUSH_DELAY = 200;
 
 const TABS = [
-  { key: 'perlu', label: 'Perlu dijadwalkan' },
-  { key: 'belum_jadwal', label: 'Belum ada jadwal' },
-  { key: 'terjadwal', label: 'Sudah terjadwal' },
-  { key: 'selesai', label: 'Selesai' },
+  { key: 'perlu', label: 'To schedule' },
+  { key: 'belum_jadwal', label: 'No MSP task' },
+  { key: 'terjadwal', label: 'Scheduled' },
+  { key: 'selesai', label: 'Completed' },
 ];
 
 // Pesan EmptyState per tab — tanpa ini "tidak ada order" tidak memberi tahu apa pun.
 const EMPTY_BY_TAB = {
-  perlu: 'Tidak ada order yang siap dijadwalkan. Order butuh status REL/LKD dan task MS Project.',
-  belum_jadwal: 'Semua order yang belum selesai sudah punya task MS Project.',
-  terjadwal: 'Belum ada order yang punya reservasi bay aktif.',
-  selesai: 'Belum ada order berstatus selesai (TECO/MCNF).',
+  perlu: 'Needs REL/LKD status and an MS Project task.',
+  belum_jadwal: 'All unfinished orders already have MS Project tasks.',
+  terjadwal: 'No order has an active bay reservation.',
+  selesai: 'No order is finished (TECO/MCNF).',
 };
 
 // Status SAP ditampilkan sebagai KODE + warna (jangan mengandalkan warna saja),
 // dengan penjelasan di title karena kode SAP tidak terbaca orang non-PPC.
 const SAP_STATUS_STYLE = {
-  REL: { cls: 'bg-emerald-100 text-emerald-700 border-emerald-200', hint: 'Released — belum selesai' },
-  LKD: { cls: 'bg-amber-100 text-amber-700 border-amber-200', hint: 'Locked — dihitung belum selesai' },
-  PCNF: { cls: 'bg-sky-100 text-sky-700 border-sky-200', hint: 'Partially confirmed — sedang jalan' },
-  MCNF: { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Fully confirmed — selesai' },
-  TECO: { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Technically complete — selesai' },
+  REL: { cls: 'bg-emerald-100 text-emerald-700 border-emerald-200', hint: 'Released — unfinished' },
+  LKD: { cls: 'bg-amber-100 text-amber-700 border-amber-200', hint: 'Locked — counted as unfinished' },
+  PCNF: { cls: 'bg-sky-100 text-sky-700 border-sky-200', hint: 'Partially confirmed — in progress' },
+  MCNF: { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Fully confirmed — finished' },
+  TECO: { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Technically complete — finished' },
 };
 
 function sapStatusStyle(status) {
   return SAP_STATUS_STYLE[String(status || '').toUpperCase()]
-    || { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Status SAP tidak dikenal' };
+    || { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Unknown SAP status' };
 }
 
 // ── Chip metadata kartu (angka selalu tabular-nums) ───────────────────────────
@@ -98,19 +98,19 @@ const OrderCard = React.memo(function OrderCard({ order, selected, onSelect, onD
         <Chip>{Number(order.operation_count) || 0} ops</Chip>
         <Chip
           title={subcontHours > 0
-            ? `Jam internal saja — ${formatHours(subcontHours)} operasi subcont sudah dikeluarkan`
+            ? `Excludes ${formatHours(subcontHours)} subcontracted`
             : undefined}
         >
           {formatHours(order.total_planhours)}{subcontHours > 0 ? ' internal' : ''}
         </Chip>
         {subcontOps > 0 && (
-          <Chip tone="purple" title="Dikerjakan vendor — jamnya bukan beban workshop internal">
-            {subcontOps} op subcont
+          <Chip tone="purple" title="Vendor work — not an internal workshop load">
+            {plural(subcontOps, 'subcont op')}
           </Chip>
         )}
         {reservations > 0 && (
-          <Chip tone="brand" title="Baris reservasi bay aktif untuk order ini">
-            {reservations} reservasi
+          <Chip tone="brand" title="Active bay reservations">
+            {plural(reservations, 'reservation')}
           </Chip>
         )}
       </span>
@@ -144,12 +144,12 @@ const OrderCard = React.memo(function OrderCard({ order, selected, onSelect, onD
         <p className="mt-2 flex items-start gap-1.5 text-xs font-semibold text-amber-700">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span>
-            Belum punya task MS Project — belum bisa dibooking ke bay.{' '}
+            Not mapped to MS Project.{' '}
             <Link
               to="/sow-scheduling/map"
               className="font-bold text-[#0077b6] underline underline-offset-2 hover:text-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
             >
-              Map operasi SAP dulu
+              Map SAP operations
             </Link>
           </span>
         </p>
@@ -282,15 +282,12 @@ export default function OrderPanel({
             >
               <Inbox className="h-4 w-4" />
             </span>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">Order Pool</p>
-              <h3 className="text-sm font-extrabold text-slate-800">SOW Orders</h3>
-            </div>
+            <h3 className="text-sm font-extrabold text-slate-800">SOW orders</h3>
           </div>
           {loading && orders.length > 0 && (
             <Loader2
               className="h-4 w-4 animate-spin text-[#00b4d8] motion-reduce:animate-none"
-              aria-label="Memuat"
+              aria-label="Loading"
             />
           )}
         </div>
@@ -298,10 +295,10 @@ export default function OrderPanel({
         <SearchInput
           value={searchInput}
           onChange={handleSearchInput}
-          placeholder="Cari order / part..."
+          placeholder="Search order / part..."
         />
 
-        <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Filter status order">
+        <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Order status filter">
           {tabItems.map((item) => {
             const active = item.key === tab;
             return (
@@ -340,14 +337,14 @@ export default function OrderPanel({
           <div className="flex flex-col items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-6 text-center">
             <AlertTriangle className="h-6 w-6 text-red-500" aria-hidden="true" />
             <p className="max-w-sm text-xs font-semibold text-red-600">
-              {typeof error === 'string' ? error : error?.message || 'Gagal memuat order.'}
+              {typeof error === 'string' ? error : error?.message || 'Failed to load orders.'}
             </p>
             <button
               type="button"
               onClick={() => onReload?.()}
               className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
             >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Coba lagi
+              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Retry
             </button>
           </div>
         ) : firstLoad ? (
@@ -357,17 +354,15 @@ export default function OrderPanel({
         ) : orders.length === 0 ? (
           <EmptyState
             icon={Inbox}
-            title={hasSearch ? 'Tidak ada order yang cocok' : 'Tidak ada order'}
-            description={hasSearch
-              ? 'Tidak ada order yang cocok dengan pencarian pada tab ini.'
-              : EMPTY_BY_TAB[tab] || 'Belum ada SOW order untuk dijadwalkan.'}
+            title={hasSearch ? 'No matching orders' : 'No orders'}
+            description={hasSearch ? undefined : (EMPTY_BY_TAB[tab] || 'No SOW orders to schedule.')}
             action={hasSearch ? (
               <button
                 type="button"
                 onClick={clearSearch}
                 className="min-h-[44px] rounded-lg bg-[#0077b6] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
               >
-                Bersihkan pencarian
+                Clear search
               </button>
             ) : undefined}
           />
@@ -391,9 +386,9 @@ export default function OrderPanel({
       {!error && (orders.length > 0 || canLoadMore) && (
         <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-slate-200 px-3 py-2">
           <p className="text-xs text-slate-500">
-            Menampilkan <span className="font-semibold tabular-nums text-slate-700">{shownCount}</span>
-            {' dari '}
-            <span className="font-semibold tabular-nums text-slate-700">{totalCount}</span> order
+            Showing <span className="font-semibold tabular-nums text-slate-700">{shownCount}</span>
+            {' of '}
+            <span className="font-semibold tabular-nums text-slate-700">{totalCount}</span>
           </p>
           {canLoadMore && (
             <button
@@ -405,7 +400,7 @@ export default function OrderPanel({
               {loading
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
-              Muat lagi
+              Load more
             </button>
           )}
         </div>

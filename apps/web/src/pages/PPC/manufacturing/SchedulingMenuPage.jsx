@@ -17,21 +17,21 @@ const FEATURE_TILES = [
     key: 'projects',
     to: '/sow-scheduling/projects',
     label: 'View All Projects',
-    description: 'Telusuri database MS Project beserta task per project.',
+    description: 'MS Project files and tasks',
     icon: FolderKanban,
   },
   {
     key: 'map',
     to: '/sow-scheduling/map',
     label: 'Map SAP Operations',
-    description: 'Petakan order & operasi SOW ke task MS Project.',
+    description: 'Link SOW operations to MS Project tasks',
     icon: DatabaseZap,
   },
   {
     key: 'area',
     to: '/sow-scheduling/area',
     label: 'Scheduling Area',
-    description: 'Reservasi bay dan atur jadwal area produksi.',
+    description: 'Reserve bays and set area schedules',
     icon: CalendarClock,
   },
 ];
@@ -39,7 +39,7 @@ const FEATURE_TILES = [
 const ADMIN_TILE = {
   to: '/ms-project-admin',
   label: 'Super Admin Panel',
-  description: 'Force check-in & kelola lock revisi MS Project.',
+  description: 'Force check-in and revision locks',
   icon: ShieldCheck,
 };
 
@@ -86,7 +86,7 @@ export default function SchedulingMenuPage() {
               <span className="text-sm font-extrabold text-slate-800">{ADMIN_TILE.label}</span>
               <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">
                 <ExternalLink className="h-3 w-3" />
-                Buka halaman lain
+                Other page
               </span>
             </span>
             <span className="mt-0.5 block text-xs text-slate-500">{ADMIN_TILE.description}</span>

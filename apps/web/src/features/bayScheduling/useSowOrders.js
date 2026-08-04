@@ -17,10 +17,10 @@ const PAGE_SIZE = 100;
 const SEARCH_DEBOUNCE_MS = 250;
 
 export const ORDER_TABS = [
-  { id: 'perlu', label: 'Perlu dijadwalkan' },
-  { id: 'belum_jadwal', label: 'Belum ada jadwal MSP' },
-  { id: 'terjadwal', label: 'Sudah terjadwal' },
-  { id: 'selesai', label: 'Selesai / TECO' },
+  { id: 'perlu', label: 'To schedule' },
+  { id: 'belum_jadwal', label: 'No MSP task' },
+  { id: 'terjadwal', label: 'Scheduled' },
+  { id: 'selesai', label: 'Completed' },
 ];
 
 export const DEFAULT_ORDER_TAB = 'perlu';
@@ -110,7 +110,7 @@ export default function useSowOrders() {
         })
         .catch((err) => {
           if (controller.signal.aborted || err?.name === 'AbortError') return;
-          setError(err?.message || 'Gagal memuat order.');
+          setError(err?.message || 'Failed to load orders.');
         })
         .finally(() => {
           // Hanya request TERBARU yang boleh mematikan flag; request lama yang
@@ -156,7 +156,7 @@ export default function useSowOrders() {
       setServerTotal(page.total);
     } catch (err) {
       if (controller.signal.aborted || err?.name === 'AbortError') return;
-      setError(err?.message || 'Gagal memuat order berikutnya.');
+      setError(err?.message || 'Failed to load more orders.');
     } finally {
       if (moreAbortRef.current === controller) {
         moreAbortRef.current = null;

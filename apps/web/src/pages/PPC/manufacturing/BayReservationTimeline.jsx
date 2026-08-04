@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { CalendarRange, Car, HelpCircle, Tag, Users, Warehouse, Wrench } from 'lucide-react';
 import { EmptyState } from '../../../components';
 import { AREA_OPTIONS } from '../../../config/manufacturingAreas';
-import { bookingTypeOf, dedupeByGroup } from '../../../features/bayScheduling/constants';
+import { bookingTypeOf, dedupeByGroup, plural } from '../../../features/bayScheduling/constants';
 
 /* ──────────────────────────────────────────────────────────────────────────
    BayReservationTimeline — Gantt hanya-baca untuk reservasi bay manufaktur.
@@ -40,8 +40,8 @@ const BAR_H = 24;      // px — tinggi bar reservasi
 const BAR_GAP = 4;     // px — jarak vertikal antar lane bertumpuk
 const ROW_PAD_Y = 6;   // px — padding vertikal di dalam baris bay
 
-const WEEKDAY = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
-const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Warna = MAKNA status saja. Gradient menggelapkan tepi kiri (tempat label order)
 // supaya teks putih lolos WCAG AA di semua status.
@@ -101,17 +101,17 @@ function barTitle(entry, style) {
   const type = bookingTypeOf(entry);
   const lines = [
     type.isJob
-      ? (entry.order_no || '(tanpa order)')
+      ? (entry.order_no || '(no order)')
       : `${type.label}${entry.purpose ? ` — ${entry.purpose}` : ''}`,
-    isUnknownOrder(entry) ? 'Order tidak dikenal di data SAP/SOW' : null,
+    isUnknownOrder(entry) ? 'Unknown order' : null,
     entry.part_name ? `Part: ${entry.part_name}` : null,
     entry.customer ? `Customer: ${entry.customer}` : null,
-    entry.task_count > 0 ? `${entry.task_count} task` : null,
+    entry.task_count > 0 ? `${entry.task_count} task${entry.task_count === 1 ? '' : 's'}` : null,
     `${entry.start_date || '?'} → ${entry.end_date || '?'}`,
-    entry.people_total != null ? `${entry.people_total} orang` : null,
+    entry.people_total != null ? `Headcount: ${entry.people_total}` : null,
     `Status: ${style.label}`,
     entry.area_name ? `Area: ${entry.area_name}` : null,
-    entry.created_by ? `Oleh: ${entry.created_by}` : null,
+    entry.created_by ? `By: ${entry.created_by}` : null,
   ];
   return lines.filter(Boolean).join('\n');
 }
@@ -131,7 +131,7 @@ function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
         {segs.length > 0 && (
           <span
             className="ml-auto shrink-0 rounded-full bg-slate-100 px-1.5 text-[11px] font-bold tabular-nums text-slate-500"
-            title={`${segs.length} reservasi`}
+            title={`${segs.length} reservation${segs.length === 1 ? '' : 's'}`}
           >
             {segs.length}
           </span>
@@ -187,7 +187,7 @@ function BayRow({ bay, segs, lanes, numDays, todayNum, originNum, onSelect }) {
               type="button"
               onClick={() => onSelect && onSelect(entry)}
               title={barTitle(entry, style)}
-              aria-label={`${label}${unknown ? ' (order tidak dikenal)' : ''} di ${bay}, ${entry.start_date} sampai ${entry.end_date}, status ${style.label}`}
+              aria-label={`${label}${unknown ? ' (unknown order)' : ''} in ${bay}, ${entry.start_date} to ${entry.end_date}, ${style.label}`}
               className="group absolute flex items-center gap-1 overflow-hidden rounded-md px-2 text-left shadow-sm ring-1 ring-black/10 transition hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:ring-offset-1 focus-visible:ring-offset-white motion-reduce:transition-none motion-reduce:hover:brightness-100"
               style={{
                 left, width, top, height: BAR_H,
@@ -294,8 +294,8 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
           icon={CalendarRange}
-          title="Rentang tanggal tidak valid"
-          description="rangeStart dan rangeEnd harus tanggal 'YYYY-MM-DD' dengan rangeEnd ≥ rangeStart."
+          title="Invalid date range"
+          description="End date must be on or after start date."
         />
       </div>
     );
@@ -305,8 +305,8 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
       <div className="flex h-full min-h-0 items-center justify-center">
         <EmptyState
           icon={CalendarRange}
-          title="Tidak ada reservasi bay"
-          description={`Tidak ada reservasi pada rentang ${rangeStart} → ${rangeEnd}.`}
+          title="No reservations"
+          description={`${rangeStart} → ${rangeEnd}`}
         />
       </div>
     );
@@ -352,9 +352,9 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex items-center gap-2 text-slate-700">
           <CalendarRange className="h-4 w-4 text-[#0077b6]" strokeWidth={2} aria-hidden="true" />
-          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Reservasi Bay</span>
+          <span className="text-xs font-bold uppercase tracking-wide text-slate-500">Bay reservations</span>
           <span className="font-mono text-xs font-semibold tabular-nums text-slate-600">{rangeStart} → {rangeEnd}</span>
-          <span className="text-xs font-semibold tabular-nums text-slate-400">· {numDays} hari · {visibleCount} reservasi</span>
+          <span className="text-xs font-semibold tabular-nums text-slate-400">· {numDays} days · {plural(visibleCount, 'reservation')}</span>
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <LegendItem swatch={STATUS_STYLE.RESERVED.bg} text="Reserved" />
@@ -362,10 +362,10 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
           <LegendItem swatch={STATUS_STYLE.DONE.bg} text="Done" />
           <LegendItem swatch={STATUS_STYLE.CANCELLED.bg} strike text="Cancelled" />
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-            <Car className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" /> Booking non-job
+            <Car className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" /> Non-job booking
           </span>
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-            <HelpCircle className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" /> Order tidak dikenal
+            <HelpCircle className="h-3.5 w-3.5" strokeWidth={2.5} aria-hidden="true" /> Unknown order
           </span>
         </div>
       </div>
@@ -419,7 +419,7 @@ export default function BayReservationTimeline({ schedules, rangeStart, rangeEnd
 
           {/* area → bay */}
           {AREA_OPTIONS.map((area) => renderGroup(area.areaCode, area.areaName, area.bays))}
-          {extraBays.length > 0 && renderGroup('__extra', 'Bay di luar topologi', extraBays)}
+          {extraBays.length > 0 && renderGroup('__extra', 'Unmapped bays', extraBays)}
         </div>
       </div>
     </div>

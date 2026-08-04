@@ -107,13 +107,13 @@ const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, pe
             <CalendarRange className="h-3 w-3 shrink-0" />
             {hasSchedule
               ? `${formatDate(planStart)} – ${formatDate(planFinish)}`
-              : 'Belum ada jadwal MS Project'}
+              : 'No plan dates'}
           </span>
         </span>
       </label>
       <div className="flex shrink-0 flex-col items-end gap-0.5">
         <label htmlFor={uid} className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-          <Users className="h-3 w-3" /> Orang
+          <Users className="h-3 w-3" /> Headcount
         </label>
         <input
           id={uid}
@@ -141,7 +141,7 @@ const OccupantRow = memo(function OccupantRow({ occupant }) {
   const type = bookingTypeOf(occupant);
   const isOrder = type.isJob;
   const title = isOrder
-    ? (occupant.order_no || 'Order tidak dikenal')
+    ? (occupant.order_no || 'Unknown order')
     : (occupant.purpose || type.label);
   const bays = Array.isArray(occupant.bay_codes) ? occupant.bay_codes : [];
 
@@ -300,7 +300,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
       })
       .catch((error) => {
         if (!active) return;
-        setTasksError(error.message || 'Gagal memuat task order');
+        setTasksError(error.message || 'Failed to load tasks');
         setOrderTasks([]);
       })
       .finally(() => {
@@ -365,7 +365,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
         .catch((error) => {
           if (!active) return;
           setOccupants(EMPTY_OCCUPANTS);
-          setOccupantsError(error.message || 'Gagal memuat penghuni bay.');
+          setOccupantsError(error.message || 'Failed to load bay reservations.');
         })
         .finally(() => {
           if (active) setLoadingOccupants(false);
@@ -477,8 +477,8 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
           // TETAP tersimpan — jumlah orang yang diketik scheduler hilang tanpa jejak.
           // Sekarang submit DIHENTIKAN; user memperbaiki atau mengembalikan angkanya.
           setSubmitError(
-            `Jumlah orang gagal disimpan: ${error?.message || 'permintaan ditolak server'}. `
-            + 'Reservasi TIDAK dibuat — kembalikan angkanya ke semula atau coba lagi.',
+            `Headcount not saved: ${error?.message || 'request rejected by server'}. `
+            + 'Reservation was not created — retry or restore the previous values.',
           );
           setWritingBack(false);
           return;
@@ -536,7 +536,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">
-              {isOrderMode ? 'Reservasi Bay — Job' : 'Booking Bay — Non-Job'}
+              {isOrderMode ? 'Bay reservation' : 'Non-job booking'}
             </p>
             <h3
               id={titleId}
@@ -546,13 +546,13 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             </h3>
             <p className="mt-0.5 flex items-center gap-1 truncate text-xs font-semibold text-slate-500">
               <MapPin className="h-3 w-3 shrink-0" />
-              {area.areaName} · mulai dari <span className="font-mono tabular-nums">{bayCode}</span>
+              {area.areaName} · from <span className="font-mono tabular-nums">{bayCode}</span>
             </p>
           </div>
           <button
             type="button"
             onClick={stableClose}
-            aria-label="Tutup"
+            aria-label="Close"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
           >
             <X className="h-4 w-4" />
@@ -565,7 +565,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
           {!isOrderMode && (
             <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <label className="grid gap-1 text-xs font-bold text-slate-700">
-                Jenis booking
+                Booking type
                 <select
                   value={bookingType}
                   onChange={(event) => setBookingType(event.target.value)}
@@ -578,21 +578,19 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
               </label>
               <div className="grid gap-1">
                 <label htmlFor={purposeId} className="text-xs font-bold text-slate-700">
-                  Tujuan <span className="text-red-600">*</span>
+                  Purpose <span className="text-red-600">*</span>
                 </label>
                 <input
                   id={purposeId}
                   type="text"
                   value={purpose}
                   onChange={(event) => setPurpose(event.target.value)}
-                  placeholder="Contoh: parkir unit menunggu vendor"
+                  placeholder="e.g. unit parked waiting for vendor"
                   aria-invalid={purposeMissing || undefined}
                   className={`${FIELD_CLASS} ${purposeMissing ? 'border-red-400 ring-2 ring-red-200' : ''}`}
                 />
                 {purposeMissing && (
-                  <p className="text-xs font-semibold text-red-600">
-                    Tujuan wajib diisi untuk booking non-job.
-                  </p>
+                  <p className="text-xs font-semibold text-red-600">Purpose is required.</p>
                 )}
               </div>
             </div>
@@ -604,10 +602,10 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
               <div className="flex items-center justify-between gap-2">
                 <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
                   <ListChecks className="h-4 w-4 text-[#0077b6]" />
-                  Pilih Operasi / Task
+                  Select tasks
                   {selectedTasks.length > 0 && (
                     <span className="rounded-full bg-[#caf0f8] px-2 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]">
-                      {selectedTasks.length} dipilih
+                      {selectedTasks.length} selected
                     </span>
                   )}
                 </span>
@@ -617,7 +615,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                     onClick={toggleAll}
                     className="rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                   >
-                    {allChecked ? 'Kosongkan' : 'Pilih semua'}
+                    {allChecked ? 'Clear' : 'Select all'}
                   </button>
                 )}
               </div>
@@ -638,7 +636,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                       onClick={retryTasks}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
                     >
-                      <RefreshCw className="h-3.5 w-3.5" /> Coba lagi
+                      <RefreshCw className="h-3.5 w-3.5" /> Retry
                     </button>
                   </div>
                 ) : orderTasks.length === 0 ? (
@@ -646,12 +644,12 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                     <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
                       <ListChecks className="h-5 w-5" />
                     </span>
-                    <p className="text-xs font-semibold text-slate-500">Order ini belum di-map ke MS Project.</p>
+                    <p className="text-xs font-semibold text-slate-500">Order is not mapped to MS Project.</p>
                     <Link
                       to="/sow-scheduling/map"
                       className="inline-flex items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-1.5 text-xs font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
                     >
-                      Map operasi SAP dulu <ExternalLink className="h-3.5 w-3.5" />
+                      Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
                     </Link>
                   </div>
                 ) : (
@@ -675,11 +673,11 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
               </div>
 
               {!loadingTasks && !tasksError && orderTasks.length > 0 && tasksMissing && (
-                <p className="text-xs font-semibold text-amber-600">Pilih minimal satu task untuk direservasi.</p>
+                <p className="text-xs font-semibold text-amber-600">Select at least one task.</p>
               )}
               {peopleInvalid && (
                 <p className="text-xs font-semibold text-red-600">
-                  Jumlah orang harus bilangan bulat positif atau dikosongkan.
+                  Headcount must be a positive whole number, or left empty.
                 </p>
               )}
             </div>
@@ -690,17 +688,17 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
               <p className="flex items-start gap-1.5 text-xs font-bold text-amber-700">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Job belum ada jadwal di MS Project
+                Job not scheduled in MS Project
               </p>
               <p className="mt-1 text-xs text-amber-700">
-                Task yang dipilih tidak punya <span className="font-semibold">plan start/finish</span>, jadi tanggal
-                booking tidak bisa di-prefill. Isi tanggal manual di bawah, atau lengkapi jadwalnya dulu.
+                Selected tasks have no <span className="font-semibold">plan start/finish</span>, so the dates below
+                are not prefilled.
               </p>
               <Link
                 to="/sow-scheduling/map"
                 className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
               >
-                Buka Map operasi SAP <ExternalLink className="h-3.5 w-3.5" />
+                Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
               </Link>
             </div>
           )}
@@ -708,19 +706,19 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
           {/* --- Bay --- */}
           <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <label className="grid gap-1 text-xs font-bold text-slate-700">
-              Jumlah bay
+              Number of bays
               <select
                 value={effectiveBayCount}
                 onChange={(event) => setBayCount(Number(event.target.value))}
                 className={`${FIELD_CLASS} tabular-nums`}
               >
                 {Array.from({ length: maxBayCount }, (_, index) => index + 1).map((count) => (
-                  <option key={count} value={count}>{count} bay</option>
+                  <option key={count} value={count}>{count === 1 ? '1 bay' : `${count} bays`}</option>
                 ))}
               </select>
             </label>
             <div className="rounded-xl border border-[#90e0ef] bg-[#caf0f8] px-3 py-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">Bay terpilih</p>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">Selected bays</p>
               <p className="mt-1 font-mono text-sm font-extrabold tabular-nums text-slate-800">
                 {selectedBays.join(', ') || '-'}
               </p>
@@ -731,7 +729,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
           <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                <CalendarRange className="h-4 w-4 text-[#0077b6]" /> Rentang booking
+                <CalendarRange className="h-4 w-4 text-[#0077b6]" /> Dates
               </span>
               {isOrderMode && prefillStart && prefillEnd && datesDirty && (
                 <button
@@ -739,20 +737,19 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                   onClick={resetDatesToPlan}
                   className="inline-flex items-center gap-1 rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                 >
-                  <Undo2 className="h-3.5 w-3.5" /> Pakai jadwal MSP
+                  <Undo2 className="h-3.5 w-3.5" /> Use MS Project dates
                 </button>
               )}
             </div>
             {prefillActive && (
               <p className="flex items-start gap-1.5 text-xs text-slate-500">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0077b6]" />
-                Diambil otomatis dari jadwal MS Project task terpilih. Mengubah tanggal di bawah
-                akan mematikan prefill ini.
+                Prefilled from the MS Project schedule.
               </p>
             )}
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-xs font-bold text-slate-700">
-                Mulai
+                Start
                 <input
                   type="date"
                   value={startDate}
@@ -762,7 +759,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                 />
               </label>
               <label className="grid gap-1 text-xs font-bold text-slate-700">
-                Selesai
+                End
                 <input
                   type="date"
                   value={endDate}
@@ -774,11 +771,11 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             </div>
             {rangeInvalid && (
               <p className="text-xs font-semibold text-red-600">
-                Tanggal selesai tidak boleh lebih awal dari tanggal mulai.
+                End date cannot be earlier than start date.
               </p>
             )}
             {datesMissing && (
-              <p className="text-xs font-semibold text-red-600">Tanggal mulai dan selesai wajib diisi.</p>
+              <p className="text-xs font-semibold text-red-600">Start and end date are required.</p>
             )}
           </div>
 
@@ -787,18 +784,15 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             <div className="flex items-start gap-2 border-b border-slate-200 px-4 py-3">
               <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#0077b6]" />
               <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-700">Sudah memakai bay ini</p>
+                <p className="text-xs font-bold text-slate-700">Currently using this bay</p>
                 <p className="mt-0.5 text-xs text-slate-500">
-                  Bay boleh dipakai bersama — daftar ini hanya pemberitahuan, tidak menghalangi
-                  penyimpanan.
+                  Bay can be shared — this does not block saving.
                 </p>
               </div>
             </div>
 
             {!canQueryOccupants ? (
-              <p className="px-4 py-4 text-xs text-slate-500">
-                Lengkapi bay dan rentang tanggal yang valid untuk melihat penghuni bay.
-              </p>
+              <p className="px-4 py-4 text-xs text-slate-500">Set valid dates to see this.</p>
             ) : loadingOccupants ? (
               <div className="space-y-2 p-3">
                 {[0, 1].map((row) => <Skeleton key={row} className="h-10 rounded-lg" />)}
@@ -811,13 +805,11 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                   onClick={retryOccupants}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" /> Coba lagi
+                  <RefreshCw className="h-3.5 w-3.5" /> Retry
                 </button>
               </div>
             ) : occupants.rows.length === 0 ? (
-              <p className="px-4 py-4 text-xs text-slate-500">
-                Belum ada reservasi lain di bay &amp; rentang tanggal ini.
-              </p>
+              <p className="px-4 py-4 text-xs text-slate-500">No other reservations in this range.</p>
             ) : (
               <>
                 <ul className="max-h-48 overflow-y-auto">
@@ -830,8 +822,8 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                 </ul>
                 <p className="border-t border-slate-100 px-4 py-2 text-xs font-semibold tabular-nums text-slate-500">
                   {occupants.truncated
-                    ? `Menampilkan ${occupants.rows.length} dari ${occupants.total} penghuni.`
-                    : `${occupants.total} penghuni.`}
+                    ? `Showing ${occupants.rows.length} of ${occupants.total} reservations`
+                    : `${occupants.total} ${occupants.total === 1 ? 'reservation' : 'reservations'}`}
                 </p>
               </>
             )}
@@ -839,12 +831,11 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
 
           {/* --- Catatan --- */}
           <label className="grid gap-1 text-xs font-bold text-slate-700">
-            Catatan (opsional)
+            Notes (optional)
             <textarea
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
               rows={3}
-              placeholder="Catatan tambahan..."
               className={FIELD_CLASS}
             />
           </label>
@@ -865,7 +856,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             onClick={stableClose}
             className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
           >
-            Batal
+            Cancel
           </button>
           <button
             type="button"
@@ -876,7 +867,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             {busy
               ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
               : <Save className="h-4 w-4" />}
-            {writingBack ? 'Menyimpan jumlah orang...' : 'Simpan reservasi'}
+            {writingBack ? 'Saving headcount...' : 'Save reservation'}
           </button>
         </div>
       </div>

@@ -68,7 +68,7 @@ export default function useBaySchedules({ rangeStart, rangeEnd } = {}) {
         setResult((prev) => ({
           key: requestKey,
           rows: prev.rows,
-          error: err?.message || 'Gagal memuat jadwal bay.',
+          error: err?.message || 'Failed to load bay schedules.',
         }));
       });
 

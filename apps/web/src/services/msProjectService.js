@@ -34,7 +34,14 @@ async function request(path, options = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.message || payload.error || `Request failed: ${response.status}`);
+    // `code` dan status HTTP ikut dibawa. Tanpa ini pemanggil terpaksa mendeteksi jenis error
+    // dengan mencocokkan potongan TEKS pesan — dan itu langsung mati begitu pesannya
+    // diterjemahkan (persis yang terjadi saat UI dikonversi ke Bahasa Inggris).
+    const error = new Error(payload.message || payload.error || `Request failed: ${response.status}`);
+    error.code = payload.code || null;
+    error.status = response.status;
+    error.details = Array.isArray(payload.details) ? payload.details : [];
+    throw error;
   }
 
   return payload;

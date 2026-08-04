@@ -1353,7 +1353,7 @@ exports.createSchedule = async (req, res) => {
     // schedules stay reschedulable/deletable on purpose (no guard in rescheduleSchedule).
     if (await isSubcontMarked(client, fields.production_order, fields.operation_no)) {
       const error = new Error(
-        "Operasi ini ditandai dikerjakan subcont — tidak bisa dijadwalkan ke kapasitas mesin internal"
+        "Operation is marked subcontracted — cannot be scheduled on internal machine capacity"
       );
       error.status = 409;
       throw error;
