@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronRight, FolderSearch,
-  GitBranch, GripVertical, ListTree, Loader2, PackageOpen, RotateCw, Target, X,
+  AlertTriangle, ChevronRight, FolderSearch, GitBranch, GripVertical, ListTree,
+  Loader2, PackageOpen, RotateCw, Target, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { EmptyState, SearchInput, Skeleton, SkeletonRow } from '../../../components';
@@ -11,7 +11,6 @@ import {
   fetchSowOrderOperations,
   fetchSowOrders,
   mapSowOperationToTask,
-  mapSowOrderToProjectTasks,
 } from '../../../services/msProjectService';
 
 function formatDate(value) {
@@ -97,23 +96,6 @@ function PanelError({ message, onRetry }) {
   );
 }
 
-/** Satu langkah pada stepper alur klik terpandu. */
-function Step({ n, label, value, done, mono }) {
-  return (
-    <li className="flex items-center gap-2">
-      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold tabular-nums ${done ? 'bg-[#0077b6] text-white' : 'bg-slate-100 text-slate-500'}`}>
-        {done ? <Check className="h-3.5 w-3.5" /> : n}
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</span>
-        <span className={`block max-w-[200px] truncate text-xs font-semibold ${done ? 'text-slate-800' : 'text-slate-400'} ${mono ? 'font-mono tabular-nums' : ''}`}>
-          {value || 'Not selected'}
-        </span>
-      </span>
-    </li>
-  );
-}
-
 function StatusBadge({ project }) {
   return (
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase ${projectStatusClass(project)}`}>
@@ -168,7 +150,7 @@ function TaskRow({ task }) {
  *   • chevron (kiri) = expand/collapse saja.
  *   • klik nama / tombol Target = jadikan target parent (tanpa efek expand).
  */
-function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggle, onSetTarget, onDropOperation, depth = 0 }) {
+function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggle, onInspect, onDropOperation, depth = 0 }) {
   const children = childrenByParent.get(task.task_id) || [];
   const expanded = expandedIds.has(task.task_id);
   const selected = selectedId === task.task_id;
@@ -216,7 +198,7 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
 
         <button
           type="button"
-          onClick={() => onSetTarget(task)}
+          onClick={() => onInspect(task)}
           className="flex min-w-0 flex-1 items-center gap-2 rounded py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]"
         >
           <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs font-bold tabular-nums text-slate-600">
@@ -231,16 +213,16 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
         {selected ? (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#0077b6] px-2 py-0.5 text-[11px] font-bold uppercase text-white">
             <Target className="h-3 w-3" />
-            Target
+            Selected
           </span>
         ) : (
           <button
             type="button"
-            onClick={() => onSetTarget(task)}
+            onClick={() => onInspect(task)}
             className="hidden shrink-0 items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-500 transition hover:border-[#90e0ef] hover:text-[#0077b6] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] group-hover:inline-flex"
           >
             <Target className="h-3 w-3" />
-            Target
+            Select
           </button>
         )}
       </div>
@@ -252,7 +234,7 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
           expandedIds={expandedIds}
           selectedId={selectedId}
           onToggle={onToggle}
-          onSetTarget={onSetTarget}
+          onInspect={onInspect}
           onDropOperation={onDropOperation}
           depth={depth + 1}
         />
@@ -261,18 +243,18 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, selectedId, onToggl
   );
 }
 
-function SowOrderCard({ order, selected, onClick, onDragStart }) {
+// Kartu order TIDAK lagi bisa ditarik: yang ditarik ke pohon adalah OPERASI, satu per satu.
+// Order di sini hanya dipilih untuk membuka daftar operasinya.
+function SowOrderCard({ order, selected, onClick }) {
   return (
     <button
       type="button"
-      draggable
-      onDragStart={(event) => onDragStart(event, order)}
       onClick={() => onClick(order)}
-      className={`group flex w-full cursor-grab items-start gap-2 rounded-xl border bg-white p-3 text-left shadow-sm transition-all hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:cursor-grabbing ${
+      className={`group flex w-full items-start gap-2 rounded-xl border bg-white p-3 text-left shadow-sm transition-all hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
         selected ? 'border-[#0077b6] ring-2 ring-[#90e0ef]' : 'border-slate-200'
       }`}
     >
-      <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-slate-300 transition-colors group-hover:text-slate-400" />
+      <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-slate-300 transition-colors group-hover:text-slate-400" />
       <span className="min-w-0 flex-1">
         <span className="flex items-center justify-between gap-2">
           <span className="truncate font-mono text-sm font-extrabold tabular-nums text-slate-800">{order.order_no}</span>
@@ -294,12 +276,12 @@ function SowOrderCard({ order, selected, onClick, onDragStart }) {
 // Satu operasi = satu kartu yang bisa ditarik. Sebelumnya mapping borongan memaksa SELURUH
 // operasi satu order masuk ke satu outline level; planner sering menyusun WBS dengan parent
 // berbeda per kelompok operasi, jadi sekarang tiap operasi ditaruh sendiri-sendiri.
-function OperationCard({ operation, mappedTask, onDragStart }) {
+function OperationCard({ operation, mappedTask, onDragStart, disabled }) {
   const mapped = Boolean(mappedTask);
   return (
     <div
-      draggable
-      onDragStart={(event) => onDragStart(event, operation)}
+      draggable={!disabled}
+      onDragStart={disabled ? undefined : (event) => onDragStart(event, operation)}
       className={`cursor-grab rounded-lg border bg-white px-3 py-2 shadow-sm transition-colors active:cursor-grabbing ${
         mapped ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200 hover:border-[#90e0ef] hover:bg-slate-50'
       }`}
@@ -327,7 +309,7 @@ function OperationCard({ operation, mappedTask, onDragStart }) {
   );
 }
 
-function OperationList({ operations, mappedByOperation, onDragStart }) {
+function OperationList({ operations, mappedByOperation, onDragStart, disabled }) {
   return (
     <div className="space-y-1.5">
       {sortByOperationNo(operations).map((operation) => (
@@ -336,6 +318,7 @@ function OperationList({ operations, mappedByOperation, onDragStart }) {
           operation={operation}
           mappedTask={mappedByOperation.get(String(operation.operation_no))}
           onDragStart={onDragStart}
+          disabled={disabled}
         />
       ))}
     </div>
@@ -366,23 +349,6 @@ function SelectedProjectBox({ project, onClear }) {
 /**
  * Ringkasan hasil mapping -> satu baris fakta. Hanya angka yang > 0 yang ikut,
  * supaya baris tidak penuh "0 ...".
- */
-function mappingSummaryText(summary = {}) {
-  const moved = Number(summary.repointed_reservation_count) || 0;
-  return [
-    Number(summary.mapped_count) > 0 && `${summary.mapped_count} updated`,
-    Number(summary.created_count) > 0 && `${summary.created_count} created`,
-    Number(summary.reused_count) > 0 && `${summary.reused_count} reused`,
-    Number(summary.taken_over_task_count) > 0 && `${summary.taken_over_task_count} taken over`,
-    moved > 0 && `${moved} reservation${moved > 1 ? 's' : ''} moved`,
-  ].filter(Boolean).join(' · ');
-}
-
-/**
- * Backend menolak order yang sudah dipetakan di project lain (409 ORDER_MAPPED_ELSEWHERE)
- * dan takeover yang akan menggantungkan reservasi (409 TAKEOVER_WOULD_ORPHAN_RESERVATION),
- * tapi services/msProjectService.js hanya melempar Error(message) — code-nya hilang dan
- * pesannya masih Bahasa Indonesia. Jadi dua kasus itu dikenali dari isi pesannya.
  */
 // Dipilih berdasarkan `error.code` dari backend, BUKAN potongan teks pesan. Versi pertama
 // mencocokkan kalimat Indonesia dan langsung jadi kode mati begitu pesan backend diterjemahkan.
@@ -428,7 +394,7 @@ export default function MapSapOperationPage() {
   const [projectLoading, setProjectLoading] = useState(false);
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskError, setTaskError] = useState(null);
-  const [targetParentTask, setTargetParentTask] = useState(null);
+  const [inspectedTask, setInspectedTask] = useState(null);
   const [expandedTaskIds, setExpandedTaskIds] = useState(() => new Set());
   const [sowOrders, setSowOrders] = useState([]);
   const [sowSearch, setSowSearch] = useState('');
@@ -439,7 +405,6 @@ export default function MapSapOperationPage() {
   const [operationLoading, setOperationLoading] = useState(false);
   const [operationError, setOperationError] = useState(null);
   const [mapping, setMapping] = useState(false);
-  const [dropActive, setDropActive] = useState(false);
   // Panel kiri dua tingkat: 'orders' (pilih order) -> 'operations' (tarik satu per satu).
   const [sourceView, setSourceView] = useState('orders');
 
@@ -482,7 +447,7 @@ export default function MapSapOperationPage() {
 
   const loadProjectTasks = useCallback(async (project) => {
     setSelectedProject(project);
-    setTargetParentTask(null);
+    setInspectedTask(null);
     setExpandedTaskIds(new Set());
     setTaskLoading(true);
     setTaskError(null);
@@ -498,7 +463,7 @@ export default function MapSapOperationPage() {
   const clearProject = useCallback(() => {
     setSelectedProject(null);
     setProjectTasks([]);
-    setTargetParentTask(null);
+    setInspectedTask(null);
     setTaskError(null);
     setExpandedTaskIds(new Set());
   }, []);
@@ -516,48 +481,6 @@ export default function MapSapOperationPage() {
       setOperationLoading(false);
     }
   }, []);
-
-  const applyMapping = useCallback(async (order = selectedOrder) => {
-    if (!order) {
-      toast.error('Choose an SOW order first');
-      return;
-    }
-    if (!selectedProject) {
-      toast.error('Choose a target project first');
-      return;
-    }
-    if (!targetParentTask) {
-      toast.error('Choose a target parent task first');
-      return;
-    }
-
-    setMapping(true);
-    try {
-      const result = await mapSowOrderToProjectTasks(selectedProject.project_id, {
-        order_no: order.order_no,
-        target_parent_task_id: targetParentTask.task_id,
-        actor: 'web-manufacturing',
-      });
-      toast.success('Operations mapped', {
-        description: mappingSummaryText(result.summary) || 'Nothing changed',
-      });
-      const refreshedTasks = await fetchMsProjectTasks(selectedProject.project_id);
-      setProjectTasks(refreshedTasks);
-      setExpandedTaskIds((prev) => new Set([...prev, targetParentTask.task_id]));
-      setTargetParentTask(refreshedTasks.find((task) => task.task_id === targetParentTask.task_id) || targetParentTask);
-    } catch (error) {
-      const { title, description } = mappingErrorText(error);
-      toast.error(title, { description });
-    } finally {
-      setMapping(false);
-    }
-  }, [selectedOrder, selectedProject, targetParentTask]);
-
-  const handleDragStart = (event, order) => {
-    event.dataTransfer.setData('text/plain', order.order_no);
-    event.dataTransfer.effectAllowed = 'copy';
-    loadOperations(order);
-  };
 
   // Satu operasi dibawa sebagai JSON; node tujuan yang menentukan assign vs buat-anak.
   const handleOperationDragStart = useCallback((event, operation) => {
@@ -617,25 +540,6 @@ export default function MapSapOperationPage() {
     mapOneOperation(dragged, task, hasChildren, false);
   }, [selectedProject, mapOneOperation]);
 
-  const handleDragOver = (event) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-    if (!dropActive) setDropActive(true);
-  };
-
-  const handleDragLeave = (event) => {
-    if (event.currentTarget.contains(event.relatedTarget)) return;
-    setDropActive(false);
-  };
-
-  const handleDrop = (event) => {
-    event.preventDefault();
-    setDropActive(false);
-    const orderNo = event.dataTransfer.getData('text/plain');
-    const order = sowOrders.find((row) => row.order_no === orderNo) || selectedOrder;
-    applyMapping(order);
-  };
-
   const toggleTaskExpand = useCallback((taskId) => {
     setExpandedTaskIds((prev) => {
       const next = new Set(prev);
@@ -645,13 +549,13 @@ export default function MapSapOperationPage() {
     });
   }, []);
 
-  const setTargetTask = useCallback((task) => {
-    setTargetParentTask(task);
+  const inspectTask = useCallback((task) => {
+    setInspectedTask(task);
   }, []);
 
-  const targetTasks = useMemo(
-    () => targetParentTask ? sortByOperationNo(taskTree.byParent.get(targetParentTask.task_id) || []) : [],
-    [targetParentTask, taskTree]
+  const inspectedChildren = useMemo(
+    () => inspectedTask ? sortByOperationNo(taskTree.byParent.get(inspectedTask.task_id) || []) : [],
+    [inspectedTask, taskTree]
   );
 
   // Operasi order terpilih yang sudah punya task di project ini -> ditandai di kartunya
@@ -668,46 +572,8 @@ export default function MapSapOperationPage() {
     return map;
   }, [projectTasks, selectedOrder]);
 
-  const ready = Boolean(selectedProject && selectedOrder && targetParentTask);
-  const steps = [
-    { n: 1, label: 'Project', value: selectedProject?.project_name, done: Boolean(selectedProject) },
-    {
-      n: 2,
-      label: 'Parent task',
-      value: targetParentTask ? `${targetParentTask.outline_number || '-'} ${targetParentTask.task_name || ''}`.trim() : null,
-      done: Boolean(targetParentTask),
-    },
-    { n: 3, label: 'Order', value: selectedOrder?.order_no, done: Boolean(selectedOrder), mono: true },
-  ];
-
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
-      {/* Alur klik terpandu + aksi utama (juga bisa via drag-and-drop ke pohon) */}
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:flex-row xl:items-center xl:justify-between">
-        <ol className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          {steps.map((step, index) => (
-            <React.Fragment key={step.n}>
-              {index > 0 && <ArrowRight className="h-4 w-4 shrink-0 text-slate-300" aria-hidden="true" />}
-              <Step {...step} />
-            </React.Fragment>
-          ))}
-        </ol>
-        <div className="flex items-center gap-3">
-          {!ready && (
-            <span className="hidden text-xs text-slate-400 xl:block">Complete the 3 steps, or drag an order onto the tree</span>
-          )}
-          <button
-            type="button"
-            onClick={() => applyMapping()}
-            disabled={mapping || !ready}
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none motion-reduce:transform-none"
-          >
-            {mapping ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-            Map Operations
-          </button>
-        </div>
-      </div>
-
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)]">
         {/* ── SUMBER: SOW Orders ─────────────────────────────── */}
         <section className="flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
@@ -748,7 +614,6 @@ export default function MapSapOperationPage() {
                       order={order}
                       selected={order.order_no === selectedOrder?.order_no}
                       onClick={loadOperations}
-                      onDragStart={handleDragStart}
                     />
                   ))
                 )}
@@ -773,7 +638,7 @@ export default function MapSapOperationPage() {
                     {selectedOrder?.part_name || selectedOrder?.ssbr_id || '-'}
                   </p>
                 </div>
-                {operationLoading ? (
+                {operationLoading || mapping ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#00b4d8]" />
                 ) : (
                   <span
@@ -797,6 +662,7 @@ export default function MapSapOperationPage() {
                     operations={operations}
                     mappedByOperation={mappedByOperation}
                     onDragStart={handleOperationDragStart}
+                    disabled={mapping}
                   />
                 )}
               </div>
@@ -809,24 +675,7 @@ export default function MapSapOperationPage() {
         </section>
 
         {/* ── TARGET: Project + Task Tree ────────────────────── */}
-        <section
-          className={`relative flex min-h-[540px] flex-col overflow-hidden rounded-xl border bg-white shadow-sm transition-colors lg:min-h-0 ${
-            dropActive ? 'border-[#00b4d8] ring-2 ring-[#00b4d8]' : 'border-slate-200'
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          {dropActive && (
-            <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#caf0f8]/60">
-              <span className="rounded-lg border border-[#00b4d8] bg-white px-4 py-2 text-sm font-bold text-[#0077b6] shadow">
-                {targetParentTask
-                  ? `Drop to map into "${targetParentTask.task_name || 'parent'}"`
-                  : 'Select a project and parent task first'}
-              </span>
-            </div>
-          )}
-
+        <section className="relative flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
           <div className="border-b border-slate-200 p-3">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
@@ -868,9 +717,9 @@ export default function MapSapOperationPage() {
                         task={task}
                         childrenByParent={taskTree.byParent}
                         expandedIds={expandedTaskIds}
-                        selectedId={targetParentTask?.task_id}
+                        selectedId={inspectedTask?.task_id}
                         onToggle={toggleTaskExpand}
-                        onSetTarget={setTargetTask}
+                        onInspect={inspectTask}
                       />
                     ))
                   )}
@@ -882,30 +731,30 @@ export default function MapSapOperationPage() {
                 <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#caf0f8] px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-extrabold uppercase tracking-wide text-slate-700">Child Tasks</span>
-                    {targetParentTask && (
-                      <span className="text-xs font-semibold tabular-nums text-slate-500">{targetTasks.length}</span>
+                    {inspectedTask && (
+                      <span className="text-xs font-semibold tabular-nums text-slate-500">{inspectedChildren.length}</span>
                     )}
                   </div>
-                  {targetParentTask && (
+                  {inspectedTask && (
                     <p className="mt-0.5 truncate text-xs font-semibold text-slate-700">
-                      <span className="font-mono tabular-nums text-[#0077b6]">{targetParentTask.outline_number || '-'}</span>{' '}
-                      {targetParentTask.task_name || '-'}
+                      <span className="font-mono tabular-nums text-[#0077b6]">{inspectedTask.outline_number || '-'}</span>{' '}
+                      {inspectedTask.task_name || '-'}
                     </p>
                   )}
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto">
-                  {!targetParentTask ? (
+                  {!inspectedTask ? (
                     <EmptyState
                       icon={Target}
-                      title="Select a parent task"
+                      title="Select a task"
                     />
                   ) : taskLoading ? (
                     Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} cols={4} />)
-                  ) : targetTasks.length === 0 ? (
+                  ) : inspectedChildren.length === 0 ? (
                     <EmptyState
                       icon={GitBranch}
                       title="No child tasks"
-                      description="Mapping will create new tasks here."
+                      description="Drop an operation here to add one."
                     />
                   ) : (
                     <>
@@ -915,7 +764,7 @@ export default function MapSapOperationPage() {
                         <span>Operation</span>
                         <span className="text-right">Work</span>
                       </div>
-                      {targetTasks.map((task) => <TaskRow key={task.task_id} task={task} />)}
+                      {inspectedChildren.map((task) => <TaskRow key={task.task_id} task={task} />)}
                     </>
                   )}
                 </div>

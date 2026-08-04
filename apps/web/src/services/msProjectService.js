@@ -129,14 +129,6 @@ export async function mapSowOperationToTask(projectId, payload) {
   return response.data;
 }
 
-export async function mapSowOrderToProjectTasks(projectId, payload) {
-  const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}/tasks/map-sow-order`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
-  return response.data;
-}
-
 // Write planned headcount back onto sow (per-operation). `updates` is an array of
 // { operation_no, people_required }; people_required null clears it. Returns { updated, requested }.
 export async function updateOperationPeople(orderNo, updates) {
@@ -272,7 +264,6 @@ export default {
   fetchSowOrderOperations,
   forceCheckinProject,
   mapSowOperationToTask,
-  mapSowOrderToProjectTasks,
   msProjectFileUrl,
   updateBayScheduleGroup,
   updateMsProjectStatus,
