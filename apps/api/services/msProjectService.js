@@ -4236,6 +4236,215 @@ async function updateProjectStatus(projectIdParam, body = {}) {
   }
 }
 
+// =============================================================================
+// CRUD project & task (halaman /sow-scheduling/projects) — rename, edit task,
+// delete project. Aktor selalu dari header sesi (controller), bukan body.
+// PERINGATAN: sync berikutnya dari file .mpp akan MENIMPA nama project/task
+// dan tanggal plan yang diubah manual di sini — ini edit darurat, bukan sumber
+// kebenaran jadwal.
+// =============================================================================
+
+async function updateProjectInfo(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const actor = nullableText(body.actor) || "web-hub";
+
+  const sets = [];
+  const values = [projectId];
+  if (body.project_name !== undefined) {
+    const projectName = normalizeText(body.project_name);
+    if (!projectName) {
+      throw new ApiError(400, "PROJECT_NAME_REQUIRED", "project_name must not be empty");
+    }
+    values.push(projectName);
+    sets.push(`project_name = $${values.length}`);
+  }
+  if (body.description !== undefined) {
+    // Kosong -> null (clear). Tidak dikirim -> tidak diubah.
+    values.push(nullableText(body.description));
+    sets.push(`description = $${values.length}`);
+  }
+  if (sets.length === 0) {
+    throw new ApiError(400, "NOTHING_TO_UPDATE", "provide project_name and/or description");
+  }
+  values.push(actor);
+  sets.push(`updated_by = $${values.length}`, "updated_at = now()");
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const result = await client.query(
+      `update ms_project
+       set ${sets.join(", ")}
+       where project_id = $1
+       returning project_id, project_name, description, status, revision_no, updated_by, updated_at`,
+      values
+    );
+    if (!result.rows[0]) {
+      await client.query("rollback");
+      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+    await writeAuditLog(client, {
+      projectId,
+      action: "PROJECT_RENAME",
+      actor,
+      revisionNo: result.rows[0].revision_no,
+      details: { project_name: result.rows[0].project_name },
+    });
+    await client.query("commit");
+    return result.rows[0];
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateProjectTask(projectIdParam, taskIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const taskId = assertUuid(taskIdParam, "task_id");
+  const actor = nullableText(body.actor) || "web-hub";
+
+  if (body.plan_start && body.plan_finish) {
+    const start = normalizeDateOnly(body.plan_start, "plan_start");
+    const finish = normalizeDateOnly(body.plan_finish, "plan_finish");
+    if (finish < start) {
+      throw new ApiError(400, "INVALID_DATE_RANGE", "plan_finish must be on or after plan_start");
+    }
+  }
+
+  const sets = [];
+  const values = [projectId, taskId];
+  if (body.task_name !== undefined) {
+    const taskName = normalizeText(body.task_name);
+    if (!taskName) {
+      throw new ApiError(400, "TASK_NAME_REQUIRED", "task_name must not be empty");
+    }
+    values.push(taskName);
+    sets.push(`task_name = $${values.length}`);
+  }
+  if (body.plan_start !== undefined) {
+    values.push(body.plan_start ? normalizeDateOnly(body.plan_start, "plan_start") : null);
+    sets.push(`plan_start = $${values.length}::timestamptz`);
+  }
+  if (body.plan_finish !== undefined) {
+    values.push(body.plan_finish ? normalizeDateOnly(body.plan_finish, "plan_finish") : null);
+    sets.push(`plan_finish = $${values.length}::timestamptz`);
+  }
+  if (sets.length === 0) {
+    throw new ApiError(400, "NOTHING_TO_UPDATE", "provide task_name, plan_start and/or plan_finish");
+  }
+  sets.push("updated_at = now()");
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+    const result = await client.query(
+      `update ms_project_task
+       set ${sets.join(", ")}
+       where project_id = $1 and task_id = $2
+       returning task_id, task_name, plan_start, plan_finish, updated_at`,
+      values
+    );
+    if (!result.rows[0]) {
+      await client.query("rollback");
+      throw new ApiError(404, "TASK_NOT_FOUND", "Task not found in this project");
+    }
+    await writeAuditLog(client, {
+      projectId,
+      action: "TASK_UPDATE",
+      actor,
+      details: {
+        task_id: taskId,
+        task_name: result.rows[0].task_name,
+        plan_start: result.rows[0].plan_start ? String(result.rows[0].plan_start).slice(0, 10) : null,
+        plan_finish: result.rows[0].plan_finish ? String(result.rows[0].plan_finish).slice(0, 10) : null,
+      },
+    });
+    await client.query("commit");
+    return result.rows[0];
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteProject(projectIdParam, body = {}) {
+  const projectId = assertUuid(projectIdParam, "project_id");
+  const actor = nullableText(body.actor) || "web-hub";
+
+  const client = await pool().connect();
+  try {
+    await client.query("begin");
+
+    const project = await client.query(
+      `select project_id, project_name, revision_no from ms_project where project_id = $1`,
+      [projectId]
+    );
+    if (!project.rows[0]) {
+      await client.query("rollback");
+      throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
+    }
+
+    // Reservasi bay AKTIF memblokir penghapusan: menghapus project tidak boleh
+    // menghapus reservasi diam-diam. Cancel dulu, baru bisa hapus.
+    const active = await client.query(
+      `select count(*)::int as n
+         from ms_project_bay_schedule
+        where project_id = $1 and status <> 'CANCELLED'`,
+      [projectId]
+    );
+    if (active.rows[0].n > 0) {
+      await client.query("rollback");
+      throw new ApiError(
+        409,
+        "PROJECT_HAS_ACTIVE_RESERVATIONS",
+        `${active.rows[0].n} active bay reservation(s) must be cancelled before deleting this project`
+      );
+    }
+
+    // Urutan hapus mengikuti FK (NO ACTION): anak yang mereferensikan task/project
+    // dihapus dulu; task (termasuk self-ref parent_task_id) satu statement; project
+    // terakhir. lock/publish/revision ber-CASCADE tapi dihapus eksplisit biar jelas.
+    await client.query(`delete from ms_project_bay_schedule where project_id = $1`, [projectId]);
+    await client.query(`delete from ms_project_assignment where project_id = $1`, [projectId]);
+    await client.query(
+      `delete from ms_project_dependency
+        where project_id = $1
+           or predecessor_task_id in (select task_id from ms_project_task where project_id = $1)
+           or successor_task_id in (select task_id from ms_project_task where project_id = $1)`,
+      [projectId]
+    );
+    await client.query(`delete from ms_project_resource where project_id = $1`, [projectId]);
+    await client.query(`delete from ms_project_lock where project_id = $1`, [projectId]);
+    await client.query(`delete from ms_project_publish where project_id = $1`, [projectId]);
+    await client.query(`delete from ms_project_revision where project_id = $1`, [projectId]);
+
+    // Jejak audit ditulis SEBELUM baris project hilang: FK ms_project_audit_log ke
+    // ms_project ber-ON DELETE SET NULL, insert setelah hapus pasti gagal.
+    await writeAuditLog(client, {
+      projectId,
+      action: "PROJECT_DELETE",
+      actor,
+      revisionNo: project.rows[0].revision_no,
+      details: { project_name: project.rows[0].project_name },
+    });
+
+    await client.query(`delete from ms_project_task where project_id = $1`, [projectId]);
+    await client.query(`delete from ms_project where project_id = $1`, [projectId]);
+
+    await client.query("commit");
+    return { project_id: projectId, project_name: project.rows[0].project_name, deleted: true };
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function syncProject(projectIdParam, payload) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const normalized = normalizeProjectPayload(payload, true);
@@ -4567,6 +4776,9 @@ module.exports = {
   syncProject,
   updateBayScheduleGroup,
   updateOperationPeople,
+  updateProjectInfo,
   updateProjectStatus,
+  updateProjectTask,
+  deleteProject,
   uploadProjectFile,
 };

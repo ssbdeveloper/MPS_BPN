@@ -73,3 +73,15 @@ Perbaikan (`SchedulingAreaPage.jsx`, `SowSchedulingPage.jsx`):
   (`{ perlu: 3, belum_jadwal: 106, terjadwal: 2, selesai: 33 }`), tanpa param
   `counts` respons tidak berubah (`rows/limit/offset/total`).
 - Tidak ada perubahan data/API selain param opsional `counts`/`counts_due_by`.
+
+## Hotfix: tombol Back layout sow-scheduling (5 Agu 2026)
+
+Tombol "Operations Hub" di menu `/sow-scheduling` memakai `goBackOrFallback`
+(`navigate(-1)`), dan di SPA `window.history.length` hampir selalu > 1 → tombol
+balik ke halaman sow-scheduling SEBELUMNYA (scheduling area / map / projects),
+bukan ke operations hub — label tombol jadi bohong dan user muter-muter.
+
+Perbaikan (`manufacturing/SowSchedulingPage.jsx`): Back DETERMINISTIK —
+index → selalu `/operations-hub`; sub-route → selalu `/sow-scheduling` (menu).
+`goBackOrFallback` dihapus dari layout ini. Tombol back browser/hardware tetap
+mengikuti riwayat (perilaku bawaan SPA).

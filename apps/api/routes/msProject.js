@@ -53,6 +53,9 @@ router.post("/projects/:project_id/file", upload.single("file"), controller.uplo
 router.get("/projects/:project_id/file", controller.downloadProjectFile);
 router.get("/projects/:project_id/revisions", controller.listProjectRevisions);
 router.put("/projects/:project_id/status", controller.updateProjectStatus);
+router.put("/projects/:project_id", controller.updateProjectInfo);
+router.put("/projects/:project_id/tasks/:task_id", controller.updateProjectTask);
+router.delete("/projects/:project_id", controller.deleteProject);
 router.post("/projects/:project_id/checkout", controller.checkoutProject);
 router.post("/projects/:project_id/heartbeat", controller.heartbeatProject);
 router.put("/projects/:project_id/sync", controller.syncProject);

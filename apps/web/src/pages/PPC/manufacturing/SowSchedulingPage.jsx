@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Outlet, useLocation, useMatches, useNavigate } from 'react-router-dom';
 import { PageHeader } from '../../../components';
-import { goBackOrFallback } from '../../../utils/navigation';
 
 /**
  * ManufacturingSchedulingLayout — shell rute BERSARANG untuk SOW Scheduling
@@ -9,11 +8,13 @@ import { goBackOrFallback } from '../../../utils/navigation';
  *
  * - Judul & eyebrow dibaca dari `handle` rute aktif (via useMatches) — sub-page
  *   TIDAK punya header sendiri.
- * - Back:
- *     index ('/sow-scheduling')  -> goBackOrFallback(navigate, '/operations-hub')
- *     sub-route                  -> kembali ke menu ('/sow-scheduling')
- *   Karena kini rute nyata, tombol back browser/hardware juga otomatis benar
- *   (memperbaiki keluhan "back malah ke Operations Hub").
+ * - Back DETERMINISTIK (bukan riwayat browser):
+ *     index ('/sow-scheduling')  -> SELALU '/operations-hub' (label "Operations Hub")
+ *     sub-route                  -> SELALU kembali ke menu ('/sow-scheduling')
+ *   goBackOrFallback TIDAK dipakai di sini: navigate(-1) di SPA hampir selalu
+ *   kembali ke halaman sow-scheduling sebelumnya (mis. scheduling area), bukan
+ *   ke operations hub — label tombol jadi bohong.
+ * - Tombol back browser/hardware tetap mengikuti riwayat (perilaku bawaan SPA).
  */
 export default function ManufacturingSchedulingLayout() {
   const navigate = useNavigate();
@@ -37,9 +38,7 @@ export default function ManufacturingSchedulingLayout() {
         eyebrow={eyebrow}
         title={title}
         backLabel={isIndex ? 'Operations Hub' : 'Menu'}
-        onBack={isIndex
-          ? () => goBackOrFallback(navigate, '/operations-hub')
-          : () => navigate('/sow-scheduling')}
+        onBack={isIndex ? () => navigate('/operations-hub') : () => navigate('/sow-scheduling')}
         right={headerRight}
       />
 

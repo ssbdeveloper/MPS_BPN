@@ -290,6 +290,29 @@ exports.updateProjectStatus = route(async (req) => {
   return (res) => success(res, data);
 });
 
+exports.updateProjectInfo = route(async (req) => {
+  const data = await service.updateProjectInfo(req.params.project_id, {
+    ...(req.body || {}),
+    actor: actorOf(req) || undefined,
+  });
+  return (res) => success(res, data);
+});
+
+exports.updateProjectTask = route(async (req) => {
+  const data = await service.updateProjectTask(req.params.project_id, req.params.task_id, {
+    ...(req.body || {}),
+    actor: actorOf(req) || undefined,
+  });
+  return (res) => success(res, data);
+});
+
+exports.deleteProject = route(async (req) => {
+  const data = await service.deleteProject(req.params.project_id, {
+    actor: actorOf(req) || undefined,
+  });
+  return (res) => success(res, data);
+});
+
 exports.checkoutProject = route(async (req) => {
   const data = await service.checkoutProject(req.params.project_id, req.body || {});
   return (res) => success(res, data);

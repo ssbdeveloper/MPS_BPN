@@ -53,6 +53,7 @@ const MANIFEST = [
   // route asli memakai :idsow / :subId; di sini ':id' seperti entri lain (nama param
   // tidak dipakai saat mencocokkan, hanya jumlah segmennya).
   { m: 'POST',   p: '/sow/operations/:id/subtasks',           f: 'sow_management', a: W },
+  { m: 'POST',   p: '/sow/operations/:id/subtasks/batch',     f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/subtasks/:id',                      f: 'sow_management', a: W },
   { m: 'POST',   p: '/sow/subtasks/:id/progress',             f: 'sow_management', a: W },
   // Import Excel: commit=false hanya dry-run, TAPI commit=true menulis. Route yang sama
@@ -182,6 +183,9 @@ const MANIFEST = [
   { m: 'POST',   p: '/ms-project/projects/:id/publish',              f: 'msproject_collab',  a: W },
   { m: 'POST',   p: '/ms-project/projects/:id/checkin',              f: 'msproject_collab',  a: W },
   { m: 'PUT',    p: '/ms-project/projects/:id/status',               f: 'msproject_collab',  a: W }, // A-03, sebelumnya unmapped
+  { m: 'PUT',    p: '/ms-project/projects/:id',                      f: 'msproject_collab',  a: W }, // rename project
+  { m: 'PUT',    p: '/ms-project/projects/:id/tasks/:task_id',       f: 'msproject_collab',  a: W }, // edit task
+  { m: 'DELETE', p: '/ms-project/projects/:id',                      f: 'ms_project_admin',  a: W }, // delete project (destructive)
 
   // Admin scheduling (dipersempit) — merebut lock orang lain, kalender, resource.
   { m: 'POST',   p: '/ms-project/projects/:id/force-checkin',        f: 'ms_project_admin',  a: W },

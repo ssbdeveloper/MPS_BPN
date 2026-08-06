@@ -59,6 +59,8 @@ updated: 2026-07-24
 - [[log/2026-07-14-prd-manufacturing-variant]] — scan 3 lapisan → PRD varian manufacturing
 - [[log/2026-08-05-order-pool-due-by-filter]] — pool order reservasi bay: filter "jatuh tempo ≤ akhir minggu ini + belum selesai (tanpa batas bawah)" via param `due_by`
 - [[log/2026-08-05-scheduling-area-ux-polish]] — UX: search task di panel reservasi, tab pool jadi segmented control, header (Map date/range/refresh) dirapikan
+- [[log/2026-08-05-project-browser-crud]] — CRUD project & task di ProjectBrowserPage: rename project, edit task, delete project (dengan blokir reservasi aktif)
+- [[log/2026-08-06-subtask-standard-hours]] — sub-task: bobot dihitung otomatis dari `standard_hours` (share jam per operasi) + cap jam operasi + fix error 42P18 (param beda tipe di recompute)
 
 ## 📚 Operasional
 

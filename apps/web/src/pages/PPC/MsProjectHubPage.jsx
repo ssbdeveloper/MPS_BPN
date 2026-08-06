@@ -371,7 +371,7 @@ export default function MsProjectHubPage() {
       <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 shadow-sm md:px-6">
         <button
           type="button"
-          onClick={() => navigate('/operations-hub')}
+          onClick={() => navigate('/sow-scheduling')}
           className={`${buttonBase} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`}
         >
           <ArrowLeft size={16} />

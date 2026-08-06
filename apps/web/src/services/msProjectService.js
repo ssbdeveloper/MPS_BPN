@@ -66,6 +66,30 @@ export async function fetchMsProjectTasks(projectId, params = {}) {
   return payload.data || [];
 }
 
+// CRUD project & task (ProjectBrowserPage) — rename, edit task, delete project.
+export async function updateMsProject(projectId, payload) {
+  const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return response.data;
+}
+
+export async function updateMsProjectTask(projectId, taskId, payload) {
+  const response = await request(
+    `/ms-project/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`,
+    { method: 'PUT', body: JSON.stringify(payload) },
+  );
+  return response.data;
+}
+
+export async function deleteMsProject(projectId) {
+  const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}`, {
+    method: 'DELETE',
+  });
+  return response.data;
+}
+
 // Paginasi endpoint ini nyata (limit default 50, MAX_LIMIT 100) dan meta-nya
 // dikirim di `summary`, BUKAN di level atas envelope — lihat
 // apps/api/controllers/msProjectController.js:paginationSummary(). Selama ini
