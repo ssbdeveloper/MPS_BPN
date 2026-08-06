@@ -4,23 +4,28 @@ import { toast } from 'sonner';
 import {
   ArrowLeft,
   Archive,
+  AlertTriangle,
   CheckCircle2,
   Download,
   FileWarning,
   History,
   Loader2,
   Lock,
+  Pencil,
   RefreshCw,
   Search,
   ShieldAlert,
+  Trash2,
   Unlock,
   X,
 } from 'lucide-react';
 import {
+  deleteMsProject,
   fetchMsProjectRevisions,
   fetchMsProjects,
   forceCheckinProject,
   msProjectFileUrl,
+  updateMsProject,
   updateMsProjectStatus,
 } from '../../services/msProjectService';
 
@@ -243,6 +248,162 @@ function ForceCheckinModal({ project, reason, saving, onReasonChange, onClose, o
   );
 }
 
+function RenameProjectModal({ project, name, saving, error, onNameChange, onClose, onConfirm }) {
+  if (!project) return null;
+  const canSave = name.trim().length > 0 && !saving;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 px-0 md:items-center md:px-4">
+      <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-base font-extrabold text-slate-800">Rename Project</h2>
+            <p className="mt-1 truncate text-xs font-semibold text-slate-500">{project.project_name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <label className="mt-4 grid gap-1 text-xs font-bold text-slate-700">
+          Project name
+          <input
+            type="text"
+            value={name}
+            onChange={(event) => onNameChange(event.target.value)}
+            disabled={saving}
+            autoFocus
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 transition-all focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
+            placeholder="Nama project baru"
+          />
+        </label>
+
+        <p className="mt-2 text-[11px] font-semibold leading-relaxed text-slate-400">
+          Catatan: sync berikutnya dari file .mpp akan menimpa nama ini.
+        </p>
+
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
+            <span className="text-xs font-semibold text-red-700">{error}</span>
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={!canSave}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-bold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="animate-spin" size={16} /> : <Pencil size={16} />}
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDelete }) {
+  if (!project) return null;
+  const activeReservations = Number(project.active_reservation_count) || 0;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 px-0 md:items-center md:px-4">
+      <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-base font-extrabold text-slate-800">Hapus Project</h2>
+            <p className="mt-1 truncate text-xs font-semibold text-slate-500">{project.project_name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div className="flex gap-3">
+            <AlertTriangle className="mt-0.5 flex-shrink-0 text-red-600" size={20} />
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-red-800">
+                Menghapus project menghapus SEMUA task, reservasi, lock, revisi, dan file .mpp-nya.
+              </p>
+              <p className="mt-1 text-xs font-semibold leading-relaxed text-red-700">
+                Data SAP/sow (operasi, plan hours, sub-task) TIDAK ikut terhapus.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {activeReservations > 0 && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <div className="flex gap-3">
+              <ShieldAlert className="mt-0.5 flex-shrink-0 text-amber-600" size={20} />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-amber-800">
+                  {activeReservations} reservasi bay AKTIF di area layout.
+                </p>
+                <p className="mt-1 text-xs font-semibold leading-relaxed text-amber-700">
+                  Delete biasa diblokir server sampai reservasi di-cancel. Force Delete
+                  menghapus reservasi tersebut dari area layout sekaligus.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5">
+            <span className="text-xs font-semibold text-red-700">{error}</span>
+          </div>
+        )}
+
+        <div className="mt-6 grid gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={busy || activeReservations > 0}
+            title={activeReservations > 0 ? 'Cancel reservasi bay aktif dulu' : 'Hapus project (tanpa menyentuh reservasi aktif)'}
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={onForceDelete}
+            disabled={busy}
+            title="Hapus project + cancel SEMUA reservasi bay (termasuk aktif) dari area layout"
+            className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white transition-all hover:bg-red-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <ShieldAlert size={16} />}
+            Force Delete
+          </button>
+        </div>
+        <p className="mt-2 text-center text-[11px] font-semibold text-slate-400">
+          Force Delete menghapus reservasi juga dari area layout.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function MsProjectHubPage() {
   const navigate = useNavigate();
   const [authUser] = useState(readAuthUser);
@@ -259,6 +420,16 @@ export default function MsProjectHubPage() {
   const [forceProject, setForceProject] = useState(null);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
+
+  // Rename / delete (keputusan 2026-08-06: hub punya rename + delete, delete punya opsi force)
+  const [renameTarget, setRenameTarget] = useState(null);
+  const [renameName, setRenameName] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState('');
+
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [statusSavingId, setStatusSavingId] = useState(null);
 
   const isAdministrator = String(authUser?.roles || '').toLowerCase() === 'administrator';
@@ -360,6 +531,69 @@ export default function MsProjectHubPage() {
       toast.error('Force check-in gagal', { description: error.message });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openRename = (project) => {
+    setRenameTarget(project);
+    setRenameName(project.project_name);
+    setRenameError('');
+  };
+
+  const closeRename = () => {
+    if (renameBusy) return;
+    setRenameTarget(null);
+    setRenameName('');
+    setRenameError('');
+  };
+
+  const submitRename = async () => {
+    if (!renameTarget || renameBusy || !renameName.trim()) return;
+    setRenameBusy(true);
+    setRenameError('');
+    try {
+      await updateMsProject(renameTarget.project_id, { project_name: renameName.trim() });
+      toast.success('Project di-rename');
+      setRenameTarget(null);
+      setRenameName('');
+      await loadProjects();
+    } catch (error) {
+      setRenameError(error.message);
+      toast.error('Rename gagal', { description: error.message });
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
+  const openDelete = (project) => {
+    setDeleteTarget(project);
+    setDeleteError('');
+  };
+
+  const closeDelete = () => {
+    if (deleteBusy) return;
+    setDeleteTarget(null);
+    setDeleteError('');
+  };
+
+  const submitDelete = async (force) => {
+    if (!deleteTarget || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError('');
+    try {
+      const result = await deleteMsProject(deleteTarget.project_id, { force });
+      toast.success(
+        force
+          ? `Project + reservasi dihapus (${result.cancelled_reservations ?? 0} reservasi ikut terhapus)`
+          : 'Project dihapus'
+      );
+      setDeleteTarget(null);
+      await loadProjects();
+    } catch (error) {
+      setDeleteError(error.message);
+      toast.error(force ? 'Force delete gagal' : 'Delete gagal', { description: error.message });
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -552,6 +786,22 @@ export default function MsProjectHubPage() {
                               <option value="ACTIVE">ACTIVE</option>
                               <option value="ARCHIVED">ARCHIVED</option>
                             </select>
+                            <button
+                              type="button"
+                              onClick={() => openRename(project)}
+                              className={iconButton}
+                              title="Rename project"
+                            >
+                              <Pencil size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openDelete(project)}
+                              className={`${iconButton} hover:border-red-200 hover:bg-red-50 hover:text-red-600`}
+                              title="Hapus project (Delete / Force Delete)"
+                            >
+                              <Trash2 size={15} />
+                            </button>
                             {isAdministrator && (
                               <button
                                 type="button"
@@ -596,6 +846,25 @@ export default function MsProjectHubPage() {
         onReasonChange={setReason}
         onClose={closeForceModal}
         onConfirm={confirmForceCheckin}
+      />
+
+      <RenameProjectModal
+        project={renameTarget}
+        name={renameName}
+        saving={renameBusy}
+        error={renameError}
+        onNameChange={setRenameName}
+        onClose={closeRename}
+        onConfirm={submitRename}
+      />
+
+      <DeleteProjectModal
+        project={deleteTarget}
+        busy={deleteBusy}
+        error={deleteError}
+        onClose={closeDelete}
+        onDelete={() => submitDelete(false)}
+        onForceDelete={() => submitDelete(true)}
       />
     </div>
   );

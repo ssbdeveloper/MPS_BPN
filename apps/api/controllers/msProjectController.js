@@ -308,6 +308,7 @@ exports.updateProjectTask = route(async (req) => {
 
 exports.deleteProject = route(async (req) => {
   const data = await service.deleteProject(req.params.project_id, {
+    ...(req.body || {}),
     actor: actorOf(req) || undefined,
   });
   return (res) => success(res, data);

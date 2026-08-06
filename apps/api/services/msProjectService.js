@@ -1110,8 +1110,10 @@ async function listProjects(query) {
       created_by,
       updated_by,
       created_at,
-      updated_at
-    from ms_project
+      updated_at,
+      (select count(*) from ms_project_bay_schedule b
+        where b.project_id = p.project_id and b.status <> 'CANCELLED') as active_reservation_count
+    from ms_project p
     ${where.length ? `where ${where.join(" and ")}` : ""}
     order by updated_at desc
     limit $${values.length - 1} offset $${values.length}
@@ -4374,13 +4376,14 @@ async function updateProjectTask(projectIdParam, taskIdParam, body = {}) {
 async function deleteProject(projectIdParam, body = {}) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const actor = nullableText(body.actor) || "web-hub";
+  const force = body.force === true || body.force === "true" || body.force === "1";
 
   const client = await pool().connect();
   try {
     await client.query("begin");
 
     const project = await client.query(
-      `select project_id, project_name, revision_no from ms_project where project_id = $1`,
+      `select project_id, project_name, revision_no, file_path from ms_project where project_id = $1`,
       [projectId]
     );
     if (!project.rows[0]) {
@@ -4388,20 +4391,21 @@ async function deleteProject(projectIdParam, body = {}) {
       throw new ApiError(404, "PROJECT_NOT_FOUND", "Project not found");
     }
 
-    // Reservasi bay AKTIF memblokir penghapusan: menghapus project tidak boleh
-    // menghapus reservasi diam-diam. Cancel dulu, baru bisa hapus.
+    // Reservasi bay AKTIF memblokir penghapusan BIASA: menghapus project tidak boleh
+    // menghapus reservasi diam-diam. Cancel dulu, atau pakai `force: true` (keputusan
+    // user 2026-08-06: force delete menghapus reservasi dari area layout juga).
     const active = await client.query(
       `select count(*)::int as n
          from ms_project_bay_schedule
         where project_id = $1 and status <> 'CANCELLED'`,
       [projectId]
     );
-    if (active.rows[0].n > 0) {
+    if (active.rows[0].n > 0 && !force) {
       await client.query("rollback");
       throw new ApiError(
         409,
         "PROJECT_HAS_ACTIVE_RESERVATIONS",
-        `${active.rows[0].n} active bay reservation(s) must be cancelled before deleting this project`
+        `${active.rows[0].n} active bay reservation(s) must be cancelled before deleting this project (or use force delete)`
       );
     }
 
@@ -4426,17 +4430,44 @@ async function deleteProject(projectIdParam, body = {}) {
     // ms_project ber-ON DELETE SET NULL, insert setelah hapus pasti gagal.
     await writeAuditLog(client, {
       projectId,
-      action: "PROJECT_DELETE",
+      action: force ? "PROJECT_DELETE_FORCE" : "PROJECT_DELETE",
       actor,
       revisionNo: project.rows[0].revision_no,
-      details: { project_name: project.rows[0].project_name },
+      details: {
+        project_name: project.rows[0].project_name,
+        force,
+        cancelled_reservations: active.rows[0].n,
+      },
     });
 
     await client.query(`delete from ms_project_task where project_id = $1`, [projectId]);
     await client.query(`delete from ms_project where project_id = $1`, [projectId]);
 
     await client.query("commit");
-    return { project_id: projectId, project_name: project.rows[0].project_name, deleted: true };
+
+    // Hapus file .mpp FISIK dari disk (keputusan user 2a). Best-effort — kalau gagal
+    // (file sudah hilang/terkunci), metadata sudah ikut project terhapus; file orphan
+    // bisa dibersihkan manual. Dilakukan setelah commit.
+    try {
+      const filePath = project.rows[0].file_path;
+      if (filePath) {
+        const uploadsRoot = path.resolve(__dirname, "../uploads/ms-project-mpp");
+        const absolutePath = path.resolve(__dirname, "..", `.${filePath}`);
+        if (absolutePath.startsWith(uploadsRoot + path.sep)) {
+          await fs.unlink(absolutePath);
+        }
+      }
+    } catch {
+      /* orphan file acceptable */
+    }
+
+    return {
+      project_id: projectId,
+      project_name: project.rows[0].project_name,
+      deleted: true,
+      force,
+      cancelled_reservations: active.rows[0].n,
+    };
   } catch (error) {
     await client.query("rollback").catch(() => {});
     throw error;

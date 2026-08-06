@@ -83,9 +83,10 @@ export async function updateMsProjectTask(projectId, taskId, payload) {
   return response.data;
 }
 
-export async function deleteMsProject(projectId) {
+export async function deleteMsProject(projectId, options = {}) {
   const response = await request(`/ms-project/projects/${encodeURIComponent(projectId)}`, {
     method: 'DELETE',
+    body: JSON.stringify({ force: !!options.force }),
   });
   return response.data;
 }
