@@ -14,6 +14,7 @@
 //      React.memo pada sel bay / kartu order tidak ada gunanya.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import {
   AlertTriangle, CalendarRange, ChevronLeft, ChevronRight, LayoutGrid, Loader2,
   PackagePlus, ParkingSquare, RefreshCw,
@@ -124,6 +125,7 @@ const OrderPoolPanel = React.memo(function OrderPoolPanel({ selectedOrder, onSel
       onDragStart={onDragStart}
       onLoadMore={pool.loadMore}
       onReload={pool.reload}
+      tabCounts={pool.tabCounts}
     />
   );
 });
@@ -156,6 +158,27 @@ export default function SchedulingAreaPage() {
   const {
     schedules, byBay, loading, error, reload, cursorDate, setCursorDate,
   } = useBaySchedules({ rangeStart: range.start, rangeEnd: range.end });
+
+  // Tombol Refresh ditaruh di slot kanan PageHeader (sejajar tombol Back menu),
+  // bukan di dalam section — layout menyediakan slot via Outlet context.
+  const outlet = useOutletContext();
+  const setHeaderRight = outlet?.setHeaderRight;
+  useEffect(() => {
+    if (!setHeaderRight) return undefined;
+    setHeaderRight(
+      <button
+        type="button"
+        onClick={reload}
+        className="inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 active:scale-95 focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:outline-none motion-reduce:transition-none motion-reduce:transform-none"
+      >
+        {loading
+          ? <Loader2 className="h-4 w-4 animate-spin text-[#00b4d8] motion-reduce:animate-none" />
+          : <RefreshCw className="h-4 w-4 text-slate-600" />}
+        Refresh
+      </button>
+    );
+    return () => setHeaderRight(null);
+  }, [setHeaderRight, reload, loading]);
 
   const area = selectedAreaCode ? AREA_BY_CODE[selectedAreaCode] : null;
   const maxEnd = minText(addDaysText(range.start, MAX_RANGE_DAYS - 1), bounds.max);
@@ -376,7 +399,8 @@ export default function SchedulingAreaPage() {
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
       <section className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+        {/* Baris 1: pilihan view (Refresh ada di PageHeader, sejajar tombol Back). */}
+        <div className="flex items-center">
           <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="View">
             <button
               type="button"
@@ -395,69 +419,71 @@ export default function SchedulingAreaPage() {
               <CalendarRange className="h-3.5 w-3.5" /> Timeline
             </button>
           </div>
+        </div>
 
-          {/* Kursor tanggal (A-08) — HANYA untuk peta. Tanpa "as-of day", dua reservasi
-              berurutan pada satu bay tampak persis sama dengan dua yang barengan. */}
-          {viewMode === 'map' && (
-            <div className="flex items-end gap-1.5">
-              <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Map date
-                <span className="flex items-center gap-1.5">
-                  <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= range.start} aria-label="Previous day" className={STEP_BTN}>
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <input
-                    type="date"
-                    value={cursorDate}
-                    min={range.start}
-                    max={range.end}
-                    onChange={(event) => setCursorDate(event.target.value)}
-                    aria-label="Map date"
-                    className={DATE_INPUT}
-                  />
-                  <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= range.end} aria-label="Next day" className={STEP_BTN}>
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </span>
-              </label>
-              <button
-                type="button"
-                onClick={() => setCursorDate(today)}
-                className="min-h-[32px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-              >
-                Today
-              </button>
-            </div>
+        {/* Baris 2: kontrol tanggal KONTEKSTUAL — tiap mode cuma satu konsep.
+            Map = as-of day (kursor); Timeline = range From/To. Preset window
+            (7/14/30 hari) dipakai bersama. */}
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5">
+          {viewMode === 'map' ? (
+            <>
+              {/* Kursor tanggal (A-08): hari yang ditampilkan peta. Tanpa "as-of day",
+                  dua reservasi berurutan pada satu bay tampak seperti dua yang barengan. */}
+              <div className="flex items-center gap-2.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Map date</span>
+                <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= range.start} aria-label="Previous day" className={STEP_BTN}>
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <input
+                  type="date"
+                  value={cursorDate}
+                  min={range.start}
+                  max={range.end}
+                  onChange={(event) => setCursorDate(event.target.value)}
+                  aria-label="Map date"
+                  className={DATE_INPUT}
+                />
+                <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= range.end} aria-label="Next day" className={STEP_BTN}>
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCursorDate(today)}
+                  className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                >
+                  Today
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Window RESERVASI — terpisah dari window task MSP milik pool order (D6). */}
+              <div className="flex flex-wrap items-center gap-2.5">
+                <label className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</span>
+                  <input type="date" value={range.start} min={bounds.min} max={bounds.max} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
+                </label>
+                <label className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</span>
+                  <input type="date" value={range.end} min={range.start} max={maxEnd} onChange={(event) => applyRange(range.start, event.target.value)} className={DATE_INPUT} />
+                </label>
+              </div>
+            </>
           )}
 
-          {/* Window RESERVASI — terpisah dari window task MSP milik pool order (D6). */}
-          <div className="flex flex-wrap items-end gap-1.5">
-            <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              From
-              <input type="date" value={range.start} min={bounds.min} max={bounds.max} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
-            </label>
-            <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              To
-              <input type="date" value={range.end} min={range.start} max={maxEnd} onChange={(event) => applyRange(range.start, event.target.value)} className={DATE_INPUT} />
-            </label>
-            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Range presets">
-              {RANGE_PRESETS.map((days) => (
-                <button
-                  key={days}
-                  type="button"
-                  onClick={() => applyRange(today, addDaysText(today, days - 1))}
-                  className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
-                >
-                  {days} days
-                </button>
-              ))}
-            </div>
-            <button type="button" onClick={reload} className={`${ACTION_BTN} border border-slate-200 bg-white text-slate-600 hover:bg-slate-50`}>
-              {loading
-                ? <Loader2 className="h-4 w-4 animate-spin text-[#00b4d8] motion-reduce:animate-none" />
-                : <RefreshCw className="h-4 w-4 text-slate-500" />}
-              Refresh
-            </button>
+          {/* Preset window dipakai dua mode: di peta = batas jelajah kursor,
+              di timeline = lebar sumbu-x. */}
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Date window presets">
+            {RANGE_PRESETS.map((days) => (
+              <button
+                key={days}
+                type="button"
+                onClick={() => applyRange(today, addDaysText(today, days - 1))}
+                className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
+              >
+                {days} days
+              </button>
+            ))}
           </div>
         </div>
         <p className="text-xs tabular-nums text-slate-500">

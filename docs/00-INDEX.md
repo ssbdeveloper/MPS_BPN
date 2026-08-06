@@ -57,6 +57,8 @@ updated: 2026-07-24
 - [[log/2026-07-11-md-cleanup]] — audit .md: 28 dihapus, 20 diisolasi
 - [[log/2026-07-12-ews-consolidation]] — 7 dokumen EWS dilebur ke [[EWS_PLAN]]
 - [[log/2026-07-14-prd-manufacturing-variant]] — scan 3 lapisan → PRD varian manufacturing
+- [[log/2026-08-05-order-pool-due-by-filter]] — pool order reservasi bay: filter "jatuh tempo ≤ akhir minggu ini + belum selesai (tanpa batas bawah)" via param `due_by`
+- [[log/2026-08-05-scheduling-area-ux-polish]] — UX: search task di panel reservasi, tab pool jadi segmented control, header (Map date/range/refresh) dirapikan
 
 ## 📚 Operasional
 

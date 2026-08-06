@@ -1263,6 +1263,17 @@ async function listSowOrders(query = {}) {
   }
   const excludeUnknown = toBool(query.exclude_unknown, false) === true;
 
+  // due_by — FILTER sungguhan, beda dari in_window yang hanya anotasi (D6).
+  // Mempertahankan order yang punya >= 1 task aktif dengan coalesce(plan_finish,
+  // plan_start) <= due_by. TANPA batas bawah: task yang jadwalnya sudah lewat
+  // (overdue) dari kapan pun tetap masuk. Dipakai tab 'perlu' (To schedule)
+  // dengan due_by = akhir minggu ini (lihat weekEndText di FE).
+  const dueBy = query.due_by ? normalizeDateOnly(query.due_by, "due_by") : null;
+  // Hitungan per-tab memakai batas jadwal SENDIRI (counts_due_by): badge 'perlu'
+  // harus tetap benar walau tab aktif berbeda. Param ini HANYA untuk hitungan,
+  // tidak pernah memfilter baris.
+  const countsDueBy = query.counts_due_by ? normalizeDateOnly(query.counts_due_by, "counts_due_by") : null;
+
   // in_window hanya MENGANOTASI, tidak pernah memfilter (keputusan D6: tab, bukan penyembunyian).
   // Irisan dihitung PER TASK, bukan terhadap selubung earliest..latest order: order yang task-nya
   // berhenti Juli lalu lanjut September tidak boleh dianggap "di window Agustus" hanya karena
@@ -1273,9 +1284,19 @@ async function listSowOrders(query = {}) {
     const startParam = values.length - 1;
     const endParam = values.length;
     inWindowTasksSql = `count(*) filter (
-             where coalesce(t.plan_finish, t.plan_start)::date >= $${startParam}::date
-               and coalesce(t.plan_start, t.plan_finish)::date <= $${endParam}::date
-           )::integer as in_window_tasks`;
+            where coalesce(t.plan_finish, t.plan_start)::date >= $${startParam}::date
+              and coalesce(t.plan_start, t.plan_finish)::date <= $${endParam}::date
+          )::integer as in_window_tasks`;
+  }
+
+  // Kolom per-order di CTE msp: apakah ada task yang harus selesai <= due_by.
+  // bool_or (bukan min()) supaya order yang task-nya tersebar (sebagian overdue,
+  // sebagian masih jauh) tetap ketangkap selama SATU task saja sudah jatuh tempo.
+  let dueByTasksSql = "false::boolean as due_by_tasks";
+  if (dueBy) {
+    values.push(dueBy);
+    const dueByParam = values.length;
+    dueByTasksSql = `bool_or(coalesce(t.plan_finish, t.plan_start)::date <= $${dueByParam}::date) as due_by_tasks`;
   }
 
   if (q) {
@@ -1314,6 +1335,17 @@ async function listSowOrders(query = {}) {
         and sap.sap_status not in ('REL','LKD')
     )`);
   }
+  // due_by — filter jadwal SUNGGAUHAN (beda keputusan dari in_window, D6).
+  // Order dipertahankan hanya kalau punya task yang harus selesai <= due_by;
+  // task yang sudah lewat jadwalnya (overdue) dari kapan pun ikut terhitung
+  // (tidak ada batas bawah). Tanpa param ini perilaku identik dengan lama.
+  if (dueBy) {
+    having.push(`exists (
+      select 1 from msp
+      where msp.order_key = ltrim(s.order_no, '0')
+        and msp.due_by_tasks
+    )`);
+  }
 
   const limit = clampLimit(query.limit, 50);
   const offset = clampOffset(query.offset);
@@ -1330,7 +1362,8 @@ async function listSowOrders(query = {}) {
        select ltrim(t.order_no, '0') as order_key,
               min(t.plan_start)::date as earliest_plan_start,
               max(t.plan_finish)::date as latest_plan_finish,
-              ${inWindowTasksSql}
+              ${inWindowTasksSql},
+              ${dueByTasksSql}
          from public.ms_project_task t
         where t.is_active = true
           and coalesce(t.is_summary, false) = false
@@ -1371,6 +1404,7 @@ async function listSowOrders(query = {}) {
        (select msp.earliest_plan_start from msp where msp.order_key = ltrim(s.order_no, '0')) as earliest_plan_start,
        (select msp.latest_plan_finish from msp where msp.order_key = ltrim(s.order_no, '0')) as latest_plan_finish,
        coalesce((select msp.in_window_tasks from msp where msp.order_key = ltrim(s.order_no, '0')), 0) > 0 as in_window,
+      coalesce((select msp.due_by_tasks from msp where msp.order_key = ltrim(s.order_no, '0')), false) as due_by,
        coalesce((select resv.active_reservations from resv where resv.order_key = ltrim(s.order_no, '0')), 0)::integer as active_reservations,
        (count(*) over ())::integer as total
      from sow s
@@ -1401,7 +1435,88 @@ async function listSowOrders(query = {}) {
     return rest;
   });
 
-  return { rows, limit, offset, total };
+  // --- Hitungan per-tab (opsional, query.counts=true) -------------------------
+  // OrderPanel menampilkan badge jumlah SEMUA tab sejak awal (tanpa perlu klik).
+  // Hitungan EXACT dihitung server dari CTE yang sama: dua sumbu tab
+  // (has_msp_task, active_reservations) tidak bisa difilter via parameter, jadi
+  // total per halaman tidak pernah cukup untuk badge tab lain.
+  let counts = null;
+  if (toBool(query.counts, false) === true) {
+    const countsValues = [];
+    const countsDueByValue = countsDueBy || dueBy;
+    let countsDueByTasksSql = "false::boolean as due_by_tasks";
+    if (countsDueByValue) {
+      countsValues.push(countsDueByValue);
+      const dueByParam = countsValues.length;
+      countsDueByTasksSql = `bool_or(coalesce(t.plan_finish, t.plan_start)::date <= $${dueByParam}::date) as due_by_tasks`;
+    }
+
+    const countsWhere = [
+      "s.order_no is not null",
+      "trim(s.order_no) <> ''",
+      "s.operation_no is not null",
+    ];
+    if (q) {
+      countsValues.push(`%${q.toLowerCase()}%`);
+      const qParam = countsValues.length;
+      countsWhere.push(`(
+        lower(coalesce(s.order_no, '')) like $${qParam}
+        or lower(coalesce(s.ssbr_id, '')) like $${qParam}
+        or lower(coalesce(s.part_name, '')) like $${qParam}
+        or lower(coalesce(s.operation_text, '')) like $${qParam}
+        or lower(coalesce(s.workcenter, '')) like $${qParam}
+        or lower(coalesce(s.operation_no::text, '')) like $${qParam}
+      )`);
+    }
+
+    const sapRelLkd = "exists (select 1 from sap where sap.order_key = ltrim(s.order_no, '0') and sap.sap_status in ('REL','LKD'))";
+    const sapNotRelLkd = "exists (select 1 from sap where sap.order_key = ltrim(s.order_no, '0') and sap.sap_status not in ('REL','LKD'))";
+    const hasMsp = "exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0'))";
+    const hasDueByTask = "exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0') and msp.due_by_tasks)";
+    const hasResv = "exists (select 1 from resv where resv.order_key = ltrim(s.order_no, '0'))";
+
+    const countsResult = await pool().query(
+      `with ${SOW_ORDER_META_CTE_SQL},
+       msp as materialized (
+         select ltrim(t.order_no, '0') as order_key,
+                ${countsDueByTasksSql}
+           from public.ms_project_task t
+          where t.is_active = true
+            and coalesce(t.is_summary, false) = false
+            and t.order_no is not null
+          group by 1
+       ),
+       resv as materialized (
+         select ltrim(bs.order_no, '0') as order_key,
+                count(distinct coalesce(bs.schedule_group_id, bs.schedule_id))::integer as active_reservations
+           from public.ms_project_bay_schedule bs
+          where bs.status <> 'CANCELLED'
+            and bs.order_no is not null
+          group by 1
+       )
+       select
+         count(*) filter (where flag_perlu)::integer as perlu,
+         count(*) filter (where flag_belum_jadwal)::integer as belum_jadwal,
+         count(*) filter (where flag_terjadwal)::integer as terjadwal,
+         count(*) filter (where flag_selesai)::integer as selesai
+       from (
+         select
+           s.order_no,
+           (${sapRelLkd} and ${hasDueByTask}) as flag_perlu,
+           (${sapRelLkd} and not ${hasMsp}) as flag_belum_jadwal,
+           (${hasResv}) as flag_terjadwal,
+           (${sapNotRelLkd}) as flag_selesai
+         from sow s
+         where ${countsWhere.join(" and ")}
+         group by s.order_no
+         ${excludeUnknown ? "having exists (select 1 from sap where sap.order_key = ltrim(s.order_no, '0'))" : ""}
+       ) g`,
+      countsValues
+    );
+    counts = countsResult.rows[0] || null;
+  }
+
+  return { rows, limit, offset, total, ...(counts ? { counts } : {}) };
 }
 
 async function getSowOrderOperations(orderNoParam) {

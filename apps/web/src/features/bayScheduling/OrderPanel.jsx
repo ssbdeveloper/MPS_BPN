@@ -265,8 +265,10 @@ export default function OrderPanel({
 
   const tabItems = useMemo(() => TABS.map((item) => ({
     ...item,
-    // Tab aktif memakai `total` dari server; tab lain hanya kalau induk mengirim tabCounts.
-    count: item.key === tab ? totalCount : tabCounts?.[item.key],
+    // Badge pakai hitungan EXACT dari server untuk SEMUA tab (tabCounts) —
+    // angka muncul tanpa perlu klik. Fallback ke total server hanya untuk tab
+    // aktif bila hitungan belum tersedia.
+    count: tabCounts?.[item.key] ?? (item.key === tab ? totalCount : undefined),
   })), [tab, totalCount, tabCounts]);
 
   return (
@@ -298,29 +300,32 @@ export default function OrderPanel({
           placeholder="Search order / part..."
         />
 
-        <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Order status filter">
+        {/* Segmented control GRID STATIS — kolom tetap (2x2), jadi badge yang
+            muncul/hilang tidak pernah menggeser tombol lain. Badge 0 disembunyikan. */}
+        <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Order status filter">
           {tabItems.map((item) => {
             const active = item.key === tab;
+            const count = item.count;
             return (
               <button
                 key={item.key}
                 type="button"
                 aria-pressed={active}
                 onClick={() => onTabChange?.(item.key)}
-                className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
+                className={`inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
                   active
-                    ? 'border-[#0077b6] bg-[#0077b6] text-white'
-                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                    ? 'bg-white text-[#0077b6] shadow-sm'
+                    : 'text-slate-600 hover:bg-white/60 hover:text-slate-900'
                 }`}
               >
                 {item.label}
-                {item.count != null && (
+                {Number.isFinite(count) && count > 0 && (
                   <span
-                    className={`rounded-full px-1.5 text-xs font-bold tabular-nums ${
-                      active ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-600'
+                    className={`rounded-full px-1.5 text-[11px] font-bold tabular-nums ${
+                      active ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-200/70 text-slate-600'
                     }`}
                   >
-                    {item.count}
+                    {count}
                   </span>
                 )}
               </button>

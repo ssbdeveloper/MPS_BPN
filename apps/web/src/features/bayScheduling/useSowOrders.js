@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchSowOrdersPage } from '../../services/msProjectService';
+import { weekEndText } from './constants';
 
 // = MAX_LIMIT di apps/api/services/msProjectService.js. Meminta lebih besar akan
 // dijepit server dan membuat perhitungan "sudah habis" meleset.
@@ -51,17 +52,57 @@ function buildParams(tab, search, offset) {
     exclude_unknown: 'true',
     limit: PAGE_SIZE,
     offset,
+    // Badge jumlah SEMUA tab dihitung server (query.counts). counts_due_by
+    // memakai batas jadwal sendiri supaya badge 'perlu' benar walau tab aktif
+    // bukan 'perlu' — param ini tidak pernah memfilter baris.
+    counts: 'true',
+    counts_due_by: weekEndText(),
   };
   const completion = TAB_COMPLETION[tab];
   if (completion) params.completion = completion;
+  // Tab 'perlu' (To schedule) = unfinished + jatuh tempo <= akhir minggu ini
+  // (termasuk overdue dari kapan pun — server tanpa batas bawah). due_by dihitung
+  // dari hari ini, jadi filter bergeser otomatis tiap minggu.
+  if (tab === 'perlu') params.due_by = weekEndText();
   const q = String(search || '').trim();
   if (q) params.q = q;
   return params;
 }
 
+// Batas halaman saat menghitung badge di KLIEN (fallback server lama). 20 halaman
+// x 100 = 2000 baris per tab; lewat itu angka jadi batas bawah (praktis tak terjadi).
+const COUNT_PAGE_CAP = 20;
+
+// Badge jumlah SEMUA tab harus muncul sejak awal tanpa perlu klik. Server baru
+// mengembalikannya sekaligus (page.counts). Kalau server belum punya (deploy
+// lama), hitung di KLIEN: tarik semua halaman tiap tab dan terapkan predicate
+// yang sama dengan daftar (TAB_PREDICATE) — hasilnya EXACT, tanpa menunggu klik.
+async function fetchTabCounts(search, signal) {
+  const counts = {};
+  for (const tab of ORDER_TABS) {
+    const predicate = TAB_PREDICATE[tab.id];
+    let matched = 0;
+    let offset = 0;
+    for (let pageIndex = 0; pageIndex < COUNT_PAGE_CAP; pageIndex += 1) {
+      const params = buildParams(tab.id, search, offset);
+      delete params.counts;   // hitungan klien tidak butuh subquery counts server
+      delete params.counts_due_by;
+      const page = await fetchSowOrdersPage(params, { signal });
+      const rows = Array.isArray(page.rows) ? page.rows : [];
+      matched += predicate ? rows.filter(predicate).length : rows.length;
+      offset += rows.length;
+      if (offset >= Number(page.total)) break;
+    }
+    counts[tab.id] = matched;
+  }
+  return counts;
+}
+
 export default function useSowOrders() {
   const [rows, setRows] = useState([]);          // baris mentah dari server (akumulatif)
   const [serverTotal, setServerTotal] = useState(0);
+  // Badge jumlah per tab (server menghitungnya sekaligus, lihat query.counts).
+  const [tabCounts, setTabCounts] = useState(null);
   // Mulai dari true: halaman pertama sudah dijadwalkan sejak render pertama, jadi
   // panel harus menampilkan skeleton — bukan EmptyState "tidak ada order".
   const [loading, setLoading] = useState(true);
@@ -107,6 +148,19 @@ export default function useSowOrders() {
           // berkedip kosong selama debounce.
           setRows(page.rows);
           setServerTotal(page.total);
+          // Badge: server baru kirim counts sekaligus; server lama dihitung
+          // klien (paralel, non-blocking) supaya angka muncul tanpa perlu klik.
+          if (page.counts) {
+            setTabCounts(page.counts);
+            return;
+          }
+          fetchTabCounts(search, controller.signal)
+            .then((counts) => {
+              if (!controller.signal.aborted) setTabCounts(counts);
+            })
+            .catch(() => {
+              // Abort/error: biarkan tabCounts lama (atau null) — badge opsional.
+            });
         })
         .catch((err) => {
           if (controller.signal.aborted || err?.name === 'AbortError') return;
@@ -193,6 +247,7 @@ export default function useSowOrders() {
     tab,
     setTab,
     loadMore,
+    tabCounts,
     // Tambahan di luar kontrak: `loadingMore` untuk membedakan spinner tombol
     // "muat lagi" dari skeleton awal, `hasMore` bila panel tidak mau memakai
     // aturan `shown >= total`.

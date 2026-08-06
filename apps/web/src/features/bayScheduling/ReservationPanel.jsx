@@ -5,7 +5,7 @@ import {
   RefreshCw, Save, Undo2, Users, X,
 } from 'lucide-react';
 import { fetchBayOccupants, fetchOrderTasks, updateOperationPeople } from '../../services/msProjectService';
-import { Skeleton } from '../../components';
+import { SearchInput, Skeleton } from '../../components';
 import {
   NONJOB_BOOKING_TYPES, addDaysText, bookingTypeOf, formatDate, formatHours, statusStyle, todayText,
   bayCode as makeBayCode, splitBayCode,
@@ -239,6 +239,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   const [loadingTasks, setLoadingTasks] = useState(shouldLoadTasks);
   const [tasksError, setTasksError] = useState('');
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const [taskSearch, setTaskSearch] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
 
   // --- Headcount ------------------------------------------------------------
@@ -327,6 +328,18 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
     [orderTasks, selectedTaskIdSet],
   );
 
+  // Pencarian task: filter lokal by op / nama / workcenter. Order dengan puluhan
+  // task mustahil di-scan dengan scroll — ini pintu masuknya.
+  const taskQuery = taskSearch.trim().toLowerCase();
+  const filteredTasks = useMemo(() => {
+    if (!taskQuery) return orderTasks;
+    return orderTasks.filter((task) => (
+      String(task.operation_no ?? '').toLowerCase().includes(taskQuery)
+      || String(task.task_name ?? '').toLowerCase().includes(taskQuery)
+      || String(task.workcenter ?? '').toLowerCase().includes(taskQuery)
+    ));
+  }, [orderTasks, taskQuery]);
+
   // --- Prefill tanggal dari jadwal MS Project (D5) --------------------------
   // start = min(plan_start), end = max(plan_finish) dari task TERPILIH.
   const planRange = useMemo(() => {
@@ -390,7 +403,8 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   }, [canQueryOccupants, bayCodesKey, startDate, endDate, occupantsToken]);
 
   // --- Handler --------------------------------------------------------------
-  const allChecked = orderTasks.length > 0 && selectedTaskIds.length === orderTasks.length;
+  const allFilteredChecked = filteredTasks.length > 0
+    && filteredTasks.every((task) => selectedTaskIdSet.has(task.task_id));
 
   const toggleTask = useCallback((taskId) => {
     setSelectedTaskIds((prev) => (
@@ -398,11 +412,20 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
     ));
   }, []);
 
+  // "Select all" bekerja pada HASIL PENCARIAN, bukan seluruh task order: kalau
+  // user memfilter lalu memilih semua, task di luar filter tidak ikut terseret.
   const toggleAll = useCallback(() => {
-    setSelectedTaskIds((prev) => (
-      prev.length === orderTasks.length ? [] : orderTasks.map((task) => task.task_id)
-    ));
-  }, [orderTasks]);
+    if (filteredTasks.length === 0) return;
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      if (filteredTasks.every((task) => next.has(task.task_id))) {
+        filteredTasks.forEach((task) => next.delete(task.task_id));
+      } else {
+        filteredTasks.forEach((task) => next.add(task.task_id));
+      }
+      return [...next];
+    });
+  }, [filteredTasks]);
 
   const handlePeopleChange = useCallback((task, raw) => {
     const digits = String(raw).replace(/[^0-9]/g, '');
@@ -626,7 +649,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                     onClick={toggleAll}
                     className="rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                   >
-                    {allChecked ? 'Clear' : 'Select all'}
+                    {allFilteredChecked ? 'Clear' : 'Select all'}
                   </button>
                 )}
               </div>
@@ -664,22 +687,43 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                     </Link>
                   </div>
                 ) : (
-                  <div className="max-h-64 overflow-y-auto">
-                    {orderTasks.map((task) => {
-                      const value = peopleEdits[peopleKey(task)] ?? '';
-                      return (
-                        <TaskRow
-                          key={task.task_id}
-                          task={task}
-                          checked={selectedTaskIdSet.has(task.task_id)}
-                          onToggle={toggleTask}
-                          peopleValue={value}
-                          peopleInvalid={!isValidPeople(value)}
-                          onPeopleChange={handlePeopleChange}
-                        />
-                      );
-                    })}
-                  </div>
+                  <>
+                    <SearchInput
+                      value={taskSearch}
+                      onChange={setTaskSearch}
+                      placeholder="Search op / task / workcenter..."
+                      className="mb-1.5"
+                    />
+                    {taskQuery && (
+                      <p className="mb-1 px-1 text-[11px] font-semibold tabular-nums text-slate-500">
+                        {filteredTasks.length} of {orderTasks.length} tasks
+                      </p>
+                    )}
+                    {filteredTasks.length === 0 ? (
+                      <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                        <p className="text-xs font-semibold text-slate-500">
+                          No tasks match “{taskSearch.trim()}”.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="max-h-72 overflow-y-auto">
+                        {filteredTasks.map((task) => {
+                          const value = peopleEdits[peopleKey(task)] ?? '';
+                          return (
+                            <TaskRow
+                              key={task.task_id}
+                              task={task}
+                              checked={selectedTaskIdSet.has(task.task_id)}
+                              onToggle={toggleTask}
+                              peopleValue={value}
+                              peopleInvalid={!isValidPeople(value)}
+                              onPeopleChange={handlePeopleChange}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 

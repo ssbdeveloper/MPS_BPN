@@ -178,6 +178,17 @@ export function addDaysText(dateText, days) {
   return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
 }
 
+// Akhir minggu (Minggu) dari tanggal yang diberikan — dipakai filter pool order
+// "harus dikerjakan minggu ini" (tab To schedule mengirim due_by = nilai ini).
+// Aritmetika UTC-safe, sama seperti addDaysText.
+export function weekEndText(dateText) {
+  const text = dateKey(dateText) || todayText();
+  const base = parseDateText(text);
+  if (!base) return text;
+  const weekday = new Date(Date.UTC(base.y, base.m - 1, base.d)).getUTCDay();
+  return addDaysText(text, (7 - weekday) % 7);
+}
+
 // Penjamakan Inggris untuk angka yang TAMPIL. Tanpa satu helper bersama, sebagian tempat
 // memberi penjaga tunggal dan sebagian tidak — di layar yang sama muncul "1 reservation"
 // di sel bay dan "1 reservations" di header area. AREA-10 memang hanya punya satu bay,
