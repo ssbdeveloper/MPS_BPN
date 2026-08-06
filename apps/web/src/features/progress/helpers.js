@@ -50,20 +50,27 @@ export const authHeaders = () => {
   } catch { return {}; }
 };
 
-// ─── Format sub-task weight (numeric string "1.00" → "1") ──────────────────────
-export const fmtWeight = (w) => {
-  const n = Number(w);
+// ─── Format sub-task hours (numeric string "1.00" → "1") ──────────────────────
+export const fmtHours = (h) => {
+  const n = Number(h);
   return Number.isFinite(n) ? String(n) : '—';
 };
 
+// ─── Format sub-task weight share (0.3333 → "33%") ────────────────────────────
+export const fmtWeightPct = (w) => {
+  const n = Number(w);
+  return Number.isFinite(n) ? `${Math.round(n * 100)}%` : '—';
+};
+
 // ─── Weighted roll-up of active sub-tasks (mirrors backend recompute) ──────────
+// standard_hours = sumber kebenaran; 0 jam = tak berpengaruh (weight turunan).
 export const computeRollup = (list) => {
   let weighted = 0;
   let total = 0;
   for (const s of list) {
-    const w = Number(s.weight) || 0;
-    weighted += (Number(s.progress) || 0) * w;
-    total += w;
+    const h = Number(s.standard_hours) || 0;
+    weighted += (Number(s.progress) || 0) * h;
+    total += h;
   }
   return total > 0 ? Math.round(weighted / total) : null;
 };

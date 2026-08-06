@@ -104,7 +104,12 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
   const [expandedOps, setExpandedOps] = useState(new Set());
 
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // StrictMode-safe: set ulang mountedRef = true di body effect (StrictMode dev
+  // menjalankan cleanup → remount; tanpa ini ref tetap false → sub-task macet skeleton).
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const loadSubtasks = useCallback(async (idsow) => {
     setSubState((prev) => ({ ...prev, [idsow]: { ...(prev[idsow] || {}), loading: true, error: '' } }));
@@ -278,6 +283,8 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
                           <SubOperationPanel
                             idsow={op.idsow}
                             operationNo={op.operation_no}
+                            partNumber={op.part_number}
+                            operationText={op.operation_text}
                             state={subs}
                             onRefresh={() => loadSubtasks(op.idsow)}
                           />

@@ -51,7 +51,13 @@ export default function ProgressUpdatePage() {
   const opsReqRef = useRef(0);
   const mountedRef = useRef(true);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // StrictMode-safe: effect body harus SET ulang mountedRef = true (StrictMode di dev
+  // menjalankan cleanup lalu remount; tanpa set ulang, ref tetap false → fetch async
+  // di-skip dan UI macet di skeleton loading).
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Debounce free-text search into the actual fetch trigger.
   useEffect(() => {
@@ -249,6 +255,8 @@ export default function ProgressUpdatePage() {
           <SubOperationPanel
             idsow={op.idsow}
             operationNo={op.operation_no}
+            partNumber={op.part_number}
+            operationText={op.operation_text}
             state={subs}
             onRefresh={() => loadSubtasks(op.idsow)}
           />

@@ -312,8 +312,8 @@ export default function SubTaskStandardPage() {
                     <div key={row.id} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-slate-50">
                       <span className="w-8 shrink-0 tabular-nums text-slate-400">{row.sort_order}</span>
                       <span className="min-w-0 flex-1 truncate font-semibold text-slate-800">{row.title}</span>
-                      <span className="shrink-0 rounded bg-slate-100 px-1.5 tabular-nums text-slate-600" title="Weight">
-                        {Number(row.weight)}
+                      <span className="shrink-0 rounded bg-slate-100 px-1.5 tabular-nums text-slate-600" title="Standard Hours">
+                        {Number(row.standard_hours)} jam
                       </span>
                       {canWrite && (
                         <button

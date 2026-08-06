@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Plus, Pencil, Ban, Loader2, Layers } from 'lucide-react';
 import EmptyState from '../../components/ui/EmptyState';
 import Skeleton from '../../components/ui/Skeleton';
 import ConfirmationModal from '../../components/ui/ConfirmationModal';
-import { API_BASE, authHeaders, fmtWeight, fmtTs } from './helpers';
+import { API_BASE, authHeaders, fmtHours, fmtWeightPct, fmtTs } from './helpers';
 import { ModalShell, ProgressBar, StatusPill } from './primitives';
 import { ProgressUpdatePanel } from './ProgressUpdatePanel';
 
@@ -14,7 +14,8 @@ export const SubTaskProgressModal = ({ sub, operationNo, onClose, onSaved }) => 
     { label: 'Order No', value: sub.order_no },
     { label: 'Op No',    value: operationNo },
     { label: 'Sub-task', value: sub.title },
-    { label: 'Bobot',    value: fmtWeight(sub.weight) },
+    { label: 'Jam',      value: `${fmtHours(sub.standard_hours)} jam` },
+    { label: 'Bobot',    value: fmtWeightPct(sub.weight) },
     { label: 'Status',   value: <StatusPill status={sub.status} /> },
   ];
   return (
@@ -44,19 +45,19 @@ export const SubTaskProgressModal = ({ sub, operationNo, onClose, onSaved }) => 
 export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
   const isEdit = mode === 'edit';
   const [title, setTitle]         = useState(sub?.title ?? '');
-  const [weight, setWeight]       = useState(sub?.weight != null ? String(Number(sub.weight)) : '');
+  const [hours, setHours]         = useState(sub?.standard_hours != null ? String(Number(sub.standard_hours)) : '');
   const [sortOrder, setSortOrder] = useState(sub?.sort_order != null ? String(sub.sort_order) : '');
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState('');
 
   const titleValid  = title.trim().length > 0;
-  const weightValid = weight === '' || Number(weight) > 0;
+  const hoursValid  = hours === '' || (Number.isFinite(Number(hours)) && Number(hours) >= 0);
   const sortValid   = sortOrder === '' || Number.isInteger(Number(sortOrder));
-  const canSave     = titleValid && weightValid && sortValid && !saving;
+  const canSave     = titleValid && hoursValid && sortValid && !saving;
 
   const handleSave = async () => {
     if (!titleValid)  { setError('Judul wajib diisi'); return; }
-    if (!weightValid) { setError('Bobot harus lebih besar dari 0'); return; }
+    if (!hoursValid)  { setError('Jam standar tidak boleh negatif'); return; }
     if (!sortValid)   { setError('Urutan harus angka bulat'); return; }
 
     setSaving(true);
@@ -65,7 +66,7 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
       const url    = isEdit ? `${API_BASE}/sow/subtasks/${sub.id}` : `${API_BASE}/sow/operations/${idsow}/subtasks`;
       const method = isEdit ? 'PUT' : 'POST';
       const body   = { title: title.trim() };
-      if (weight !== '')    body.weight     = Number(weight);
+      if (hours !== '')     body.standard_hours = Number(hours);
       if (sortOrder !== '') body.sort_order = parseInt(sortOrder, 10);
 
       const res = await fetch(url, {
@@ -119,17 +120,20 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Bobot <span className="font-normal text-slate-400">(opsional)</span>
+              Jam Standar <span className="font-normal text-slate-400">(opsional)</span>
             </label>
             <input
               type="number"
               min={0}
               step="0.01"
-              value={weight}
-              onChange={(e) => { setWeight(e.target.value); setError(''); }}
+              value={hours}
+              onChange={(e) => { setHours(e.target.value); setError(''); }}
               placeholder="1"
               className={`${inputCls} tabular-nums`}
             />
+            <p className="mt-1 text-[11px] text-slate-400 leading-snug">
+              Bobot dihitung otomatis dari jam (0 = tak dihitung).
+            </p>
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
@@ -181,6 +185,206 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
   );
 };
 
+// ─── Add from standard master modal ──────────────────────────────────────────
+// Standar sub-task (sow_sub_operation_standard) dikunci per (part_number,
+// operation_text) — sama dengan kunci autoseed SAP. Modal ini menampilkan
+// standar yang cocok dengan operasi yang sedang dibuka, user centang, lalu
+// POST batch ke /sow/operations/:idsow/subtasks/batch (cap jam dicek server).
+export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, existingTitles = [], onClose, onSaved }) => {
+  const [rows, setRows]         = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState('');
+  const [selected, setSelected] = useState(new Set());
+  const [saving, setSaving]     = useState(false);
+  const [err2, setErr2]         = useState('');
+
+  const norm = (t) => String(t || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  const existingSet = useMemo(() => new Set(existingTitles.map(norm)), [existingTitles]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const p = new URLSearchParams();
+        if (partNumber)  p.set('part_number', partNumber);
+        if (operationText) p.set('operation_text', operationText);
+        const res = await fetch(`${API_BASE}/sow/subtask-standards?${p.toString()}`);
+        if (!res.ok) throw new Error();
+        const json = await res.json();
+        if (!alive) return;
+        // Standar yang judulnya sudah jadi sub-task AKTIF tidak ditampilkan.
+        const data = Array.isArray(json.data) ? json.data.filter((r) => !existingSet.has(norm(r.title))) : [];
+        setRows(data);
+        setSelected(new Set());
+      } catch {
+        if (alive) setError('Gagal memuat standar sub-task.');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [idsow, partNumber, operationText, existingSet]);
+
+  const toggle = (id) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const selRows   = rows.filter((r) => selected.has(r.id));
+  const selHours  = selRows.reduce((s, r) => s + (Number(r.standard_hours) || 0), 0);
+
+  const handleAdd = async () => {
+    if (saving || selRows.length === 0) return;
+    setSaving(true);
+    setErr2('');
+    try {
+      const items = selRows.map((r) => ({
+        title: r.title,
+        standard_hours: r.standard_hours != null ? Number(r.standard_hours) : 1,
+        sort_order: r.sort_order != null ? Number(r.sort_order) : 0,
+      }));
+      const res = await fetch(`${API_BASE}/sow/operations/${idsow}/subtasks/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ items }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const m = j.error || 'Gagal menambah sub-task dari standar';
+        setErr2(m);
+        toast.error(m);
+        return;
+      }
+      const added   = j.created_count ?? selRows.length;
+      const skipped = j.skipped_count ?? 0;
+      toast.success(`Sub-task ditambahkan dari standar (${added})${skipped ? ` — ${skipped} dilewati` : ''}`);
+      onSaved?.();
+    } catch (err) {
+      const m = 'Gagal: ' + err.message;
+      setErr2(m);
+      toast.error(m);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell
+      title="Tambah dari Standar"
+      subtitle={partNumber ? `${partNumber}${operationText ? ` · ${operationText}` : ''}` : 'Master sub-task per part'}
+      onClose={onClose}
+      size="md"
+    >
+      <div className="overflow-y-auto p-5 space-y-4">
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-11 rounded-xl" />
+            <Skeleton className="h-11 rounded-xl" />
+            <Skeleton className="h-11 rounded-xl" />
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2.5">
+            <span className="text-xs text-red-700 font-medium">{error}</span>
+            <button
+              onClick={onClose}
+              className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
+            >
+              Tutup
+            </button>
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={Layers}
+            title="Tidak ada standar"
+            description={
+              partNumber
+                ? `Belum ada standar sub-task untuk part ${partNumber} pada operasi ini. Kelola di menu SOW Management → Sub-task Standard.`
+                : 'Operasi tanpa part_number/operation_text — standar tidak bisa dicocokkan.'
+            }
+          />
+        ) : (
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
+              {rows.length} standar cocok — centang yang mau ditambahkan
+            </p>
+            {rows.map((r) => (
+              <label
+                key={r.id}
+                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5 cursor-pointer hover:border-slate-300 hover:bg-slate-50 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(r.id)}
+                  onChange={() => toggle(r.id)}
+                  className="h-4 w-4 rounded border-slate-300 accent-[#0077b6]"
+                />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm font-semibold text-slate-800 truncate">{r.title}</span>
+                  <span className="block text-[11px] text-slate-400 tabular-nums">
+                    urutan {r.sort_order ?? 0}
+                  </span>
+                </span>
+                <span className="shrink-0 rounded bg-sky-50 border border-sky-100 px-2 py-0.5 text-[11px] font-bold tabular-nums text-[#0077b6]">
+                  {Number(r.standard_hours) || 0} jam
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+
+        {err2 && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5">
+            <span className="text-xs text-red-700 font-medium">{err2}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex-shrink-0 border-t border-slate-200 px-5 py-3 flex items-center justify-between gap-2">
+        <span className="text-xs text-slate-500 tabular-nums">
+          {selected.size > 0 ? (
+            <>
+              <span className="font-bold text-slate-700">{selected.size}</span> terpilih ·{' '}
+              <span className="font-bold text-slate-700">{selHours}</span> jam
+            </>
+          ) : (
+            'Pilih standar untuk ditambahkan'
+          )}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 min-h-[44px] rounded-lg text-sm font-semibold bg-white border border-slate-200 text-slate-700
+                       hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            Batal
+          </button>
+          <button
+            onClick={handleAdd}
+            disabled={saving || selected.size === 0}
+            className="px-4 py-2 min-h-[44px] rounded-lg text-sm font-semibold text-white bg-[#0077b6] hover:bg-[#023e8a]
+                       transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+          >
+            {saving ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
+                Menambah...
+              </span>
+            ) : (
+              `Tambah (${selected.size})`
+            )}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  );
+};
+
 // ─── Sub-task row (presentational) ────────────────────────────────────────────
 export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
   <div className="flex flex-col md:flex-row md:items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
@@ -190,7 +394,9 @@ export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
         <StatusPill status={sub.status} />
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
-        <span className="tabular-nums">Bobot {fmtWeight(sub.weight)}</span>
+        <span className="tabular-nums">{fmtHours(sub.standard_hours)} jam</span>
+        <span className="text-slate-300">·</span>
+        <span className="tabular-nums">Bobot {fmtWeightPct(sub.weight)}</span>
         <span className="text-slate-300">·</span>
         <span>Update {fmtTs(sub.updated_at)}</span>
         {sub.updated_by && (
@@ -239,9 +445,10 @@ export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
 );
 
 // ─── Sub-operation panel (list + CRUD orchestration for one operation) ────────
-export const SubOperationPanel = ({ idsow, operationNo, state, onRefresh }) => {
+export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationText, state, onRefresh }) => {
   const { list = [], loading, error } = state || {};
   const [formModal, setFormModal]         = useState(null); // { mode, sub? }
+  const [stdModal, setStdModal]           = useState(false);
   const [progressSub, setProgressSub]     = useState(null);
   const [deactivateSub, setDeactivateSub] = useState(null);
   const [deactivating, setDeactivating]   = useState(false);
@@ -274,11 +481,28 @@ export const SubOperationPanel = ({ idsow, operationNo, state, onRefresh }) => {
     <button
       onClick={() => setFormModal({ mode: 'add' })}
       className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg text-xs font-semibold text-white
-                 bg-[#0077b6] hover:bg-[#023e8a] transition-all active:scale-95
-                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                bg-[#0077b6] hover:bg-[#023e8a] transition-all active:scale-95
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
     >
       <Plus size={15} />
       Tambah Sub-task
+    </button>
+  );
+
+  // Tambah dari MASTER standar (sow_sub_operation_standard, kunci part_number +
+  // operation_text). Nonaktif bila operasi tidak punya part/teks operasi (tak bisa cocok).
+  const stdButton = (
+    <button
+      onClick={() => setStdModal(true)}
+      disabled={!partNumber || !operationText}
+      title={partNumber && operationText ? 'Tambahkan sub-task dari standar (master per part & operasi)' : 'Operasi tanpa part/operation_text — standar tidak bisa dicocokkan'}
+      className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg text-xs font-semibold
+                bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300
+                transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
+                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+    >
+      <Layers size={15} />
+      Dari Standar
     </button>
   );
 
@@ -293,7 +517,12 @@ export const SubOperationPanel = ({ idsow, operationNo, state, onRefresh }) => {
             </span>
           )}
         </div>
-        {!loading && !error && list.length > 0 && addButton}
+        {!loading && !error && (
+          <div className="flex items-center gap-2">
+            {stdButton}
+            {list.length > 0 && addButton}
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -339,6 +568,17 @@ export const SubOperationPanel = ({ idsow, operationNo, state, onRefresh }) => {
           sub={formModal.sub}
           onClose={() => setFormModal(null)}
           onSaved={() => { setFormModal(null); onRefresh(); }}
+        />
+      )}
+
+      {stdModal && (
+        <SubTaskFromStandardModal
+          idsow={idsow}
+          partNumber={partNumber}
+          operationText={operationText}
+          existingTitles={list.map((s) => s.title)}
+          onClose={() => setStdModal(false)}
+          onSaved={() => { setStdModal(false); onRefresh(); }}
         />
       )}
 

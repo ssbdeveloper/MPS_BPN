@@ -124,6 +124,7 @@ router.post("/progress-history", controller.addProgressUpdate);
 // ============================================
 router.get("/operations/:idsow/subtasks",     controller.getSubtasks);
 router.post("/operations/:idsow/subtasks",    controller.createSubtask);
+router.post("/operations/:idsow/subtasks/batch", controller.createSubtasksBatch);
 router.put("/subtasks/:subId",                controller.updateSubtask);
 router.post("/subtasks/:subId/progress",      controller.addSubtaskProgress);
 router.get("/subtasks/:subId/progress-history", controller.getSubtaskProgressHistory);

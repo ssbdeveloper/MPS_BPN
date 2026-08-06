@@ -1401,29 +1401,77 @@ exports.addProgressUpdate = async (req, res) => {
 // ============================================================================
 
 // Recompute the parent operation's progress from its ACTIVE sub-tasks.
-// sow.progress = round( SUM(progress*weight) / SUM(weight) ) over active rows.
+// sow.progress = round( SUM(progress*standard_hours) / SUM(standard_hours) ) over active rows.
+// standard_hours adalah SUMBER (0 jam = tak berpengaruh); weight hanyalah turunan display.
 // Also mirrors the value into sow.actual_progress. Runs on the SAME transaction
-// client as the mutation. If there are 0 active sub-tasks (SUM(weight) NULL/0),
+// client as the mutation. If there are 0 active sub-tasks (SUM NULL/0),
 // it does NOT overwrite sow.progress (leaves the last direct input intact).
 async function recomputeOperationProgress(client, idsow) {
   const agg = await client.query(
-    `SELECT SUM(progress * weight)::numeric AS weighted,
-            SUM(weight)::numeric           AS total_weight
+    `SELECT SUM(progress * standard_hours)::numeric AS weighted,
+            SUM(standard_hours)::numeric           AS total_hours
        FROM sow_sub_operation
       WHERE operation_id = $1 AND is_active = true`,
     [idsow]
   );
-  const totalWeight = agg.rows[0]?.total_weight;
-  // No active sub-task (or zero total weight) → do not overwrite operation progress.
-  if (totalWeight === null || totalWeight === undefined || Number(totalWeight) === 0) {
+  const totalHours = agg.rows[0]?.total_hours;
+  // No active sub-task (or zero total hours) → do not overwrite operation progress.
+  if (totalHours === null || totalHours === undefined || Number(totalHours) === 0) {
     return;
   }
   const weighted = Number(agg.rows[0].weighted) || 0;
-  const rolled = Math.round(weighted / Number(totalWeight));
+  const rolled = Math.round(weighted / Number(totalHours));
+  // $1 DULU dipakai di 2 kolom beda tipe (progress integer vs actual_progress numeric) —
+  // Postgres gagal infer satu tipe untuk param yang sama (42P18 "inconsistent types").
+  // Solusi: dua parameter terpisah, nilainya sama. Cast pun TIDAK cukup — site lain
+  // tetap memaksa infer ke integer, dan param tunggal tak bisa dua tipe sekaligus.
   await client.query(
-    `UPDATE sow SET progress = $1, actual_progress = $1 WHERE idsow = $2`,
-    [rolled, idsow]
+    `UPDATE sow SET progress = $1, actual_progress = $2 WHERE idsow = $3`,
+    [rolled, rolled, idsow]
   );
+}
+
+// Recompute derived weight for every ACTIVE sub-task of an operation:
+//   weight = standard_hours / SUM(standard_hours)   (share jam, bukan bobot manual)
+// Runs on the same transaction client as the mutation. Skipped when total hours = 0
+// (all sub-tasks have 0 hours → weight column left untouched).
+async function recomputeSubtaskWeights(client, idsow) {
+  await client.query(
+    `UPDATE sow_sub_operation s
+        SET weight = round(s.standard_hours / t.total, 4)
+       FROM (SELECT SUM(standard_hours)::numeric AS total
+               FROM sow_sub_operation
+              WHERE operation_id = $1 AND is_active = true) t
+      WHERE s.operation_id = $1 AND s.is_active = true
+        AND t.total > 0`,
+    [idsow]
+  );
+}
+
+// Cap: SUM(sub-task standard_hours aktif) tidak boleh melebihi jam standar operasi
+// (sow.planhours). Hanya ditegakkan saat planhours > 0 — operasi tanpa budget dibiarkan
+// bebas (70% operasi di prod planhours-nya kosong; cap 0 akan mematikan fitur).
+// excludeId dipakai saat UPDATE agar baris yang sedang diedit tidak dihitung dua kali.
+async function assertSubtaskHoursCap(client, idsow, newHours, excludeId) {
+  const opRow = await client.query('SELECT planhours FROM sow WHERE idsow = $1', [idsow]);
+  const planhours = Number(opRow.rows[0]?.planhours) || 0;
+  if (planhours <= 0) return;
+  const excludeSql = excludeId ? 'AND id <> $2' : '';
+  const params = excludeId ? [idsow, excludeId] : [idsow];
+  const sumRes = await client.query(
+    `SELECT COALESCE(SUM(standard_hours), 0)::numeric AS used
+       FROM sow_sub_operation
+      WHERE operation_id = $1 AND is_active = true ${excludeSql}`,
+    params
+  );
+  const used = Number(sumRes.rows[0].used);
+  if (used + newHours > planhours) {
+    const err = new Error(
+      `Total jam sub-task (${(used + newHours).toFixed(2)}) melebihi jam standar operasi (${planhours.toFixed(2)}). Ubah dulu jam operasinya.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
 }
 
 // GET /sow/operations/:idsow/subtasks — list active sub-tasks of one operation
@@ -1431,7 +1479,7 @@ exports.getSubtasks = async (req, res) => {
   try {
     const { idsow } = req.params;
     const result = await db.query(
-      `SELECT id, operation_id, order_no, title, sort_order, weight, progress,
+      `SELECT id, operation_id, order_no, title, sort_order, weight, standard_hours, progress,
               status, is_active, msp_task_id,
               created_by, created_at, updated_by, updated_at
          FROM sow_sub_operation
@@ -1445,22 +1493,23 @@ exports.getSubtasks = async (req, res) => {
   }
 };
 
-// POST /sow/operations/:idsow/subtasks — create { title, weight?, sort_order? }
+// POST /sow/operations/:idsow/subtasks — create { title, standard_hours?, sort_order? }
+// standard_hours = sumber kebenaran (0 = tak berpengaruh); weight dihitung otomatis.
 exports.createSubtask = async (req, res) => {
   let client;
   try {
     const { idsow } = req.params;
-    const { title, weight, sort_order } = req.body || {};
+    const { title, standard_hours, sort_order } = req.body || {};
     const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
 
     if (!title || !String(title).trim()) {
       return res.status(400).json({ error: 'title wajib diisi' });
     }
-    let w = 1;
-    if (weight !== undefined && weight !== null && weight !== '') {
-      w = Number(weight);
-      if (isNaN(w) || w <= 0) {
-        return res.status(400).json({ error: 'weight harus lebih besar dari 0' });
+    let hours = 1;
+    if (standard_hours !== undefined && standard_hours !== null && standard_hours !== '') {
+      hours = Number(standard_hours);
+      if (isNaN(hours) || hours < 0) {
+        return res.status(400).json({ error: 'standard_hours tidak boleh negatif' });
       }
     }
     let so = 0;
@@ -1482,33 +1531,143 @@ exports.createSubtask = async (req, res) => {
     }
     const orderNo = opRow.rows[0].order_no;
 
+    await assertSubtaskHoursCap(client, idsow, hours, null);
+
     const inserted = await client.query(
       `INSERT INTO sow_sub_operation
-         (operation_id, order_no, title, sort_order, weight, created_by, updated_by)
+         (operation_id, order_no, title, sort_order, standard_hours, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $6)
        RETURNING *`,
-      [idsow, orderNo || null, String(title).trim(), so, w, createdBy]
+      [idsow, orderNo || null, String(title).trim(), so, hours, createdBy]
     );
 
+    await recomputeSubtaskWeights(client, parseInt(idsow, 10));
     await recomputeOperationProgress(client, parseInt(idsow, 10));
 
     await client.query('COMMIT');
     res.status(201).json(inserted.rows[0]);
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   } finally {
     if (client) client.release();
   }
 };
 
-// PUT /sow/subtasks/:subId — update { title?, weight?, sort_order?, status?, is_active? }
-// Recomputes operation rollup when weight or is_active changes.
+// POST /sow/operations/:idsow/subtasks/batch — create many sub-tasks from the
+// standard master (or manual multi-add) atomically.
+// body: { items: [{ title, standard_hours?, sort_order? }] }
+//   - standard_hours default 1, boleh 0 (tidak dihitung dalam roll-up)
+//   - cap planhours dicek SEKALI untuk total jam batch
+//   - baris yang judulnya sudah ada sebagai sub-task AKTIF dilewati (dikembalikan di skipped)
+//   - weights + roll-up dihitung ulang sekali setelah semua insert
+exports.createSubtasksBatch = async (req, res) => {
+  let client;
+  try {
+    const { idsow } = req.params;
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
+
+    if (items.length === 0) {
+      return res.status(400).json({ error: 'items wajib diisi (array sub-task)' });
+    }
+
+    // Validasi + normalisasi item.
+    const clean = [];
+    for (const it of items) {
+      const title = String(it?.title || '').trim();
+      if (!title) {
+        return res.status(400).json({ error: 'title wajib diisi' });
+      }
+      let hours = 1;
+      if (it?.standard_hours !== undefined && it.standard_hours !== null && it.standard_hours !== '') {
+        hours = Number(it.standard_hours);
+        if (isNaN(hours) || hours < 0) {
+          return res.status(400).json({ error: 'standard_hours tidak boleh negatif' });
+        }
+      }
+      let so = 0;
+      if (it?.sort_order !== undefined && it.sort_order !== null && it.sort_order !== '') {
+        so = parseInt(it.sort_order, 10);
+        if (isNaN(so)) {
+          return res.status(400).json({ error: 'sort_order harus berupa angka' });
+        }
+      }
+      clean.push({ title, hours, so });
+    }
+
+    client = await pgPool.connect();
+    await client.query('BEGIN');
+
+    const opRow = await client.query('SELECT order_no FROM sow WHERE idsow = $1', [idsow]);
+    if (opRow.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Operasi (idsow) tidak ditemukan' });
+    }
+    const orderNo = opRow.rows[0].order_no;
+
+    // Skip judul yang sudah ada sebagai sub-task AKTIF (normalisasi sama seperti
+    // import: upper(btrim) + spasi tunggal).
+    const existingRes = await client.query(
+      `SELECT upper(regexp_replace(btrim(title), '\\s+', ' ', 'g')) AS norm
+         FROM sow_sub_operation
+        WHERE operation_id = $1 AND is_active = true`,
+      [idsow]
+    );
+    const existingSet = new Set(existingRes.rows.map((r) => r.norm));
+    const normTitle = (t) => String(t).trim().replace(/\s+/g, ' ').toUpperCase();
+
+    const toCreate = [];
+    const skipped = [];
+    for (const it of clean) {
+      if (existingSet.has(normTitle(it.title))) {
+        skipped.push({ title: it.title, reason: 'sudah ada' });
+      } else {
+        toCreate.push(it);
+      }
+    }
+
+    if (toCreate.length > 0) {
+      const totalHours = toCreate.reduce((sum, it) => sum + it.hours, 0);
+      await assertSubtaskHoursCap(client, idsow, totalHours, null);
+
+      const created = [];
+      for (const it of toCreate) {
+        const inserted = await client.query(
+          `INSERT INTO sow_sub_operation
+             (operation_id, order_no, title, sort_order, standard_hours, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $6)
+           RETURNING *`,
+          [idsow, orderNo || null, it.title, it.so, it.hours, createdBy]
+        );
+        created.push(inserted.rows[0]);
+      }
+
+      await recomputeSubtaskWeights(client, parseInt(idsow, 10));
+      await recomputeOperationProgress(client, parseInt(idsow, 10));
+
+      await client.query('COMMIT');
+      return res.status(201).json({ created, skipped, created_count: created.length, skipped_count: skipped.length });
+    }
+
+    // Tidak ada yang baru → tetap 201 dengan created kosong (skipped penuh).
+    await client.query('COMMIT');
+    res.status(201).json({ created: [], skipped, created_count: 0, skipped_count: skipped.length });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    res.status(err.statusCode || 500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+};
+
+// PUT /sow/subtasks/:subId — update { title?, standard_hours?, sort_order?, status?, is_active? }
+// Recomputes weights + operation rollup when standard_hours or is_active changes.
 exports.updateSubtask = async (req, res) => {
   let client;
   try {
     const { subId } = req.params;
-    const { title, weight, sort_order, status, is_active } = req.body || {};
+    const { title, standard_hours, sort_order, status, is_active } = req.body || {};
     const updatedBy = req.body?.updated_by || req.body?.created_by || req.headers['x-user-id'] || null;
 
     const sets = [];
@@ -1522,12 +1681,12 @@ exports.updateSubtask = async (req, res) => {
       }
       sets.push(`title = $${i++}`); vals.push(String(title).trim());
     }
-    if (weight !== undefined) {
-      const w = Number(weight);
-      if (isNaN(w) || w <= 0) {
-        return res.status(400).json({ error: 'weight harus lebih besar dari 0' });
+    if (standard_hours !== undefined) {
+      const h = Number(standard_hours);
+      if (isNaN(h) || h < 0) {
+        return res.status(400).json({ error: 'standard_hours tidak boleh negatif' });
       }
-      sets.push(`weight = $${i++}`); vals.push(w);
+      sets.push(`standard_hours = $${i++}`); vals.push(h);
       recompute = true;
     }
     if (sort_order !== undefined) {
@@ -1571,14 +1730,17 @@ exports.updateSubtask = async (req, res) => {
     }
 
     if (recompute) {
-      await recomputeOperationProgress(client, updated.rows[0].operation_id);
+      const row = updated.rows[0];
+      await assertSubtaskHoursCap(client, row.operation_id, Number(row.standard_hours) || 0, row.id);
+      await recomputeSubtaskWeights(client, row.operation_id);
+      await recomputeOperationProgress(client, row.operation_id);
     }
 
     await client.query('COMMIT');
     res.json(updated.rows[0]);
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   } finally {
     if (client) client.release();
   }
@@ -1721,7 +1883,7 @@ exports.importSubtasks = async (req, res) => {
     }
 
     // ── Map header columns (row 1) → column index ────────────────────────────
-    const HEADER_KEYS = ['order_no', 'operation_no', 'title', 'weight', 'sort_order', 'status', 'progress'];
+    const HEADER_KEYS = ['order_no', 'operation_no', 'title', 'standard_hours', 'sort_order', 'status', 'progress'];
     const colMap = {};
     ws.getRow(1).eachCell({ includeEmpty: false }, (cell, colNumber) => {
       const key = cellText(cell).toLowerCase().replace(/\s+/g, '_');
@@ -1757,7 +1919,7 @@ exports.importSubtasks = async (req, res) => {
       const orderNoRaw = get('order_no');
       const opNoRaw    = get('operation_no');
       const titleRaw   = get('title');
-      const weightRaw  = get('weight');
+      const hoursRaw   = get('standard_hours');
       const sortRaw    = get('sort_order');
       const statusRaw  = get('status');
       const progRaw    = get('progress');
@@ -1776,7 +1938,7 @@ exports.importSubtasks = async (req, res) => {
 
       // 2) match parent operation (leading-zero normalized, operation_no is INT)
       const opRes = await q.query(
-        `SELECT idsow, order_no FROM sow
+        `SELECT idsow, order_no, planhours FROM sow
           WHERE ltrim(order_no, '0') = ltrim($1, '0') AND operation_no = $2::int
           LIMIT 1`,
         [orderNoRaw, opNo]
@@ -1792,11 +1954,12 @@ exports.importSubtasks = async (req, res) => {
         reject(index, orderNoRaw, opNoRaw, titleRaw, 'title wajib diisi');
         continue;
       }
-      let w;
-      if (weightRaw !== '') {
-        w = Number(weightRaw);
-        if (isNaN(w) || w <= 0) {
-          reject(index, orderNoRaw, opNoRaw, titleRaw, 'weight harus lebih besar dari 0');
+      let hours = 1;
+      const hoursProvided = hoursRaw !== '';
+      if (hoursProvided) {
+        hours = Number(hoursRaw);
+        if (isNaN(hours) || hours < 0) {
+          reject(index, orderNoRaw, opNoRaw, titleRaw, 'standard_hours tidak boleh negatif');
           continue;
         }
       }
@@ -1841,13 +2004,16 @@ exports.importSubtasks = async (req, res) => {
           const sets = [];
           const vals = [];
           let i = 1;
-          if (w !== undefined)         { sets.push(`weight = $${i++}`);     vals.push(w); }
-          if (so !== undefined)        { sets.push(`sort_order = $${i++}`); vals.push(so); }
-          if (statusVal !== undefined) { sets.push(`status = $${i++}`);     vals.push(statusVal); }
-          if (progVal !== undefined)   { sets.push(`progress = $${i++}`);   vals.push(progVal); }
+          if (hoursProvided)           { sets.push(`standard_hours = $${i++}`); vals.push(hours); }
+          if (so !== undefined)        { sets.push(`sort_order = $${i++}`);     vals.push(so); }
+          if (statusVal !== undefined) { sets.push(`status = $${i++}`);         vals.push(statusVal); }
+          if (progVal !== undefined)   { sets.push(`progress = $${i++}`);       vals.push(progVal); }
           sets.push(`updated_by = $${i++}`); vals.push(actor);
           sets.push('updated_at = now()');
           vals.push(existing.id);
+          if (hoursProvided) {
+            await assertSubtaskHoursCap(client, op.idsow, hours, existing.id);
+          }
           await client.query(
             `UPDATE sow_sub_operation SET ${sets.join(', ')} WHERE id = $${i}`,
             vals
@@ -1859,16 +2025,17 @@ exports.importSubtasks = async (req, res) => {
       } else {
         // ── CREATE: defaults for unfilled optional columns ───────────────────
         if (commit) {
+          await assertSubtaskHoursCap(client, op.idsow, hours, null);
           await client.query(
             `INSERT INTO sow_sub_operation
-               (operation_id, order_no, title, sort_order, weight, progress, status, created_by, updated_by)
+               (operation_id, order_no, title, sort_order, standard_hours, progress, status, created_by, updated_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
             [
               op.idsow,
               op.order_no || null,
               titleRaw,
               so !== undefined ? so : 0,
-              w !== undefined ? w : 1,
+              hours,
               progVal !== undefined ? progVal : 0,
               statusVal !== undefined ? statusVal : 'NOT_STARTED',
               actor,
@@ -1883,6 +2050,7 @@ exports.importSubtasks = async (req, res) => {
 
     if (commit) {
       for (const idsow of affectedOps) {
+        await recomputeSubtaskWeights(client, idsow);
         await recomputeOperationProgress(client, idsow);
       }
       await client.query('COMMIT');
@@ -1894,7 +2062,7 @@ exports.importSubtasks = async (req, res) => {
     });
   } catch (err) {
     if (client) await client.query('ROLLBACK').catch(() => {});
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   } finally {
     if (client) client.release();
   }
@@ -4456,13 +4624,18 @@ exports.getAll = async (req, res) => {
 // 20260804d_sow_sub_operation_standard.sql.
 // ============================================================================================
 
-const SUBTASK_STD_HEADERS = ['part_number', 'operation_text', 'operation_no', 'title', 'weight', 'sort_order'];
+const SUBTASK_STD_HEADERS = ['part_number', 'operation_text', 'operation_no', 'title', 'standard_hours', 'sort_order'];
 
 // Normalisasi teks HARUS identik dengan uq_sow_sub_op_std_active dan trigger
 // seed_sow_sub_operation_from_standard (migrasi 20260804f). btrim saja TIDAK cukup: ia hanya
 // memangkas ujung, sehingga 'CUT AND  BEVEL' tidak pernah cocok dengan 'CUT AND BEVEL'.
 // Di prod Cikupa 91 baris sow.operation_text mengandung spasi ganda.
-const NORM = (col) => `upper(regexp_replace(btrim(${col}), '\s+', ' ', 'g'))`;
+// Normalisasi teks HARUS identik dengan uq_sow_sub_op_std_active dan trigger
+// seed_sow_sub_operation_from_standard (migrasi 20260804f).
+// PENTING: `'\\\\s+'` (DUA backslash di source JS) — satu backslash (`'\s+'`) akan
+// dimakan JS (escape tak dikenal → 's') sehingga regex jadi literal 's+' dan
+// normalisasi spasi-ganda TIDAK PERNAH jalan (bug 2026-08-06).
+const NORM = (col) => `upper(regexp_replace(btrim(${col}), '\\s+', ' ', 'g'))`;
 const normText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
 
 // Baca teks dari bentuk cell ExcelJS apa pun (richText / formula / hyperlink / Date).
@@ -4480,16 +4653,21 @@ function stdCellText(cell) {
   return String(v).trim();
 }
 
-// GET /sow/subtask-standards?part_number=&q=
+// GET /sow/subtask-standards?part_number=&operation_text=&q=
 exports.getSubtaskStandards = async (req, res) => {
   try {
     const values = [];
     const where = ['is_active = true'];
     const partNumber = String(req.query.part_number || '').trim();
+    const operationText = String(req.query.operation_text || '').trim();
     const q = String(req.query.q || '').trim();
     if (partNumber) {
       values.push(partNumber);
       where.push(`${NORM('part_number')} = ${NORM(`$${values.length}`)}`);
+    }
+    if (operationText) {
+      values.push(operationText);
+      where.push(`${NORM('operation_text')} = ${NORM(`$${values.length}`)}`);
     }
     if (q) {
       values.push(`%${q.toLowerCase()}%`);
@@ -4497,7 +4675,7 @@ exports.getSubtaskStandards = async (req, res) => {
                    or lower(part_number) like $${values.length})`);
     }
     const result = await db.query(
-      `SELECT id, part_number, operation_text, operation_no, title, sort_order, weight,
+      `SELECT id, part_number, operation_text, operation_no, title, sort_order, standard_hours,
               created_by, created_at, updated_by, updated_at
          FROM public.sow_sub_operation_standard
         WHERE ${where.join(' AND ')}
@@ -4592,7 +4770,7 @@ exports.importSubtaskStandards = async (req, res) => {
       const partNumber = get('part_number');
       const operationText = get('operation_text');
       const title = get('title');
-      const weightRaw = get('weight');
+      const hoursRaw = get('standard_hours');
       const sortRaw = get('sort_order');
       const opNoRaw = get('operation_no');
 
@@ -4607,10 +4785,10 @@ exports.importSubtaskStandards = async (req, res) => {
       if (!operationText) { rejectRow('operation_text wajib diisi'); continue; }
       if (!title) { rejectRow('title wajib diisi'); continue; }
 
-      let weight = 1;
-      if (weightRaw !== '') {
-        weight = Number(weightRaw);
-        if (!Number.isFinite(weight) || weight <= 0) { rejectRow('weight harus lebih besar dari 0'); continue; }
+      let hours = 1;
+      if (hoursRaw !== '') {
+        hours = Number(hoursRaw);
+        if (!Number.isFinite(hours) || hours < 0) { rejectRow('standard_hours tidak boleh negatif'); continue; }
       }
       let sortOrder = r - 2;
       if (sortRaw !== '') {
@@ -4652,9 +4830,9 @@ exports.importSubtaskStandards = async (req, res) => {
         if (commit) {
           await q.query(
             `UPDATE public.sow_sub_operation_standard
-                SET operation_no = $2, weight = $3, sort_order = $4, updated_by = $5, updated_at = now()
+                SET operation_no = $2, standard_hours = $3, sort_order = $4, updated_by = $5, updated_at = now()
               WHERE id = $1`,
-            [existing.rows[0].id, operationNo, weight, sortOrder, actor],
+            [existing.rows[0].id, operationNo, hours, sortOrder, actor],
           );
         }
         push('update', warn); updated += 1;
@@ -4662,9 +4840,9 @@ exports.importSubtaskStandards = async (req, res) => {
         if (commit) {
           await q.query(
             `INSERT INTO public.sow_sub_operation_standard
-               (part_number, operation_text, operation_no, title, weight, sort_order, created_by)
+               (part_number, operation_text, operation_no, title, standard_hours, sort_order, created_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [partNumber, operationText, operationNo, title, weight, sortOrder, actor],
+            [partNumber, operationText, operationNo, title, hours, sortOrder, actor],
           );
         }
         push('create', warn); created += 1;

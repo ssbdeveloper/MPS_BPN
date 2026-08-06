@@ -13,7 +13,8 @@ export {
   compressImage,
   fmtTs,
   authHeaders,
-  fmtWeight,
+  fmtHours,
+  fmtWeightPct,
   computeRollup,
 } from './helpers';
 
@@ -30,6 +31,7 @@ export { ProgressUpdatePanel } from './ProgressUpdatePanel';
 export {
   SubTaskProgressModal,
   SubTaskFormModal,
+  SubTaskFromStandardModal,
   SubTaskRow,
   SubOperationPanel,
 } from './subtasks';
