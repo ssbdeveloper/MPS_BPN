@@ -14,13 +14,13 @@ export const SubTaskProgressModal = ({ sub, operationNo, onClose, onSaved }) => 
     { label: 'Order No', value: sub.order_no },
     { label: 'Op No',    value: operationNo },
     { label: 'Sub-task', value: sub.title },
-    { label: 'Jam',      value: `${fmtHours(sub.standard_hours)} jam` },
-    { label: 'Bobot',    value: fmtWeightPct(sub.weight) },
+    { label: 'Hours',    value: `${fmtHours(sub.standard_hours)} hrs` },
+    { label: 'Weight',   value: fmtWeightPct(sub.weight) },
     { label: 'Status',   value: <StatusPill status={sub.status} /> },
   ];
   return (
     <ModalShell
-      title="Update Progress Sub-task"
+      title="Sub-task Progress"
       subtitle={sub.title}
       onClose={onClose}
       size="lg"
@@ -29,7 +29,7 @@ export const SubTaskProgressModal = ({ sub, operationNo, onClose, onSaved }) => 
         historyUrl={`${API_BASE}/sow/subtasks/${sub.id}/progress-history`}
         submitUrl={`${API_BASE}/sow/subtasks/${sub.id}/progress`}
         infoRows={infoRows}
-        successMsg="Progress sub-task tersimpan"
+        successMsg="Sub-task progress saved"
         onSaved={onSaved}
         buildPayload={(prog, issueVal, img) => ({
           progress:          prog,
@@ -56,9 +56,9 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
   const canSave     = titleValid && hoursValid && sortValid && !saving;
 
   const handleSave = async () => {
-    if (!titleValid)  { setError('Judul wajib diisi'); return; }
-    if (!hoursValid)  { setError('Jam standar tidak boleh negatif'); return; }
-    if (!sortValid)   { setError('Urutan harus angka bulat'); return; }
+    if (!titleValid)  { setError('Title is required'); return; }
+    if (!hoursValid)  { setError('Hours cannot be negative'); return; }
+    if (!sortValid)   { setError('Order must be a whole number'); return; }
 
     setSaving(true);
     setError('');
@@ -76,15 +76,15 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        const msg = j.error || 'Gagal menyimpan sub-task';
+        const msg = j.error || 'Failed to save sub-task';
         setError(msg);
         toast.error(msg);
         return;
       }
-      toast.success(isEdit ? 'Sub-task diperbarui' : 'Sub-task ditambahkan');
+      toast.success(isEdit ? 'Sub-task updated' : 'Sub-task added');
       onSaved();
     } catch (err) {
-      const msg = 'Gagal: ' + err.message;
+      const msg = 'Failed: ' + err.message;
       setError(msg);
       toast.error(msg);
     } finally {
@@ -98,20 +98,20 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
 
   return (
     <ModalShell
-      title={isEdit ? 'Edit Sub-task' : 'Tambah Sub-task'}
+      title={isEdit ? 'Edit Sub-task' : 'Add Sub-task'}
       onClose={onClose}
       size="sm"
     >
       <div className="overflow-y-auto p-5 space-y-4">
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-            Judul <span className="text-red-500">*</span>
+            Title <span className="text-red-500">*</span>
           </label>
           <input
             type="text"
             value={title}
             onChange={(e) => { setTitle(e.target.value); setError(''); }}
-            placeholder="mis. Fabrikasi bracket kiri"
+            placeholder="e.g. Left bracket fabrication"
             autoFocus
             className={`${inputCls} ${!titleValid && error ? 'border-red-400 ring-2 ring-red-200' : ''}`}
           />
@@ -120,7 +120,7 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Jam Standar <span className="font-normal text-slate-400">(opsional)</span>
+              Std Hours <span className="font-normal text-slate-400">(optional)</span>
             </label>
             <input
               type="number"
@@ -131,13 +131,10 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
               placeholder="1"
               className={`${inputCls} tabular-nums`}
             />
-            <p className="mt-1 text-[11px] text-slate-400 leading-snug">
-              Bobot dihitung otomatis dari jam (0 = tak dihitung).
-            </p>
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Urutan <span className="font-normal text-slate-400">(opsional)</span>
+              Order <span className="font-normal text-slate-400">(optional)</span>
             </label>
             <input
               type="number"
@@ -163,7 +160,7 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
                        hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95
                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
-            Batal
+            Cancel
           </button>
           <button
             onClick={handleSave}
@@ -175,9 +172,9 @@ export const SubTaskFormModal = ({ mode, idsow, sub, onClose, onSaved }) => {
             {saving ? (
               <span className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                Menyimpan...
+                Saving...
               </span>
-            ) : (isEdit ? 'Simpan' : 'Tambah')}
+            ) : (isEdit ? 'Save' : 'Add')}
           </button>
         </div>
       </div>
@@ -219,7 +216,7 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
         setRows(data);
         setSelected(new Set());
       } catch {
-        if (alive) setError('Gagal memuat standar sub-task.');
+        if (alive) setError('Failed to load standards.');
       } finally {
         if (alive) setLoading(false);
       }
@@ -254,17 +251,17 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const m = j.error || 'Gagal menambah sub-task dari standar';
+        const m = j.error || 'Failed to add sub-tasks from standard';
         setErr2(m);
         toast.error(m);
         return;
       }
       const added   = j.created_count ?? selRows.length;
       const skipped = j.skipped_count ?? 0;
-      toast.success(`Sub-task ditambahkan dari standar (${added})${skipped ? ` — ${skipped} dilewati` : ''}`);
+      toast.success(`Added from standard (${added})${skipped ? ` — ${skipped} skipped` : ''}`);
       onSaved?.();
     } catch (err) {
-      const m = 'Gagal: ' + err.message;
+      const m = 'Failed: ' + err.message;
       setErr2(m);
       toast.error(m);
     } finally {
@@ -274,8 +271,8 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
 
   return (
     <ModalShell
-      title="Tambah dari Standar"
-      subtitle={partNumber ? `${partNumber}${operationText ? ` · ${operationText}` : ''}` : 'Master sub-task per part'}
+      title="Add from Standard"
+      subtitle={partNumber ? `${partNumber}${operationText ? ` · ${operationText}` : ''}` : 'Sub-task master per part'}
       onClose={onClose}
       size="md"
     >
@@ -293,23 +290,18 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
               onClick={onClose}
               className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
             >
-              Tutup
+              Close
             </button>
           </div>
         ) : rows.length === 0 ? (
           <EmptyState
             icon={Layers}
-            title="Tidak ada standar"
-            description={
-              partNumber
-                ? `Belum ada standar sub-task untuk part ${partNumber} pada operasi ini. Kelola di menu SOW Management → Sub-task Standard.`
-                : 'Operasi tanpa part_number/operation_text — standar tidak bisa dicocokkan.'
-            }
+            title="No standards"
           />
         ) : (
           <div className="space-y-1.5">
             <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-              {rows.length} standar cocok — centang yang mau ditambahkan
+              {rows.length} matching standards — select to add
             </p>
             {rows.map((r) => (
               <label
@@ -325,11 +317,11 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
                 <span className="flex-1 min-w-0">
                   <span className="block text-sm font-semibold text-slate-800 truncate">{r.title}</span>
                   <span className="block text-[11px] text-slate-400 tabular-nums">
-                    urutan {r.sort_order ?? 0}
+                    order {r.sort_order ?? 0}
                   </span>
                 </span>
                 <span className="shrink-0 rounded bg-sky-50 border border-sky-100 px-2 py-0.5 text-[11px] font-bold tabular-nums text-[#0077b6]">
-                  {Number(r.standard_hours) || 0} jam
+                  {Number(r.standard_hours) || 0} hrs
                 </span>
               </label>
             ))}
@@ -347,11 +339,11 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
         <span className="text-xs text-slate-500 tabular-nums">
           {selected.size > 0 ? (
             <>
-              <span className="font-bold text-slate-700">{selected.size}</span> terpilih ·{' '}
-              <span className="font-bold text-slate-700">{selHours}</span> jam
+              <span className="font-bold text-slate-700">{selected.size}</span> selected ·{' '}
+              <span className="font-bold text-slate-700">{selHours}</span> hrs
             </>
           ) : (
-            'Pilih standar untuk ditambahkan'
+            'Select standards to add'
           )}
         </span>
         <div className="flex items-center gap-2">
@@ -361,7 +353,7 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
                        hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95
                        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
-            Batal
+            Cancel
           </button>
           <button
             onClick={handleAdd}
@@ -373,10 +365,10 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
             {saving ? (
               <span className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                Menambah...
+                Adding...
               </span>
             ) : (
-              `Tambah (${selected.size})`
+              `Add (${selected.size})`
             )}
           </button>
         </div>
@@ -394,11 +386,11 @@ export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
         <StatusPill status={sub.status} />
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-500">
-        <span className="tabular-nums">{fmtHours(sub.standard_hours)} jam</span>
+        <span className="tabular-nums">{fmtHours(sub.standard_hours)} hrs</span>
         <span className="text-slate-300">·</span>
-        <span className="tabular-nums">Bobot {fmtWeightPct(sub.weight)}</span>
+        <span className="tabular-nums">Weight {fmtWeightPct(sub.weight)}</span>
         <span className="text-slate-300">·</span>
-        <span>Update {fmtTs(sub.updated_at)}</span>
+        <span>Updated {fmtTs(sub.updated_at)}</span>
         {sub.updated_by && (
           <>
             <span className="text-slate-300">·</span>
@@ -432,11 +424,11 @@ export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
       </button>
       <button
         onClick={onDeactivate}
-        aria-label="Nonaktifkan sub-task"
-        title="Nonaktifkan sub-task"
+        aria-label="Deactivate sub-task"
+        title="Deactivate sub-task"
         className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg border border-slate-200 text-slate-500
-                   hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-all active:scale-95
-                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                  hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-all active:scale-95
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
       >
         <Ban size={15} />
       </button>
@@ -464,14 +456,14 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        toast.error(j.error || 'Gagal menonaktifkan sub-task');
+        toast.error(j.error || 'Failed to deactivate sub-task');
         return;
       }
-      toast.success('Sub-task dinonaktifkan');
+      toast.success('Sub-task deactivated');
       setDeactivateSub(null);
       onRefresh();
     } catch (err) {
-      toast.error('Gagal: ' + err.message);
+      toast.error('Failed: ' + err.message);
     } finally {
       setDeactivating(false);
     }
@@ -485,24 +477,24 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
     >
       <Plus size={15} />
-      Tambah Sub-task
+      Add Sub-task
     </button>
   );
 
-  // Tambah dari MASTER standar (sow_sub_operation_standard, kunci part_number +
-  // operation_text). Nonaktif bila operasi tidak punya part/teks operasi (tak bisa cocok).
+  // Add from STANDARD master (sow_sub_operation_standard, keyed by part_number +
+  // operation_text). Disabled when the operation has no part/operation text.
   const stdButton = (
     <button
       onClick={() => setStdModal(true)}
       disabled={!partNumber || !operationText}
-      title={partNumber && operationText ? 'Tambahkan sub-task dari standar (master per part & operasi)' : 'Operasi tanpa part/operation_text — standar tidak bisa dicocokkan'}
+      title={partNumber && operationText ? 'Add sub-tasks from the standard master (per part & operation)' : 'Operation without part/operation_text — standards cannot match'}
       className="inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg text-xs font-semibold
                 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300
                 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
     >
       <Layers size={15} />
-      Dari Standar
+      From Standard
     </button>
   );
 
@@ -543,8 +535,7 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
       ) : list.length === 0 ? (
         <EmptyState
           icon={Layers}
-          title="Belum ada sub-task"
-          description="Pecah operasi ini menjadi child task untuk melacak progress fisik yang lebih granular."
+          title="No sub-tasks yet"
           action={addButton}
         />
       ) : (
@@ -593,12 +584,12 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
 
       <ConfirmationModal
         isOpen={!!deactivateSub}
-        title="Nonaktifkan sub-task?"
+        title="Deactivate sub-task?"
         message={deactivateSub
-          ? `"${deactivateSub.title}" akan disembunyikan dan progress operasi dihitung ulang dari sub-task yang tersisa.`
+          ? `"${deactivateSub.title}" will be hidden and operation progress recalculated from remaining sub-tasks.`
           : ''}
-        confirmLabel={deactivating ? 'Memproses...' : 'Nonaktifkan'}
-        cancelLabel="Batal"
+        confirmLabel={deactivating ? 'Processing...' : 'Deactivate'}
+        cancelLabel="Cancel"
         onConfirm={handleDeactivate}
         onCancel={() => setDeactivateSub(null)}
       />

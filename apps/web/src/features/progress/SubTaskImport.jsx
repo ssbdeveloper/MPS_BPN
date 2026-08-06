@@ -28,7 +28,7 @@ async function postImport(file, commit) {
     body: fd,
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || 'Gagal memproses file');
+  if (!res.ok) throw new Error(json.error || 'Failed to process file');
   return json;
 }
 
@@ -80,7 +80,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
       const json = await postImport(f, false);
       setPreview(json);
     } catch (err) {
-      setError(err.message || 'Gagal menganalisis file');
+      setError(err.message || 'Failed to analyze file');
     } finally {
       setLoading(false);
     }
@@ -111,13 +111,13 @@ export function SubTaskImportButton({ onImported, className = '' }) {
     try {
       const json = await postImport(file, true);
       const { created = 0, updated = 0, rejected = 0 } = json.summary || {};
-      toast.success(`Import selesai — ${created} dibuat, ${updated} diupdate, ${rejected} ditolak`);
+      toast.success(`Import complete — ${created} created, ${updated} updated, ${rejected} rejected`);
       setOpen(false);
       setFile(null);
       setPreview(null);
       onImported?.(json);
     } catch (err) {
-      toast.error('Gagal memproses import: ' + (err.message || 'kesalahan tak diketahui'));
+      toast.error('Import failed: ' + (err.message || 'unknown error'));
     } finally {
       setCommitting(false);
     }
@@ -154,7 +154,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
 
       {open && (
         <ModalShell
-          title="Import Sub-task dari Excel"
+          title="Import Sub-tasks from Excel"
           subtitle={file?.name}
           onClose={closeModal}
           size="lg"
@@ -165,7 +165,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
               <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm text-slate-600">
                   <Loader2 size={16} className="animate-spin motion-reduce:animate-none text-[#0077b6]" />
-                  Menganalisis file…
+                  Analyzing file…
                 </div>
                 <Skeleton className="h-16 rounded-xl" />
                 <Skeleton className="h-12 rounded-xl" />
@@ -182,7 +182,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                   onClick={() => file && runDryRun(file)}
                   className="self-start text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
                 >
-                  Coba lagi
+                  Retry
                 </button>
               </div>
             ) : preview ? (
@@ -190,9 +190,9 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                 {/* Summary */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <SummaryTile label="Total"    value={summary.total ?? 0}   tone="slate" />
-                  <SummaryTile label="Dibuat"   value={summary.created ?? 0} tone="emerald" />
-                  <SummaryTile label="Diupdate" value={summary.updated ?? 0} tone="blue" />
-                  <SummaryTile label="Ditolak"  value={summary.rejected ?? 0} tone="red" />
+                  <SummaryTile label="Created"  value={summary.created ?? 0} tone="emerald" />
+                  <SummaryTile label="Updated"  value={summary.updated ?? 0} tone="blue" />
+                  <SummaryTile label="Rejected" value={summary.rejected ?? 0} tone="red" />
                 </div>
 
                 {/* Outcome hint */}
@@ -200,14 +200,14 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                   <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
                     <Ban size={16} className="flex-shrink-0 mt-0.5 text-amber-600" />
                     <p className="text-xs text-amber-800 leading-relaxed">
-                      Tidak ada baris yang bisa diproses. Perbaiki baris yang ditolak lalu unggah ulang.
+                      No rows can be processed. Fix rejected rows and re-upload.
                     </p>
                   </div>
                 ) : rejects.length === 0 ? (
                   <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
                     <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5 text-emerald-600" />
                     <p className="text-xs text-emerald-800 leading-relaxed">
-                      Semua baris valid dan siap diproses. Klik <span className="font-semibold">Proses</span> untuk menerapkan.
+                      All rows valid. Click <span className="font-semibold">Apply</span> to commit.
                     </p>
                   </div>
                 ) : null}
@@ -216,7 +216,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                 {rejects.length > 0 && (
                   <div>
                     <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">
-                      Baris Ditolak
+                      Rejected Rows
                       <span className="ml-1.5 tabular-nums text-red-600">({rejects.length})</span>
                     </h3>
                     <div className="space-y-2">
@@ -227,7 +227,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                         >
                           <span className="flex-shrink-0 inline-flex items-center justify-center px-1.5 h-5 rounded
                                            bg-red-100 text-red-700 text-[11px] font-bold tabular-nums">
-                            Baris {r.index}
+                            Row {r.index}
                           </span>
                           <div className="min-w-0 flex-1">
                             <p className="text-xs font-semibold text-slate-800 truncate">
@@ -236,7 +236,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                               <span className="tabular-nums">{r.operation_no || '—'}</span>
                               {r.title ? <span className="text-slate-500"> · {r.title}</span> : null}
                             </p>
-                            <p className="text-xs text-red-600 leading-snug">{r.reason || 'Ditolak'}</p>
+                            <p className="text-xs text-red-600 leading-snug">{r.reason || 'Rejected'}</p>
                           </div>
                         </div>
                       ))}
@@ -262,7 +262,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                            hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
                            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none motion-reduce:transform-none"
               >
-                Batal
+                Cancel
               </button>
               <button
                 type="button"
@@ -275,10 +275,10 @@ export function SubTaskImportButton({ onImported, className = '' }) {
                 {committing ? (
                   <span className="flex items-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                    Memproses…
+                    Applying…
                   </span>
                 ) : (
-                  <>Proses{actionable > 0 ? <span className="tabular-nums"> ({actionable})</span> : ''}</>
+                  <>Apply{actionable > 0 ? <span className="tabular-nums"> ({actionable})</span> : ''}</>
                 )}
               </button>
             </div>

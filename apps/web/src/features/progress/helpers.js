@@ -77,8 +77,8 @@ export const computeRollup = (list) => {
 
 // ─── Sub-task status pill config (NOT_STARTED / IN_PROGRESS / ON_HOLD / DONE) ──
 export const SUBTASK_STATUS = {
-  NOT_STARTED: { label: 'Belum Mulai', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
-  IN_PROGRESS: { label: 'Berjalan',    cls: 'bg-blue-50 text-blue-700 border-blue-200' },
-  ON_HOLD:     { label: 'Ditahan',     cls: 'bg-amber-100 text-amber-700 border-amber-200' },
-  DONE:        { label: 'Selesai',     cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+  NOT_STARTED: { label: 'Not Started',  cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+  IN_PROGRESS: { label: 'In Progress',  cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  ON_HOLD:     { label: 'On Hold',      cls: 'bg-amber-100 text-amber-700 border-amber-200' },
+  DONE:        { label: 'Done',         cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
 };

@@ -104,10 +104,10 @@ function LockBadge({ project }) {
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-extrabold ${
         stale ? 'border-red-200 bg-red-50 text-red-700' : 'border-amber-200 bg-amber-50 text-amber-700'
       }`}
-      title={stale ? 'Lock lebih dari 24 jam — kemungkinan nyangkut' : 'Sedang di-checkout'}
+      title={stale ? 'Locked over 24h — likely stuck' : 'Checked out'}
     >
       <Lock size={12} />
-      {stale ? 'Lock > 24 jam' : 'Checked Out'}
+      {stale ? 'Lock > 24h' : 'Checked Out'}
     </span>
   );
 }
@@ -119,7 +119,7 @@ function RevisionHistoryModal({ project, revisions, loading, onClose }) {
       <div className="max-h-[85vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="text-base font-extrabold text-slate-800">Riwayat Revisi</h2>
+            <h2 className="text-base font-extrabold text-slate-800">Revision History</h2>
             <p className="mt-1 truncate text-xs font-semibold text-slate-500">{project.project_name}</p>
           </div>
           <button
@@ -135,11 +135,11 @@ function RevisionHistoryModal({ project, revisions, loading, onClose }) {
           {loading ? (
             <div className="py-10 text-center text-slate-500">
               <Loader2 className="mx-auto animate-spin text-[#0096c7]" size={22} />
-              <div className="mt-2 text-sm font-bold">Memuat riwayat...</div>
+              <div className="mt-2 text-sm font-bold">Loading history...</div>
             </div>
           ) : revisions.length === 0 ? (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-center text-sm font-bold text-slate-400">
-              Belum ada revisi tercatat.
+              No revisions recorded.
             </div>
           ) : (
             <ol className="divide-y divide-slate-100">
@@ -193,9 +193,9 @@ function ForceCheckinModal({ project, reason, saving, onReasonChange, onClose, o
           <div className="flex gap-3">
             <ShieldAlert className="mt-0.5 flex-shrink-0 text-amber-600" size={20} />
             <div className="min-w-0">
-              <p className="text-sm font-bold text-amber-800">Lock project akan dilepas paksa.</p>
+              <p className="text-sm font-bold text-amber-800">The project lock will be force-released.</p>
               <p className="mt-1 text-xs font-semibold leading-relaxed text-amber-700">
-                Perubahan yang belum di-sync dari MS Project pemilik lock TIDAK ikut tersimpan.
+                Unsynced changes from the lock owner's MS Project will NOT be saved.
               </p>
             </div>
           </div>
@@ -220,7 +220,7 @@ function ForceCheckinModal({ project, reason, saving, onReasonChange, onClose, o
             rows={3}
             disabled={saving}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 transition-all focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
-            placeholder="Contoh: user lupa check-in sebelum cuti"
+            placeholder="e.g. user forgot check-in before leave"
           />
         </label>
 
@@ -278,12 +278,12 @@ function RenameProjectModal({ project, name, saving, error, onNameChange, onClos
             disabled={saving}
             autoFocus
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 transition-all focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
-            placeholder="Nama project baru"
+            placeholder="New project name"
           />
         </label>
 
         <p className="mt-2 text-[11px] font-semibold leading-relaxed text-slate-400">
-          Catatan: sync berikutnya dari file .mpp akan menimpa nama ini.
+          Note: the next sync from the .mpp file will overwrite this name.
         </p>
 
         {error && (
@@ -324,7 +324,7 @@ function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDe
       <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl md:max-w-lg md:rounded-2xl">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="text-base font-extrabold text-slate-800">Hapus Project</h2>
+            <h2 className="text-base font-extrabold text-slate-800">Delete Project</h2>
             <p className="mt-1 truncate text-xs font-semibold text-slate-500">{project.project_name}</p>
           </div>
           <button
@@ -342,10 +342,10 @@ function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDe
             <AlertTriangle className="mt-0.5 flex-shrink-0 text-red-600" size={20} />
             <div className="min-w-0">
               <p className="text-sm font-bold text-red-800">
-                Menghapus project menghapus SEMUA task, reservasi, lock, revisi, dan file .mpp-nya.
+                Deleting a project removes ALL its tasks, reservations, locks, revisions, and .mpp file.
               </p>
               <p className="mt-1 text-xs font-semibold leading-relaxed text-red-700">
-                Data SAP/sow (operasi, plan hours, sub-task) TIDAK ikut terhapus.
+                SAP/sow data (operations, plan hours, sub-tasks) is NOT deleted.
               </p>
             </div>
           </div>
@@ -357,11 +357,11 @@ function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDe
               <ShieldAlert className="mt-0.5 flex-shrink-0 text-amber-600" size={20} />
               <div className="min-w-0">
                 <p className="text-sm font-bold text-amber-800">
-                  {activeReservations} reservasi bay AKTIF di area layout.
+                  {activeReservations} ACTIVE bay reservation{activeReservations === 1 ? '' : 's'} in the area layout.
                 </p>
                 <p className="mt-1 text-xs font-semibold leading-relaxed text-amber-700">
-                  Delete biasa diblokir server sampai reservasi di-cancel. Force Delete
-                  menghapus reservasi tersebut dari area layout sekaligus.
+                  Regular Delete is blocked by the server until reservations are cancelled. Force Delete
+                  also removes those reservations from the area layout.
                 </p>
               </div>
             </div>
@@ -379,7 +379,7 @@ function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDe
             type="button"
             onClick={onDelete}
             disabled={busy || activeReservations > 0}
-            title={activeReservations > 0 ? 'Cancel reservasi bay aktif dulu' : 'Hapus project (tanpa menyentuh reservasi aktif)'}
+            title={activeReservations > 0 ? 'Cancel active bay reservations first' : 'Delete project (without touching active reservations)'}
             className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
@@ -389,7 +389,7 @@ function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDe
             type="button"
             onClick={onForceDelete}
             disabled={busy}
-            title="Hapus project + cancel SEMUA reservasi bay (termasuk aktif) dari area layout"
+            title="Delete project + cancel ALL bay reservations (including active) from the area layout"
             className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white transition-all hover:bg-red-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy ? <Loader2 className="animate-spin" size={16} /> : <ShieldAlert size={16} />}
@@ -397,7 +397,7 @@ function DeleteProjectModal({ project, busy, error, onClose, onDelete, onForceDe
           </button>
         </div>
         <p className="mt-2 text-center text-[11px] font-semibold text-slate-400">
-          Force Delete menghapus reservasi juga dari area layout.
+          Force Delete also removes reservations from the area layout.
         </p>
       </div>
     </div>
@@ -442,7 +442,7 @@ export default function MsProjectHubPage() {
       setProjects(rows);
     } catch (error) {
       setProjects([]);
-      toast.error('Gagal load MS Project', { description: error.message });
+      toast.error('Failed to load MS Project', { description: error.message });
     } finally {
       setLoading(false);
     }
@@ -483,7 +483,7 @@ export default function MsProjectHubPage() {
       const rows = await fetchMsProjectRevisions(project.project_id, { limit: 20 });
       setRevisions(rows);
     } catch (error) {
-      toast.error('Gagal load riwayat revisi', { description: error.message });
+      toast.error('Failed to load revision history', { description: error.message });
     } finally {
       setHistoryLoading(false);
     }
@@ -498,7 +498,7 @@ export default function MsProjectHubPage() {
       toast.success(`Status ${project.project_name} → ${status}`);
       await loadProjects();
     } catch (error) {
-      toast.error('Ubah status gagal', { description: error.message });
+      toast.error('Failed to change status', { description: error.message });
     } finally {
       setStatusSavingId(null);
     }
@@ -523,12 +523,12 @@ export default function MsProjectHubPage() {
         actor: actorName,
         reason: reason.trim(),
       });
-      toast.success('Project berhasil force check-in');
+      toast.success('Project force check-in successful');
       setForceProject(null);
       setReason('');
       await loadProjects();
     } catch (error) {
-      toast.error('Force check-in gagal', { description: error.message });
+      toast.error('Force check-in failed', { description: error.message });
     } finally {
       setSaving(false);
     }
@@ -553,13 +553,13 @@ export default function MsProjectHubPage() {
     setRenameError('');
     try {
       await updateMsProject(renameTarget.project_id, { project_name: renameName.trim() });
-      toast.success('Project di-rename');
+      toast.success('Project renamed');
       setRenameTarget(null);
       setRenameName('');
       await loadProjects();
     } catch (error) {
       setRenameError(error.message);
-      toast.error('Rename gagal', { description: error.message });
+      toast.error('Rename failed', { description: error.message });
     } finally {
       setRenameBusy(false);
     }
@@ -584,14 +584,14 @@ export default function MsProjectHubPage() {
       const result = await deleteMsProject(deleteTarget.project_id, { force });
       toast.success(
         force
-          ? `Project + reservasi dihapus (${result.cancelled_reservations ?? 0} reservasi ikut terhapus)`
-          : 'Project dihapus'
+          ? `Project + reservations deleted (${result.cancelled_reservations ?? 0} reservations removed)`
+          : 'Project deleted'
       );
       setDeleteTarget(null);
       await loadProjects();
     } catch (error) {
       setDeleteError(error.message);
-      toast.error(force ? 'Force delete gagal' : 'Delete gagal', { description: error.message });
+      toast.error(force ? 'Force delete failed' : 'Delete failed', { description: error.message });
     } finally {
       setDeleteBusy(false);
     }
@@ -613,7 +613,7 @@ export default function MsProjectHubPage() {
         </button>
         <div className="text-center">
           <h1 className="text-sm font-extrabold text-slate-800 md:text-base">MS Project Hub</h1>
-          <p className="text-[10px] font-bold uppercase text-slate-500">Semua project tersimpan · checkout · file · riwayat</p>
+          <p className="text-[10px] font-bold uppercase text-slate-500">All stored projects · checkout · file · history</p>
         </div>
         <button
           type="button"
@@ -639,7 +639,7 @@ export default function MsProjectHubPage() {
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     className="min-h-[44px] w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-800 placeholder-slate-400 transition-all focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-                    placeholder="Nama project, ID, user checkout..."
+                    placeholder="Project name, ID, checkout user..."
                   />
                 </div>
               </label>
@@ -698,7 +698,7 @@ export default function MsProjectHubPage() {
                     <th className="px-3 py-2 text-left text-xs font-extrabold text-slate-700">Lock</th>
                     <th className="hidden px-3 py-2 text-left text-xs font-extrabold text-slate-700 md:table-cell">File .mpp</th>
                     <th className="hidden px-3 py-2 text-left text-xs font-extrabold text-slate-700 md:table-cell">Updated</th>
-                    <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-700">Aksi</th>
+                    <th className="px-3 py-2 text-right text-xs font-extrabold text-slate-700">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -713,8 +713,8 @@ export default function MsProjectHubPage() {
                     <tr>
                       <td colSpan={6} className="px-4 py-12 text-center text-sm font-bold text-slate-400">
                         {projects.length === 0
-                          ? 'Belum ada project tersimpan. Publish dari MS Project (macro Ms_PublishNewProject) untuk memulai.'
-                          : 'Tidak ada project sesuai filter.'}
+                          ? 'No projects stored yet. Publish from MS Project (macro Ms_PublishNewProject) to get started.'
+                          : 'No projects match the filter.'}
                       </td>
                     </tr>
                   ) : (
@@ -749,7 +749,7 @@ export default function MsProjectHubPage() {
                           ) : (
                             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600">
                               <FileWarning size={13} />
-                              Belum ada file
+                              No file yet
                             </span>
                           )}
                         </td>
@@ -762,7 +762,7 @@ export default function MsProjectHubPage() {
                             <a
                               href={project.file_uploaded_at ? msProjectFileUrl(project.project_id) : undefined}
                               className={`${iconButton} ${!project.file_uploaded_at ? 'pointer-events-none opacity-40' : ''}`}
-                              title={project.file_uploaded_at ? 'Download .mpp' : 'Belum ada file .mpp'}
+                              title={project.file_uploaded_at ? 'Download .mpp' : 'No .mpp file yet'}
                               download
                             >
                               <Download size={15} />
@@ -771,7 +771,7 @@ export default function MsProjectHubPage() {
                               type="button"
                               onClick={() => openHistory(project)}
                               className={iconButton}
-                              title="Riwayat revisi"
+                              title="Revision history"
                             >
                               <History size={15} />
                             </button>
@@ -779,7 +779,7 @@ export default function MsProjectHubPage() {
                               value={String(project.status || 'ACTIVE').toUpperCase()}
                               onChange={(event) => changeStatus(project, event.target.value)}
                               disabled={statusSavingId === project.project_id}
-                              title="Ubah status"
+                              title="Change status"
                               className="min-h-[38px] rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-700 transition-all focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <option value="DRAFT">DRAFT</option>
@@ -798,7 +798,7 @@ export default function MsProjectHubPage() {
                               type="button"
                               onClick={() => openDelete(project)}
                               className={`${iconButton} hover:border-red-200 hover:bg-red-50 hover:text-red-600`}
-                              title="Hapus project (Delete / Force Delete)"
+                              title="Delete project (Delete / Force Delete)"
                             >
                               <Trash2 size={15} />
                             </button>
@@ -827,7 +827,7 @@ export default function MsProjectHubPage() {
 
           <p className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400">
             <Archive size={12} />
-            Alur editor: buka MS Project → macro Ms_OpenFromServer → Ms_CheckOut → edit → Ms_SaveToServer → Ms_CheckIn.
+            Editor flow: open MS Project → macro Ms_OpenFromServer → Ms_CheckOut → edit → Ms_SaveToServer → Ms_CheckIn.
           </p>
         </div>
       </main>

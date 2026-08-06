@@ -73,7 +73,7 @@ const ProgressModal = ({ op, onClose }) => {
   ];
   return (
     <ModalShell
-      title="Update Progress Operasi"
+      title="Update Operation Progress"
       subtitle={`${op.order_no} · Op ${op.operation_no}${op.workcenter ? ` / ${op.workcenter}` : ''}`}
       onClose={onClose}
       size="lg"
@@ -82,7 +82,7 @@ const ProgressModal = ({ op, onClose }) => {
         historyUrl={`${API_BASE}/sow/progress-history/${op.idsow}`}
         submitUrl={`${API_BASE}/sow/progress-history`}
         infoRows={infoRows}
-        successMsg="Progress operasi tersimpan"
+        successMsg="Operation progress saved"
         buildPayload={(prog, issueVal, img) => ({
           operation_id:      op.idsow,
           order_no:          op.order_no,
@@ -123,7 +123,7 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
       if (!mountedRef.current) return;
       setSubState((prev) => ({
         ...prev,
-        [idsow]: { list: prev[idsow]?.list || [], loading: false, error: 'Gagal memuat sub-task' },
+        [idsow]: { list: prev[idsow]?.list || [], loading: false, error: 'Failed to load sub-tasks' },
       }));
     }
   }, []);
@@ -144,7 +144,7 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
         setOps(arr);
         arr.forEach((o) => loadSubtasks(o.idsow));
       } catch {
-        if (!cancelled) setError('Gagal memuat operations');
+        if (!cancelled) setError('Failed to load operations');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -164,7 +164,7 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
     return (
       <div className="flex items-center gap-2.5 px-6 py-4 bg-slate-50">
         <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-        <span className="text-xs text-slate-500 font-medium">Memuat operations...</span>
+        <span className="text-xs text-slate-500 font-medium">Loading operations...</span>
       </div>
     );
 
@@ -193,7 +193,7 @@ const OperationsPanel = React.memo(({ orderNo, onSelectOp }) => {
             <thead>
               <tr className="bg-gradient-to-r from-blue-700 to-blue-600 text-white">
                 <th className="px-3 py-2 text-left w-14 font-semibold tracking-wide">Op No</th>
-                <th className="px-3 py-2 text-left font-semibold tracking-wide">Deskripsi Operasi</th>
+                <th className="px-3 py-2 text-left font-semibold tracking-wide">Operation Description</th>
                 <th className="px-3 py-2 text-left w-40 font-semibold tracking-wide">Workcenter</th>
                 <th className="px-3 py-2 text-right w-20 font-semibold tracking-wide">Plan Hrs</th>
                 <th className="px-3 py-2 text-left w-44 font-semibold tracking-wide">Progress</th>
@@ -334,7 +334,7 @@ const Pagination = ({ page, totalPages, total, limit, onPageChange, onLimitChang
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-white border-t border-slate-200 flex-shrink-0">
       <div className="flex items-center gap-3 text-xs">
         <span className="text-slate-500">
-          {total === 0 ? 'Tidak ada data' : (
+          {total === 0 ? 'No data' : (
             <>
               <span className="font-semibold text-slate-800">{((page - 1) * limit + 1).toLocaleString()}</span>
               <span className="mx-0.5 text-slate-400">–</span>
@@ -471,7 +471,7 @@ const OrderListPage = () => {
       setTotalPages(json.totalPages ?? 1);
     } catch (err) {
       if (err.name === 'AbortError') return;
-      setError('Gagal memuat data. Silakan coba lagi.');
+      setError('Failed to load data. Try again.');
     } finally {
       setLoading(false);
     }
@@ -510,7 +510,7 @@ const OrderListPage = () => {
         <div className="text-center">
           <h1 className="text-sm font-bold text-white tracking-wide">Order List</h1>
           <p className="text-[10px] text-blue-300 font-medium mt-px">
-            {loading ? 'Memuat...' : `${total.toLocaleString()} orders`}
+            {loading ? 'Loading...' : `${total.toLocaleString()} orders`}
           </p>
         </div>
 
@@ -546,7 +546,7 @@ const OrderListPage = () => {
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Cari Order No, SSBR ID, Part Number, Part Name..."
+                placeholder="Search order no, SSBR ID, part number, part name..."
                 className="w-full pl-10 pr-9 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-lg
                            placeholder-slate-400 text-slate-800
                            focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 focus:bg-white
@@ -610,7 +610,7 @@ const OrderListPage = () => {
               <div className="absolute inset-0 bg-white/70 backdrop-blur-[1px] flex items-center justify-center z-20 pointer-events-none">
                 <div className="flex flex-col items-center gap-2">
                   <div className="w-8 h-8 border-4 border-blue-700 border-t-transparent rounded-full animate-spin" />
-                  <span className="text-xs text-blue-700 font-medium">Memuat...</span>
+                  <span className="text-xs text-blue-700 font-medium">Loading...</span>
                 </div>
               </div>
             )}
@@ -618,7 +618,7 @@ const OrderListPage = () => {
             {loading && orders.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-3">
                 <div className="w-12 h-12 border-4 border-blue-700 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-slate-500 font-medium">Memuat data orders...</p>
+                <p className="text-sm text-slate-500 font-medium">Loading orders data...</p>
               </div>
 
             ) : !loading && orders.length === 0 ? (
@@ -628,7 +628,7 @@ const OrderListPage = () => {
                     d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 <p className="text-sm font-semibold text-slate-500">
-                  {activeSearch ? 'Tidak ada hasil' : 'Tidak ada data'}
+                  {activeSearch ? 'No results' : 'No data'}
                 </p>
                 {activeSearch && (
                   <p className="text-xs text-slate-400">

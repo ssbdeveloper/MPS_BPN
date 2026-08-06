@@ -393,7 +393,7 @@ export default function FloorMapOverview({ schedulesByBay, cursorDate, selectedA
           <span className="h-3 w-4 shrink-0 rounded border border-slate-200 bg-slate-100" /> Warehouse
         </span>
         <span className="text-slate-500">
-          Numbers: <span className="font-extrabold text-slate-800">reservations</span> /{' '}
+          <span className="font-extrabold text-slate-800">reservations</span> /{' '}
           <span className="font-normal text-slate-800">activities</span>
         </span>
         <span className="inline-flex items-center gap-1.5">

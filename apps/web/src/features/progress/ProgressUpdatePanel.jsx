@@ -33,7 +33,7 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
       const data = await res.json();
       setHistory(Array.isArray(data) ? data : []);
     } catch {
-      setHistError('Gagal memuat riwayat.');
+      setHistError('Failed to load history.');
       setHistory([]);
     } finally {
       setHistLoading(false);
@@ -48,9 +48,9 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
     const n = parseInt(val, 10);
     if (val === '') { setWarn(''); return; }
     if (isNaN(n) || n < 1 || n > 100) {
-      setWarn('Masukkan angka antara 1 – 100');
+      setWarn('Enter a number between 1 – 100');
     } else if (lastProgress !== null && n < lastProgress) {
-      setWarn(`Tidak boleh kurang dari progress terakhir (${lastProgress}%)`);
+      setWarn(`Cannot be less than last progress (${lastProgress}%)`);
     } else {
       setWarn('');
     }
@@ -68,7 +68,7 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
   const handleSubmit = async () => {
     const prog = parseInt(progress, 10);
     if (!progress || isNaN(prog) || prog < 1 || prog > 100) {
-      setError('Masukkan progress yang valid (1 – 100)');
+      setError('Enter valid progress (1 – 100)');
       return;
     }
     if (warn) { setError(warn); return; }
@@ -83,7 +83,7 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        const msg = j.error || 'Gagal menyimpan progress';
+        const msg = j.error || 'Failed to save progress';
         setError(msg);
         toast.error(msg);
         return;
@@ -93,11 +93,11 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
       setImageData(null);
       setImagePreview(null);
       setWarn('');
-      toast.success(successMsg || 'Progress tersimpan');
+      toast.success(successMsg || 'Progress saved');
       await loadHistory();
       onSaved?.();
     } catch (err) {
-      const msg = 'Gagal: ' + err.message;
+      const msg = 'Failed: ' + err.message;
       setError(msg);
       toast.error(msg);
     } finally {
@@ -116,7 +116,7 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
 
           {/* Read-only info */}
           <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-2">
-            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">Informasi</p>
+            <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-1">Info</p>
             {infoRows.map((r, i) => (
               <InfoRow key={i} label={r.label} value={r.value} />
             ))}
@@ -139,7 +139,7 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
                 min={1} max={100}
                 value={progress}
                 onChange={(e) => handleProgressChange(e.target.value)}
-                placeholder={lastProgress !== null ? `Terakhir: ${lastProgress}%` : '1 – 100'}
+                placeholder={lastProgress !== null ? `Last: ${lastProgress}%` : '1 – 100'}
                 className={`w-full px-3 py-2.5 pr-9 text-sm bg-white text-slate-800 tabular-nums border rounded-lg
                   focus:outline-none focus:ring-2 transition-all motion-reduce:transition-none
                   ${warn
@@ -161,22 +161,22 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
           {/* Issue / notes */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Issue / Catatan <span className="font-normal text-slate-400">(opsional)</span>
+              Issue / Notes <span className="font-normal text-slate-400">(optional)</span>
             </label>
             <textarea
               value={issue}
               onChange={(e) => setIssue(e.target.value)}
               rows={3}
-              placeholder="Deskripsi masalah, kendala, atau catatan tambahan..."
+              placeholder="Describe the issue, constraint, or additional note..."
               className="w-full px-3 py-2 text-sm text-slate-800 bg-white border border-slate-200 rounded-lg placeholder-slate-400
-                         focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] resize-none transition-all motion-reduce:transition-none"
+                        focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] resize-none transition-all motion-reduce:transition-none"
             />
           </div>
 
           {/* Photo */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Foto <span className="font-normal text-slate-400">(opsional)</span>
+              Photo <span className="font-normal text-slate-400">(optional)</span>
             </label>
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
             {imagePreview ? (
@@ -184,9 +184,9 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
                 <img src={imagePreview} alt="Preview" className="w-full h-44 object-cover" />
                 <button
                   onClick={() => { setImageData(null); setImagePreview(null); }}
-                  aria-label="Hapus foto"
+                  aria-label="Remove photo"
                   className="absolute top-2 right-2 w-7 h-7 bg-black/60 text-white rounded-full
-                             flex items-center justify-center hover:bg-black/80 transition-colors text-sm font-bold"
+                            flex items-center justify-center hover:bg-black/80 transition-colors text-sm font-bold"
                 >
                   ×
                 </button>
@@ -195,12 +195,12 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="w-full h-24 border-2 border-dashed border-slate-300 rounded-xl
-                           flex flex-col items-center justify-center gap-1.5
-                           text-slate-400 hover:border-[#0096c7] hover:text-[#0077b6] hover:bg-slate-50
-                           transition-all motion-reduce:transition-none"
+                          flex flex-col items-center justify-center gap-1.5
+                          text-slate-400 hover:border-[#0096c7] hover:text-[#0077b6] hover:bg-slate-50
+                          transition-all motion-reduce:transition-none"
               >
                 <Camera size={26} strokeWidth={1.5} />
-                <span className="text-xs font-medium">Ambil Foto / Pilih Gambar</span>
+                <span className="text-xs font-medium">Take photo / choose image</span>
               </button>
             )}
           </div>
@@ -223,9 +223,9 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
             {submitting ? (
               <span className="flex items-center justify-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
-                Menyimpan...
+                Saving...
               </span>
-            ) : 'Simpan Progress'}
+            ) : 'Save Progress'}
           </button>
         </div>
       </div>
@@ -233,10 +233,10 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
       {/* ── Right: history ─────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Riwayat Update</span>
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Update History</span>
           {history.length > 0 && (
             <span className="text-[11px] bg-[#0077b6] text-white rounded-full px-2 py-0.5 font-bold tabular-nums">
-              {history.length} catatan
+              {history.length} notes
             </span>
           )}
         </div>
@@ -256,15 +256,14 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
                   onClick={loadHistory}
                   className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
                 >
-                  Coba lagi
+                  Retry
                 </button>
               </div>
             </div>
           ) : history.length === 0 ? (
             <EmptyState
               icon={History}
-              title="Belum ada riwayat update"
-              description="Submit progress pertama di panel kiri."
+              title="No updates yet"
             />
           ) : (
             <div className="p-4 space-y-3">

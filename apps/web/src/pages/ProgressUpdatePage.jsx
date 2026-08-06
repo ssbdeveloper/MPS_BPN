@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw,
-  Info,
   PackageSearch,
   Layers,
   ChevronRight,
@@ -82,7 +81,7 @@ export default function ProgressUpdatePage() {
       if (err.name === 'AbortError') return;
       setOrders([]);
       setTotal(0);
-      setOrdersError('Gagal memuat daftar order. Coba lagi.');
+      setOrdersError('Failed to load order list. Try again.');
     } finally {
       setOrdersLoading(false);
     }
@@ -103,7 +102,7 @@ export default function ProgressUpdatePage() {
       if (!mountedRef.current) return;
       setSubState((prev) => ({
         ...prev,
-        [idsow]: { list: prev[idsow]?.list || [], loading: false, error: 'Gagal memuat sub-task' },
+        [idsow]: { list: prev[idsow]?.list || [], loading: false, error: 'Failed to load sub-tasks' },
       }));
     }
   }, []);
@@ -126,7 +125,7 @@ export default function ProgressUpdatePage() {
     } catch {
       if (opsReqRef.current !== reqId) return;
       setOps([]);
-      setOpsError('Gagal memuat operasi order ini.');
+      setOpsError('Failed to load operations for this order.');
     } finally {
       if (opsReqRef.current === reqId) setOpsLoading(false);
     }
@@ -170,7 +169,7 @@ export default function ProgressUpdatePage() {
           <span className="font-bold text-sm text-slate-800 truncate tabular-nums">{order.order_no}</span>
           <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[2.25rem] px-1.5 h-5 rounded-full
                            bg-[#0077b6] text-white text-[11px] font-bold tabular-nums">
-            {order.operation_count} op
+            {order.operation_count} ops
           </span>
         </div>
         <p className="mt-0.5 text-xs text-slate-700 truncate">{order.part_name || '—'}</p>
@@ -227,11 +226,11 @@ export default function ProgressUpdatePage() {
               )}
               <span className="text-slate-300">·</span>
               {subLoading ? (
-                <span className="text-slate-400">memuat sub-task…</span>
+                <span className="text-slate-400">loading sub-tasks…</span>
               ) : hasSubs ? (
-                <span className="font-semibold text-[#0077b6] tabular-nums">{list.length} sub-task</span>
+                <span className="font-semibold text-[#0077b6] tabular-nums">{list.length} sub-tasks</span>
               ) : (
-                <span className="text-slate-400">tanpa sub-task</span>
+                <span className="text-slate-400">no sub-tasks</span>
               )}
             </div>
           </div>
@@ -269,7 +268,7 @@ export default function ProgressUpdatePage() {
     <div className="h-dvh flex flex-col bg-slate-50 overflow-hidden">
       <PageHeader
         title="Update Progress"
-        eyebrow="Foreman · Estimasi Fisik"
+        eyebrow="Foreman · Physical Progress"
         onBack={() => goBackOrFallback(navigate)}
         right={
           <>
@@ -285,7 +284,7 @@ export default function ProgressUpdatePage() {
                          motion-reduce:transition-none motion-reduce:transform-none"
             >
               <RefreshCw size={15} className={busy ? 'animate-spin motion-reduce:animate-none' : ''} />
-              <span>Segarkan</span>
+              <span>Refresh</span>
             </button>
           </>
         }
@@ -298,17 +297,17 @@ export default function ProgressUpdatePage() {
                           md:w-80 lg:w-96 max-h-[42vh] md:max-h-none">
           <div className="flex-shrink-0 px-4 py-3 border-b border-slate-200">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">Pilih Order</h2>
+              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">Select Order</h2>
               {!ordersLoading && !ordersError && (
                 <span className="text-[11px] font-semibold text-slate-400 tabular-nums">
-                  {total.toLocaleString('id-ID')} order
+                  {total.toLocaleString('id-ID')} orders
                 </span>
               )}
             </div>
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder="Cari order, part, SSBR..."
+              placeholder="Search order, part, SSBR..."
             />
           </div>
 
@@ -330,16 +329,13 @@ export default function ProgressUpdatePage() {
                   onClick={() => loadOrders(activeSearch)}
                   className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
                 >
-                  Coba lagi
+                  Retry
                 </button>
               </div>
             ) : orders.length === 0 ? (
               <EmptyState
                 icon={PackageSearch}
-                title={activeSearch ? 'Order tidak ditemukan' : 'Belum ada order'}
-                description={activeSearch
-                  ? `Tidak ada hasil untuk "${activeSearch}".`
-                  : 'Order akan muncul di sini setelah tersedia di sistem.'}
+                title={activeSearch ? 'Order not found' : 'No orders yet'}
               />
             ) : (
               orders.map(renderOrderCard)
@@ -353,8 +349,7 @@ export default function ProgressUpdatePage() {
             <div className="h-full flex items-center justify-center">
               <EmptyState
                 icon={ClipboardList}
-                title="Pilih order untuk mulai"
-                description="Estimasi progress fisik diperbarui per operasi. Pilih sebuah order di panel kiri untuk melihat operasinya."
+                title="Select an order to start"
               />
             </div>
           ) : (
@@ -376,26 +371,16 @@ export default function ProgressUpdatePage() {
                     </p>
                   </div>
                   <div className="w-full sm:w-56 flex-shrink-0">
-                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Progress Order</p>
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Order Progress</p>
                     <ProgressBar value={selectedOrder.avg_progress} />
                   </div>
                 </div>
               </section>
 
-              {/* Subjective-estimate framing */}
-              <div className="flex items-start gap-2.5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
-                <Info size={16} className="flex-shrink-0 mt-0.5 text-[#0077b6]" />
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Angka progress di sini adalah <span className="font-semibold text-slate-700">estimasi subjektif foreman</span>{' '}
-                  berdasarkan kondisi lapangan — bukan daftar penugasan kerja. Operator tidak mengubah nilai ini;
-                  mereka hanya check-in pada operasi.
-                </p>
-              </div>
-
               {/* Operations list */}
               <section>
                 <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2.5">
-                  Operasi &amp; Estimasi Progress
+                  Operations &amp; Progress
                 </h3>
 
                 {opsLoading ? (
@@ -414,14 +399,13 @@ export default function ProgressUpdatePage() {
                       onClick={() => loadOps(selectedOrder.order_no)}
                       className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
                     >
-                      Coba lagi
+                      Retry
                     </button>
                   </div>
                 ) : ops.length === 0 ? (
                   <EmptyState
                     icon={Layers}
-                    title="Belum ada operasi"
-                    description="Order ini belum memiliki operasi untuk diperbarui progresnya."
+                    title="No operations"
                   />
                 ) : (
                   <div className="space-y-2.5">

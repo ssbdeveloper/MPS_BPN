@@ -64,7 +64,7 @@ export const HistoryCard = ({ item, isLatest }) => {
           {imgUrl && (
             <button
               onClick={() => setImgOpen(true)}
-              title="Lihat foto"
+              title="View photo"
               className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-blue-700 transition-colors text-[10px] font-semibold"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="w-3.5 h-3.5">
@@ -72,7 +72,7 @@ export const HistoryCard = ({ item, isLatest }) => {
                   d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
               </svg>
-              Foto
+              Photo
             </button>
           )}
           <div className="text-right">
@@ -101,7 +101,7 @@ export const HistoryCard = ({ item, isLatest }) => {
           <div className="relative max-w-4xl w-full" onClick={(e) => e.stopPropagation()}>
             <img
               src={imgUrl}
-              alt="Dokumentasi"
+              alt="Documentation"
               className="w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
             />
             <button
@@ -161,10 +161,10 @@ export const ModalShell = ({ title, subtitle, onClose, size = 'lg', children }) 
           </div>
           <button
             onClick={onClose}
-            aria-label="Tutup"
+            aria-label="Close"
             className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-lg text-slate-400
-                       hover:text-slate-600 hover:bg-slate-100 transition-colors
-                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                      hover:text-slate-600 hover:bg-slate-100 transition-colors
+                      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
           >
             <X size={18} />
           </button>
