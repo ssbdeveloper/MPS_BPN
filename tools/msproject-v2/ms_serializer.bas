@@ -131,15 +131,16 @@ Private Function MsSafeAssignmentLocalUid(ByVal a As Object, ByVal taskObj As Ob
 End Function
 
 Private Function MsDependencyTypeCode(ByVal typeValue As Variant) As String
+    ' pjTaskLinkType (MS Project): 0=FF, 1=FS, 2=SS, 3=SF
     Select Case CLng(Val(typeValue))
         Case 0
             MsDependencyTypeCode = "FF"
         Case 1
             MsDependencyTypeCode = "FS"
         Case 2
-            MsDependencyTypeCode = "SF"
-        Case 3
             MsDependencyTypeCode = "SS"
+        Case 3
+            MsDependencyTypeCode = "SF"
         Case Else
             MsDependencyTypeCode = "FS"
     End Select

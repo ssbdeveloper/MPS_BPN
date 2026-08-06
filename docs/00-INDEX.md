@@ -63,6 +63,7 @@ updated: 2026-07-24
 - [[log/2026-08-06-subtask-standard-hours]] — sub-task: bobot dihitung otomatis dari `standard_hours` (share jam per operasi) + cap jam operasi + fix error 42P18 (param beda tipe di recompute)
 - [[log/2026-08-06-msproject-hub-rename-delete]] — MS Project Hub: rename project + delete (Delete biasa vs Force Delete yang menghapus reservasi dari area layout + file .mpp fisik)
 - [[log/2026-08-06-manufacturing-english-ui]] — full English UI kluster manufaktur (Update Progress, Order List, panel sub-task) + label info berlebihan diringkas/dihapus
+- [[log/2026-08-06-msproject-vba-dependency-fix]] — VBA: import dependency predecessor gagal (CallByName + object COM) → panggil .Add langsung; mapping SS/SF sesuai pjTaskLinkType
 
 ## 📚 Operasional
 

@@ -1,6 +1,9 @@
 Attribute VB_Name = "ms_import"
 Option Explicit
 
+' Error dependency pertama saat import (untuk diagnosa kalau Add gagal).
+Private mDepFirstError As String
+
 Private Function MsApiDateToVba(ByVal value As Variant) As Variant
     If IsEmpty(value) Or IsNull(value) Then
         MsApiDateToVba = Empty
@@ -101,14 +104,15 @@ Private Sub MsTrySetObjectBoolProperty(ByVal obj As Object, ByVal propertyName A
 End Sub
 
 Private Function MsLinkTypeValue(ByVal dependencyType As String) As Long
+    ' pjTaskLinkType (MS Project): FF=0, FS=1, SS=2, SF=3
     Select Case UCase$(Trim$(dependencyType))
         Case "FF"
             MsLinkTypeValue = 0
         Case "FS"
             MsLinkTypeValue = 1
-        Case "SF"
-            MsLinkTypeValue = 2
         Case "SS"
+            MsLinkTypeValue = 2
+        Case "SF"
             MsLinkTypeValue = 3
         Case Else
             MsLinkTypeValue = 1
@@ -116,18 +120,40 @@ Private Function MsLinkTypeValue(ByVal dependencyType As String) As Long
 End Function
 
 Private Function MsTryAddTaskDependency(ByVal succTask As Task, ByVal predTask As Task, ByVal dependencyType As String, ByVal lagMinutes As Long) As Boolean
-    Dim dependencies As Object
     On Error Resume Next
-    Set dependencies = CallByName(succTask, "TaskDependencies", VbGet)
+    Dim dependencies As TaskDependencies
+    Set dependencies = succTask.TaskDependencies
     If Err.Number <> 0 Then
+        If Len(mDepFirstError) = 0 Then mDepFirstError = "get TaskDependencies: " & Err.Description
         Err.Clear
         Set dependencies = Nothing
     End If
 
     If Not dependencies Is Nothing Then
-        CallByName dependencies, "Add", VbMethod, predTask, MsLinkTypeValue(dependencyType), lagMinutes
-        MsTryAddTaskDependency = (Err.Number = 0)
-        If Err.Number <> 0 Then Err.Clear
+        ' Early binding (typed TaskDependencies) — CallByName/Object late-bound
+        ' menerjemahkan argumen Task/Type/Lag tidak andal dan menolak dengan
+        ' "The argument value is not valid" (fix 2026-08-06).
+        ' Lag dikirim sebagai string durasi ("0m", "3600m") mengikuti contoh
+        ' resmi MS Project Add(From, Type, Lag); fallback bertahap:
+        '   1) dengan lag string   2) tanpa lag (default FS, 0)
+        dependencies.Add predTask, MsLinkTypeValue(dependencyType), CStr(lagMinutes) & "m"
+        If Err.Number <> 0 Then
+            Dim errWithLag As String
+            errWithLag = Err.Description
+            Err.Clear
+            dependencies.Add predTask, MsLinkTypeValue(dependencyType)
+            If Err.Number <> 0 Then
+                If Len(mDepFirstError) = 0 Then _
+                    mDepFirstError = "Add(" & predTask.Name & " -> " & succTask.Name & "): with-lag=[" & errWithLag & "] no-lag=[" & Err.Description & "]"
+                Err.Clear
+            Else
+                MsTryAddTaskDependency = True
+            End If
+        Else
+            MsTryAddTaskDependency = True
+        End If
+    Else
+        If Len(mDepFirstError) = 0 Then mDepFirstError = "TaskDependencies kosong untuk task " & succTask.Name
     End If
     On Error GoTo 0
 End Function
@@ -185,6 +211,7 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
     Set taskById = CreateObject("Scripting.Dictionary")
     Set resourceById = CreateObject("Scripting.Dictionary")
     Set dependencyByKey = CreateObject("Scripting.Dictionary")
+    mDepFirstError = ""
 
     responseText = MsHttpGet("/projects/" & projectId & "/package")
     Set root = MsParseSuccess(responseText)
@@ -232,7 +259,9 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         If IsDate(planFinish) Then t.Finish = planFinish
 
         Call MsSetTaskOutlineLevel(t, CLng(MsItemNumber(item, "outline_level", 1)))
-        taskById(MsItemText(item, "task_id")) = t.ID
+        ' Simpan OBJECT Task (bukan t.ID) — ID nomor baris bisa bergeser setelah
+        ' OutlineIndent/Outdent, sehingga referensi dependency jadi salah/kosong.
+        Set taskById(MsItemText(item, "task_id")) = t
     Next item
 
     For Each item In assignments
@@ -247,7 +276,7 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
                 MsSetAssignmentId a, MsItemText(item, "assignment_id")
             Else
                 Err.Clear
-                ActiveProject.Tasks(taskById(taskId)).ResourceNames = ActiveProject.Resources(resourceById(resourceId)).Name
+                taskById(taskId).ResourceNames = ActiveProject.Resources(resourceById(resourceId)).Name
             End If
             On Error GoTo ErrHandler
         End If
@@ -270,8 +299,8 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
             End If
             dependencyByKey.Add dependencyKey, True
 
-            Set succTask = ActiveProject.Tasks(taskById(succId))
-            Set predTask = ActiveProject.Tasks(taskById(predId))
+            Set succTask = taskById(succId)
+            Set predTask = taskById(predId)
             depType = MsItemText(item, "dependency_type", "FS")
             depLag = CLng(MsItemNumber(item, "lag_minutes", 0))
 
@@ -295,7 +324,8 @@ NextDependency:
            "Resources: " & projectResources.Count & vbCrLf & _
            "Assignments: " & assignments.Count & vbCrLf & _
            "Dependencies skipped duplicate: " & dependencySkipped & vbCrLf & _
-           "Dependencies failed: " & dependencyFailed, vbInformation
+           "Dependencies failed: " & dependencyFailed & _
+           IIf(dependencyFailed > 0 And Len(mDepFirstError) > 0, vbCrLf & vbCrLf & "Error pertama: " & mDepFirstError, ""), vbInformation
     Exit Sub
 
 ErrHandler:
