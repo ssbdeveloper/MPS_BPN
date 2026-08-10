@@ -14,7 +14,7 @@
 //      React.memo pada sel bay / kartu order tidak ada gunanya.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useOutletContext, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, CalendarRange, ChevronLeft, ChevronRight, LayoutGrid, Loader2,
   PackagePlus, ParkingSquare, RefreshCw,
@@ -40,6 +40,8 @@ const MAX_RANGE_DAYS = 90;
 const WINDOW_BACK_DAYS = 180;
 const WINDOW_FORWARD_DAYS = 365;
 const RANGE_PRESETS = [7, 14, 30];
+// Pola tanggal YYYY-MM-DD untuk validasi ?date= dari URL.
+const DATE_INPUT_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const minText = (a, b) => (a < b ? a : b);
 
@@ -148,16 +150,42 @@ export default function SchedulingAreaPage() {
   }));
   const [viewMode, setViewMode] = useState('map');      // 'map' | 'timeline'
   const [level, setLevel] = useState('overview');       // 'overview' | 'area'
-  const [selectedAreaCode, setSelectedAreaCode] = useState(null);
+  // ?area=AREA-XX&date=YYYY-MM-DD (dari Gantt portfolio, keputusan 4b):
+  // langsung fokus ke area + tanggal booking yang dipilih.
+  const [searchParams] = useSearchParams();
+  const initialAreaCode = searchParams.get('area');
+  const initialDate = searchParams.get('date');
+  const [selectedAreaCode, setSelectedAreaCode] = useState(
+    initialAreaCode && AREA_BY_CODE[initialAreaCode.toUpperCase()] ? initialAreaCode.toUpperCase() : null
+  );
   const [selectedBay, setSelectedBay] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [reservation, setReservation] = useState(null); // { mode, bayCode, order }
   const [detail, setDetail] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  // Saat dibuka dengan ?area=AREA-XX, langsung masuk level area (keputusan 4b).
+  const areaFromUrl = selectedAreaCode && level === 'overview';
+  useEffect(() => {
+    if (areaFromUrl) setLevel('area');
+  }, [areaFromUrl]);
+
+  // Fetch schedule SEMUA tanggal dalam bounds (bukan cuma 7 hari) — peta bisa
+  // melihat reservasi pada tanggal berapa pun. Filter 7/14/30 hari hanya untuk
+  // ORDER POOL (tab "To schedule" = due_by minggu ini), bukan pembatas schedule
+  // area (feedback 2026-08-06).
   const {
     schedules, byBay, loading, error, reload, cursorDate, setCursorDate,
-  } = useBaySchedules({ rangeStart: range.start, rangeEnd: range.end });
+  } = useBaySchedules({ rangeStart: bounds.min, rangeEnd: bounds.max });
+
+  // Kursor awal dari URL ?date= (booking yang diklik di Gantt).
+  useEffect(() => {
+    if (initialDate) {
+      const d = String(initialDate).slice(0, 10);
+      if (DATE_INPUT_RE.test(d) && d >= bounds.min && d <= bounds.max) setCursorDate(d);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Tombol Refresh ditaruh di slot kanan PageHeader (sejajar tombol Back menu),
   // bukan di dalam section — layout menyediakan slot via Outlet context.
@@ -422,8 +450,9 @@ export default function SchedulingAreaPage() {
         </div>
 
         {/* Baris 2: kontrol tanggal KONTEKSTUAL — tiap mode cuma satu konsep.
-            Map = as-of day (kursor); Timeline = range From/To. Preset window
-            (7/14/30 hari) dipakai bersama. */}
+            Map = as-of day bebas SEMUA tanggal (bounds); Timeline = range
+            From/To (7/14/30 hari HANYA untuk lebar sumbu timeline & filter
+            order, bukan pembatas schedule area — feedback 2026-08-06). */}
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5">
           {viewMode === 'map' ? (
             <>
@@ -431,19 +460,19 @@ export default function SchedulingAreaPage() {
                   dua reservasi berurutan pada satu bay tampak seperti dua yang barengan. */}
               <div className="flex items-center gap-2.5">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Map date</span>
-                <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= range.start} aria-label="Previous day" className={STEP_BTN}>
+                <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= bounds.min} aria-label="Previous day" className={STEP_BTN}>
                   <ChevronLeft className="h-4 w-4" />
                 </button>
                 <input
                   type="date"
                   value={cursorDate}
-                  min={range.start}
-                  max={range.end}
+                  min={bounds.min}
+                  max={bounds.max}
                   onChange={(event) => setCursorDate(event.target.value)}
                   aria-label="Map date"
                   className={DATE_INPUT}
                 />
-                <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= range.end} aria-label="Next day" className={STEP_BTN}>
+                <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= bounds.max} aria-label="Next day" className={STEP_BTN}>
                   <ChevronRight className="h-4 w-4" />
                 </button>
                 <button
@@ -461,7 +490,7 @@ export default function SchedulingAreaPage() {
               <div className="flex flex-wrap items-center gap-2.5">
                 <label className="flex items-center gap-2">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</span>
-                  <input type="date" value={range.start} min={bounds.min} max={bounds.max} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
+                  <input type="date" value={range.start} min={bounds.min} max={maxEnd} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
                 </label>
                 <label className="flex items-center gap-2">
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</span>
@@ -471,25 +500,27 @@ export default function SchedulingAreaPage() {
             </>
           )}
 
-          {/* Preset window dipakai dua mode: di peta = batas jelajah kursor,
-              di timeline = lebar sumbu-x. */}
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Date window presets">
-            {RANGE_PRESETS.map((days) => (
-              <button
-                key={days}
-                type="button"
-                onClick={() => applyRange(today, addDaysText(today, days - 1))}
-                className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
-              >
-                {days} days
-              </button>
-            ))}
-          </div>
+          {/* Preset window HANYA untuk timeline (lebar sumbu-x) — di map mode
+              tidak ditampilkan karena peta sudah bebas semua tanggal. */}
+          {viewMode === 'timeline' && (
+            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Date window presets">
+              {RANGE_PRESETS.map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => applyRange(today, addDaysText(today, days - 1))}
+                  className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
+                >
+                  {days} days
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <p className="text-xs tabular-nums text-slate-500">
           {viewMode === 'timeline'
             ? `Read-only · max ${MAX_RANGE_DAYS} days`
-            : 'Map shows reservations active on the selected date'}
+            : 'Map shows reservations active on the selected date (all dates)'}
         </p>
       </section>
 
