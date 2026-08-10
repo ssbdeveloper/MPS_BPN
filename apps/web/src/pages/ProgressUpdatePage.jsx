@@ -13,7 +13,7 @@ import PageHeader from '../components/layout/PageHeader';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 import SearchInput from '../components/forms/SearchInput';
-import { API_BASE, ProgressBar, SubOperationPanel, SubTaskImportButton, computeRollup } from '../features/progress';
+import { API_BASE, ProgressBar, SubOperationPanel, SubTaskImportButton, SubTaskTemplateLink, computeRollup } from '../features/progress';
 
 const ORDER_PICKER_LIMIT = 50;
 
@@ -272,6 +272,7 @@ export default function ProgressUpdatePage() {
         onBack={() => goBackOrFallback(navigate)}
         right={
           <>
+            <SubTaskTemplateLink />
             <SubTaskImportButton onImported={handleRefresh} />
             <button
               type="button"

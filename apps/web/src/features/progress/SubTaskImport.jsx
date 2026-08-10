@@ -7,12 +7,35 @@ import {
   AlertCircle,
   CheckCircle2,
   Ban,
+  Download,
 } from 'lucide-react';
 import Skeleton from '../../components/ui/Skeleton';
 import { API_BASE, authHeaders } from './helpers';
 import { ModalShell } from './primitives';
 
 const IMPORT_URL = `${API_BASE}/sow/subtasks/import`;
+const TEMPLATE_URL = '/templates/sub_task_upload_template.xlsx';
+
+// Always-visible template download link, rendered next to "Upload Excel" in the
+// page header — the import modal only opens AFTER a file is picked, so the
+// template link cannot live there (chicken-and-egg).
+export function SubTaskTemplateLink({ className = '' }) {
+  return (
+    <a
+      href={TEMPLATE_URL}
+      download
+      title="Download template Excel"
+      className={`inline-flex items-center gap-1.5 bg-white border border-slate-200 text-slate-700
+                  hover:bg-slate-50 hover:border-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold min-h-[40px]
+                  transition-all duration-150 active:scale-95
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
+                  motion-reduce:transition-none motion-reduce:transform-none ${className}`}
+    >
+      <Download size={15} />
+      <span>Template</span>
+    </a>
+  );
+}
 
 // ─── POST the .xlsx to the server-side importer (multipart) ───────────────────
 // commit=false → dry-run preview (no DB writes); commit=true → apply in a txn.
@@ -251,7 +274,7 @@ export function SubTaskImportButton({ onImported, className = '' }) {
           <div className="flex-shrink-0 border-t border-slate-200 px-5 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5">
             <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-500">
               <FileSpreadsheet size={14} className="flex-shrink-0 text-slate-400" />
-              Pakai template <span className="font-semibold text-slate-600">sub_task_upload_template.xlsx</span>
+              <span className="font-semibold text-slate-600">sub_task_upload_template.xlsx</span>
             </span>
             <div className="flex items-center justify-end gap-2">
               <button

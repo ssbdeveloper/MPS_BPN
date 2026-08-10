@@ -36,4 +36,4 @@ export {
   SubOperationPanel,
 } from './subtasks';
 
-export { SubTaskImportButton } from './SubTaskImport';
+export { SubTaskImportButton, SubTaskTemplateLink } from './SubTaskImport';
