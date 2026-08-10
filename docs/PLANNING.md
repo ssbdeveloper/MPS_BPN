@@ -12,6 +12,7 @@ updated: 2026-07-28
 ## 🏗️ Sedang dikerjakan (active)
 
 - [[REFACTOR_PLAN]] — refactor besar DB/API/frontend. Phase 1 ✅ · Phase 2 berikutnya: A-R1 auth, A-R3 satu jalur SAP, D-R1 migration ledger
+- [[SOW_SCHEDULING_MFG_UI_REDESIGN_PLAN]] — perombakan UI/UX scheduling manufaktur (desktop-only). **KODE SELESAI lokal (branch 2b, uncommitted)**: route bersarang `/sow-scheduling/{projects,map,area}` + `PageHeader` tunggal (fix back-button), design-system sweep, bay board fit-to-width, drag desktop + jalur klik. Build/lint hijau. **Pending: test owner → commit → push**. Follow-up: ekstrak Modal accessible bersama (ui/Modal.jsx = modal kamera, tak reusable)
 - [[deployment/PLANT_CONFIG_VARIANT_DESIGN]] · [[deployment/PLANT_CONFIG_VARIANT_PLAN]] — sumber kebenaran per plant (identitas+varian+timezone) di tabel `plant_config`; frontend fetch varian dari `/config` (revisi F-R4). **Kode SELESAI 2026-07-27** (12 task, test/build/lint hijau, uncommitted). **Pending: rollout** (migrate+seed+deploy per plant) + commit. Jobs & aturan SAP (BLOCKED PRD D2/D3) = follow-up
 
 ## 👀 Menunggu review / keputusan
@@ -21,6 +22,8 @@ updated: 2026-07-28
 - [[prd/manufacturing-variant]] — PRD varian manufacturing (beda vs salvaging). **Blocker: jawaban §7 (D1–D11: plant/WERKS, ZCONF_TYPE, sumber jam standar insentif, dll.)**
 
 ## 🔜 Backlog (belum dimulai)
+
+- [[LEAD_TIME_BOTTLENECK_PLAN]] — re-implementasi analitik Lead Time (§16) + Bottleneck (§17) dari Power BI `UNIFY_5051` ke Postgres+Express. docx↔md terverifikasi (md kanonik). DB: 3 view/matview dari `mch_transaction` (WAJIB `end_effective`, koreksi statusid-2=Idle bukan productive, queue via window). Backend: endpoint machine-flow/order-flow/bottleneck. **Blocker: keputusan F (D-STATUS, D-STD, D-PF, D-MT, D-THRESH)**
 
 - 🧹 **Pembenahan vault + pengelolaan .md** ([[VAULT_CLEANUP_PLAN]]) — audit 2026-07-24: 64/92 file nol wikilink, 4 folder (`_isolasi/ planning/ prd/ salvaging/`) tak disebut CLAUDE.md, klaim `docs/` di CLAUDE.md tak sinkron. Butuh keputusan owner: perkuat aturan wikilink di CLAUDE.md? lane brainstorm? nasib `_isolasi/` (deadline hapus 2026-09-01). Dikerjakan nanti
 - [[operations/sap-staging-reconciliation-page]] — design draft. Fitur 1 (read-only) + edit terpandu SEBAGIAN SUDAH (tab Jam Operator di SAP-log). Sisa: `ops_worker` deploy (Fitur 2), pertimbangkan buang `sap_ops_request`

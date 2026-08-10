@@ -1,90 +1,95 @@
 ---
 type: guide
 tags: [domain/msproject, domain/timesheet]
+updated: 2026-07-31
 ---
 
-# UAT Checklist — Manufaktur: Check-in + Area→Bay + MS Project VBA
+# Panduan UAT — MS Project Manufaktur
 
-> Uji end-to-end fitur slice [[MSPROJECT_COLLAB_HARDENING_PLAN]] §6: web assign **task→bay**,
-> MS Project menampilkan **MPS Area/Bay** per task, operator **check-in single/multiple**.
-> Plan induk: [[MSPROJECT_PWA_LITE_PLAN]]. Konteks manufaktur yang sudah ada:
-> [[timesheet/MANUFACTURING_VERSION_UAT]].
+> Cek apakah fitur MS Project + jadwal bay + check-in operator jalan sesuai harapan.
+> Tak perlu paham teknis — cukup **lakukan** langkahnya dan lihat **hasilnya**.
 >
-> Isi kolom **Status**: ✅ lulus · ❌ gagal · — belum diuji. Catat error/observasi di **Catatan**.
-> Dibuat 2026-07-29.
+> **Cara isi kolom "Lulus?":** `✅` kalau hasilnya sesuai · `❌` kalau tidak · `—` kalau belum dites.
+> Kalau `❌`, tulis singkat **apa yang terjadi** di kolom Catatan (lalu catat di tabel "Bug ditemukan").
+>
+> Kalau ada langkah yang error/nyangkut, lihat **Lampiran teknis** di bawah atau minta bantuan IT.
+> Diperbarui 2026-07-31. Rencana induk: [[MSPROJECT_COLLAB_HARDENING_PLAN]] · [[MSPROJECT_PWA_LITE_PLAN]].
 
-## 0. Prasyarat lingkungan
+---
 
-| # | Item | Cara cek | Status | Catatan |
-|---|---|---|---|---|
-| P1 | Migrasi `20260728` ter-apply di DB Cikupa | `\d timesheet_transaction` → ada 5 kolom `ms_*` | ✅ 2026-07-28 | via psql 5441 |
-| P2 | Kode task-level live di Cikupa | `GET /api/ms-project/sow-orders/1/tasks` → 200 | ✅ | dulu 404 |
-| P3 | Varian Cikupa = manufacturing | `GET /api/config` → `variant=manufacturing` | ✅ | plant 5100 |
-| P4 | SOCKS proxy Tailscale up | `127.0.0.1:1055` listening | — | `tailscale-start.sh` bila mati |
-| P5 | Forwarder HTTPS jalan | `pg_socks_tunnel.py … 8443` + `curl -k …/health` → 200 | — | biarkan jendela terbuka |
+## Persiapan (lakukan sekali sebelum mulai)
 
-## A. Setup MS Project VBA (sekali per mesin)
+| # | Yang dilakukan | Yang harus terjadi | Lulus? | Catatan |
+|---|---|---|:---:|---|
+| S1 | Buka MS Project → Alt+F11 → import semua modul + form login dari folder `tools/msproject-v2` (detail di Lampiran) | Semua ke-import, tak ada error | — | |
+| S2 | Menu Debug → **Compile VBAProject** | **Tak ada tulisan error merah** | — | kalau error, cek Lampiran (modul kurang) |
+| S3 | Isi alamat server (file `config.ini`, lihat Lampiran) | — | — | biasanya IT yang set |
+| S4 | Jalankan `Ms_CheckConnection` | Muncul "connected" | — | gagal → koneksi/VPN, lihat Lampiran |
 
-| # | Langkah | Hasil diharapkan | Status | Catatan |
-|---|---|---|---|---|
-| A1 | Alt+F11 → import **semua** `.bas` `tools/msproject-v2/` (JsonConverter wajib; **ms_auth.bas kini modul WAJIB**; hapus modul v1) | Compile bersih (Debug → Compile VBAProject: tanpa error) | — | import modul wiring (ms_sync/ms_serializer/ms_calendars) **tanpa ms_auth = gagal compile** (`MsCurrentActor`/`gCurrentUser` undefined) |
-| A2 | Import **UserForm** `frmLogin` (login) & `frmProjectPicker` (picker Ms_OpenFromServer) | Kedua form muncul di tree VBAProject; compile tetap bersih | — | frmLogin dipakai `Ms_Login`; tanpa form ini macro login gagal |
-| A3 | Tak set Tools→References | Late binding — biarkan default | — | |
-| A4 | `config.ini` di `%APPDATA%\mps-msproject\`: `base_url=https://127.0.0.1:8443/api/ms-project`, `verify_tls=false`, `tz_suffix=+08:00` | Config kebaca | — | login POST ke **sibling** `/api/auth/login` (base_url tanpa `/ms-project`) |
+---
 
-## B. Konektivitas & lifecycle MS Project (`ms_sync.bas`)
+## 1. Positive test — hasilnya harus BERHASIL
 
-| # | Macro | Hasil diharapkan | Status | Catatan |
-|---|---|---|---|---|
-| B1 | `Ms_CheckConnection` | Tampil base URL + `service: ms-project / connected` | — | gagal → cek forwarder/URL (`/api`, `https`) |
-| B2 | `Ms_OpenFromServer` → pilih nomor | Daftar 30 project → import lolos **tanpa "Automation error"** | — | fix `CustomFieldRename` sudah masuk |
-| B3 | `Ms_CheckOut` | Dapat lock; Hub `/ms-project-hub` tampil "Checked Out by …" | — | |
-| B4 | edit → `Ms_SaveToServer` | Sukses, `revision_no` naik | — | 409 = revisi stale, 423 = lock hilang |
-| B5 | `Ms_PublishCurrentRevision` (opsional) | Revisi ditandai published | — | |
-| B6 | `Ms_CheckIn` | Lock lepas (Hub kembali "Available") | — | |
+Skenario pemakaian normal. Semua ini **harus jalan mulus**.
 
-## C. Fitur BARU — web assign task→bay → MS Project
+| # | Yang kamu lakukan | Yang harus terjadi | Lulus? | Catatan |
+|---|---|---|:---:|---|
+| P1 | Jalankan `Ms_Login`, isi **username & password yang benar** | Muncul pesan **"Berhasil login sebagai: \<nama kamu\>"** | — | |
+| P2 | Jalankan `Ms_WhoAmI` | Muncul **nama kamu** (yang barusan login) | — | |
+| P3 | Jalankan `Ms_OpenFromServer` | Muncul daftar project → pilih satu → ke-buka tanpa error | — | |
+| P4 | Jalankan `Ms_CheckOut` (mulai mengedit) | Di web (`/ms-project-hub`) project itu jadi **"Checked out by \<nama kamu\>"** | — | harus nama kamu, bukan "ms-project-vba" |
+| P5 | Ubah sesuatu → jalankan `Ms_SaveToServer` | Tersimpan, **nomor revisi naik** | — | |
+| P6 | Jalankan `Ms_CheckIn` (selesai) | Di web project kembali **"Available"** | — | |
+| P7 | **Belum login**, langsung jalankan `Ms_CheckOut` | **Form login muncul sendiri** → login → checkout lanjut atas nama kamu | — | sistem memaksa login supaya jelas siapa yang kerja |
+| P8 | Di web **Scheduling Area**: taruh sebuah order ke bay → lalu di MS Project buka project itu, tampilkan kolom **Text4** & **Text5** | Task menampilkan **Area** (Text4) & **Bay** (Text5) sesuai yang diatur di web | — | order harus sudah di-Map ke MS Project dulu |
+| P9 | Ulangi checkout → edit → simpan → check-in → buka lagi project-nya | **Area & Bay tetap sama** (tidak berubah) | — | web yang menentukan Area/Bay |
+| P10 | Buka file `.mpp` lama hasil **download** (yang "dianggap project baru") → jalankan `Ms_LinkToServerProject` → pilih project yang benar → **Ctrl+S** → `Ms_CheckOut` | Checkout jalan **ke project itu** (bukan minta publish baru) | — | fitur menghubungkan ulang file lama |
+| P11 | Di web taruh order ke area **Blasting** → cek muncul di jadwal | Reservasi blasting muncul & **tidak hilang** | — | |
+| P12 | Operator di tablet: check-in mode **Single** | Baris kerja yang masih terbuka **otomatis ditutup** | — | |
+| P13 | Operator di tablet: check-in mode **Multiple** | Baris kerja **menumpuk** (yang lama tetap terbuka) | — | |
 
-| # | Langkah | Hasil diharapkan | Status | Catatan |
-|---|---|---|---|---|
-| C1 | Web → Scheduling Area: pilih order → **pilih operasi/task** → taruh ke bay (tanggal mencakup hari ini) | Toast "N task direservasi di <bays>" | — | order harus sudah di-map ke MS Project dulu |
-| C2 | MS Project: `Ms_OpenFromServer` project itu → Insert kolom **Text4** & **Text5** | Task ter-assign menampilkan **Area** (Text4) & **Bay** (Text5) | — | rename header opsional via Field Settings |
-| C3 | Round-trip: `Ms_CheckOut`→edit→`Ms_SaveToServer`→`Ms_CheckIn`→`Ms_OpenFromServer` | Area/Bay **tidak berubah** (web otoritatif; MSP tak clobber) | — | |
-| C4 | Assign ke **Blasting** (AREA-18) lalu ulangi C1–C2 | Reservasi blasting muncul, tak hilang | — | dulu bug: 'BLASTING'≠'AREA-18' |
+---
 
-## D. Check-in operator (web, tablet Cikupa)
+## 2. Negative test — hasilnya harus DITOLAK / berhenti dengan aman
 
-| # | Langkah | Hasil diharapkan | Status | Catatan |
-|---|---|---|---|---|
-| D1 | Select Machine (pilih grup/workcenter) → Select Job (area+bay device) | Task muncul, **terfilter grup** (FAB lihat FAB, dst) | — | |
-| D2 | Check-in mode **Single** | Tutup baris terbuka lain → pindah `/login-timesheet` | — | |
-| D3 | Check-in mode **Multiple** | Tetap di halaman, menumpuk baris produktif terbuka | — | |
-| D4 | Ubah **Device Area/Bay** | Minta **PIN** (`12345`) sebelum berubah | — | client-side gate |
+Sengaja salah / kondisi tak wajar. Sistem **tidak boleh** menerima ini diam-diam — harus menolak dengan pesan jelas, tanpa merusak data.
 
-## E. Verifikasi DB (via tunnel `127.0.0.1:5441`)
+| # | Yang kamu lakukan (sengaja) | Yang harus terjadi | Lulus? | Catatan |
+|---|---|---|:---:|---|
+| N1 | `Ms_Login` dengan **password salah** | **Gagal login** (pesan/status merah). Tetap belum login | — | |
+| N2 | **Belum login**, jalankan `Ms_CheckOut`, lalu **Batal** di form login | Aksi **berhenti** — tidak jadi checkout | — | membatalkan login = tidak ada yang terjadi |
+| N3 | Dua orang buka project sama; orang lain simpan duluan, lalu **kamu** `Ms_SaveToServer` | **Ditolak** dengan pesan (revisi sudah berubah). Kerja orang lain **tidak tertimpa** | — | |
+| N4 | Lock kamu dilepas admin (Force Check-In di web), lalu kamu `Ms_SaveToServer` | **Ditolak** dengan pesan (lock sudah hilang) | — | |
+| N5 | Edit **Area/Bay langsung di MS Project** (kolom Text4/Text5) → `Ms_SaveToServer` | Di server **tidak berubah** — web tetap yang menentukan | — | wajar; MS Project cuma menampilkan |
+| N6 | Di tablet, ubah **Device Area/Bay** tanpa/ salah **PIN** | **Ditolak** — diminta PIN dulu | — | PIN `12345` |
+| N7 | Di **Scheduling Area**, buka order yang **belum di-Map** ke MS Project | Daftar task **kosong** (tak bisa direservasi sebelum di-Map) | — | |
 
-| # | Query | Hasil diharapkan | Status | Catatan |
-|---|---|---|---|---|
-| E1 | `SELECT ms_task_id, ms_area_code, ms_bay_schedule_id FROM timesheet_transaction ORDER BY tsnumber DESC LIMIT 5;` | Kolom `ms_*` terisi utk check-in manufaktur | — | |
-| E2 | `SELECT status,count(*) FROM ms_project_bay_schedule GROUP BY status;` | Ada `CONFIRMED` setelah check-in | — | flip `RESERVED→CONFIRMED` |
-
-## F. Login & identitas actor (`ms_auth.bas` + `frmLogin`)
-
-| # | Langkah | Hasil diharapkan | Status | Catatan |
-|---|---|---|---|---|
-| F1 | `Ms_Login` → isi user & password valid | MsgBox **"Berhasil login sebagai: <user>"**; `gCurrentUser` terisi | — | POST `/api/auth/login` (sibling, bukan `/ms-project`) |
-| F2 | `Ms_WhoAmI` | Tampil **username** yang sedang login | — | belum login → tampil fallback `ms-project-vba` |
-| F3 | `Ms_CheckOut` lalu buka Hub `/ms-project-hub` | Lock tampil **"Checked out by <user>"** (username login, **bukan** `ms-project-vba`) | — | actor = `MsCurrentActor()` = username login |
-| F4 | Belum login → langsung `Ms_CheckOut` / save | Jalan **tanpa error**; actor **fallback** `ms-project-vba` | — | login opsional; identitas default aman |
-| F5 | `Ms_Login` → password **salah** | `frmLogin` **`lblStatus` merah** (gagal login); `gCurrentUser` tidak berubah | — | actor tetap fallback bila belum pernah login |
+---
 
 ## Bug ditemukan saat UAT
 
-| ID | Langkah | Gejala | Err.Number / Description | Severity | Status |
-|---|---|---|---|---|---|
-| | | | | | |
+| # | Test (mis. P4 / N3) | Apa yang terjadi | Parah? (ringan/berat) | Status |
+|---|---|---|---|---|
+| | | | | |
 
-## Catatan diketahui (bukan bug)
-- Header kolom MS Project tampil `Text4`/`Text5` (bukan "MPS Area"/"MPS Bay") — auto-rename via VBA sengaja dibuang (bikin "Automation error"); rename manual di Field Settings.
-- Password device-bay `12345` = client-side only (bisa di-bypass devtools) — cukup untuk model tablet LAN; belum PIN server-side.
-- Order yang belum di-map ke MS Project → picker task di Scheduling Area kosong (perlu Map SAP Operations dulu).
+---
+
+## Lampiran teknis (untuk IT bila ada yang gagal)
+
+**S1 — modul yang diimport** (folder `tools/msproject-v2`): semua file `.bas` (termasuk `JsonConverter.bas` dan **`ms_auth.bas` — wajib**) + 2 UserForm: **`frmLogin`** (login) & **`frmProjectPicker`** (daftar project). Hapus dulu modul versi lama. Tanpa `ms_auth` → compile gagal.
+
+**S3 — `config.ini`** (di `%APPDATA%\mps-msproject\`): `base_url=https://127.0.0.1:8443/api/ms-project`, `verify_tls=false`, `tz_suffix=+08:00`. Login menembak alamat **sibling** `/api/auth/login` (bukan di bawah `/ms-project`).
+
+**S4 — koneksi** (akses dari luar pabrik): butuh SOCKS Tailscale `127.0.0.1:1055` **dan** forwarder HTTPS (`pg_socks_tunnel.py … 8443`) jalan. Uji: `curl -k https://127.0.0.1:8443/api/ms-project/health` → 200.
+
+**Kode error yang mungkin muncul** saat `Ms_SaveToServer`: **409** = revisi sudah berubah (N3) · **423** = lock hilang (N4).
+
+**Cek langsung ke database** (via tunnel `127.0.0.1:5441`), kalau perlu bukti:
+- Check-in manufaktur mengisi kolom `ms_*`: `SELECT ms_task_id, ms_area_code, ms_bay_schedule_id FROM timesheet_transaction ORDER BY tsnumber DESC LIMIT 5;`
+- Setelah check-in, reservasi jadi CONFIRMED: `SELECT status, count(*) FROM ms_project_bay_schedule GROUP BY status;`
+- Prasyarat: migrasi `20260728` (5 kolom `ms_*`) & `20260730` (`sow.people_required`) sudah dijalankan; varian Cikupa = `manufacturing` (`GET /api/config`).
+
+**Perilaku yang benar (bukan bug):**
+- Header kolom MS Project tampil `Text4`/`Text5`, bukan "MPS Area"/"MPS Bay" — rename manual via klik-kanan kolom → Field Settings (auto-rename sengaja tak dipakai karena bikin "Automation error").
+- PIN device-bay `12345` cuma penghalang di sisi tablet (bukan keamanan server) — cukup untuk LAN pabrik.
+- Order yang belum di-Map ke MS Project → daftar task kosong di Scheduling Area (Map SAP Operations dulu).

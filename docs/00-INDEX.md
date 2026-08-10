@@ -64,6 +64,9 @@ updated: 2026-07-24
 - [[log/2026-08-06-msproject-hub-rename-delete]] — MS Project Hub: rename project + delete (Delete biasa vs Force Delete yang menghapus reservasi dari area layout + file .mpp fisik)
 - [[log/2026-08-06-manufacturing-english-ui]] — full English UI kluster manufaktur (Update Progress, Order List, panel sub-task) + label info berlebihan diringkas/dihapus
 - [[log/2026-08-06-msproject-vba-dependency-fix]] — VBA: import dependency predecessor gagal (CallByName + object COM) → panggil .Add langsung; mapping SS/SF sesuai pjTaskLinkType
+- [[log/2026-08-06-subtask-upload-template-download]] — tombol download template upload sub-task di modal import (progress-update); template dipindah ke public/templates
+- [[log/2026-08-06-project-portfolio-gantt]] — View All Projects dirombak jadi Portfolio Gantt (semua project + expand task tree + badge booking area, klik → map area); CRUD dipindah ke MS Project Hub
+- [[log/2026-08-07-msproject-workcenter-resource-names]] — workcenter task = kolom Resource Names MS Project (bukan Notes); resource M5051 Balikpapan tidak dipakai; workcenter Cikupa dari tabel `workcenter` (C5100XX)
 
 ## 📚 Operasional
 
