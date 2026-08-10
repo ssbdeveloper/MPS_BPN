@@ -119,7 +119,13 @@ Private Function MsSafeTaskUniqueId(ByVal t As Task) As String
 End Function
 
 Private Function MsSafeTaskWorkcenter(ByVal t As Task) As String
-    MsSafeTaskWorkcenter = Trim$(MsObjText(t, "Notes"))
+    ' Workcenter = kolom Resource Names di MS Project (keputusan 2026-08-07:
+    ' resource name itulah workcenter — resource M5051 Balikpapan TIDAK dipakai).
+    ' Fallback ke Notes hanya untuk data lama yang belum diisi Resource Names.
+    MsSafeTaskWorkcenter = Trim$(MsObjText(t, "ResourceNames"))
+    If Len(MsSafeTaskWorkcenter) = 0 Then
+        MsSafeTaskWorkcenter = Trim$(MsObjText(t, "Notes"))
+    End If
 End Function
 
 Private Function MsSafeAssignmentLocalUid(ByVal a As Object, ByVal taskObj As Object, ByVal resourceObj As Object) As String

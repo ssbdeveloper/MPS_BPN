@@ -246,7 +246,19 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         t.Text1 = MsItemText(item, "order_no")
         t.Text2 = MsItemText(item, "operation_no")
         t.Text3 = MsItemText(item, "ssbr_id")
-        t.Notes = MsItemText(item, "workcenter")
+        ' Workcenter dari server disimpan ke Resource Names (bukan Notes) supaya
+        ' kolom Resource Names di MS Project terisi & terkirim balik sebagai
+        ' workcenter (keputusan 2026-08-07). Notes tetap diisi sebagai cadangan
+        ' untuk task yang Resource Names-nya kosong (data lama).
+        Dim workcenterValue As String
+        workcenterValue = MsItemText(item, "workcenter")
+        t.Notes = workcenterValue
+        If Len(workcenterValue) > 0 Then
+            On Error Resume Next
+            t.ResourceNames = workcenterValue
+            If Err.Number <> 0 Then Err.Clear
+            On Error GoTo ErrHandler
+        End If
         ' Web-authoritative Area/Bay for this task (display-only; never sent back on sync).
         MsSetTaskArea t, MsItemText(item, "area_code")
         MsSetTaskBay t, MsItemText(item, "bay_codes")

@@ -15,7 +15,7 @@ Option Explicit
 ' Tanpa file config, nilai DEFAULT di bawah yang dipakai - modul tetap jalan.
 ' =============================================================================
 
-Private Const MS_DEFAULT_BASE_URL As String = "https://100.80.101.53/api/ms-project"
+Private Const MS_DEFAULT_BASE_URL As String = "https://10.16.1.103/api/ms-project"
 Private Const MS_DEFAULT_TIMEOUT_MS As Long = 30000
 Private Const MS_DEFAULT_VERIFY_TLS As Boolean = False
 ' Server MPS2 berjalan di Asia/Makassar (+08 WITA) - terverifikasi 2026-07-07.

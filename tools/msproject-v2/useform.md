@@ -115,3 +115,63 @@ Langkah 1 — Buat UserForm di VBE
   Export .bas) ke tools/msproject-v2/, lalu bilang — aku commit ketiganya sekaligus (form butuh .frx
   biner yang cuma bisa dihasilkan VBE, tak bisa kubuat manual). Sampai itu, ms_sync.bas yang committed
   tetap jadi versi aman-mu.
+
+
+    ✅ DIKIRIM ke server (round-trip — edit di MS Project IKUT tersimpan)
+
+  Task:
+
+  ┌────────┬─────────────────────┐
+  │ Kolom  │   → field payload   │
+  ├────────┼─────────────────────┤
+  │ Text1  │ order_no            │
+  ├────────┼─────────────────────┤
+  │ Text2  │ operation_no        │
+  ├────────┼─────────────────────┤
+  │ Text3  │ ssbr_id             │
+  ├────────┼─────────────────────┤
+  │ Text10 │ task_id (identitas) │
+  ├────────┼─────────────────────┤
+  │ Text13 │ calendar_id         │
+  └────────┴─────────────────────┘
+
+  (plus field native yang bukan Text: Name→task_name, Start/Finish→plan_start/finish, Work/Duration,
+  ResourceNames→workcenter (keputusan 2026-08-07; fallback Notes untuk data lama),
+  OutlineLevel/Number, Summary.)
+
+  Resource: Text9 → resource_id
+  ProjectSummaryTask (identitas): Text30→project_id, Text29→revision_no, Text27→lock_token,
+  Text26→calendar_id
+
+  🚫 DISPLAY / LOKAL saja (TIDAK dikirim balik)
+
+  Task:
+
+  ┌────────┬────────────────────┬─────────────────────────────────────────────────────────────────┐
+  │ Kolom  │        Isi         │                       Kenapa tak dikirim                        │
+  ├────────┼────────────────────┼─────────────────────────────────────────────────────────────────┤
+  │ Text4  │ Area (MPS Area)    │ web-authoritative; serializer sengaja skip (komentar baris      │
+  │        │                    │ 177-180)                                                        │
+  ├────────┼────────────────────┼─────────────────────────────────────────────────────────────────┤
+  │ Text5  │ Bay (MPS Bay)      │ sda                                                             │
+  ├────────┼────────────────────┼─────────────────────────────────────────────────────────────────┤
+  │ Text11 │ project_id         │ di-set saat import sebagai referensi; tak dibaca serializer     │
+  │        │ per-task           │                                                                 │
+  ├────────┼────────────────────┼─────────────────────────────────────────────────────────────────┤
+  │ Text12 │ parent id          │ parent dikirim via struktur outline (OutlineParent), bukan      │
+  │        │                    │ Text12                                                          │
+  └────────┴────────────────────┴─────────────────────────────────────────────────────────────────┘
+
+  ProjectSummaryTask: Text28 → mode (konvensi VBA lokal; server tak kenal "mode")
+
+  Konsekuensi praktis
+
+  - Text4/Text5 (Area/Bay) → ubah di MS Project percuma (tak ke server, ditimpa ulang tiap import).
+  Area/Bay milik scheduler web.
+  - Text1/Text2/Text3 (order/op/ssbr) → ubah di MS Project AKAN tersimpan ke server saat Save.
+  Hati-hati kalau tak sengaja mengeditnya.
+  - Text26-30 = plumbing identitas project — jangan diutak-atik manual (rusak = file "dianggap baru" /
+  lock kacau).
+
+  Kalau kamu mau kolom lain (mis. cost center, prioritas) ikut dikirim atau jadi display-only, tinggal
+  bilang — tambah/kurang 1 baris di ms_serializer.bas (kirim) atau ms_import.bas (display).

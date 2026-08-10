@@ -1,6 +1,6 @@
 VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} frmProjectPicker 
-   Caption         =   "UserForm1"
+   Caption         =   "LIST PROJECT"
    ClientHeight    =   6585
    ClientLeft      =   120
    ClientTop       =   465
@@ -23,8 +23,7 @@ Option Explicit
           MsgBox "Pilih satu project dulu.", vbExclamation
           Exit Sub
       End If
-      SelectedProjectId = CStr(lstProjects.List(lstProjects.ListIndex, 5)) ' kolom tersembunyi =
-  project_id
+      SelectedProjectId = CStr(lstProjects.List(lstProjects.ListIndex, 5)) ' kolom tersembunyi =  project_id
       Confirmed = True
       Me.Hide
   End Sub
