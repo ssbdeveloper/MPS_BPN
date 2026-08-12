@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useId, useRef } from 'react';
 import {
   Ban, Building2, CalendarRange, Clock, HelpCircle, ListChecks, Loader2, MapPin, Package,
-  Tag, User, Users, X,
+  Pencil, Tag, User, Users, X,
 } from 'lucide-react';
 import { bookingTypeOf, formatDate, formatHours, statusStyle } from './constants';
 import useDialogA11y from './useDialogA11y';
@@ -41,9 +41,10 @@ function DetailRow({ icon, label, children }) {
  *   detail   – object|null  satu reservasi hasil dedupe per schedule_group_id
  *   onClose  – () => void
  *   onCancel – (detail) => void
+ *   onEdit   – (detail) => void  buka panel EDIT untuk reservasi ini
  *   busy     – boolean      pembatalan sedang berjalan
  */
-export default function ReservationDetailModal({ detail, onClose, onCancel, busy }) {
+export default function ReservationDetailModal({ detail, onClose, onCancel, onEdit, busy }) {
   const titleId = useId();
 
   // Identitas onClose distabilkan supaya efek focus-trap tidak dibongkar-pasang tiap
@@ -238,13 +239,24 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, busy
             {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Ban className="h-4 w-4" />}
             Cancel reservation
           </button>
-          <button
-            type="button"
-            onClick={stableClose}
-            className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-          >
-            Close
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onEdit(detail)}
+              disabled={busy || !detail.schedule_group_id}
+              title={!detail.schedule_group_id ? 'Legacy reservation cannot be edited' : undefined}
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+            >
+              <Pencil className="h-4 w-4" /> Edit
+            </button>
+            <button
+              type="button"
+              onClick={stableClose}
+              className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>

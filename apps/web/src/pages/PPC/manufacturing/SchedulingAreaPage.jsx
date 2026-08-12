@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  cancelBaySchedule, cancelBayScheduleGroup, createBaySchedule,
+  cancelBaySchedule, cancelBayScheduleGroup, createBaySchedule, updateBayScheduleGroup,
 } from '../../../services/msProjectService';
 import { Skeleton } from '../../../components';
 import {
@@ -209,6 +209,18 @@ export default function SchedulingAreaPage() {
   }, [setHeaderRight, reload, loading]);
 
   const area = selectedAreaCode ? AREA_BY_CODE[selectedAreaCode] : null;
+  // Area untuk panel reservasi. Mode EDIT memakai area dari DETAIL reservasi
+  // (fallback ke objek minimal bila area_code tidak dikenal FE) — bukan area
+  // yang sedang terpilih di peta, karena edit bisa dibuka dari Timeline.
+  const panelArea = reservation?.edit
+    ? (AREA_BY_CODE[reservation.edit.area_code]
+        || {
+            areaCode: reservation.edit.area_code || '',
+            areaName: reservation.edit.area_name || reservation.edit.area_code || 'Unknown area',
+            bays: Array.isArray(reservation.edit.bay_codes) ? reservation.edit.bay_codes : [],
+            zoned: false,
+          })
+    : area;
   const maxEnd = minText(addDaysText(range.start, MAX_RANGE_DAYS - 1), bounds.max);
 
   // Indeks reservasi (satu entri per schedule_group_id) untuk membuka modal detail
@@ -243,6 +255,21 @@ export default function SchedulingAreaPage() {
 
   const handleSelectOrder = useCallback((order) => setSelectedOrder(order), []);
 
+  // Edit reservasi: buka panel dalam mode EDIT dengan data detail terisi.
+  // Area dibangun dari detail (bukan AREA_BY_CODE[selectedAreaCode]) supaya edit
+  // tetap bisa dibuka dari view Timeline, di mana tidak ada area yang terpilih.
+  const handleEditReservation = useCallback((target) => {
+    if (!target) return;
+    setDetail(null);
+    const isOrder = bookingTypeOf(target).isJob;
+    setReservation({
+      mode: isOrder ? 'ORDER' : 'NONJOB',
+      bayCode: (Array.isArray(target.bay_codes) && target.bay_codes[0]) || null,
+      order: isOrder ? { order_no: target.order_no, has_msp_task: true } : null,
+      edit: target,
+    });
+  }, []);
+
   const handleOrderDragStart = useCallback((event, order) => {
     setSelectedOrder(order);
     event.dataTransfer.effectAllowed = 'copy';
@@ -271,7 +298,12 @@ export default function SchedulingAreaPage() {
   const handleSubmitReservation = useCallback(async (payload) => {
     setSaving(true);
     try {
-      const result = await createBaySchedule(payload);
+      // Panel mengirim schedule_group_id saat mode EDIT -> update grup (satu
+      // transaksi di server); tanpa itu = create reservasi baru.
+      const groupId = payload?.schedule_group_id;
+      const result = groupId
+        ? await updateBayScheduleGroup(groupId, payload)
+        : await createBaySchedule(payload);
       const bays = (payload.bay_codes || []).join(', ');
       const taskCount = Array.isArray(payload.tasks) ? payload.tasks.length : 0;
       const what = payload.booking_type === 'ORDER'
@@ -290,13 +322,14 @@ export default function SchedulingAreaPage() {
       const dropped = warnings.find((warning) => warning.type === 'DUPLICATE_OPERATION_DROPPED');
       const droppedOps = dropped?.operations || [];
 
+      const doneText = groupId ? 'Reservation updated' : 'Reservation saved';
       if ((overlap?.occupants || []).length > 0) {
-        toast.warning('Reservation saved — bay is shared', {
+        toast.warning(`${doneText} — bay is shared`, {
           description: `${what} · ${bays} · with ${describeOccupants(overlap)}`,
           duration: 8000,
         });
       } else {
-        toast.success('Reservation saved', { description: `${what} · ${bays}` });
+        toast.success(doneText, { description: `${what} · ${bays}` });
       }
 
       if (droppedOps.length > 0) {
@@ -527,11 +560,12 @@ export default function SchedulingAreaPage() {
       <div className="flex min-h-0 flex-1 flex-col">{content}</div>
 
       <ReservationPanel
-        open={Boolean(reservation && area)}
+        open={Boolean(reservation && panelArea)}
         mode={reservation?.mode}
-        area={area}
+        area={panelArea}
         bayCode={reservation?.bayCode}
         order={reservation?.order}
+        edit={reservation?.edit}
         saving={saving}
         onClose={closeReservation}
         onSubmit={handleSubmitReservation}
@@ -542,6 +576,7 @@ export default function SchedulingAreaPage() {
           detail={detail}
           onClose={closeDetail}
           onCancel={handleCancelReservation}
+          onEdit={handleEditReservation}
           busy={saving}
         />
       )}

@@ -188,18 +188,23 @@ const OccupantRow = memo(function OccupantRow({ occupant }) {
  *   area     – { areaCode, areaName, bays[] }  area terpilih
  *   bayCode  – string           bay awal; N bay berikutnya diambil dari area.bays
  *   order    – object|null      order SOW terpilih (wajib untuk mode ORDER)
+ *   edit     – object|null      detail reservasi yang sedang diubah (lihat
+ *                               dedupeByGroup). Saat ada, semua isian di-seed
+ *                               dari nilainya dan submit mengirim
+ *                               schedule_group_id (orkestrator memilih
+ *                               updateBayScheduleGroup).
  *   saving   – boolean          submit sedang berjalan di orkestrator
  *   onClose  – () => void
- *   onSubmit – (payload) => void  payload createBaySchedule yang sudah jadi
+ *   onSubmit – (payload) => void  payload createBaySchedule / updateBayScheduleGroup
  */
-export default function ReservationPanel({ open, mode, area, bayCode, order, saving, onClose, onSubmit }) {
+export default function ReservationPanel({ open, mode, area, bayCode, order, saving, onClose, onSubmit, edit }) {
   if (!open || !area) return null;
-  // Remount saat KONTEKS reservasi berganti (mode/area/order) supaya form tidak
-  // membawa sisa isian booking sebelumnya. Ganti BAY saja sengaja TIDAK me-remount:
-  // memindahkan bay tidak boleh menghapus tanggal & pilihan task yang sudah dibuat.
+  // Remount saat KONTEKS reservasi berganti (mode/area/order/edit) supaya form
+  // tidak membawa sisa isian booking sebelumnya. Ganti BAY saja sengaja TIDAK
+  // me-remount: memindahkan bay tidak boleh menghapus tanggal & pilihan task.
   return (
     <ReservationPanelBody
-      key={`${mode}|${area.areaCode}|${order?.order_no || ''}`}
+      key={`${mode}|${area.areaCode}|${order?.order_no || ''}|${edit?.schedule_group_id || 'new'}`}
       mode={mode}
       area={area}
       bayCode={bayCode}
@@ -207,17 +212,32 @@ export default function ReservationPanel({ open, mode, area, bayCode, order, sav
       saving={saving}
       onClose={onClose}
       onSubmit={onSubmit}
+      edit={edit}
     />
   );
 }
 
-function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onSubmit }) {
+function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onSubmit, edit }) {
   const isOrderMode = mode !== 'NONJOB';
+  const isEdit = Boolean(edit);
   // Konstan sepanjang umur instance: shell me-remount saat mode/order berganti.
   const shouldLoadTasks = isOrderMode && Boolean(order?.order_no);
 
+  // Task yang SUDAH direservasi (mode EDIT). Dipakai sebagai seed pilihan task
+  // dan sebagai FALLBACK daftar task ketika order tidak lagi bisa di-fetch
+  // (reservasi order yatim) — tanggal/bay/catatan tetap bisa diubah.
+  const editTasks = useMemo(
+    () => (isEdit && Array.isArray(edit?.tasks) ? edit.tasks : []),
+    [isEdit, edit],
+  );
+
+  // Bay awal saat EDIT = bay pertama reservasi, bukan bay hasil klik peta.
+  const initialBay = isEdit && edit?.bay_codes?.length ? edit.bay_codes[0] : bayCode;
+
   // --- Bay ------------------------------------------------------------------
-  const [bayCount, setBayCount] = useState(1);
+  const [bayCount, setBayCount] = useState(
+    isEdit && edit?.bay_codes?.length ? edit.bay_codes.length : 1,
+  );
 
   // --- Tanggal --------------------------------------------------------------
   // Tanggal EFEKTIF diturunkan saat render, bukan disinkronkan lewat useEffect:
@@ -225,27 +245,70 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   // MS Project task terpilih; begitu disentuh, nilai manual yang menang. Pola effect
   // + setState untuk ini melanggar react-hooks/set-state-in-effect DAN menghasilkan
   // render berantai tiap kali pilihan task berubah.
-  const [manualStart, setManualStart] = useState(todayText());
-  const [manualEnd, setManualEnd] = useState(addDaysText(todayText(), 7));
-  const [datesDirty, setDatesDirty] = useState(false);
-  const [notes, setNotes] = useState('');
+  //
+  // Mode EDIT: tanggal reservasi adalah sumber kebenaran — datesDirty langsung
+  // true supaya prefill jadwal MSP tidak menimpa tanggal yang sudah tersimpan.
+  const [manualStart, setManualStart] = useState(
+    () => (isEdit && edit?.start_date) || todayText(),
+  );
+  const [manualEnd, setManualEnd] = useState(
+    () => (isEdit && edit?.end_date) || addDaysText(todayText(), 7),
+  );
+  const [datesDirty, setDatesDirty] = useState(isEdit);
+  const [notes, setNotes] = useState(() => (isEdit && edit?.notes) || '');
 
   // --- Non-job --------------------------------------------------------------
-  const [bookingType, setBookingType] = useState(NONJOB_BOOKING_TYPES[0]?.code || 'PARKING');
-  const [purpose, setPurpose] = useState('');
+  // Mode EDIT: jenis booking TIDAK bisa diubah (backend update tidak menerima
+  // booking_type), jadi select di-disable — nilai tetap terlihat.
+  const [bookingType, setBookingType] = useState(() => {
+    if (isEdit && edit?.booking_type) return String(edit.booking_type).toUpperCase();
+    return NONJOB_BOOKING_TYPES[0]?.code || 'PARKING';
+  });
+  const [purpose, setPurpose] = useState(() => (isEdit && edit?.purpose) || '');
 
   // --- Task (mode ORDER) ----------------------------------------------------
   const [orderTasks, setOrderTasks] = useState([]);
   const [loadingTasks, setLoadingTasks] = useState(shouldLoadTasks);
   const [tasksError, setTasksError] = useState('');
-  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState(() => (
+    isEdit ? editTasks.map((task) => task.task_id).filter(Boolean) : []
+  ));
   const [taskSearch, setTaskSearch] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
 
   // --- Headcount ------------------------------------------------------------
-  const [peopleEdits, setPeopleEdits] = useState({});
+  const [peopleEdits, setPeopleEdits] = useState(() => {
+    if (!isEdit) return {};
+    const seed = {};
+    editTasks.forEach((task) => {
+      const key = peopleKey(task);
+      if (key in seed) return;
+      seed[key] = task.people_required == null || task.people_required === ''
+        ? ''
+        : String(task.people_required);
+    });
+    return seed;
+  });
   const [writingBack, setWritingBack] = useState(false);
-  const peopleBaselineRef = useRef({});
+  // Baseline EDIT di-seed dari nilai reservasi dulu; effect fetch menimpanya
+  // dengan nilai segar dari DB begitu task order berhasil dimuat. Kalau fetch
+  // gagal (order yatim), baseline tetap = nilai reservasi -> tidak ada write-back
+  // headcount yang menimpa, submit tanggal/bay tetap jalan.
+  const peopleBaselineRef = useRef(
+    isEdit
+      ? (() => {
+          const seed = {};
+          editTasks.forEach((task) => {
+            const key = peopleKey(task);
+            if (key in seed) return;
+            seed[key] = task.people_required == null || task.people_required === ''
+              ? ''
+              : String(task.people_required);
+          });
+          return seed;
+        })()
+      : {},
+  );
 
   // --- Penghuni bay (peringatan lunak D3) -----------------------------------
   const [occupants, setOccupants] = useState(EMPTY_OCCUPANTS);
@@ -273,10 +336,10 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   // berarti menyeberangi jalan, yang mustahil untuk satu unit.
   const zoneBays = useMemo(() => {
     if (!area?.zoned) return area?.bays || [];
-    const { zoneKey } = splitBayCode(bayCode);
+    const { zoneKey } = splitBayCode(initialBay);
     return (area.bays || []).map((base) => makeBayCode(base, zoneKey || 'CENTER'));
-  }, [area, bayCode]);
-  const bayIndex = Math.max(0, zoneBays.indexOf(bayCode));
+  }, [area, initialBay]);
+  const bayIndex = Math.max(0, zoneBays.indexOf(initialBay));
   const maxBayCount = Math.max(1, zoneBays.length - bayIndex);
   // Di-clamp saat render (bukan lewat efek) supaya ganti bay ke ujung area tidak
   // sempat menghasilkan daftar bay yang lebih pendek dari angka di select.
@@ -323,22 +386,29 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   }, [shouldLoadTasks, order?.order_no, reloadToken]);
 
   const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
+  // Daftar task yang DITAMPILKAN. Normal = hasil fetch order. Mode EDIT dengan
+  // fetch gagal/order yatim = task dari detail reservasi (tetap bisa diubah
+  // tanggal/bay; pilihan task sudah terkunci sesuai isi reservasi).
+  const displayTasks = useMemo(
+    () => (orderTasks.length > 0 ? orderTasks : editTasks),
+    [orderTasks, editTasks],
+  );
   const selectedTasks = useMemo(
-    () => orderTasks.filter((task) => selectedTaskIdSet.has(task.task_id)),
-    [orderTasks, selectedTaskIdSet],
+    () => displayTasks.filter((task) => selectedTaskIdSet.has(task.task_id)),
+    [displayTasks, selectedTaskIdSet],
   );
 
   // Pencarian task: filter lokal by op / nama / workcenter. Order dengan puluhan
   // task mustahil di-scan dengan scroll — ini pintu masuknya.
   const taskQuery = taskSearch.trim().toLowerCase();
   const filteredTasks = useMemo(() => {
-    if (!taskQuery) return orderTasks;
-    return orderTasks.filter((task) => (
+    if (!taskQuery) return displayTasks;
+    return displayTasks.filter((task) => (
       String(task.operation_no ?? '').toLowerCase().includes(taskQuery)
       || String(task.task_name ?? '').toLowerCase().includes(taskQuery)
       || String(task.workcenter ?? '').toLowerCase().includes(taskQuery)
     ));
-  }, [orderTasks, taskQuery]);
+  }, [displayTasks, taskQuery]);
 
   // --- Prefill tanggal dari jadwal MS Project (D5) --------------------------
   // start = min(plan_start), end = max(plan_finish) dari task TERPILIH.
@@ -381,6 +451,10 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
         bay_codes: bayCodesKey.split(','),
         start_date: startDate,
         end_date: endDate,
+        // Mode EDIT: grup ini sendiri tidak boleh dihitung sebagai penghuni —
+        // menggeser tanggal/bay seharusnya tidak melaporkan \"bentrok dengan
+        // reservasi ini\" (backend: exclude_group_id di /bay-schedules/occupants).
+        ...(isEdit && edit?.schedule_group_id ? { exclude_group_id: edit.schedule_group_id } : {}),
       })
         .then((result) => {
           if (!active) return;
@@ -400,7 +474,9 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
       active = false;
       clearTimeout(timer);
     };
-  }, [canQueryOccupants, bayCodesKey, startDate, endDate, occupantsToken]);
+    // isEdit / edit.schedule_group_id konstan sepanjang umur instance (shell
+    // me-remount saat target edit berganti) — aman sebagai dependency.
+  }, [canQueryOccupants, bayCodesKey, startDate, endDate, occupantsToken, isEdit, edit?.schedule_group_id]);
 
   // --- Handler --------------------------------------------------------------
   const allFilteredChecked = filteredTasks.length > 0
@@ -527,8 +603,16 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
       bay_codes: selectedBays,
       start_date: startDate,
       end_date: endDate,
-      ...(notes.trim() ? { notes: notes.trim() } : {}),
     };
+    if (isEdit) {
+      // Mode EDIT: schedule_group_id membuat orkestrator memilih endpoint
+      // updateBayScheduleGroup. notes dikirim SELALU (boleh kosong) supaya
+      // mengosongkan catatan benar-benar terhapus di server.
+      base.schedule_group_id = edit.schedule_group_id;
+      base.notes = notes.trim();
+    } else if (notes.trim()) {
+      base.notes = notes.trim();
+    }
 
     if (isOrderMode) {
       onSubmit({
@@ -570,7 +654,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
         <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">
-              {isOrderMode ? 'Bay reservation' : 'Non-job booking'}
+              {isEdit ? 'Edit reservation' : (isOrderMode ? 'Bay reservation' : 'Non-job booking')}
             </p>
             <h3
               id={titleId}
@@ -603,7 +687,8 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                 <select
                   value={bookingType}
                   onChange={(event) => setBookingType(event.target.value)}
-                  className={FIELD_CLASS}
+                  disabled={isEdit}
+                  className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
                 >
                   {NONJOB_BOOKING_TYPES.map((option) => (
                     <option key={option.code} value={option.code}>{option.label}</option>
@@ -643,7 +728,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                     </span>
                   )}
                 </span>
-                {orderTasks.length > 0 && (
+                {displayTasks.length > 0 && (
                   <button
                     type="button"
                     onClick={toggleAll}
@@ -661,7 +746,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                       <Skeleton key={row} className="h-9 rounded-lg" />
                     ))}
                   </div>
-                ) : tasksError ? (
+                ) : tasksError && !isEdit ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
                     <AlertTriangle className="h-7 w-7 text-red-400" strokeWidth={1.5} />
                     <p className="text-xs font-semibold text-red-600">{tasksError}</p>
@@ -673,18 +758,26 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                       <RefreshCw className="h-3.5 w-3.5" /> Retry
                     </button>
                   </div>
-                ) : orderTasks.length === 0 ? (
+                ) : displayTasks.length === 0 ? (
                   <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
-                      <ListChecks className="h-5 w-5" />
-                    </span>
-                    <p className="text-xs font-semibold text-slate-500">Order is not mapped to MS Project.</p>
-                    <Link
-                      to="/sow-scheduling/map"
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-1.5 text-xs font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-                    >
-                      Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
-                    </Link>
+                    {isEdit ? (
+                      <p className="text-xs font-semibold text-slate-500">
+                        This reservation has no reserved tasks — edit dates, bay, or notes only.
+                      </p>
+                    ) : (
+                      <>
+                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                          <ListChecks className="h-5 w-5" />
+                        </span>
+                        <p className="text-xs font-semibold text-slate-500">Order is not mapped to MS Project.</p>
+                        <Link
+                          to="/sow-scheduling/map"
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-1.5 text-xs font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                        >
+                          Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -696,7 +789,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                     />
                     {taskQuery && (
                       <p className="mb-1 px-1 text-[11px] font-semibold tabular-nums text-slate-500">
-                        {filteredTasks.length} of {orderTasks.length} tasks
+                        {filteredTasks.length} of {displayTasks.length} tasks
                       </p>
                     )}
                     {filteredTasks.length === 0 ? (
@@ -727,7 +820,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                 )}
               </div>
 
-              {!loadingTasks && !tasksError && orderTasks.length > 0 && tasksMissing && (
+              {!loadingTasks && !tasksError && displayTasks.length > 0 && tasksMissing && (
                 <p className="text-xs font-semibold text-amber-600">Select at least one task.</p>
               )}
               {peopleInvalid && (
@@ -922,7 +1015,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
             {busy
               ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
               : <Save className="h-4 w-4" />}
-            {writingBack ? 'Saving headcount...' : 'Save reservation'}
+            {writingBack ? 'Saving headcount...' : (isEdit ? 'Save changes' : 'Save reservation')}
           </button>
         </div>
       </div>

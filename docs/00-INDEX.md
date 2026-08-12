@@ -67,6 +67,10 @@ updated: 2026-07-24
 - [[log/2026-08-06-subtask-upload-template-download]] — tombol download template upload sub-task di modal import (progress-update); template dipindah ke public/templates
 - [[log/2026-08-06-project-portfolio-gantt]] — View All Projects dirombak jadi Portfolio Gantt (semua project + expand task tree + badge booking area, klik → map area); CRUD dipindah ke MS Project Hub
 - [[log/2026-08-07-msproject-workcenter-resource-names]] — workcenter task = kolom Resource Names MS Project (bukan Notes); resource M5051 Balikpapan tidak dipakai; workcenter Cikupa dari tabel `workcenter` (C5100XX)
+- [[log/2026-08-10-ews-issue-log-spesifik]] — analisa & saran issue log EWS lebih spesifik (kolom salah, PIC, cara perbaiki) — **menunggu keputusan user**, jangan coding dulu
+- [[log/2026-08-10-ews-issue-log-logic]] — detail lengkap logic EWS issue log dalam tabel: konsep, business day, semua threshold/env, schema, 7 generator, lifecycle upsert/auto-resolve, TTS notifier, API, temuan probe BPN/CKP
+- [[log/2026-08-12-bay-schedule-edit]] — edit reservasi bay: tombol Edit di modal detail → ReservationPanel mode EDIT (seed dari detail, exclude diri di occupants, fallback task list) → `PUT /bay-schedules/group/:id`
+- [[UAT_MANUFACTURING_FULL_CHECKLIST]] — daftar UAT full manufacturing (Cikupa, tanpa machine hours): setup server → API/auth → order pool → bay scheduling → portfolio Gantt → MS Project Hub/VBA → progress sub-task → timesheet tapping → EWS → UAT per role
 
 ## 📚 Operasional
 
