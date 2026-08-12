@@ -45,3 +45,17 @@ tags: [log, ms-project, bay-scheduling, frontend]
   zona, `A1` ditolak `INVALID_BAY_CODE`) → `PUT group/:id` (geser tanggal 12–14 → 13–15,
   notes berubah) → GET verify (baris baru ketemu) → DELETE group (cleanup) → 0 baris
   aktif tersisa; sweep `ZZTEST` = 0. Payload update persis seperti yang dikirim panel.
+
+## Iterasi layout (2026-08-12, user: "full layar saja, tetap flexible, rapihkan")
+
+- ReservationPanel dirombak dari drawer kanan 440px → **full screen** (fixed inset-0,
+  header/footer sticky, body scroll, konten `max-w-5xl` di tengah). Berlaku untuk mode
+  create MAUPUN edit (satu komponen yang sama).
+- Layout rapi: NONJOB type+purpose berdampingan (md:grid-cols-2); ORDER task card full
+  width (list `max-h-[42vh]`); Bay + Tanggal berdampingan (lg:grid-cols-2); Penghuni bay
+  + Catatan berdampingan (lg:grid-cols-2, notes jadi kartu). Mobile tetap single column
+  tanpa horizontal scroll.
+- Box "Selected bays" diubah dari biru menyala (bg-[#caf0f8]) → netral
+  (border-slate-200 bg-slate-50, label uppercase abu-abu) sesuai selera UI user.
+- Klik backdrop tidak lagi menutup (full screen tidak ada backdrop) — tutup via X /
+  Cancel / Escape (tetap ditangani useDialogA11y).

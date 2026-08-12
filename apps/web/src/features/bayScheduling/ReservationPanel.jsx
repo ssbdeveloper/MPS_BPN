@@ -637,387 +637,393 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   const headline = isOrderMode ? (order?.order_no || '-') : bookingTypeLabel(bookingType);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 backdrop-blur-sm md:items-stretch md:justify-end"
-      onClick={stableClose}
-    >
+    <div className="fixed inset-0 z-50 flex flex-col bg-white">
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        onClick={(event) => event.stopPropagation()}
-        className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl bg-white shadow-xl focus:outline-none md:h-full md:max-h-none md:w-[440px] md:rounded-none md:rounded-l-2xl"
+        className="flex h-full w-full flex-col overflow-hidden bg-white focus:outline-none"
       >
         {/* Header */}
-        <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">
-              {isEdit ? 'Edit reservation' : (isOrderMode ? 'Bay reservation' : 'Non-job booking')}
-            </p>
-            <h3
-              id={titleId}
-              className={`truncate text-base font-extrabold text-slate-800 ${isOrderMode ? 'font-mono tabular-nums' : ''}`}
+        <header className="shrink-0 border-b border-slate-200 bg-white">
+          <div className="mx-auto flex w-full max-w-5xl items-start justify-between gap-3 px-4 py-3.5 md:px-6">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">
+                {isEdit ? 'Edit reservation' : (isOrderMode ? 'Bay reservation' : 'Non-job booking')}
+              </p>
+              <h3
+                id={titleId}
+                className={`truncate text-base font-extrabold text-slate-800 ${isOrderMode ? 'font-mono tabular-nums' : ''}`}
+              >
+                {headline}
+              </h3>
+              <p className="mt-0.5 flex items-center gap-1 truncate text-xs font-semibold text-slate-500">
+                <MapPin className="h-3 w-3 shrink-0" />
+                {area.areaName} · from <span className="font-mono tabular-nums">{bayCode}</span>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={stableClose}
+              aria-label="Close"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
             >
-              {headline}
-            </h3>
-            <p className="mt-0.5 flex items-center gap-1 truncate text-xs font-semibold text-slate-500">
-              <MapPin className="h-3 w-3 shrink-0" />
-              {area.areaName} · from <span className="font-mono tabular-nums">{bayCode}</span>
-            </p>
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={stableClose}
-            aria-label="Close"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+        </header>
 
         {/* Isi panel */}
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 px-4 py-4">
-          {/* --- Mode NONJOB: jenis booking + tujuan --- */}
-          {!isOrderMode && (
-            <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <label className="grid gap-1 text-xs font-bold text-slate-700">
-                Booking type
-                <select
-                  value={bookingType}
-                  onChange={(event) => setBookingType(event.target.value)}
-                  disabled={isEdit}
-                  className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
-                >
-                  {NONJOB_BOOKING_TYPES.map((option) => (
-                    <option key={option.code} value={option.code}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="grid gap-1">
-                <label htmlFor={purposeId} className="text-xs font-bold text-slate-700">
-                  Purpose <span className="text-red-600">*</span>
+        <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50">
+          <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-5 md:px-6">
+            {/* --- Mode NONJOB: jenis booking + tujuan --- */}
+            {!isOrderMode && (
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-2">
+                <label className="grid gap-1 text-xs font-bold text-slate-700">
+                  Booking type
+                  <select
+                    value={bookingType}
+                    onChange={(event) => setBookingType(event.target.value)}
+                    disabled={isEdit}
+                    className={`${FIELD_CLASS} disabled:cursor-not-allowed disabled:opacity-60`}
+                  >
+                    {NONJOB_BOOKING_TYPES.map((option) => (
+                      <option key={option.code} value={option.code}>{option.label}</option>
+                    ))}
+                  </select>
                 </label>
-                <input
-                  id={purposeId}
-                  type="text"
-                  value={purpose}
-                  onChange={(event) => setPurpose(event.target.value)}
-                  placeholder="e.g. unit parked waiting for vendor"
-                  aria-invalid={purposeMissing || undefined}
-                  className={`${FIELD_CLASS} ${purposeMissing ? 'border-red-400 ring-2 ring-red-200' : ''}`}
-                />
-                {purposeMissing && (
-                  <p className="text-xs font-semibold text-red-600">Purpose is required.</p>
+                <div className="grid gap-1">
+                  <label htmlFor={purposeId} className="text-xs font-bold text-slate-700">
+                    Purpose <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    id={purposeId}
+                    type="text"
+                    value={purpose}
+                    onChange={(event) => setPurpose(event.target.value)}
+                    placeholder="e.g. unit parked waiting for vendor"
+                    aria-invalid={purposeMissing || undefined}
+                    className={`${FIELD_CLASS} ${purposeMissing ? 'border-red-400 ring-2 ring-red-200' : ''}`}
+                  />
+                  {purposeMissing && (
+                    <p className="text-xs font-semibold text-red-600">Purpose is required.</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* --- Mode ORDER: pilih task --- */}
+            {isOrderMode && (
+              <div className="grid gap-1.5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                    <ListChecks className="h-4 w-4 text-[#0077b6]" />
+                    Select tasks
+                    {selectedTasks.length > 0 && (
+                      <span className="rounded-full bg-[#caf0f8] px-2 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]">
+                        {selectedTasks.length} selected
+                      </span>
+                    )}
+                  </span>
+                  {displayTasks.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={toggleAll}
+                      className="rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                    >
+                      {allFilteredChecked ? 'Clear' : 'Select all'}
+                    </button>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white">
+                  {loadingTasks ? (
+                    <div className="space-y-2 p-3">
+                      {[0, 1, 2].map((row) => (
+                        <Skeleton key={row} className="h-9 rounded-lg" />
+                      ))}
+                    </div>
+                  ) : tasksError && !isEdit ? (
+                    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                      <AlertTriangle className="h-7 w-7 text-red-400" strokeWidth={1.5} />
+                      <p className="text-xs font-semibold text-red-600">{tasksError}</p>
+                      <button
+                        type="button"
+                        onClick={retryTasks}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" /> Retry
+                      </button>
+                    </div>
+                  ) : displayTasks.length === 0 ? (
+                    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                      {isEdit ? (
+                        <p className="text-xs font-semibold text-slate-500">
+                          This reservation has no reserved tasks — edit dates, bay, or notes only.
+                        </p>
+                      ) : (
+                        <>
+                          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
+                            <ListChecks className="h-5 w-5" />
+                          </span>
+                          <p className="text-xs font-semibold text-slate-500">Order is not mapped to MS Project.</p>
+                          <Link
+                            to="/sow-scheduling/map"
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-1.5 text-xs font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                          >
+                            Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <SearchInput
+                        value={taskSearch}
+                        onChange={setTaskSearch}
+                        placeholder="Search op / task / workcenter..."
+                        className="mb-1.5"
+                      />
+                      {taskQuery && (
+                        <p className="mb-1 px-1 text-[11px] font-semibold tabular-nums text-slate-500">
+                          {filteredTasks.length} of {displayTasks.length} tasks
+                        </p>
+                      )}
+                      {filteredTasks.length === 0 ? (
+                        <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+                          <p className="text-xs font-semibold text-slate-500">
+                            No tasks match “{taskSearch.trim()}”.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="max-h-[42vh] overflow-y-auto">
+                          {filteredTasks.map((task) => {
+                            const value = peopleEdits[peopleKey(task)] ?? '';
+                            return (
+                              <TaskRow
+                                key={task.task_id}
+                                task={task}
+                                checked={selectedTaskIdSet.has(task.task_id)}
+                                onToggle={toggleTask}
+                                peopleValue={value}
+                                peopleInvalid={!isValidPeople(value)}
+                                onPeopleChange={handlePeopleChange}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {!loadingTasks && !tasksError && displayTasks.length > 0 && tasksMissing && (
+                  <p className="text-xs font-semibold text-amber-600">Select at least one task.</p>
+                )}
+                {peopleInvalid && (
+                  <p className="text-xs font-semibold text-red-600">
+                    Headcount must be a positive whole number, or left empty.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* --- Peringatan: task terpilih belum punya jadwal MSP --- */}
+            {noPlanSchedule && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <p className="flex items-start gap-1.5 text-xs font-bold text-amber-700">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  Job not scheduled in MS Project
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Selected tasks have no <span className="font-semibold">plan start/finish</span>, so the dates below
+                  are not prefilled.
+                </p>
+                <Link
+                  to="/sow-scheduling/map"
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                >
+                  Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            )}
+
+            {/* --- Bay + Tanggal (berdampingan di layar lebar) --- */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <label className="grid gap-1 text-xs font-bold text-slate-700">
+                  Number of bays
+                  <select
+                    value={effectiveBayCount}
+                    onChange={(event) => setBayCount(Number(event.target.value))}
+                    className={`${FIELD_CLASS} tabular-nums`}
+                  >
+                    {Array.from({ length: maxBayCount }, (_, index) => index + 1).map((count) => (
+                      <option key={count} value={count}>{count === 1 ? '1 bay' : `${count} bays`}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Selected bays</p>
+                  <p className="mt-1 font-mono text-sm font-bold tabular-nums text-slate-800">
+                    {selectedBays.join(', ') || '-'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                    <CalendarRange className="h-4 w-4 text-[#0077b6]" /> Dates
+                  </span>
+                  {isOrderMode && prefillStart && prefillEnd && datesDirty && (
+                    <button
+                      type="button"
+                      onClick={resetDatesToPlan}
+                      className="inline-flex items-center gap-1 rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" /> Use MS Project dates
+                    </button>
+                  )}
+                </div>
+                {prefillActive && (
+                  <p className="flex items-start gap-1.5 text-xs text-slate-500">
+                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0077b6]" />
+                    Prefilled from the MS Project schedule.
+                  </p>
+                )}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-xs font-bold text-slate-700">
+                    Start
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={handleStartDate}
+                      aria-invalid={rangeInvalid || undefined}
+                      className={`${FIELD_CLASS} tabular-nums ${rangeInvalid ? 'border-red-400 ring-2 ring-red-200' : ''}`}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-bold text-slate-700">
+                    End
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={handleEndDate}
+                      aria-invalid={rangeInvalid || undefined}
+                      className={`${FIELD_CLASS} tabular-nums ${rangeInvalid ? 'border-red-400 ring-2 ring-red-200' : ''}`}
+                    />
+                  </label>
+                </div>
+                {rangeInvalid && (
+                  <p className="text-xs font-semibold text-red-600">
+                    End date cannot be earlier than start date.
+                  </p>
+                )}
+                {datesMissing && (
+                  <p className="text-xs font-semibold text-red-600">Start and end date are required.</p>
                 )}
               </div>
             </div>
-          )}
 
-          {/* --- Mode ORDER: pilih task --- */}
-          {isOrderMode && (
-            <div className="grid gap-1.5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                  <ListChecks className="h-4 w-4 text-[#0077b6]" />
-                  Select tasks
-                  {selectedTasks.length > 0 && (
-                    <span className="rounded-full bg-[#caf0f8] px-2 py-0.5 text-xs font-bold tabular-nums text-[#0077b6]">
-                      {selectedTasks.length} selected
-                    </span>
-                  )}
-                </span>
-                {displayTasks.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={toggleAll}
-                    className="rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
-                  >
-                    {allFilteredChecked ? 'Clear' : 'Select all'}
-                  </button>
-                )}
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-white">
-                {loadingTasks ? (
-                  <div className="space-y-2 p-3">
-                    {[0, 1, 2].map((row) => (
-                      <Skeleton key={row} className="h-9 rounded-lg" />
-                    ))}
+            {/* --- Penghuni bay + Catatan (berdampingan di layar lebar) --- */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-start gap-2 border-b border-slate-200 px-4 py-3">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#0077b6]" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-700">Currently using this bay</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Bay can be shared — this does not block saving.
+                    </p>
                   </div>
-                ) : tasksError && !isEdit ? (
-                  <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
-                    <AlertTriangle className="h-7 w-7 text-red-400" strokeWidth={1.5} />
-                    <p className="text-xs font-semibold text-red-600">{tasksError}</p>
+                </div>
+
+                {!canQueryOccupants ? (
+                  <p className="px-4 py-4 text-xs text-slate-500">Set valid dates to see this.</p>
+                ) : loadingOccupants ? (
+                  <div className="space-y-2 p-3">
+                    {[0, 1].map((row) => <Skeleton key={row} className="h-10 rounded-lg" />)}
+                  </div>
+                ) : occupantsError ? (
+                  <div className="flex flex-col items-center gap-2 px-4 py-5 text-center">
+                    <p className="text-xs font-semibold text-red-600">{occupantsError}</p>
                     <button
                       type="button"
-                      onClick={retryTasks}
+                      onClick={retryOccupants}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
                     >
                       <RefreshCw className="h-3.5 w-3.5" /> Retry
                     </button>
                   </div>
-                ) : displayTasks.length === 0 ? (
-                  <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
-                    {isEdit ? (
-                      <p className="text-xs font-semibold text-slate-500">
-                        This reservation has no reserved tasks — edit dates, bay, or notes only.
-                      </p>
-                    ) : (
-                      <>
-                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-400">
-                          <ListChecks className="h-5 w-5" />
-                        </span>
-                        <p className="text-xs font-semibold text-slate-500">Order is not mapped to MS Project.</p>
-                        <Link
-                          to="/sow-scheduling/map"
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-1.5 text-xs font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-                        >
-                          Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
-                        </Link>
-                      </>
-                    )}
-                  </div>
+                ) : occupants.rows.length === 0 ? (
+                  <p className="px-4 py-4 text-xs text-slate-500">No other reservations in this range.</p>
                 ) : (
                   <>
-                    <SearchInput
-                      value={taskSearch}
-                      onChange={setTaskSearch}
-                      placeholder="Search op / task / workcenter..."
-                      className="mb-1.5"
-                    />
-                    {taskQuery && (
-                      <p className="mb-1 px-1 text-[11px] font-semibold tabular-nums text-slate-500">
-                        {filteredTasks.length} of {displayTasks.length} tasks
-                      </p>
-                    )}
-                    {filteredTasks.length === 0 ? (
-                      <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
-                        <p className="text-xs font-semibold text-slate-500">
-                          No tasks match “{taskSearch.trim()}”.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="max-h-72 overflow-y-auto">
-                        {filteredTasks.map((task) => {
-                          const value = peopleEdits[peopleKey(task)] ?? '';
-                          return (
-                            <TaskRow
-                              key={task.task_id}
-                              task={task}
-                              checked={selectedTaskIdSet.has(task.task_id)}
-                              onToggle={toggleTask}
-                              peopleValue={value}
-                              peopleInvalid={!isValidPeople(value)}
-                              onPeopleChange={handlePeopleChange}
-                            />
-                          );
-                        })}
-                      </div>
-                    )}
+                    <ul className="max-h-48 overflow-y-auto">
+                      {occupants.rows.map((occupant, index) => (
+                        <OccupantRow
+                          key={occupant.schedule_id || `${occupant.schedule_group_id || 'row'}-${index}`}
+                          occupant={occupant}
+                        />
+                      ))}
+                    </ul>
+                    <p className="border-t border-slate-100 px-4 py-2 text-xs font-semibold tabular-nums text-slate-500">
+                      {occupants.truncated
+                        ? `Showing ${occupants.rows.length} of ${occupants.total} reservations`
+                        : `${occupants.total} ${occupants.total === 1 ? 'reservation' : 'reservations'}`}
+                    </p>
                   </>
                 )}
               </div>
 
-              {!loadingTasks && !tasksError && displayTasks.length > 0 && tasksMissing && (
-                <p className="text-xs font-semibold text-amber-600">Select at least one task.</p>
-              )}
-              {peopleInvalid && (
-                <p className="text-xs font-semibold text-red-600">
-                  Headcount must be a positive whole number, or left empty.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* --- Peringatan: task terpilih belum punya jadwal MSP --- */}
-          {noPlanSchedule && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
-              <p className="flex items-start gap-1.5 text-xs font-bold text-amber-700">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                Job not scheduled in MS Project
-              </p>
-              <p className="mt-1 text-xs text-amber-700">
-                Selected tasks have no <span className="font-semibold">plan start/finish</span>, so the dates below
-                are not prefilled.
-              </p>
-              <Link
-                to="/sow-scheduling/map"
-                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-700 transition hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-              >
-                Map SAP operations <ExternalLink className="h-3.5 w-3.5" />
-              </Link>
-            </div>
-          )}
-
-          {/* --- Bay --- */}
-          <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label className="grid gap-1 text-xs font-bold text-slate-700">
-              Number of bays
-              <select
-                value={effectiveBayCount}
-                onChange={(event) => setBayCount(Number(event.target.value))}
-                className={`${FIELD_CLASS} tabular-nums`}
-              >
-                {Array.from({ length: maxBayCount }, (_, index) => index + 1).map((count) => (
-                  <option key={count} value={count}>{count === 1 ? '1 bay' : `${count} bays`}</option>
-                ))}
-              </select>
-            </label>
-            <div className="rounded-xl border border-[#90e0ef] bg-[#caf0f8] px-3 py-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">Selected bays</p>
-              <p className="mt-1 font-mono text-sm font-extrabold tabular-nums text-slate-800">
-                {selectedBays.join(', ') || '-'}
-              </p>
-            </div>
-          </div>
-
-          {/* --- Tanggal --- */}
-          <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                <CalendarRange className="h-4 w-4 text-[#0077b6]" /> Dates
-              </span>
-              {isOrderMode && prefillStart && prefillEnd && datesDirty && (
-                <button
-                  type="button"
-                  onClick={resetDatesToPlan}
-                  className="inline-flex items-center gap-1 rounded text-xs font-bold text-[#0077b6] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
-                >
-                  <Undo2 className="h-3.5 w-3.5" /> Use MS Project dates
-                </button>
-              )}
-            </div>
-            {prefillActive && (
-              <p className="flex items-start gap-1.5 text-xs text-slate-500">
-                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#0077b6]" />
-                Prefilled from the MS Project schedule.
-              </p>
-            )}
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="grid gap-1 text-xs font-bold text-slate-700">
-                Start
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={handleStartDate}
-                  aria-invalid={rangeInvalid || undefined}
-                  className={`${FIELD_CLASS} tabular-nums ${rangeInvalid ? 'border-red-400 ring-2 ring-red-200' : ''}`}
-                />
-              </label>
-              <label className="grid gap-1 text-xs font-bold text-slate-700">
-                End
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={handleEndDate}
-                  aria-invalid={rangeInvalid || undefined}
-                  className={`${FIELD_CLASS} tabular-nums ${rangeInvalid ? 'border-red-400 ring-2 ring-red-200' : ''}`}
-                />
-              </label>
-            </div>
-            {rangeInvalid && (
-              <p className="text-xs font-semibold text-red-600">
-                End date cannot be earlier than start date.
-              </p>
-            )}
-            {datesMissing && (
-              <p className="text-xs font-semibold text-red-600">Start and end date are required.</p>
-            )}
-          </div>
-
-          {/* --- Penghuni bay (peringatan LUNAK, D3) --- */}
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex items-start gap-2 border-b border-slate-200 px-4 py-3">
-              <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#0077b6]" />
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-700">Currently using this bay</p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Bay can be shared — this does not block saving.
-                </p>
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <label className="grid gap-1 text-xs font-bold text-slate-700">
+                  Notes (optional)
+                  <textarea
+                    value={notes}
+                    onChange={(event) => setNotes(event.target.value)}
+                    rows={4}
+                    className={FIELD_CLASS}
+                  />
+                </label>
               </div>
             </div>
 
-            {!canQueryOccupants ? (
-              <p className="px-4 py-4 text-xs text-slate-500">Set valid dates to see this.</p>
-            ) : loadingOccupants ? (
-              <div className="space-y-2 p-3">
-                {[0, 1].map((row) => <Skeleton key={row} className="h-10 rounded-lg" />)}
+            {/* --- Error submit (write-back headcount dsb) --- */}
+            {submitError && (
+              <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                <p className="text-xs font-semibold text-red-600">{submitError}</p>
               </div>
-            ) : occupantsError ? (
-              <div className="flex flex-col items-center gap-2 px-4 py-5 text-center">
-                <p className="text-xs font-semibold text-red-600">{occupantsError}</p>
-                <button
-                  type="button"
-                  onClick={retryOccupants}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" /> Retry
-                </button>
-              </div>
-            ) : occupants.rows.length === 0 ? (
-              <p className="px-4 py-4 text-xs text-slate-500">No other reservations in this range.</p>
-            ) : (
-              <>
-                <ul className="max-h-48 overflow-y-auto">
-                  {occupants.rows.map((occupant, index) => (
-                    <OccupantRow
-                      key={occupant.schedule_id || `${occupant.schedule_group_id || 'row'}-${index}`}
-                      occupant={occupant}
-                    />
-                  ))}
-                </ul>
-                <p className="border-t border-slate-100 px-4 py-2 text-xs font-semibold tabular-nums text-slate-500">
-                  {occupants.truncated
-                    ? `Showing ${occupants.rows.length} of ${occupants.total} reservations`
-                    : `${occupants.total} ${occupants.total === 1 ? 'reservation' : 'reservations'}`}
-                </p>
-              </>
             )}
           </div>
-
-          {/* --- Catatan --- */}
-          <label className="grid gap-1 text-xs font-bold text-slate-700">
-            Notes (optional)
-            <textarea
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              rows={3}
-              className={FIELD_CLASS}
-            />
-          </label>
-
-          {/* --- Error submit (write-back headcount dsb) --- */}
-          {submitError && (
-            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-              <p className="text-xs font-semibold text-red-600">{submitError}</p>
-            </div>
-          )}
         </div>
 
         {/* Footer aksi */}
-        <div className="flex shrink-0 justify-end gap-2 border-t border-slate-200 bg-white px-4 py-3">
-          <button
-            type="button"
-            onClick={stableClose}
-            className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
-          >
-            {busy
-              ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
-              : <Save className="h-4 w-4" />}
-            {writingBack ? 'Saving headcount...' : (isEdit ? 'Save changes' : 'Save reservation')}
-          </button>
-        </div>
+        <footer className="shrink-0 border-t border-slate-200 bg-white">
+          <div className="mx-auto flex w-full max-w-5xl items-center justify-end gap-2 px-4 py-3 md:px-6">
+            <button
+              type="button"
+              onClick={stableClose}
+              className="min-h-[44px] rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+            >
+              {busy
+                ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                : <Save className="h-4 w-4" />}
+              {writingBack ? 'Saving headcount...' : (isEdit ? 'Save changes' : 'Save reservation')}
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
   );
