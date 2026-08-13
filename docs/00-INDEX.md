@@ -70,6 +70,7 @@ updated: 2026-07-24
 - [[log/2026-08-10-ews-issue-log-spesifik]] — analisa & saran issue log EWS lebih spesifik (kolom salah, PIC, cara perbaiki) — **menunggu keputusan user**, jangan coding dulu
 - [[log/2026-08-10-ews-issue-log-logic]] — detail lengkap logic EWS issue log dalam tabel: konsep, business day, semua threshold/env, schema, 7 generator, lifecycle upsert/auto-resolve, TTS notifier, API, temuan probe BPN/CKP
 - [[log/2026-08-12-bay-schedule-edit]] — edit reservasi bay: tombol Edit di modal detail → ReservationPanel mode EDIT (seed dari detail, exclude diri di occupants, fallback task list) → `PUT /bay-schedules/group/:id`
+- [[log/2026-08-13-unknown-order-fix]] — fix false-positive badge "Unknown order": FE beralih ke `order_known` dari backend (EXISTS ke sow/ph3_order), konsolidasi `isUnknownOrder` di constants.js; task area tanpa sow_id tidak lagi salah-positif
 - [[UAT_MANUFACTURING_FULL_CHECKLIST]] — daftar UAT full manufacturing (Cikupa, tanpa machine hours): setup server → API/auth → order pool → bay scheduling → portfolio Gantt → MS Project Hub/VBA → progress sub-task → timesheet tapping → EWS → UAT per role
 
 ## 📚 Operasional

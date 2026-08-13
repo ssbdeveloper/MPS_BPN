@@ -376,20 +376,31 @@ export function orderKeyOf(value) {
   return text.replace(/^0+/, '');
 }
 
+function hasText(value) {
+  return value != null && String(value).trim() !== '';
+}
+
 // D7: reservasi yang order_no-nya tidak dikenal TETAP tampil, dengan badge
-// "order tidak dikenal".
-//
-// PERINGATAN: `GET /ms-project/bay-schedules` TIDAK mengembalikan flag apa pun
-// untuk ini, jadi penilaiannya harus datang dari luar — pemanggil menyediakan
-// Set berisi kunci order yang dikenal. Tanpa Set itu fungsi ini mengembalikan
-// false (tidak pernah memasang badge palsu). Jangan menebak dari part_name yang
-// null: baris order-level warisan juga null di situ.
+// "order tidak dikenal". Urutan sumber kebenaran:
+//   1. `order_known` dari backend listBaySchedules (EXISTS check ke sow &
+//      ph3_order pakai ltrim, nilai boolean) — PALING akurat, sudah deploy.
+//   2. Set `knownOrderKeys` (kunci order dikenal, dari pemanggil) — desain
+//      awal D7, dipakai kalau backend lama belum kirim order_known.
+//   3. Heuristic part_name/customer — HANYA untuk backend lama yang tidak
+//      kirim order_known DAN tidak ada Set. Ini salah-positif untuk order SAH
+//      yang task-nya belum ber-sow_id (part_name/customer di-resolve backend
+//      lewat LEFT JOIN sow via ms_project_task.sow_id), jadi jangan diandalkan.
+// Booking non-job tidak punya order sama sekali -> bukan yatim.
 export function isUnknownOrder(schedule, knownOrderKeys) {
   if (!schedule || isNonJob(schedule)) return false;
-  const key = orderKeyOf(schedule.order_no);
-  if (!key) return false;
-  if (!knownOrderKeys || typeof knownOrderKeys.has !== 'function') return false;
-  return !knownOrderKeys.has(key);
+  if (typeof schedule.order_known === 'boolean') return !schedule.order_known;
+  if (knownOrderKeys && typeof knownOrderKeys.has === 'function') {
+    const key = orderKeyOf(schedule.order_no);
+    if (!key) return false;
+    return !knownOrderKeys.has(key);
+  }
+  if (!schedule.order_no) return false;
+  return !hasText(schedule.part_name) && !hasText(schedule.customer);
 }
 
 /* ── Aksen visual ────────────────────────────────────────────────────────── */

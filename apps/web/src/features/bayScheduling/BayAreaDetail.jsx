@@ -13,6 +13,7 @@ import {
   formatDate,
   groupKeyOf,
   isActiveOn,
+  isUnknownOrder,
   plural,
 } from './constants';
 
@@ -76,21 +77,6 @@ const NON_JOB_ICON = {
 
 function isNonJob(schedule) {
   return bookingTypeOf(schedule) !== 'ORDER';
-}
-
-// D7 — reservasi yang order_no-nya tidak dikenal TETAP tampil supaya bay tidak
-// terlihat kosong padahal terpakai. Deteksinya heuristik: listBaySchedules
-// mengambil part_name/customer lewat LEFT JOIN sow (via ms_project_task.sow_id),
-// jadi order yatim datang dengan keduanya NULL.
-//
-// PERINGATAN: heuristik ini bisa salah-positif untuk order yang SAH tapi task-nya
-// belum ber-sow_id, atau baris sow yang part_name+customer-nya memang kosong.
-// Perbaikan sebenarnya = kolom eksplisit dari backend (mis. `order_known` hasil
-// EXISTS ke ph3_order/sow) — sudah dilaporkan ke pemilik lapisan data.
-function isUnknownOrder(schedule) {
-  if (isNonJob(schedule)) return false;
-  if (!schedule?.order_no) return false;
-  return !schedule.part_name && !schedule.customer;
 }
 
 // Penanda subcont (Fase 6 / D4). listBaySchedules BELUM mengembalikan field ini —

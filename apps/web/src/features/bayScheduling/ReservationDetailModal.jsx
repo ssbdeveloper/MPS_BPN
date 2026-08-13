@@ -3,7 +3,7 @@ import {
   Ban, Building2, CalendarRange, Clock, HelpCircle, ListChecks, Loader2, MapPin, Package,
   Pencil, Tag, User, Users, X,
 } from 'lucide-react';
-import { bookingTypeOf, formatDate, formatHours, statusStyle } from './constants';
+import { bookingTypeOf, formatDate, formatHours, isUnknownOrder, statusStyle } from './constants';
 import useDialogA11y from './useDialogA11y';
 
 // --- Helper LOKAL (tidak ada di kontrak constants.js) ------------------------
@@ -65,9 +65,11 @@ export default function ReservationDetailModal({ detail, onClose, onCancel, onEd
   const isOrderBooking = bookingType.isJob;
 
   // D7 / A-17: reservasi ORDER yang order_no-nya tidak dikenal (tidak ketemu di
-  // ph3_order/sow) datang tanpa part_name & customer. PENTING: syarat isOrderBooking
-  // wajib ada — booking non-job memang tidak punya keduanya dan BUKAN order yatim.
-  const unknownOrder = isOrderBooking && !isText(detail.part_name) && !isText(detail.customer);
+  // ph3_order/sow). Sumber kebenaran = `order_known` dari backend; heuristic
+  // part_name/customer hanya fallback backend lama. Booking non-job memang
+  // tidak punya part_name/customer dan BUKAN order yatim (isNonJob di dalam
+  // isUnknownOrder yang menanganinya).
+  const unknownOrder = isUnknownOrder(detail);
 
   const heading = isOrderBooking
     ? (isText(detail.order_no) ? detail.order_no : '(no order)')

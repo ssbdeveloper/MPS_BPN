@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { CalendarRange, Car, HelpCircle, Tag, Users, Warehouse, Wrench } from 'lucide-react';
 import { EmptyState } from '../../../components';
 import { AREA_OPTIONS, bayCodesOf, bayLabel } from '../../../config/manufacturingAreas';
-import { bookingTypeOf, dedupeByGroup, plural } from '../../../features/bayScheduling/constants';
+import { bookingTypeOf, dedupeByGroup, isUnknownOrder, plural } from '../../../features/bayScheduling/constants';
 
 /* ──────────────────────────────────────────────────────────────────────────
    BayReservationTimeline — Gantt hanya-baca untuk reservasi bay manufaktur.
@@ -58,17 +58,9 @@ function statusStyle(s) { return STATUS_STYLE[String(s || '').toUpperCase()] || 
 // bukan lewat warna: warna di bar ini sudah dipakai penuh untuk status.
 const NONJOB_ICON = { PARKING: Car, STORAGE: Warehouse, MAINTENANCE: Wrench, OTHER: Tag };
 
-// D7 — reservasi yatim tetap tampil, dengan penanda. Heuristik yang sama dengan
-// ReservationDetailModal: listBaySchedules mengambil part_name/customer lewat LEFT
-// JOIN sow, jadi order yang tidak dikenal datang dengan keduanya NULL. Syarat
-// "booking job" wajib ada — booking non-job memang tidak punya keduanya.
-// Perbaikan sebenarnya = kolom `order_known` dari backend, bukan menebak dari NULL.
-function isUnknownOrder(entry) {
-  if (!bookingTypeOf(entry).isJob) return false;
-  if (!entry.order_no) return false;
-  return !entry.part_name && !entry.customer;
-}
-
+// D7 — reservasi yatim tetap tampil, dengan penanda. Deteksi order tidak dikenal
+// dipusatkan di constants.isUnknownOrder: pakai `order_known` dari backend
+// (EXISTS ke sow/ph3_order), fallback ke knownOrderKeys / heuristic lama.
 function barLabel(entry) {
   const type = bookingTypeOf(entry);
   if (type.isJob) return entry.order_no || '—';
