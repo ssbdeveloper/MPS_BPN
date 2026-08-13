@@ -4,7 +4,7 @@ import {
   AlertTriangle, CalendarRange, Clock, ExternalLink, Info, ListChecks, Loader2, MapPin,
   RefreshCw, Save, Undo2, Users, X,
 } from 'lucide-react';
-import { fetchBayOccupants, fetchOrderTasks, updateOperationPeople } from '../../services/msProjectService';
+import { fetchBayOccupants, fetchBaySchedules, fetchOrderTasks, updateOperationPeople } from '../../services/msProjectService';
 import { SearchInput, Skeleton } from '../../components';
 import {
   NONJOB_BOOKING_TYPES, addDaysText, bookingTypeOf, formatDate, formatHours, statusStyle, todayText,
@@ -33,6 +33,16 @@ function dateOnly(value) {
   return value ? String(value).slice(0, 10) : '';
 }
 
+// Label ringkas reservasi bay untuk baris task: AREA-18 · PT1, PT2 · 27 Jul – 20 Aug
+function reservationLabel(row) {
+  const bays = Array.isArray(row.bay_codes) && row.bay_codes.length
+    ? row.bay_codes.join(', ')
+    : '';
+  const where = [row.area_name || row.area_code, bays].filter(Boolean).join(' · ');
+  const when = `${formatDate(row.start_date)} – ${formatDate(row.end_date)}`;
+  return [where, when].filter(Boolean).join(' · ');
+}
+
 // Hanya digit yang diterima; valid = bilangan bulat positif atau kosong.
 function isValidPeople(value) {
   return value === '' || /^[1-9]\d*$/.test(value);
@@ -57,6 +67,7 @@ function normalizeOccupants(result) {
 }
 
 const EMPTY_OCCUPANTS = { rows: [], truncated: false, total: 0 };
+const EMPTY_TASK_RESERVATIONS = [];
 
 // =============================================================================
 // Sub-komponen
@@ -64,13 +75,14 @@ const EMPTY_OCCUPANTS = { rows: [], truncated: false, total: 0 };
 
 const FIELD_CLASS = 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 transition-all duration-150 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] motion-reduce:transition-none';
 
-const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, peopleInvalid, onPeopleChange }) {
+const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, peopleInvalid, onPeopleChange, reservations }) {
   const uid = useId();
   const planhours = task.planhours;
   const hasPlan = planhours != null && planhours !== '' && Number.isFinite(Number(planhours));
   const planStart = dateOnly(task.plan_start);
   const planFinish = dateOnly(task.plan_finish);
   const hasSchedule = Boolean(planStart || planFinish);
+  const hasReservation = reservations.length > 0;
 
   return (
     <div className="flex items-start gap-2.5 border-b border-slate-100 px-3 py-2 last:border-b-0 hover:bg-slate-50">
@@ -109,6 +121,27 @@ const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, pe
             {hasSchedule
               ? `${formatDate(planStart)} – ${formatDate(planFinish)}`
               : 'No plan dates'}
+          </span>
+          <span
+            className={`mt-0.5 flex items-start gap-1 text-xs tabular-nums ${hasReservation ? 'text-emerald-700' : 'text-slate-400'}`}
+          >
+            <MapPin className="mt-0.5 h-3 w-3 shrink-0" />
+            {hasReservation ? (
+              <span className="min-w-0">
+                {reservations.slice(0, 2).map((row) => (
+                  <span key={row.schedule_group_id || row.schedule_id} className="block truncate">
+                    {reservationLabel(row)}
+                  </span>
+                ))}
+                {reservations.length > 2 && (
+                  <span className="block truncate text-slate-500">
+                    +{reservations.length - 2} more reservation{reservations.length - 2 > 1 ? 's' : ''}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span>No area reservation</span>
+            )}
           </span>
         </span>
       </label>
@@ -316,6 +349,12 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   const [occupantsError, setOccupantsError] = useState('');
   const [occupantsToken, setOccupantsToken] = useState(0);
 
+  // --- Reservasi bay per task (mode ORDER) ----------------------------------
+  // task_id -> baris reservasi aktif order ini. Dipakai baris task untuk
+  // menampilkan area/bay + tanggal yang SUDAH dimiliki task itu, supaya user
+  // langsung melihat task mana yang sudah dan belum punya reservasi.
+  const [taskReservations, setTaskReservations] = useState({});
+
   // --- Submit ---------------------------------------------------------------
   const [submitError, setSubmitError] = useState('');
 
@@ -384,6 +423,26 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
 
     return () => { active = false; };
   }, [shouldLoadTasks, order?.order_no, reloadToken]);
+
+  // Reservasi bay order ini (SEMUA tanggal, bukan cuma window peta) -> status
+  // per task. Tanpa batas tanggal supaya task yang sudah direservasi di periode
+  // lain tetap kelihatan. Gagal fetch = diam (info opsional, tidak memblokir).
+  useEffect(() => {
+    if (!shouldLoadTasks) return undefined;
+    let active = true;
+    fetchBaySchedules({ order_no: order.order_no, limit: 5000 })
+      .then((rows) => {
+        if (!active) return;
+        const map = {};
+        (Array.isArray(rows) ? rows : []).forEach((row) => {
+          if (!row.task_id) return;
+          (map[row.task_id] || (map[row.task_id] = [])).push(row);
+        });
+        setTaskReservations(map);
+      })
+      .catch(() => { if (active) setTaskReservations({}); });
+    return () => { active = false; };
+  }, [shouldLoadTasks, order?.order_no]);
 
   const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
   // Daftar task yang DITAMPILKAN. Normal = hasil fetch order. Mode EDIT dengan
@@ -810,6 +869,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                                 peopleValue={value}
                                 peopleInvalid={!isValidPeople(value)}
                                 onPeopleChange={handlePeopleChange}
+                                reservations={taskReservations[task.task_id] || EMPTY_TASK_RESERVATIONS}
                               />
                             );
                           })}
