@@ -14,6 +14,13 @@ import ssbLogo from '../../assets/ssb.png';
 import travelCardHtml from '../../templates/travel-card.html?raw';
 import operationCardHtml from '../../templates/operation-card.html?raw';
 import { useSowDraft } from '../../features/sow/useSowDraft';
+import {
+  listSavedSows,
+  getSavedSow,
+  createSavedSow,
+  updateSavedSow,
+  deleteSavedSow,
+} from '../../features/sow/savedSows';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -2720,6 +2727,16 @@ const SowCreatePage = () => {
   const [newDoc, setNewDoc]               = useState({ documentno: '', revision_no: '', revision_date: '', default: false });
   const [printing, setPrinting]           = useState(false);
   const printRef = useRef(null);
+  // ── Saved SOW (snapshot durable — save & load ulang) ──
+  const [savedSows, setSavedSows]           = useState([]);
+  const [savedLoading, setSavedLoading]     = useState(false);
+  const [savedSearch, setSavedSearch]       = useState('');
+  const [showSavedPanel, setShowSavedPanel] = useState(false);
+  const [showSaveModal, setShowSaveModal]   = useState(false);
+  const [savedName, setSavedName]           = useState('');
+  const [savingSow, setSavingSow]           = useState(false);
+  const [renamingId, setRenamingId]         = useState(null);
+  const [renamingName, setRenamingName]     = useState('');
   const issuedByName = getAuthUserDisplayName();
   const issuedAt = useMemo(() => formatTravelCardIssuedAt(), []);
 
@@ -2742,6 +2759,100 @@ const SowCreatePage = () => {
       checkedTemplateOpsRef.current.clear();
     },
   });
+
+  // ── Saved SOW: load list, save snapshot, load ulang, rename, delete ──
+  const loadSavedSows = useCallback(async () => {
+    setSavedLoading(true);
+    try {
+      const data = await listSavedSows();
+      setSavedSows(Array.isArray(data.data) ? data.data : []);
+    } catch (err) {
+      toast.error(err.message || 'Gagal memuat saved SOW');
+    } finally {
+      setSavedLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSavedSows(); }, [loadSavedSows]);
+
+  const savedFiltered = useMemo(() => {
+    const q = savedSearch.trim().toLowerCase();
+    if (!q) return savedSows;
+    return savedSows.filter((row) => String(row.name || '').toLowerCase().includes(q));
+  }, [savedSows, savedSearch]);
+
+  const openSaveModal = () => {
+    const base = [selectedPart?.part_number, cardInfo.customer, selectedPart?.part_name]
+      .filter(Boolean).join(' - ').trim();
+    setSavedName(base || 'Saved SOW');
+    setShowSaveModal(true);
+  };
+
+  const handleSaveSow = async () => {
+    const name = savedName.trim();
+    if (!name) { toast.error('Nama wajib diisi'); return; }
+    if (!selectedPart && editOps.length === 0) { toast.error('Belum ada konten untuk disimpan'); return; }
+    setSavingSow(true);
+    try {
+      await createSavedSow({
+        name,
+        component_id: selectedPart?.component_id ?? null,
+        payload: { selectedPart, cardInfo, editOps },
+      });
+      toast.success('SOW tersimpan');
+      setShowSaveModal(false);
+      setSavedName('');
+      loadSavedSows();
+    } catch (err) {
+      toast.error(err.message || 'Gagal menyimpan SOW');
+    } finally {
+      setSavingSow(false);
+    }
+  };
+
+  const handleLoadSaved = async (row) => {
+    try {
+      const detail = await getSavedSow(row.id);
+      const payload = detail?.payload;
+      if (!payload) throw new Error('Saved SOW tidak punya isi');
+      setSelectedPart(payload.selectedPart ?? null);
+      setCardInfo((prev) => ({ ...prev, ...(payload.cardInfo || {}) }));
+      setEditOps(Array.isArray(payload.editOps) ? payload.editOps : []);
+      setActiveStep('edit');
+      setOperationCardKeys((payload.editOps || []).map(makeOperationCardKey));
+      setOperationCardImages({});
+      setCheckedOps(new Set((payload.editOps || []).map((op) => op._srcId).filter(Boolean)));
+      setCheckedTemplates(new Set());
+      checkedTemplateOpsRef.current.clear();
+      toast.success(`Saved SOW "${row.name}" dimuat`);
+    } catch (err) {
+      toast.error(err.message || 'Gagal memuat saved SOW');
+    }
+  };
+
+  const handleRename = async (id) => {
+    const name = renamingName.trim();
+    if (!name) { toast.error('Nama wajib diisi'); return; }
+    try {
+      await updateSavedSow(id, { name });
+      toast.success('Nama diperbarui');
+      setRenamingId(null);
+      loadSavedSows();
+    } catch (err) {
+      toast.error(err.message || 'Gagal rename');
+    }
+  };
+
+  const handleDeleteSaved = async (row) => {
+    if (!window.confirm(`Hapus "${row.name}"?`)) return;
+    try {
+      await deleteSavedSow(row.id);
+      toast.success('Saved SOW dihapus');
+      loadSavedSows();
+    } catch (err) {
+      toast.error(err.message || 'Gagal menghapus');
+    }
+  };
 
   const loadDocumentNos = useCallback(async ({ selectDocumentNo } = {}) => {
     try {
@@ -3036,7 +3147,7 @@ const SowCreatePage = () => {
   }, []);
 
   // ── Submit ──
-  const handleCreate = async (saveAsTemplate) => {
+  const handleCreate = async () => {
     if (!selectedPart) { toast.error('Pilih part terlebih dahulu'); return; }
     if (editOps.length === 0) { toast.error('Pilih atau tambahkan minimal 1 proses'); return; }
 
@@ -3062,7 +3173,6 @@ const SowCreatePage = () => {
         location:         cardInfo.location || selectedPart.customer_site_name || selectedPart.customer_site_location,
         type:             selectedPart.part_type,
         group:            selectedPart.parent_part_name || selectedPart.part_type,
-        save_as_template: saveAsTemplate,
         operations:       editOps.map((op) => ({
           operation_no:   op.operation_no,
           operation_text: op.operation_text,
@@ -3125,9 +3235,7 @@ const SowCreatePage = () => {
       }
 
       toast.success(
-        saveAsTemplate
-          ? `SOW dibuat & disimpan sebagai template${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
-          : `SOW berhasil dibuat${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
+        `SOW berhasil dibuat${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
       );
       discardDraft(); // draft tidak diperlukan lagi setelah SOW tersimpan
 
@@ -3183,6 +3291,102 @@ const SowCreatePage = () => {
           </div>
         </div>
       )}
+
+      {/* ── Saved SOWs panel ──────────────────────────────────────────────── */}
+      <div className="flex-shrink-0 border-b border-slate-200 bg-slate-50/70">
+        <button
+          type="button"
+          onClick={() => setShowSavedPanel((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-2 md:px-6"
+        >
+          <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+            Saved SOWs ({savedSows.length})
+          </span>
+          <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition ${showSavedPanel ? 'rotate-180' : ''}`} />
+        </button>
+        {showSavedPanel && (
+          <div className="px-4 pb-3 md:px-6">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                value={savedSearch}
+                onChange={(e) => setSavedSearch(e.target.value)}
+                placeholder="Cari saved SOW..."
+                className="h-8 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-[#0096c7]"
+              />
+              <button
+                type="button"
+                onClick={openSaveModal}
+                disabled={!selectedPart && editOps.length === 0}
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 text-xs font-bold text-white hover:bg-[#0077b6] disabled:opacity-40"
+              >
+                <BookmarkPlus className="h-3.5 w-3.5" /> Save SOW
+              </button>
+            </div>
+            {savedLoading ? (
+              <div className="flex items-center gap-2 py-2 text-xs text-slate-400">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Memuat...
+              </div>
+            ) : savedFiltered.length === 0 ? (
+              <p className="py-2 text-[11px] text-slate-400">Belum ada saved SOW. Buat & simpan SOW dulu lewat tombol Save SOW.</p>
+            ) : (
+              <div className="grid max-h-56 gap-1.5 overflow-y-auto md:grid-cols-2 lg:grid-cols-3">
+                {savedFiltered.map((row) => (
+                  <div key={row.id} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    {renamingId === row.id ? (
+                      <input
+                        value={renamingName}
+                        onChange={(e) => setRenamingName(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleRename(row.id); if (e.key === 'Escape') setRenamingId(null); }}
+                        autoFocus
+                        className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs outline-none"
+                      />
+                    ) : (
+                      <button type="button" onClick={() => handleLoadSaved(row)} className="min-w-0 flex-1 text-left" title="Load saved SOW ini">
+                        <p className="truncate text-xs font-bold text-slate-700">{row.name}</p>
+                        <p className="text-[10px] text-slate-400">
+                          <span className="tabular-nums">{row.operation_count}</span> ops · {fmtHours(row.total_hours)} hrs
+                          {row.created_by ? ` · ${row.created_by}` : ''}
+                        </p>
+                      </button>
+                    )}
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {renamingId === row.id ? (
+                        <>
+                          <button type="button" onClick={() => handleRename(row.id)} title="Simpan nama" className="rounded p-1 text-emerald-600 hover:bg-emerald-50">
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                          <button type="button" onClick={() => setRenamingId(null)} title="Batal" className="rounded p-1 text-slate-400 hover:bg-slate-100">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => { setRenamingId(row.id); setRenamingName(row.name); }}
+                            title="Rename"
+                            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                          >
+                            <PenLine className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSaved(row)}
+                            title="Hapus"
+                            className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ── Body ──────────────────────────────────────────────────────────── */}
       {activeStep === 'preview' ? (
@@ -3426,18 +3630,16 @@ const SowCreatePage = () => {
               {activeStep === 'operation-card' && (
                 <>
               <button
-                onClick={() => handleCreate(true)}
-                disabled={saving}
+                onClick={openSaveModal}
                 className="flex items-center gap-1.5 bg-white border border-slate-200
                            text-slate-700 hover:bg-slate-50 hover:border-slate-300
-                           px-3 py-2 rounded-lg text-xs font-semibold transition-all active:scale-95
-                           disabled:opacity-40 disabled:cursor-not-allowed"
+                           px-3 py-2 rounded-lg text-xs font-semibold transition-all active:scale-95"
               >
-                {saving ? <Loader2 size={13} className="animate-spin" /> : <BookmarkPlus size={13} />}
-                Save as Template
+                <BookmarkPlus size={13} />
+                Save SOW
               </button>
               <button
-                onClick={() => handleCreate(false)}
+                onClick={handleCreate}
                 disabled={saving}
                 className="flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white
                            px-4 py-2 rounded-lg text-xs font-semibold transition-all active:scale-95
@@ -3453,6 +3655,44 @@ const SowCreatePage = () => {
         )}
 
       </div>
+
+      {/* ── Save SOW modal ───────────────────────────────────────────────── */}
+      {showSaveModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowSaveModal(false)}
+        >
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-1 text-sm font-bold text-slate-800">Save SOW</h3>
+            <p className="mb-4 text-[11px] text-slate-400">Simpan snapshot SOW ini — bisa di-load lagi nanti saat create.</p>
+            <input
+              value={savedName}
+              onChange={(e) => setSavedName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveSow(); }}
+              autoFocus
+              placeholder="Nama saved SOW"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-[#0096c7]"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowSaveModal(false)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveSow}
+                disabled={savingSow}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#0096c7] px-3 py-2 text-xs font-bold text-white hover:bg-[#0077b6] disabled:opacity-40"
+              >
+                {savingSow ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BookmarkPlus className="h-3.5 w-3.5" />} Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Add Info Panel (modal) ──────────────────────────────────────── */}
       {showInfoPanel && (
