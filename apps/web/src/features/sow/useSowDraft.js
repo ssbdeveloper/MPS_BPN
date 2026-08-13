@@ -27,8 +27,16 @@ function readUserName() {
   }
 }
 
+// refKey kosong (create) TIDAK boleh menghasilkan trailing slash — route & RBAC manifest
+// `/drafts/:context/:refKey` butuh 2 segmen; `.../create/` (1 segmen + slash) tidak match.
+// Fallback 'new' = penanda draft create (1 draft per user, konsisten di DB).
+function resolvedRefKey(refKey) {
+  return refKey || 'new';
+}
+
 function draftUrl(context, refKey) {
-  return `${API_BASE}/sow/drafts/${encodeURIComponent(context)}/${encodeURIComponent(refKey || '')}`;
+  const rk = resolvedRefKey(refKey);
+  return `${API_BASE}/sow/drafts/${encodeURIComponent(context)}/${encodeURIComponent(rk)}`;
 }
 
 // Kunci pembanding state — KECUALI operationCardImages (base64 besar; mengubahnya
@@ -61,7 +69,7 @@ export function useSowDraft({ context, refKey, state, enabled, onRestore }) {
   const optionsRef = useRef({});
   optionsRef.current = { context, refKey, enabled, onRestore };
 
-  const draftKey = `${context}/${refKey || ''}`;
+  const draftKey = `${context}/${resolvedRefKey(refKey)}`;
 
   // ── Cek draft (mount & tiap ganti context/refKey) ────────────────────────
   useEffect(() => {
