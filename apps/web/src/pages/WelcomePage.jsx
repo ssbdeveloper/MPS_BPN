@@ -80,60 +80,27 @@ export default function WelcomePage() {
   };
 
   return (
-    <main className="relative min-h-dvh overflow-hidden bg-[#edf3f0] text-slate-950">
-      <div
-        className="absolute inset-0 opacity-[0.08] grayscale"
-        style={{
-          backgroundImage: `url(${teamImage})`,
-          backgroundSize: 'contain',
-          backgroundRepeat: 'no-repeat',
-          backgroundPosition: 'center',
-        }}
-        aria-hidden="true"
-      />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(0,150,199,0.22),transparent_34%),linear-gradient(135deg,rgba(241,245,249,0.92),rgba(229,246,243,0.96)_46%,rgba(255,255,255,0.9))]" aria-hidden="true" />
+    <main className="relative min-h-dvh overflow-hidden bg-slate-950 text-slate-950">
+      {/* Background foto full layar — menutupi seluruh viewport, tidak dipotong panel/card */}
+      <div className="absolute inset-0">
+        <img src={teamImage} alt="MPS team" className="h-full w-full object-cover" />
+      </div>
+      {/* Overlay gelap supaya card & teks tetap terbaca di atas foto */}
+      <div className="absolute inset-0 bg-gradient-to-br from-slate-950/65 via-slate-950/40 to-slate-950/65" aria-hidden="true" />
 
-      <section className="relative grid min-h-dvh grid-cols-1 lg:grid-cols-[1.12fr_0.88fr]">
-        <div className="relative hidden min-h-dvh overflow-hidden bg-slate-950 lg:block">
-          <img
-            src={teamImage}
-            alt="MPS team"
-            className="h-full w-full object-contain grayscale-[18%]"
-          />
-          <div className="absolute inset-0 bg-gradient-to-r from-slate-950/40 via-slate-900/18 to-transparent" />
-          <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-slate-950/72 via-slate-950/16 to-transparent" />
-          <div className="absolute left-10 top-10 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/92 text-[#0077b6] shadow-xl shadow-slate-950/10">
-              <ShieldCheck size={25} />
+      <section className="relative flex min-h-dvh flex-col items-center justify-center px-5 py-10 sm:px-8">
+        <div className="w-full max-w-md">
+          <div className="mb-7 flex items-center justify-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/95 text-[#0077b6] shadow-lg">
+              <ShieldCheck size={23} />
             </div>
             <div>
               <p className="text-lg font-black tracking-wide text-white">MPS</p>
-              <p className="text-xs font-semibold uppercase tracking-[0.28em] text-white/70">Operations</p>
+              <p className="text-xs font-bold uppercase tracking-[0.24em] text-white/80">Operations</p>
             </div>
           </div>
-          <div className="absolute bottom-12 left-10 max-w-xl">
-            <h1 className="max-w-[13ch] text-5xl font-black leading-[0.98] tracking-normal text-white">
-              Selamat Datang di MPS Control
-            </h1>
-            <p className="mt-5 max-w-md text-sm font-medium leading-6 text-white/78">
-              Akses terpusat untuk operations, validation, machine hours, dan production records.
-            </p>
-          </div>
-        </div>
 
-        <div className="flex min-h-dvh items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
-          <div className="w-full max-w-md">
-            <div className="mb-7 flex items-center gap-3 lg:hidden">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#0096c7] text-white shadow-lg shadow-cyan-700/20">
-                <ShieldCheck size={23} />
-              </div>
-              <div>
-                <p className="text-lg font-black text-slate-950">MPS</p>
-                <p className="text-xs font-bold uppercase tracking-[0.24em] text-slate-500">Operations</p>
-              </div>
-            </div>
-
-            <div className="overflow-hidden rounded-[2rem] border border-white/70 bg-white/82 shadow-2xl shadow-slate-900/12 backdrop-blur-xl">
+          <div className="overflow-hidden rounded-[2rem] border border-white/70 bg-white/85 shadow-2xl shadow-slate-950/40 backdrop-blur-xl">
               {!showLoginPanel ? (
                 <div className="px-7 py-8">
                   <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#e8f7fb] text-[#0077b6]">
@@ -247,7 +214,6 @@ export default function WelcomePage() {
               )}
             </div>
           </div>
-        </div>
       </section>
     </main>
   );
