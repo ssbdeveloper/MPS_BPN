@@ -54,27 +54,27 @@ const SAP_LINKS = {
 const SAP_ENV_STORAGE_KEY = 'operationsHubSapEnv';
 
 const sidebarItems = [
-  { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
-  { title: 'Order Progress', icon: BarChart2, path: '/order-progress-dashboard' },
-  { title: 'Update Progress', icon: ListChecks, path: '/progress-update' },
-  { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list' },
-  { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling' },
-  { title: 'Shift Capacity', icon: TimerReset, path: '/shift-definition' },
-  { title: 'Roster Operator', icon: Users, path: '/ews/roster' },
-  { title: 'Notifikasi EWS', icon: Bell, path: '/ews/notifications' },
-  { title: 'MS Project Admin', icon: ShieldCheck, path: '/ms-project-admin' },
-  { title: 'Component Tracking', icon: Boxes, path: '/component-tracking' },
-  { title: 'Kanban Board', icon: Factory, path: '/kanban-board' },
-  { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment' },
-  { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control' },
-  { title: 'Tools Management', icon: Hammer, path: '/tools-management' },
-  { title: 'Manage User', icon: UserCog, path: '/manage-user' },
+  { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', group: 'Overview' },
+  { title: 'Order Progress', icon: BarChart2, path: '/order-progress-dashboard', group: 'Overview' },
+  { title: 'Update Progress', icon: ListChecks, path: '/progress-update', group: 'Overview' },
+  { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list', group: 'SOW & Planning' },
+  { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling', group: 'SOW & Planning' },
+  { title: 'Shift Capacity', icon: TimerReset, path: '/shift-definition', group: 'SOW & Planning' },
+  { title: 'Roster Operator', icon: Users, path: '/ews/roster', group: 'Production' },
+  { title: 'Notifikasi EWS', icon: Bell, path: '/ews/notifications', group: 'Production' },
+  { title: 'Kanban Board', icon: Factory, path: '/kanban-board', group: 'Production' },
+  { title: 'Component Tracking', icon: Boxes, path: '/component-tracking', group: 'Production' },
+  { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment', group: 'Production' },
+  { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control', group: 'Inventory & Tools' },
+  { title: 'Tools Management', icon: Hammer, path: '/tools-management', group: 'Inventory & Tools' },
+  { title: 'MS Project Admin', icon: ShieldCheck, path: '/ms-project-admin', group: 'Administration' },
+  { title: 'Manage User', icon: UserCog, path: '/manage-user', group: 'Administration' },
   // Pintu langsung ke NFC Users: sebelumnya HANYA bisa lewat kartu di /manage-user,
   // jadi pemegang izin nfc_users tanpa manage_users tidak punya jalan masuk sama sekali.
-  { title: 'NFC Users', icon: CreditCard, path: '/nfc-users' },
-  { title: 'TimeSheet', icon: ShieldCheck, path: '/timesheet-validation' },
-  { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver' },
-  { title: 'SAP Log', icon: Database, path: '/sap-log' },
+  { title: 'NFC Users', icon: CreditCard, path: '/nfc-users', group: 'Administration' },
+  { title: 'TimeSheet', icon: ShieldCheck, path: '/timesheet-validation', group: 'Administration' },
+  { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver', group: 'Administration' },
+  { title: 'SAP Log', icon: Database, path: '/sap-log', group: 'Administration' },
 ];
 
 const emptyHubData = {
@@ -214,13 +214,23 @@ function InsightStrip({ items }) {
   );
 }
 
-function Sidebar({ onNavigate, onLogout }) {
+function Sidebar({ onNavigate }) {
   const { canRead } = usePermissions();
   // Menu auto-follows permission: hide items the role can't read.
   const items = sidebarItems.filter((item) => {
     const feature = routeToFeature(item.path);
     return !feature || canRead(feature);
   });
+  // Kelompokkan menu berdasarkan fungsi (group), urut sesuai definisi sidebarItems.
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const item of items) {
+      const key = item.group || 'Other';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return [...map.entries()];
+  }, [items]);
   return (
     <aside className="border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-dvh lg:w-[clamp(180px,16vw,244px)] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
       <div className="flex h-full min-h-0 flex-col">
@@ -240,32 +250,28 @@ function Sidebar({ onNavigate, onLogout }) {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3 py-3 lg:min-h-0 lg:space-y-0.5 lg:px-2 lg:py-2 [@media(max-height:720px)]:py-1">
-          {items.map((item) => (
-            <button
-              key={item.path}
-              type="button"
-              onClick={() => onNavigate(item.path)}
-              className="flex min-h-[42px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] lg:min-h-[34px] lg:gap-2 lg:px-2 lg:py-1 lg:text-xs [@media(max-height:720px)]:min-h-[30px] [@media(max-height:720px)]:py-0.5"
-            >
-              <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-slate-100 text-[#0077b6] lg:h-7 lg:w-7 [@media(max-height:720px)]:h-6 [@media(max-height:720px)]:w-6">
-                <item.icon className="h-[18px] w-[18px] lg:h-4 lg:w-4" />
-              </span>
-              <span className="truncate">{item.title}</span>
-            </button>
+        <nav className="flex-1 space-y-1 px-3 py-3 lg:min-h-0 lg:space-y-0.5 lg:overflow-y-auto lg:px-2 lg:py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [@media(max-height:720px)]:py-1">
+          {groups.map(([group, groupItems]) => (
+            <div key={group}>
+              <p className="px-2 pb-1 pt-3 text-[10px] font-extrabold uppercase tracking-widest text-slate-400 lg:px-2 lg:pt-2">
+                {group}
+              </p>
+              {groupItems.map((item) => (
+                <button
+                  key={item.path}
+                  type="button"
+                  onClick={() => onNavigate(item.path)}
+                  className="flex min-h-[42px] w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] lg:min-h-[34px] lg:gap-2 lg:px-2 lg:py-1 lg:text-xs [@media(max-height:720px)]:min-h-[30px] [@media(max-height:720px)]:py-0.5"
+                >
+                  <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-slate-100 text-[#0077b6] lg:h-7 lg:w-7 [@media(max-height:720px)]:h-6 [@media(max-height:720px)]:w-6">
+                    <item.icon className="h-[18px] w-[18px] lg:h-4 lg:w-4" />
+                  </span>
+                  <span className="truncate">{item.title}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
-
-        <div className="border-t border-slate-200 p-4 lg:p-2">
-          <button
-            type="button"
-            onClick={onLogout}
-            className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50 lg:min-h-[34px] lg:text-xs [@media(max-height:720px)]:min-h-[30px]"
-          >
-            <LogOut size={17} />
-            Lock
-          </button>
-        </div>
       </div>
     </aside>
   );
@@ -962,7 +968,6 @@ function OperationsHubPage() {
     <div className="min-h-screen bg-[#f6f8fb] text-slate-800 lg:flex">
       <Sidebar
         onNavigate={navigate}
-        onLogout={handleLogout}
       />
 
       <main className="min-w-0 flex-1">
@@ -1044,6 +1049,14 @@ function OperationsHubPage() {
                 aria-label="Ubah password"
               >
                 <Settings size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 text-xs font-extrabold text-red-600 shadow-sm transition hover:bg-red-50"
+                title="Log out"
+              >
+                <LogOut size={15} /> Log Out
               </button>
             </div>
           </div>
