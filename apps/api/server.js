@@ -2,6 +2,7 @@
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { envPath, loaded: envLoaded } = require('./config/loadEnv');
@@ -127,6 +128,11 @@ const server = http.createServer(app);
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Gzip semua respons JSON/teks (LAN tetap untung: payload 1MB+ di
+// /ms-project/bay-schedules jadi ~120KB). Urutan SEBELUM routes supaya
+// stream terkompresi dari awal.
+app.use(compression());
 
 // CORS configuration
 app.use(
