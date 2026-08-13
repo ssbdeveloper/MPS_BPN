@@ -3,6 +3,7 @@ import { RefreshCw, Save, Search, Trash2, X, ChevronDown, Loader2, ArrowRight, D
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useCan, authHeaders } from '../../rbac';
+import { useSowDraft } from '../../features/sow/useSowDraft';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -155,6 +156,21 @@ export default function SowHistoryPage() {
   const detailRequestRef = useRef(0);
 
   const [detailInfo, setDetailInfo] = useState({ customer: '', ssbr_id: '', part_number: '', part_name: '', model: '' });
+
+  // ── Draft autosave (anti crash-loss): snapshot editor state, restore via banner ──
+  const { draftAvailable, lastSavedAt, restoreDraft, discardDraft } = useSowDraft({
+    context: 'history-edit',
+    refKey: selectedOrder,
+    state: { detailInfo, editRows, selectedRevision, currentRevision },
+    enabled: showEditor && !detailLoading && !saving && !savingInfo && editRows.length > 0,
+    onRestore: (payload) => {
+      if (!payload) return;
+      setDetailInfo((prev) => ({ ...prev, ...(payload.detailInfo || {}) }));
+      setEditRows(Array.isArray(payload.editRows) ? payload.editRows : []);
+      if (payload.selectedRevision != null) setSelectedRevision(payload.selectedRevision);
+      if (payload.currentRevision != null) setCurrentRevision(payload.currentRevision);
+    },
+  });
 
   const [wcData, setWcData] = useState([]);
   useEffect(() => { fetch(`${API_BASE}/workcenter`).then(r => r.json()).then(d => setWcData(Array.isArray(d) ? d : d?.data || [])).catch(() => {}); }, []);
@@ -377,6 +393,7 @@ export default function SowHistoryPage() {
       setCurrentRevision(result.revision?.revision_no || currentRevision + 1);
       setEditRows(result.rows || []);
       toast.success(`Revision ${result.revision?.revision_no || currentRevision + 1} saved`); loadRows(1);
+      discardDraft(); // draft tidak diperlukan lagi setelah revision tersimpan
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };
 
@@ -572,6 +589,17 @@ export default function SowHistoryPage() {
               </div>
               <button onClick={closeEditor} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"><X className="h-4 w-4" /></button>
             </div>
+            {draftAvailable && (
+              <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2">
+                <p className="text-xs font-semibold text-amber-800">
+                  Draft tersimpan{lastSavedAt ? ` ${lastSavedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}` : ''} — lanjutkan dari sini?
+                </p>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={restoreDraft} className="rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#0077b6]">Lanjutkan</button>
+                  <button type="button" onClick={discardDraft} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Buang</button>
+                </div>
+              </div>
+            )}
             <div className="min-h-0 flex-1 flex flex-col">
               <section className="flex min-w-0 min-h-0 flex-1 flex-col">
                 {detailLoading && (

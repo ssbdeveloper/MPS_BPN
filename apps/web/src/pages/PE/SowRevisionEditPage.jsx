@@ -18,6 +18,7 @@ import {
   normalizeProductionOrder,
   useWorkcenterData,
 } from './SowCreatePage';
+import { useSowDraft } from '../../features/sow/useSowDraft';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -150,6 +151,41 @@ export default function SowRevisionEditPage() {
   const issuedByName = getAuthUserDisplayName();
   const issuedAt = useMemo(() => formatTravelCardIssuedAt(), []);
   const wcData = useWorkcenterData();
+
+  // ── Draft autosave (anti crash-loss): snapshot state editor, restore via banner ──
+  const { draftAvailable, lastSavedAt, restoreDraft, discardDraft } = useSowDraft({
+    context: 'revision',
+    refKey: decodedOrderNo,
+    state: {
+      selectedPart,
+      cardInfo,
+      editOps,
+      activeStep,
+      selectedRevision,
+      currentRevision,
+      operationCardKeys,
+      operationCardImages,
+      operationCardPaths,
+      dirtyCardKeys: [...dirtyCardKeys],
+    },
+    enabled: !loading && !saving && editOps.length > 0,
+    onRestore: (payload) => {
+      if (!payload) return;
+      setSelectedPart(payload.selectedPart ?? null);
+      setCardInfo((prev) => ({ ...prev, ...(payload.cardInfo || {}) }));
+      setEditOps(Array.isArray(payload.editOps) ? payload.editOps : []);
+      setActiveStep(payload.activeStep || 'edit');
+      if (payload.selectedRevision != null) setSelectedRevision(payload.selectedRevision);
+      if (payload.currentRevision != null) setCurrentRevision(payload.currentRevision);
+      setOperationCardKeys(Array.isArray(payload.operationCardKeys) ? payload.operationCardKeys : []);
+      setOperationCardImages(payload.operationCardImages || {});
+      setOperationCardPaths(payload.operationCardPaths || {});
+      setDirtyCardKeys(new Set(Array.isArray(payload.dirtyCardKeys) ? payload.dirtyCardKeys : []));
+      setCheckedOps(new Set((payload.editOps || []).map((op) => op._srcId).filter(Boolean)));
+      setCheckedTemplates(new Set());
+      checkedTemplateOpsRef.current.clear();
+    },
+  });
 
   const opCardRevision = selectedRevision > 0 ? String(selectedRevision) : 'Original';
   const operationCardsLoadKey = useMemo(
@@ -492,6 +528,7 @@ export default function SowRevisionEditPage() {
       }
 
       toast.success(`Revision ${revisionNo} dibuat${savedCards ? `, ${savedCards} operation card tersimpan` : ''}`);
+      discardDraft(); // draft tidak diperlukan lagi setelah revision tersimpan
       navigate(`/sow-edit/revision/${encodeURIComponent(decodedOrderNo)}?revision_no=${revisionNo}`, { replace: true });
     } catch (err) {
       toast.error(err.message);
@@ -543,6 +580,31 @@ export default function SowRevisionEditPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Draft restore banner ──────────────────────────────────────────── */}
+      {draftAvailable && (
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2">
+          <p className="text-xs font-semibold text-amber-800">
+            Draft tersimpan{lastSavedAt ? ` ${lastSavedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}` : ''} — lanjutkan dari sini?
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={restoreDraft}
+              className="rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#0077b6]"
+            >
+              Lanjutkan
+            </button>
+            <button
+              type="button"
+              onClick={discardDraft}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Buang
+            </button>
+          </div>
+        </div>
+      )}
 
       {activeStep === 'preview' ? (
         <div className="min-h-0 flex-1 overflow-y-auto">

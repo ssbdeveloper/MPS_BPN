@@ -13,6 +13,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import ssbLogo from '../../assets/ssb.png';
 import travelCardHtml from '../../templates/travel-card.html?raw';
 import operationCardHtml from '../../templates/operation-card.html?raw';
+import { useSowDraft } from '../../features/sow/useSowDraft';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -2722,6 +2723,26 @@ const SowCreatePage = () => {
   const issuedByName = getAuthUserDisplayName();
   const issuedAt = useMemo(() => formatTravelCardIssuedAt(), []);
 
+  // ── Draft autosave (anti crash-loss): snapshot state form, restore via banner ──
+  const { draftAvailable, lastSavedAt, restoreDraft, discardDraft } = useSowDraft({
+    context: 'create',
+    refKey: '',
+    state: { selectedPart, cardInfo, editOps, activeStep, operationCardKeys, operationCardImages },
+    enabled: !saving && documentNos.length > 0,
+    onRestore: (payload) => {
+      if (!payload) return;
+      setSelectedPart(payload.selectedPart ?? null);
+      setCardInfo((prev) => ({ ...prev, ...(payload.cardInfo || {}) }));
+      setEditOps(Array.isArray(payload.editOps) ? payload.editOps : []);
+      setActiveStep(payload.activeStep || 'edit');
+      setOperationCardKeys(Array.isArray(payload.operationCardKeys) ? payload.operationCardKeys : []);
+      setOperationCardImages(payload.operationCardImages || {});
+      setCheckedOps(new Set((payload.editOps || []).map((op) => op._srcId).filter(Boolean)));
+      setCheckedTemplates(new Set());
+      checkedTemplateOpsRef.current.clear();
+    },
+  });
+
   const loadDocumentNos = useCallback(async ({ selectDocumentNo } = {}) => {
     try {
       const res = await fetch(`${API_BASE}/sow/documentnos`);
@@ -3108,6 +3129,7 @@ const SowCreatePage = () => {
           ? `SOW dibuat & disimpan sebagai template${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
           : `SOW berhasil dibuat${savedOperationCards ? `, ${savedOperationCards} operation card tersimpan` : ''}!`
       );
+      discardDraft(); // draft tidak diperlukan lagi setelah SOW tersimpan
 
       // Reset
       setSelectedPart(null);
@@ -3136,6 +3158,31 @@ const SowCreatePage = () => {
           Pilih part → centang proses → review &amp; edit → buat SOW
         </p>
       </div>
+
+      {/* ── Draft restore banner ──────────────────────────────────────────── */}
+      {draftAvailable && (
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 md:px-6">
+          <p className="text-xs font-semibold text-amber-800">
+            Draft tersimpan{lastSavedAt ? ` ${lastSavedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}` : ''} — lanjutkan dari sini?
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={restoreDraft}
+              className="rounded-lg bg-[#0096c7] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#0077b6]"
+            >
+              Lanjutkan
+            </button>
+            <button
+              type="button"
+              onClick={discardDraft}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Buang
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Body ──────────────────────────────────────────────────────────── */}
       {activeStep === 'preview' ? (
