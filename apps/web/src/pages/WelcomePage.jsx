@@ -85,7 +85,8 @@ export default function WelcomePage() {
         className="absolute inset-0 opacity-[0.08] grayscale"
         style={{
           backgroundImage: `url(${teamImage})`,
-          backgroundSize: 'cover',
+          backgroundSize: 'contain',
+          backgroundRepeat: 'no-repeat',
           backgroundPosition: 'center',
         }}
         aria-hidden="true"
@@ -93,11 +94,11 @@ export default function WelcomePage() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(0,150,199,0.22),transparent_34%),linear-gradient(135deg,rgba(241,245,249,0.92),rgba(229,246,243,0.96)_46%,rgba(255,255,255,0.9))]" aria-hidden="true" />
 
       <section className="relative grid min-h-dvh grid-cols-1 lg:grid-cols-[1.12fr_0.88fr]">
-        <div className="relative hidden min-h-dvh overflow-hidden lg:block">
+        <div className="relative hidden min-h-dvh overflow-hidden bg-slate-950 lg:block">
           <img
             src={teamImage}
             alt="MPS team"
-            className="h-full w-full object-cover grayscale-[18%]"
+            className="h-full w-full object-contain grayscale-[18%]"
           />
           <div className="absolute inset-0 bg-gradient-to-r from-slate-950/40 via-slate-900/18 to-transparent" />
           <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-slate-950/72 via-slate-950/16 to-transparent" />
