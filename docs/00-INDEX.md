@@ -73,6 +73,7 @@ updated: 2026-07-24
 - [[log/2026-08-13-unknown-order-fix]] — fix false-positive badge "Unknown order": FE beralih ke `order_known` dari backend (EXISTS ke sow/ph3_order), konsolidasi `isUnknownOrder` di constants.js; task area tanpa sow_id tidak lagi salah-positif
 - [[log/2026-08-13-scheduling-area-back-fix]] — fix tombol Back detail area tidak kembali ke overview: efek deep-link `?area=` re-fire tiap Back; level diinisialisasi sekali di useState
 - [[log/2026-08-13-task-reservation-status]] — panel select tasks menampilkan status reservasi bay per task (area + bay + tanggal) untuk task yang sudah/belum punya reservasi
+- [[log/2026-08-13-offline-lan-hardening]] — audit offline (0 dependensi internet runtime setelah TTS pindah ke Piper) + analisa performa LAN (payload 1,1 MB tanpa gzip → gzip 15,7×; DB 9,6 ms bukan bottleneck)
 - [[UAT_MANUFACTURING_FULL_CHECKLIST]] — daftar UAT full manufacturing (Cikupa, tanpa machine hours): setup server → API/auth → order pool → bay scheduling → portfolio Gantt → MS Project Hub/VBA → progress sub-task → timesheet tapping → EWS → UAT per role
 
 ## 📚 Operasional
