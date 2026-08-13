@@ -414,11 +414,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - TTS_UPLOAD_ROOT=/uploads
       - TTS_SERVICE_DIR=/app
-      # Suara: edge = perempuan natural (butuh internet); piper = offline unisex.
-      - EWS_TTS_ENGINE=edge
-      - EWS_TTS_VOICE=id-ID-GadisNeural
-      - EWS_TTS_EDGE_RATE=+0%
-      # Fallback Piper (dipakai bila EWS_TTS_ENGINE=piper):
+      # Suara: Piper lokal/offline (tanpa internet). Ganti suara via PIPER_MODEL_PATH.
       - PIPER_BIN=piper
       - PIPER_MODEL_PATH=/app/models/id_ID.onnx
       - PIPER_CONFIG_PATH=/app/models/id_ID.onnx.json

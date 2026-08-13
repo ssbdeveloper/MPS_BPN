@@ -3,10 +3,11 @@ preview_ews_tts.py — DENGAR LOKAL isu EWS hari ini sebagai suara.
 
 Ini alat TEST, bukan bagian pipeline produksi. Ia menarik isu hari ini dari DB,
 menyusun kalimat yang SAMA dengan yang diucapkan worker (ewsTtsNotifier.buildIssueSpeech),
-lalu meng-generate MP3 secara lokal dengan Edge TTS supaya bisa diputar di device ini.
+lalu meng-generate MP3 secara lokal dengan Piper (OFFLINE, tanpa internet) supaya
+bisa diputar di device ini.
 
-Butuh: paket `edge_tts` (sudah ada) + internet. TIDAK butuh ffmpeg/pydub (jalur Edge
-menyimpan MP3 langsung).
+Butuh: `piper` binary di PATH + `ffmpeg` (untuk wav->mp3 via pydub), model Piper di
+`models/id_ID.onnx` (+ .json). Semua lokal — tidak ada koneksi keluar.
 
 Contoh:
     # semua isu open hari ini (critical + warning), per-isu + 1 briefing gabungan:
@@ -21,10 +22,12 @@ Contoh:
 Output: folder ./ews_tts_preview (per-isu NN_kategori_entitas.mp3 + _briefing_all.mp3).
 """
 import argparse
-import asyncio
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -114,9 +117,35 @@ def fetch_notifications(cur, critical_only: bool):
     return out
 
 
-async def synth(text: str, out_path: Path, voice: str, rate: str) -> None:
-    import edge_tts
-    await edge_tts.Communicate(text, voice, rate=rate).save(str(out_path))
+def synth(text: str, out_path: Path) -> None:
+    # Piper lokal/offline — model dari env (sama dengan worker produksi).
+    piper_bin = shutil.which(os.getenv("PIPER_BIN", "piper"))
+    if not piper_bin:
+        raise RuntimeError("Piper binary tidak ditemukan di PATH — pip install piper-tts atau unduh binary piper")
+    model = Path(os.getenv("PIPER_MODEL_PATH", BASE_DIR / "models" / "id_ID.onnx"))
+    config = Path(os.getenv("PIPER_CONFIG_PATH", BASE_DIR / "models" / "id_ID.onnx.json"))
+    missing = [str(p) for p in (model, config) if not p.exists()]
+    if missing:
+        raise RuntimeError(f"Model Piper tidak ditemukan: {', '.join(missing)}")
+    with tempfile.NamedTemporaryFile(prefix="ews_preview_", suffix=".wav", delete=False) as tmp:
+        wav_path = Path(tmp.name)
+    try:
+        result = subprocess.run(
+            [piper_bin, "--model", str(model), "--config", str(config), "--output_file", str(wav_path)],
+            input=text, text=True, capture_output=True, timeout=60, check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Piper returncode={result.returncode} stderr={result.stderr[:300]}")
+        if not wav_path.exists() or wav_path.stat().st_size <= 0:
+            raise RuntimeError("Piper menghasilkan file kosong")
+        from pydub import AudioSegment
+        AudioSegment.from_file(wav_path).export(out_path, format="mp3")
+    finally:
+        if wav_path.exists():
+            try:
+                wav_path.unlink()
+            except OSError:
+                pass
 
 
 def main() -> None:
@@ -129,8 +158,6 @@ def main() -> None:
     ap.add_argument("--source", choices=["issue", "notification"], default="issue",
                     help="issue = susun ulang dari ews.issue_log (default); notification = teks persis yang diantrikan server")
     ap.add_argument("--critical-only", action="store_true", help="Hanya isu critical (perilaku produksi saat ini)")
-    ap.add_argument("--voice", default=os.getenv("EWS_TTS_VOICE", "id-ID-GadisNeural"))
-    ap.add_argument("--rate", default=os.getenv("EWS_TTS_EDGE_RATE", "+0%"))
     ap.add_argument("--out", default=str(BASE_DIR / "ews_tts_preview"))
     ap.add_argument("--no-briefing", action="store_true", help="Jangan buat file gabungan _briefing_all.mp3")
     ap.add_argument("--no-individual", action="store_true", help="Jangan buat MP3 per-isu (briefing saja)")
@@ -169,7 +196,7 @@ def main() -> None:
         except OSError:
             pass
 
-    print(f"{len(items)} isu | source={args.source} | voice={args.voice} rate={args.rate}")
+    print(f"{len(items)} isu | source={args.source} | piper:{os.getenv('PIPER_MODEL_PATH', BASE_DIR / 'models' / 'id_ID.onnx')}")
     print(f"Output: {out_dir}\n")
 
     if not args.no_individual:
@@ -177,10 +204,10 @@ def main() -> None:
             fname = f"{i:02d}_{slug(it['kpi_type'],18)}_{slug(it['entity'])}.mp3"
             fpath = out_dir / fname
             try:
-                asyncio.run(synth(it["message"], fpath, args.voice, args.rate))
+                synth(it["message"], fpath)
                 print(f"  [{i:02d}] {it['severity']:8} {it['kpi_type']:16} {it['entity']}")
             except Exception as exc:  # noqa: BLE001
-                print(f"  [{i:02d}] GAGAL ({exc}) — cek koneksi internet untuk edge-tts", file=sys.stderr)
+                print(f"  [{i:02d}] GAGAL ({exc}) — cek piper/ffmpeg sudah terpasang", file=sys.stderr)
 
     if not args.no_briefing:
         _bulan = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
@@ -193,7 +220,7 @@ def main() -> None:
         body = "\n\n".join(it["message"] for it in items)
         brief_path = out_dir / "_briefing_all.mp3"
         try:
-            asyncio.run(synth(header + "\n\n" + body, brief_path, args.voice, args.rate))
+            synth(header + "\n\n" + body, brief_path)
             print(f"\n  Briefing gabungan: {brief_path}")
         except Exception as exc:  # noqa: BLE001
             print(f"\n  Briefing GAGAL ({exc})", file=sys.stderr)

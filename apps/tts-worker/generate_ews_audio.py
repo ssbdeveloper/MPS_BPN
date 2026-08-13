@@ -56,14 +56,9 @@ TTS_UPLOAD_ROOT = Path(os.getenv("TTS_UPLOAD_ROOT", ROOT_DIR / "apps" / "api" / 
 EWS_TTS_DIR = TTS_UPLOAD_ROOT / "ews-tts"
 PUBLIC_EWS_TTS_PREFIX = "/uploads/ews-tts"
 
-# Engine suara:
-#   'edge'  = Microsoft Edge TTS — suara PEREMPUAN natural (butuh internet). DEFAULT.
-#   'piper' = Piper lokal/offline — model news-anchor unisex (fallback tanpa internet).
-TTS_ENGINE = os.getenv("EWS_TTS_ENGINE", "edge").lower()
-# Suara Edge. id-ID-GadisNeural = perempuan; id-ID-ArdiNeural = laki-laki.
-EDGE_VOICE = os.getenv("EWS_TTS_VOICE", "id-ID-GadisNeural")
-EDGE_RATE = os.getenv("EWS_TTS_EDGE_RATE", "+0%")
-
+# Engine suara: Piper LOKAL/offline (tanpa internet) — model id_ID news-anchor unisex.
+# Ganti suara (mis. ke suara lain) via PIPER_MODEL_PATH & PIPER_CONFIG_PATH —
+# lihat README.md bagian "Model Files".
 TTS_SERVICE_DIR = Path(os.getenv("TTS_SERVICE_DIR", BASE_DIR))
 PIPER_BIN = os.getenv("PIPER_BIN", "piper")
 PIPER_MODEL_PATH = Path(os.getenv("PIPER_MODEL_PATH", TTS_SERVICE_DIR / "models" / "id_ID.onnx"))
@@ -143,33 +138,7 @@ def clean_text(text: str) -> str:
 
 
 def generate_mp3(text: str, output_path: Path) -> dict:
-    if TTS_ENGINE == "piper":
-        return generate_mp3_piper(text, output_path)
-    return generate_mp3_edge(text, output_path)
-
-
-def generate_mp3_edge(text: str, output_path: Path) -> dict:
-    # Microsoft Edge TTS — suara perempuan natural, output MP3 langsung (butuh internet).
-    import asyncio
-    import edge_tts
-
-    async def _run():
-        communicate = edge_tts.Communicate(text, EDGE_VOICE, rate=EDGE_RATE)
-        await communicate.save(str(output_path))
-
-    try:
-        asyncio.run(_run())
-    except Exception as exc:  # noqa: BLE001
-        raise TtsWorkerError(f"edge-tts gagal (cek koneksi internet): {exc}") from exc
-    if not output_path.exists() or output_path.stat().st_size <= 0:
-        raise TtsWorkerError("edge-tts menghasilkan file kosong (kemungkinan tanpa internet)")
-    return {
-        "tts_engine": "edge-tts",
-        "voice": EDGE_VOICE,
-        "rate": EDGE_RATE,
-        "text": text,
-        "generated_at": datetime.now().isoformat(),
-    }
+    return generate_mp3_piper(text, output_path)
 
 
 def generate_mp3_piper(text: str, output_path: Path) -> dict:
@@ -260,8 +229,8 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Process one job then exit")
     args = parser.parse_args()
 
-    voice_info = f"edge:{EDGE_VOICE}" if TTS_ENGINE == "edge" else f"piper:{PIPER_MODEL_PATH}"
-    log.info("Starting EWS TTS worker. poll=%ss engine=%s voice=%s", POLL_INTERVAL_SECONDS, TTS_ENGINE, voice_info)
+    voice_info = f"piper:{PIPER_MODEL_PATH}"
+    log.info("Starting EWS TTS worker. poll=%ss engine=%s", POLL_INTERVAL_SECONDS, voice_info)
     conn = connect_db()
     try:
         while True:
