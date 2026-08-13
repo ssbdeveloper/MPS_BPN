@@ -148,7 +148,7 @@ function readSapEnv() {
 
 function DashboardCard({ children, className = '', style }) {
   return (
-    <section style={style} className={`rounded-lg border border-slate-200 bg-white shadow-sm ${className}`}>
+    <section style={style} className={`rounded-lg border border-slate-300 bg-white shadow-sm ${className}`}>
       {children}
     </section>
   );
@@ -232,9 +232,9 @@ function Sidebar({ onNavigate }) {
     return [...map.entries()];
   }, [items]);
   return (
-    <aside className="border-b border-slate-200 bg-white lg:sticky lg:top-0 lg:h-dvh lg:w-[clamp(180px,16vw,244px)] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
+    <aside className="border-b border-slate-300 bg-white lg:sticky lg:top-0 lg:h-dvh lg:w-[clamp(180px,16vw,244px)] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
       <div className="flex h-full min-h-0 flex-col">
-        <div className="border-b border-slate-100 px-4 py-3 lg:px-3 lg:py-2">
+        <div className="border-b border-slate-200 px-4 py-3 lg:px-3 lg:py-2">
           <button
             type="button"
             onClick={() => onNavigate('/operations-hub')}
@@ -251,8 +251,8 @@ function Sidebar({ onNavigate }) {
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-3 lg:min-h-0 lg:space-y-0.5 lg:overflow-y-auto lg:px-2 lg:py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [@media(max-height:720px)]:py-1">
-          {groups.map(([group, groupItems]) => (
-            <div key={group}>
+          {groups.map(([group, groupItems], groupIndex) => (
+            <div key={group} className={groupIndex === 0 ? '' : 'border-t border-slate-200'}>
               <p className="px-2 pb-1 pt-3 text-[10px] font-extrabold uppercase tracking-widest text-slate-400 lg:px-2 lg:pt-2">
                 {group}
               </p>
@@ -971,7 +971,7 @@ function OperationsHubPage() {
       />
 
       <main className="min-w-0 flex-1">
-        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
+        <header className="sticky top-0 z-10 border-b border-slate-300 bg-white/90 backdrop-blur">
           <div className="flex flex-col gap-3 px-4 py-3 md:px-6 xl:flex-row xl:items-center xl:justify-between">
             <div>
               <h1 className="text-xl font-extrabold text-slate-950">Operations Hub</h1>
