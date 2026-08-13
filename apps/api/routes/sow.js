@@ -103,6 +103,14 @@ router.put("/history-order/:orderNo", controller.saveSowOrderRevision);
 router.get("/revision-history/:orderNo", controller.getSowRevisionHistory);
 
 // ============================================
+// SOW DRAFT (autosave create/edit — anti crash-loss)
+// WAJIB di atas route generic /:order (legacy paling bawah).
+// ============================================
+router.put("/drafts/:context/:refKey",    controller.saveSowDraft);
+router.get("/drafts/:context/:refKey",    controller.getSowDraft);
+router.delete("/drafts/:context/:refKey", controller.deleteSowDraft);
+
+// ============================================
 // PENANDA SUBCONT (Fase 6 — docs/MFG_PLAN_AREA_PLAN.md §4 Fase 6 / D4)
 // Label saja: workcenter tidak disentuh, jadwal tetap ada, jamnya keluar dari beban internal.
 // WAJIB terdaftar DI ATAS route generic `/:order`, `/:id` di bagian LEGACY paling bawah —

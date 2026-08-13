@@ -68,6 +68,8 @@ let sowRuntimeColumnsReady = false;
 let sowRuntimeColumnsPromise = null;
 let sowRevisionHistoryReady = false;
 let sowRevisionHistoryPromise = null;
+let sowDraftReady = false;
+let sowDraftPromise = null;
 
 async function ensureSowRuntimeColumns() {
   if (sowRuntimeColumnsReady) return;
@@ -115,6 +117,38 @@ async function ensureSowRevisionHistoryTable() {
     sowRevisionHistoryPromise = null;
   });
   return sowRevisionHistoryPromise;
+}
+
+// Draft autosave (Create SOW / Edit SOW history) — anti kehilangan pekerjaan saat
+// crash/close. Satu baris per (user_key, context, ref_key), payload = snapshot state FE
+// (keputusan 2a: 1 draft overwrite, tanpa list UI). DDL juga ada di
+// database/migrations/api/20260813_sow_draft.sql — ensure di sini (pola sama dengan
+// sow_revision_history) supaya deploy kode yang mendahului migrasi tetap jalan.
+async function ensureSowDraftTable() {
+  if (sowDraftReady) return;
+  if (sowDraftPromise) return sowDraftPromise;
+  sowDraftPromise = (async () => {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sow_draft (
+        id         BIGSERIAL PRIMARY KEY,
+        user_key   TEXT NOT NULL,
+        context    TEXT NOT NULL,
+        ref_key    TEXT NOT NULL DEFAULT '',
+        payload    JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_key, context, ref_key)
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_sow_draft_user_updated
+        ON sow_draft (user_key, updated_at DESC)
+    `);
+    sowDraftReady = true;
+  })().finally(() => {
+    sowDraftPromise = null;
+  });
+  return sowDraftPromise;
 }
 
 function normalizeSowOperation(row, fallbackOrderNo) {
@@ -1137,6 +1171,64 @@ exports.saveSowOrderRevision = async (req, res) => {
     res.status(500).json({ error: err.message });
   } finally {
     if (client) client.release();
+  }
+};
+
+exports.getSowDraft = async (req, res) => {
+  try {
+    await ensureSowDraftTable();
+    const userKey = req.user?.username || "web";
+    const { context, refKey } = req.params;
+    const result = await db.query(
+      `SELECT payload, updated_at
+       FROM sow_draft
+       WHERE user_key = $1 AND context = $2 AND ref_key = $3`,
+      [userKey, context, refKey || ""]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Draft tidak ditemukan" });
+    res.json({ draft: result.rows[0].payload, updated_at: result.rows[0].updated_at });
+  } catch (err) {
+    console.error("getSowDraft error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.saveSowDraft = async (req, res) => {
+  try {
+    await ensureSowDraftTable();
+    const userKey = req.user?.username || "web";
+    const { context, refKey } = req.params;
+    const payload = req.body?.payload ?? null;
+    if (!context) return res.status(400).json({ error: "context wajib diisi" });
+    if (payload == null) return res.status(400).json({ error: "payload wajib diisi" });
+    await db.query(
+      `INSERT INTO sow_draft (user_key, context, ref_key, payload)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (user_key, context, ref_key)
+       DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+      [userKey, context, refKey || "", JSON.stringify(payload)]
+    );
+    res.json({ saved_at: new Date().toISOString() });
+  } catch (err) {
+    console.error("saveSowDraft error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteSowDraft = async (req, res) => {
+  try {
+    await ensureSowDraftTable();
+    const userKey = req.user?.username || "web";
+    const { context, refKey } = req.params;
+    await db.query(
+      `DELETE FROM sow_draft
+       WHERE user_key = $1 AND context = $2 AND ref_key = $3`,
+      [userKey, context, refKey || ""]
+    );
+    res.status(204).end();
+  } catch (err) {
+    console.error("deleteSowDraft error:", err);
+    res.status(500).json({ error: err.message });
   }
 };
 

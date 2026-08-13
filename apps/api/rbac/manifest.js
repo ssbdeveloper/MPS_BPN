@@ -31,6 +31,8 @@ const MANIFEST = [
   { m: 'POST',   p: '/sow/create',                            f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/history-order/:id/info',            f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/history-order/:id',                 f: 'sow_management', a: W },
+  { m: 'PUT',    p: '/sow/drafts/:context/:refKey',           f: 'sow_management', a: W },
+  { m: 'DELETE', p: '/sow/drafts/:context/:refKey',           f: 'sow_management', a: W },
   { m: 'POST',   p: '/sow/progress-history',                  f: 'sow_management', a: W },
   { m: 'POST',   p: '/sow/parts',                             f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/parts/:id',                         f: 'sow_management', a: W },
