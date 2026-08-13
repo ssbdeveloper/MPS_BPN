@@ -265,6 +265,10 @@ const RESERVATION_FIELDS = [
   'area_code', 'area_name', 'bay_codes', 'start_date', 'end_date', 'status', 'notes',
   'created_by', 'created_by_name', 'updated_by', 'updated_by_name',
   'created_at', 'updated_at', 'part_name', 'customer',
+  // Flag tingkat-reservasi dari backend (D7/ditambah belakangan). Tanpa dua ini
+  // dedupeByGroup membuangnya -> isUnknownOrder jatuh ke heuristic part_name/
+  // customer (salah-positif order sah tanpa sow_id) dan badge subcont mati.
+  'order_known', 'is_subcont',
 ];
 
 // Headcount hidup di OPERASI SOW, bukan di task: beberapa task bisa berbagi satu
