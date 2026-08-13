@@ -70,6 +70,8 @@ let sowRevisionHistoryReady = false;
 let sowRevisionHistoryPromise = null;
 let sowDraftReady = false;
 let sowDraftPromise = null;
+let sowSavedReady = false;
+let sowSavedPromise = null;
 
 async function ensureSowRuntimeColumns() {
   if (sowRuntimeColumnsReady) return;
@@ -149,6 +151,35 @@ async function ensureSowDraftTable() {
     sowDraftPromise = null;
   });
   return sowDraftPromise;
+}
+
+// Saved SOW (snapshot durable, bernama, shared) — "save SOW yang diedit, load ulang kapan pun".
+// Berbeda dari sow_draft (autosave ephemeral per user): sow_saved = snapshot penuh state create
+// yang bisa di-rename dan di-load lintas component. Template standard (sow_templates) tidak disentuh.
+// DDL juga ada di database/migrations/api/20260813_sow_saved.sql — ensure di sini (pola sama).
+async function ensureSowSavedTable() {
+  if (sowSavedReady) return;
+  if (sowSavedPromise) return sowSavedPromise;
+  sowSavedPromise = (async () => {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sow_saved (
+        id           BIGSERIAL PRIMARY KEY,
+        name         TEXT NOT NULL,
+        component_id INTEGER,
+        payload      JSONB NOT NULL,
+        created_by   TEXT,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_sow_saved_name ON sow_saved (lower(name))
+    `);
+    sowSavedReady = true;
+  })().finally(() => {
+    sowSavedPromise = null;
+  });
+  return sowSavedPromise;
 }
 
 function normalizeSowOperation(row, fallbackOrderNo) {
@@ -1177,7 +1208,7 @@ exports.saveSowOrderRevision = async (req, res) => {
 exports.getSowDraft = async (req, res) => {
   try {
     await ensureSowDraftTable();
-    const userKey = req.user?.username || "web";
+    const userKey = String(req.headers['x-user-name'] || req.user?.username || "web");
     const { context, refKey } = req.params;
     const result = await db.query(
       `SELECT payload, updated_at
@@ -1196,7 +1227,7 @@ exports.getSowDraft = async (req, res) => {
 exports.saveSowDraft = async (req, res) => {
   try {
     await ensureSowDraftTable();
-    const userKey = req.user?.username || "web";
+    const userKey = String(req.headers['x-user-name'] || req.user?.username || "web");
     const { context, refKey } = req.params;
     const payload = req.body?.payload ?? null;
     if (!context) return res.status(400).json({ error: "context wajib diisi" });
@@ -1218,7 +1249,7 @@ exports.saveSowDraft = async (req, res) => {
 exports.deleteSowDraft = async (req, res) => {
   try {
     await ensureSowDraftTable();
-    const userKey = req.user?.username || "web";
+    const userKey = String(req.headers['x-user-name'] || req.user?.username || "web");
     const { context, refKey } = req.params;
     await db.query(
       `DELETE FROM sow_draft
@@ -1228,6 +1259,114 @@ exports.deleteSowDraft = async (req, res) => {
     res.status(204).end();
   } catch (err) {
     console.error("deleteSowDraft error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.createSavedSow = async (req, res) => {
+  try {
+    await ensureSowSavedTable();
+    const { name, component_id, payload } = req.body || {};
+    if (!name || String(name).trim() === "") {
+      return res.status(400).json({ error: "name wajib diisi" });
+    }
+    if (payload == null || typeof payload !== "object") {
+      return res.status(400).json({ error: "payload wajib diisi" });
+    }
+    const createdBy = String(req.headers["x-user-name"] || req.user?.username || "web");
+    const result = await db.query(
+      `INSERT INTO sow_saved (name, component_id, payload, created_by)
+       VALUES ($1, $2, $3::jsonb, $4)
+       RETURNING id, name, created_at`,
+      [String(name).trim(), component_id || null, JSON.stringify(payload), createdBy]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error("createSavedSow error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.listSavedSows = async (req, res) => {
+  try {
+    await ensureSowSavedTable();
+    const q = String(req.query.q || "").trim();
+    const params = [];
+    let where = "";
+    if (q) {
+      params.push(`%${q}%`);
+      where = "WHERE lower(name) LIKE lower($1)";
+    }
+    const result = await db.query(
+      `SELECT id, name, component_id, created_by, updated_at,
+              jsonb_array_length(COALESCE(payload->'editOps', '[]'::jsonb)) AS operation_count,
+              COALESCE((
+                SELECT SUM(COALESCE(NULLIF(op->>'std_hours','')::numeric, 0))
+                FROM jsonb_array_elements(payload->'editOps') op
+              ), 0) AS total_hours
+       FROM sow_saved ${where}
+       ORDER BY updated_at DESC
+       LIMIT 200`,
+      params
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error("listSavedSows error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.getSavedSow = async (req, res) => {
+  try {
+    await ensureSowSavedTable();
+    const { id } = req.params;
+    const result = await db.query(
+      `SELECT id, name, component_id, payload, created_by, updated_at
+       FROM sow_saved WHERE id = $1`,
+      [id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Saved SOW tidak ditemukan" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("getSavedSow error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.updateSavedSow = async (req, res) => {
+  try {
+    await ensureSowSavedTable();
+    const { id } = req.params;
+    const { name, component_id, payload } = req.body || {};
+    const sets = [];
+    const params = [];
+    if (name !== undefined) { params.push(String(name).trim()); sets.push(`name = $${params.length}`); }
+    if (component_id !== undefined) { params.push(component_id || null); sets.push(`component_id = $${params.length}`); }
+    if (payload !== undefined) { params.push(JSON.stringify(payload)); sets.push(`payload = $${params.length}::jsonb`); }
+    if (!sets.length) return res.status(400).json({ error: "tidak ada field yang diupdate" });
+    params.push(id);
+    const result = await db.query(
+      `UPDATE sow_saved SET ${sets.join(", ")}, updated_at = NOW()
+       WHERE id = $${params.length}
+       RETURNING id, name, updated_at`,
+      params
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Saved SOW tidak ditemukan" });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error("updateSavedSow error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.deleteSavedSow = async (req, res) => {
+  try {
+    await ensureSowSavedTable();
+    const { id } = req.params;
+    await db.query(`DELETE FROM sow_saved WHERE id = $1`, [id]);
+    res.status(204).end();
+  } catch (err) {
+    console.error("deleteSavedSow error:", err);
     res.status(500).json({ error: err.message });
   }
 };

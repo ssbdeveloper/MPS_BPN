@@ -111,6 +111,16 @@ router.get("/drafts/:context/:refKey",    controller.getSowDraft);
 router.delete("/drafts/:context/:refKey", controller.deleteSowDraft);
 
 // ============================================
+// SAVED SOW (snapshot durable — save & load ulang)
+// WAJIB di atas route generic /:order (legacy paling bawah).
+// ============================================
+router.post("/saved",        controller.createSavedSow);
+router.get("/saved",         controller.listSavedSows);
+router.get("/saved/:id",     controller.getSavedSow);
+router.put("/saved/:id",     controller.updateSavedSow);
+router.delete("/saved/:id",  controller.deleteSavedSow);
+
+// ============================================
 // PENANDA SUBCONT (Fase 6 — docs/MFG_PLAN_AREA_PLAN.md §4 Fase 6 / D4)
 // Label saja: workcenter tidak disentuh, jadwal tetap ada, jamnya keluar dari beban internal.
 // WAJIB terdaftar DI ATAS route generic `/:order`, `/:id` di bagian LEGACY paling bawah —
