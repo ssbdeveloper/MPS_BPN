@@ -149,26 +149,26 @@ export default function SchedulingAreaPage() {
     end: addDaysText(today, DEFAULT_RANGE_DAYS - 1),
   }));
   const [viewMode, setViewMode] = useState('map');      // 'map' | 'timeline'
-  const [level, setLevel] = useState('overview');       // 'overview' | 'area'
-  // ?area=AREA-XX&date=YYYY-MM-DD (dari Gantt portfolio, keputusan 4b):
-  // langsung fokus ke area + tanggal booking yang dipilih.
+
+  // ?area=AREA-XX&date=YYYY-MM-DD (dari Gantt portfolio, keputusan 4b): langsung
+  // fokus ke area + tanggal booking yang dipilih. Level area diinisialisasi DI
+  // SINI (bukan via useEffect) — deep-link berlaku sekali saat mount, dan tombol
+  // Back tetap bebas kembali ke overview (effect lama setLevel('area') lagi tiap
+  // Back karena areaFromUrl = selectedAreaCode && level==='overview' — bug
+  // A-2026-08-13, Back tidak pernah kembali ke pemilihan area).
   const [searchParams] = useSearchParams();
   const initialAreaCode = searchParams.get('area');
   const initialDate = searchParams.get('date');
-  const [selectedAreaCode, setSelectedAreaCode] = useState(
-    initialAreaCode && AREA_BY_CODE[initialAreaCode.toUpperCase()] ? initialAreaCode.toUpperCase() : null
-  );
+  const initialArea = initialAreaCode && AREA_BY_CODE[initialAreaCode.toUpperCase()]
+    ? initialAreaCode.toUpperCase()
+    : null;
+  const [level, setLevel] = useState(() => (initialArea ? 'area' : 'overview')); // 'overview' | 'area'
+  const [selectedAreaCode, setSelectedAreaCode] = useState(initialArea);
   const [selectedBay, setSelectedBay] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [reservation, setReservation] = useState(null); // { mode, bayCode, order }
   const [detail, setDetail] = useState(null);
   const [saving, setSaving] = useState(false);
-
-  // Saat dibuka dengan ?area=AREA-XX, langsung masuk level area (keputusan 4b).
-  const areaFromUrl = selectedAreaCode && level === 'overview';
-  useEffect(() => {
-    if (areaFromUrl) setLevel('area');
-  }, [areaFromUrl]);
 
   // Fetch schedule SEMUA tanggal dalam bounds (bukan cuma 7 hari) — peta bisa
   // melihat reservasi pada tanggal berapa pun. Filter 7/14/30 hari hanya untuk
