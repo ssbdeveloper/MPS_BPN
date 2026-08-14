@@ -2271,14 +2271,39 @@ async function listBayScheduleTasks(query = {}) {
        t.duration_minutes,
        t.planned_work_minutes,
        t.actual_progress,
-       t.is_summary
-     from ms_project_bay_schedule s
-     left join ms_project_task t
+       t.is_summary,
+       mp.project_name,
+       u.unit_name
+       from ms_project_bay_schedule s
+       left join ms_project_task t
        on t.is_active = true
-      and s.project_id is not null
-      and s.task_id is not null
-      and t.project_id = s.project_id
-      and t.task_id = s.task_id
+       and s.project_id is not null
+       and s.task_id is not null
+       and t.project_id = s.project_id
+       and t.task_id = s.task_id
+       -- Nama project untuk group header (order-level: task NULL → pakai project_id dari schedule).
+       left join ms_project mp
+       on mp.project_id = coalesce(t.project_id, s.project_id)
+       -- Grouping job per "Unit": naikkan rantai parent sampai summary yang namanya mengandung
+       -- 'unit' (mis. "UNIT 1", "UNIT 01"). Kalau tidak ada (project berbasis proses seperti
+       -- FABRICATION/BLASTING), unit_name NULL → FE menampilkan bucket "No Unit".
+       left join lateral (
+       with recursive chain as (
+         select m.task_id, m.task_name, m.parent_task_id, 1 as depth
+         from ms_project_task m
+         where m.task_id = t.parent_task_id
+         union all
+         select m.task_id, m.task_name, m.parent_task_id, c.depth + 1
+         from ms_project_task m
+         join chain c on m.task_id = c.parent_task_id
+         where c.depth < 8
+       )
+       select c.task_name as unit_name
+       from chain c
+       where c.task_name ilike '%unit%'
+       order by c.depth
+       limit 1
+       ) u on true
      where ${where.join(" and ")}
        and (
          -- reservasi task-level: tetap seperti dulu, satu baris per task nyata
