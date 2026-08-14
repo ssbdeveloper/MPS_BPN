@@ -271,20 +271,6 @@ export default function ManufacturingTimesheetMainMenuPage() {
             onClick={() => navigate('/select-machine')}
           />
         </section>
-
-        <section className="mt-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-50 text-[#0077b6]">
-              <ClipboardList size={20} />
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-extrabold text-slate-800">Manufacturing mode aktif</p>
-              <p className="mt-0.5 text-xs font-semibold text-slate-500">
-                Halaman ini adalah contoh variant frontend. Backend dan database tetap shared.
-              </p>
-            </div>
-          </div>
-        </section>
       </main>
     </div>
   );
