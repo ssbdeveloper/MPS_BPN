@@ -6,7 +6,6 @@ import {
   BriefcaseBusiness,
   CheckCircle2,
   ClipboardList,
-  LogOut,
   Monitor,
   RefreshCw,
 } from 'lucide-react';
@@ -174,33 +173,6 @@ export default function ManufacturingTimesheetMainMenuPage() {
     }
   };
 
-  const handleCheckOut = async () => {
-    const employee = readSessionJson('datakaryawan');
-
-    if (!employee.snssb) {
-      toast.error('Data karyawan tidak ditemukan');
-      return;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/timesheet/checkout`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ datakaryawan: { sn: employee.snssb } }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || 'Gagal checkout timesheet');
-      }
-
-      toast.success('Timesheet berhasil checkout');
-      navigate('/login-timesheet');
-    } catch (err) {
-      toast.error('Checkout gagal', { description: err.message });
-    }
-  };
-
   return (
     <div className="flex h-dvh w-screen flex-col overflow-hidden bg-slate-50">
       <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 shadow-sm md:px-6">
@@ -278,11 +250,11 @@ export default function ManufacturingTimesheetMainMenuPage() {
             onClick={postdata}
           />
           <ActionButton
-            icon={LogOut}
-            label="Check Out"
-            helper="Akhiri pekerjaan"
-            tone="success"
-            onClick={handleCheckOut}
+            icon={ClipboardList}
+            label="View Timesheet"
+            helper="Lihat list timesheet"
+            tone="outline"
+            onClick={() => navigate('/view-timesheet')}
           />
           <ActionButton
             icon={BriefcaseBusiness}
