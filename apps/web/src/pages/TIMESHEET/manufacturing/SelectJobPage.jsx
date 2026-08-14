@@ -114,9 +114,10 @@ export default function ManufacturingSelectJobPage() {
   const [nfcError, setNfcError] = useState('');
   const [nfcVerifying, setNfcVerifying] = useState(false);
   const [areaDraft, setAreaDraft] = useState('');
-  const [filterOpen, setFilterOpen] = useState(true);
-  const [collapsedProjects, setCollapsedProjects] = useState(new Set());
-  const [collapsedUnits, setCollapsedUnits] = useState(new Set());
+  const [filterOpen, setFilterOpen] = useState(false);
+  // Default: semua group COLLAPSED (set kosong = belum ada yang di-expand).
+  const [expandedProjects, setExpandedProjects] = useState(new Set());
+  const [expandedUnits, setExpandedUnits] = useState(new Set());
 
   const selectedArea = useMemo(
     () => AREA_OPTIONS.find((area) => area.areaCode === deviceAreaCode) || null,
@@ -168,8 +169,8 @@ export default function ManufacturingSelectJobPage() {
         (job) => isOrderLevelJob(job) || sameWorkcenter(job.workcenter, currentWorkcenter)
       );
       setJobs(rows);
-      setCollapsedProjects(new Set());
-      setCollapsedUnits(new Set());
+      setExpandedProjects(new Set());
+      setExpandedUnits(new Set());
       if (!rows.length) {
         toast.info('Tidak ada task aktif untuk area, bay, dan workcenter ini');
       }
@@ -328,9 +329,9 @@ export default function ManufacturingSelectJobPage() {
     }));
   }, [jobs]);
 
-  // Expand/collapse group project & unit (keputusan user 2026-08-13).
+  // Expand/collapse group project & unit (default: collapse — keputusan user 2026-08-13).
   const toggleProject = (project) => {
-    setCollapsedProjects((prev) => {
+    setExpandedProjects((prev) => {
       const next = new Set(prev);
       if (next.has(project)) next.delete(project);
       else next.add(project);
@@ -339,7 +340,7 @@ export default function ManufacturingSelectJobPage() {
   };
 
   const toggleUnit = (unitKey) => {
-    setCollapsedUnits((prev) => {
+    setExpandedUnits((prev) => {
       const next = new Set(prev);
       if (next.has(unitKey)) next.delete(unitKey);
       else next.add(unitKey);
@@ -522,7 +523,7 @@ export default function ManufacturingSelectJobPage() {
               </tr>
             ) : (
               groupedJobs.map(({ project, units }) => {
-                const projectCollapsed = collapsedProjects.has(project);
+                const projectExpanded = expandedProjects.has(project);
                 const projectTotal = units.reduce((total, u) => total + u.rows.length, 0);
                 return (
                   <React.Fragment key={project}>
@@ -534,9 +535,9 @@ export default function ManufacturingSelectJobPage() {
                     >
                       <td colSpan={7} className="px-3 py-1.5 text-[11px] font-extrabold">
                         <span className="inline-flex items-center gap-1.5">
-                          {projectCollapsed
-                            ? <ChevronRight size={13} className="text-[#0077b6]" />
-                            : <ChevronDown size={13} className="text-[#0077b6]" />}
+                          {projectExpanded
+                            ? <ChevronDown size={13} className="text-[#0077b6]" />
+                            : <ChevronRight size={13} className="text-[#0077b6]" />}
                           <span className="text-slate-800">{project}</span>
                           <span className="rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-slate-500">
                             {projectTotal}
@@ -544,9 +545,9 @@ export default function ManufacturingSelectJobPage() {
                         </span>
                       </td>
                     </tr>
-                    {!projectCollapsed && units.map(({ unit, rows }) => {
+                    {projectExpanded && units.map(({ unit, rows }) => {
                       const unitKey = `${project}|${unit}`;
-                      const unitCollapsed = collapsedUnits.has(unitKey);
+                      const unitExpanded = expandedUnits.has(unitKey);
                       return (
                         <React.Fragment key={unitKey}>
                           {/* Group header 2: unit (click = collapse/expand unit) */}
@@ -557,9 +558,9 @@ export default function ManufacturingSelectJobPage() {
                           >
                             <td colSpan={7} className="px-6 py-1 text-[11px] font-extrabold">
                               <span className="inline-flex items-center gap-1.5">
-                                {unitCollapsed
-                                  ? <ChevronRight size={12} className="text-[#0077b6]" />
-                                  : <ChevronDown size={12} className="text-[#0077b6]" />}
+                                {unitExpanded
+                                  ? <ChevronDown size={12} className="text-[#0077b6]" />
+                                  : <ChevronRight size={12} className="text-[#0077b6]" />}
                                 <span className="text-[#0077b6]">{unit}</span>
                                 <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-slate-500">
                                   {rows.length}
@@ -567,7 +568,7 @@ export default function ManufacturingSelectJobPage() {
                               </span>
                             </td>
                           </tr>
-                          {!unitCollapsed && rows.map((job, index) => {
+                          {unitExpanded && rows.map((job, index) => {
                       const isOrderLevel = isOrderLevelJob(job);
                       // Order-level rows share the same (null) task_id, so the schedule must be
                       // part of the comparison or every one of them would highlight at once.
