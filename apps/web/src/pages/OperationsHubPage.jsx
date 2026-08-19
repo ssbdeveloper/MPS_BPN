@@ -45,6 +45,8 @@ const emptyHubData = {
     total_orders: 0,
     active_orders: 0,
     teco_orders: 0,
+    ongoing_orders: 0,
+    not_started_orders: 0,
     latest_labor_hours: 0,
     latest_machine_hours: 0,
     avg_progress: 0,
@@ -147,7 +149,7 @@ function useCountUp(target, duration = 900) {
   return display;
 }
 
-function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0, progress = null }) {
+function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0, progress = null, chips = [] }) {
   const IconComponent = icon;
   const hasDelta = Number.isFinite(Number(delta));
   const up = Number(delta) > 0;
@@ -168,9 +170,25 @@ function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#00
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{title}</p>
-          <p className="mt-1.5 text-[26px] font-extrabold leading-none tracking-tight tabular-nums text-slate-950">
-            {formatNumber(animated)}{suffix}
-          </p>
+          <div className="mt-1.5 flex items-center gap-3">
+            <p className="text-[26px] font-extrabold leading-none tracking-tight tabular-nums text-slate-950">
+              {formatNumber(animated)}{suffix}
+            </p>
+            {/* Chips di samping value — memanfaatkan ruang kosong card */}
+            {chips.length > 0 && (
+              <div className="flex flex-col items-start gap-1">
+                {chips.map((chip) => (
+                  <span
+                    key={chip.label}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${chip.tone}`}
+                  >
+                    <span className="tabular-nums">{formatNumber(chip.value)}</span>
+                    <span className="font-bold opacity-80">{chip.label}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${tone} transition-transform duration-300 group-hover:scale-110`}>
           {React.createElement(IconComponent, { size: 18 })}
@@ -226,8 +244,8 @@ function InsightStrip({ items }) {
 
 function Sidebar({ onNavigate }) {
   const { canRead } = usePermissions();
-  // Menu yang di-hide dari hub (per browser, dari Configuration Rules →
-  // "hide from hub"). HANYA visual — RBAC/permission tidak berubah.
+  // Hidden items from hub (per browser, set in Configuration Rules →
+  // "hide from hub"). VISUAL ONLY — RBAC/permissions unchanged.
   const [hiddenMenus, setHiddenMenus] = useState(() => getHiddenHubMenus());
   useEffect(() => {
     const sync = () => setHiddenMenus(getHiddenHubMenus());
@@ -340,11 +358,11 @@ function ChangePasswordPanel({ user, onClose }) {
       const payload = await response.json().catch(() => ({}));
 
       if (!response.ok || payload.success === false) {
-        throw new Error(payload.error || 'Gagal ubah password');
+        throw new Error(payload.error || 'Failed to change password');
       }
 
       setForm({ oldPassword: '', newPassword: '', retypeNewPassword: '' });
-      setMessage({ type: 'success', text: 'Password berhasil diubah' });
+      setMessage({ type: 'success', text: 'Password changed successfully' });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -367,9 +385,9 @@ function ChangePasswordPanel({ user, onClose }) {
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e8f7fb] text-[#0077b6]">
               <Settings size={22} />
             </div>
-            <h2 className="mt-4 text-lg font-extrabold text-slate-950">Ubah Password</h2>
+            <h2 className="mt-4 text-lg font-extrabold text-slate-950">Change Password</h2>
             <p className="mt-1 text-sm font-medium text-slate-500">
-              Konfirmasi old password sebelum menyimpan password baru.
+              Confirm your old password before saving a new one.
             </p>
           </div>
           <button
@@ -391,7 +409,7 @@ function ChangePasswordPanel({ user, onClose }) {
           {!user?.username && (
             <div className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
               <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              Login melalui welcome page diperlukan untuk ubah password.
+              Log in through the welcome page to change the password.
             </div>
           )}
 
@@ -435,7 +453,7 @@ function ChangePasswordPanel({ user, onClose }) {
           </label>
 
           {form.retypeNewPassword && form.newPassword !== form.retypeNewPassword && (
-            <p className="text-xs font-bold text-red-600">Retype new password belum sama.</p>
+            <p className="text-xs font-bold text-red-600">Retype new password does not match.</p>
           )}
 
           {message && (
@@ -486,7 +504,7 @@ function InfoTile({ label, value, sub, tone = 'neutral' }) {
   );
 }
 
-function BarList({ items, valueOf, labelOf, subOf, valueFmt, color = '#0096c7', empty = 'Tidak ada data' }) {
+function BarList({ items, valueOf, labelOf, subOf, valueFmt, color = '#0096c7', empty = 'No data' }) {
   if (!items?.length) {
     return <p className="py-8 text-center text-sm font-semibold text-slate-400">{empty}</p>;
   }
@@ -527,7 +545,7 @@ function MachineActivityChart({ data }) {
         <div>
           <h2 className="text-sm font-extrabold text-slate-900">Machine Activity</h2>
           <p className="mt-0.5 text-xs font-semibold text-slate-500">
-            Productive vs support/loss · 7 hari
+            Productive vs support/loss · last 7 days
             {todayPct != null && (
               <>
                 {' · today '}
@@ -639,7 +657,7 @@ function LaborByWorkcenter({ items }) {
   return (
     <DashboardCard className="hub-card p-5">
       <h2 className="text-sm font-extrabold text-slate-900">Labor by Workcenter</h2>
-      <p className="mt-0.5 text-xs font-semibold text-slate-500">Jam aktual · 24 jam terakhir</p>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Actual hours · last 24h</p>
 
       {rows.length === 0 ? (
         <p className="py-8 text-center text-sm font-semibold text-slate-400">No labor data</p>
@@ -682,14 +700,14 @@ function TopOperators({ items }) {
   return (
     <DashboardCard className="hub-card p-5">
       <h2 className="text-sm font-extrabold text-slate-900">Top Operators</h2>
-      <p className="mt-0.5 text-xs font-semibold text-slate-500">Jam produktif · 24 jam terakhir</p>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Productive hours · last 24h</p>
       <div className="mt-4">
         <BarList
           items={rows}
           valueOf={(r) => toNum(r.productive_hours)}
           labelOf={(r) => r.name}
           valueFmt={(r) => `${formatNumber(r.productive_hours)}h`}
-          subOf={(r) => `dari ${formatNumber(r.total_hours)}h tercatat`}
+          subOf={(r) => `of ${formatNumber(r.total_hours)}h recorded`}
           color="#059669"
           empty="No operator data"
         />
@@ -733,7 +751,7 @@ function SapPostingHealth({ data }) {
         <img src={sapLogo} alt="" className="h-4 w-auto" aria-hidden="true" />
         <h2 className="text-sm font-extrabold text-slate-900">SAP Posting Health</h2>
       </div>
-      <p className="mt-0.5 text-xs font-semibold text-slate-500">Outbound timesheet → SAP · 7 hari</p>
+      <p className="mt-0.5 text-xs font-semibold text-slate-500">Outbound timesheet → SAP · last 7 days</p>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
         <InfoTile label="Posted 7d" value={formatNumber(posted)} tone="good" />
@@ -748,13 +766,13 @@ function SapPostingHealth({ data }) {
         <div className="h-2 overflow-hidden rounded-full bg-slate-100">
           <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, postedRate)}%` }} />
         </div>
-        <div className="mt-1 text-[10px] font-semibold text-slate-400">{formatNumber(posted)} dari {formatNumber(staged)} staged</div>
+        <div className="mt-1 text-[10px] font-semibold text-slate-400">{formatNumber(posted)} of {formatNumber(staged)} staged</div>
       </div>
 
       <div className="mt-auto rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
         <div className="text-[10px] font-bold uppercase tracking-wide text-amber-600">Pending backlog</div>
         <div className="text-2xl font-black leading-none text-amber-700">{formatNumber(pending)}</div>
-        <div className="mt-0.5 text-[10px] font-semibold text-amber-600/80">menunggu posting ke SAP</div>
+        <div className="mt-0.5 text-[10px] font-semibold text-amber-600/80">waiting to be posted to SAP</div>
       </div>
     </DashboardCard>
   );
@@ -870,6 +888,11 @@ function OperationsHubPage() {
       tone: 'bg-sky-50 text-sky-700',
       accent: '#0096c7',
       progress: activePct,
+      // Pembagian active: sudah ada record (timesheet/mch) vs belum disentuh sama sekali.
+      chips: [
+        { label: 'on going', value: toNum(kpi.ongoing_orders), tone: 'bg-emerald-50 text-emerald-700' },
+        { label: 'not started', value: toNum(kpi.not_started_orders), tone: 'bg-slate-100 text-slate-500' },
+      ],
     },
     {
       title: 'TECO Orders',
@@ -907,10 +930,10 @@ function OperationsHubPage() {
   const insights = useMemo(() => {
     const list = [];
     if (productiveDelta != null && productiveDelta <= -2) {
-      list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% di bawah rata-rata 7 hari (${machineAvgPct.toFixed(1)}%).` });
+      list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% below the 7-day average (${machineAvgPct.toFixed(1)}%).` });
     }
     if (toNum(kpi.validation_pending) > 0) {
-      list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} records hari ini menunggu validasi foreman/supervisor.` });
+      list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} records today awaiting foreman/supervisor validation.` });
     }
     return list.slice(0, 3);
   }, [kpi, machineAvgPct, productiveDelta]);
@@ -950,12 +973,12 @@ function OperationsHubPage() {
     }
     const list = announcements.filter((x) => x && x.path_mp3);
     if (list.length === 0) {
-      toast('Tidak ada pengumuman audio untuk hari ini');
+      toast('No audio announcement for today');
       return;
     }
     ttsStopRef.current = false;
     setAnnouncing(true);
-    toast(`Memutar ${list.length} pengumuman EWS`);
+    toast(`Playing ${list.length} EWS announcement(s)`);
     const playAt = (idx) => {
       if (ttsStopRef.current || idx >= list.length) {
         setAnnouncing(false);
@@ -1048,10 +1071,10 @@ function OperationsHubPage() {
                   className={`flex min-h-[34px] items-center gap-1.5 rounded-lg px-3 text-xs font-extrabold text-white transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
                     announcing ? 'bg-red-600 hover:bg-red-500' : 'bg-[#0077b6] hover:bg-[#023e8a]'
                   }`}
-                  title={announcing ? 'Hentikan pengumuman' : 'Putar pengumuman EWS (audio issue log hari ini)'}
+                  title={announcing ? 'Stop announcements' : 'Play EWS announcements (audio issue log for today)'}
                 >
                   {announcing ? <Square size={15} /> : <Volume2 size={15} />}
-                  {announcing ? 'Hentikan' : 'Pengumuman'}
+                  {announcing ? 'Stop' : 'Announce'}
                   {!announcing && announcements.length > 0 && (
                     <span className="rounded-full bg-white/25 px-1.5 text-[10px] tabular-nums">{announcements.length}</span>
                   )}
@@ -1067,8 +1090,8 @@ function OperationsHubPage() {
                 type="button"
                 onClick={() => setShowPasswordPanel(true)}
                 className="flex h-[34px] w-[34px] items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-[#90e0ef] hover:bg-cyan-50 hover:text-[#0077b6]"
-                title="Ubah password"
-                aria-label="Ubah password"
+                title="Change password"
+                aria-label="Change password"
               >
                 <Settings size={16} />
               </button>

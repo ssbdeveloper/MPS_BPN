@@ -213,6 +213,31 @@ async function getOperationsHub(req, res) {
             GROUP BY 1
           ) o
         ),
+        -- Pembagian ACTIVE orders: "on going" = sudah punya record di timesheet
+        -- ATAU mch_transaction; "not started" = belum punya transaction sama sekali.
+        -- Pakai LEFT JOIN ke set order_no yang muncul di tiap tabel (hash join satu
+        -- pass) — subquery EXISTS per-order terlalu lambat (query read timeout).
+        order_activity_kpi AS (
+          SELECT
+            COUNT(*) FILTER (WHERE t.o IS NOT NULL OR m.o IS NOT NULL)::int AS ongoing_orders,
+            COUNT(*) FILTER (WHERE t.o IS NULL AND m.o IS NULL)::int AS not_started_orders
+          FROM (
+            SELECT TRIM(order_no) AS order_no,
+                   bool_or(order_description = 'TECO') AS has_teco
+            FROM public.ph3_order
+            GROUP BY 1
+          ) o
+          LEFT JOIN (
+            SELECT DISTINCT TRIM(order_no) AS o
+            FROM public.timesheet_transaction
+            WHERE state_flag != 5
+          ) t ON t.o = o.order_no
+          LEFT JOIN (
+            SELECT DISTINCT TRIM(order_no) AS o
+            FROM public.mch_transaction
+          ) m ON m.o = o.order_no
+          WHERE NOT has_teco
+        ),
         validation_kpi AS (
           SELECT
             COUNT(*) FILTER (
@@ -227,6 +252,8 @@ async function getOperationsHub(req, res) {
           COALESCE(p.total_orders, 0) AS total_orders,
           COALESCE(p.active_orders, 0) AS active_orders,
           COALESCE(p.teco_orders, 0) AS teco_orders,
+          COALESCE(oa.ongoing_orders, 0) AS ongoing_orders,
+          COALESCE(oa.not_started_orders, 0) AS not_started_orders,
           COALESCE(a.avg_progress, 0)::float AS avg_progress,
           COALESCE(v.validation_pending, 0) AS validation_pending,
           COALESCE(v.validation_total, 0) AS validation_total,
@@ -249,6 +276,7 @@ async function getOperationsHub(req, res) {
         FROM ph3_kpi p
         CROSS JOIN sow_avg a
         CROSS JOIN validation_kpi v
+        CROSS JOIN order_activity_kpi oa
       `),
       q(`
         WITH daily AS (
@@ -375,6 +403,8 @@ async function getOperationsHub(req, res) {
           total_orders: num(overviewRow.total_orders),
           active_orders: num(overviewRow.active_orders),
           teco_orders: num(overviewRow.teco_orders),
+          ongoing_orders: num(overviewRow.ongoing_orders),
+          not_started_orders: num(overviewRow.not_started_orders),
           latest_labor_hours: num(overviewRow.latest_labor_hours),
           latest_machine_hours: num(overviewRow.latest_machine_hours),
           avg_progress: num(overviewRow.avg_progress),

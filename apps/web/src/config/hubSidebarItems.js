@@ -31,7 +31,7 @@ export const sidebarItems = [
   { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling', group: 'SOW & Planning' },
   { title: 'Shift Capacity', icon: TimerReset, path: '/shift-definition', group: 'SOW & Planning' },
   { title: 'Roster Operator', icon: Users, path: '/ews/roster', group: 'Production' },
-  { title: 'Notifikasi EWS', icon: Bell, path: '/ews/notifications', group: 'Production' },
+  { title: 'EWS Notifications', icon: Bell, path: '/ews/notifications', group: 'Production' },
   { title: 'Kanban Board', icon: Factory, path: '/kanban-board', group: 'Production' },
   { title: 'Component Tracking', icon: Boxes, path: '/component-tracking', group: 'Production' },
   { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment', group: 'Production' },
