@@ -40,6 +40,7 @@ const PERMISSION_MATRIX = {
     roster_operator: LEVELS.FULL_ACCESS,
     manage_users: LEVELS.NO_ACCESS,
     ms_project_admin: LEVELS.NO_ACCESS, // dipersempit: force-checkin/kalender/resource saja
+    config_rules: LEVELS.NO_ACCESS,
   },
 
   foreman: {
