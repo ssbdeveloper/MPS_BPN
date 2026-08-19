@@ -3,27 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   BarChart2,
-  Bell,
-  BookOpen,
-  Boxes,
-  CalendarClock,
   CheckCircle2,
-  CreditCard,
-  Database,
+  ClipboardList,
   Factory,
-  Gauge,
-  Hammer,
-  LayoutDashboard,
-  ListChecks,
   Loader2,
   LogOut,
-  ClipboardList,
   Settings,
-  ShieldCheck,
   Square,
-  TimerReset,
-  Truck,
-  UserCog,
   Users,
   Volume2,
   X,
@@ -45,6 +31,7 @@ import {
 import sapLogo from '../assets/sap.svg';
 import EwsControlTower from '../components/ews/EwsControlTower';
 import { usePermissions, routeToFeature, getRole, authHeaders } from '../rbac';
+import { sidebarItems, getHiddenHubMenus } from '../config/hubSidebarItems';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const SAP_LINKS = {
@@ -52,31 +39,6 @@ const SAP_LINKS = {
   QH3: 'https://fioriqa-rise.abm-investama.co.id:44380/fiori',
 };
 const SAP_ENV_STORAGE_KEY = 'operationsHubSapEnv';
-
-const sidebarItems = [
-  { title: 'Dashboard', icon: LayoutDashboard, path: '/dashboard', group: 'Overview' },
-  { title: 'Order Progress', icon: BarChart2, path: '/order-progress-dashboard', group: 'Overview' },
-  { title: 'Update Progress', icon: ListChecks, path: '/progress-update', group: 'Overview' },
-  { title: 'SOW Management', icon: BookOpen, path: '/sow-management/list', group: 'SOW & Planning' },
-  { title: 'SOW Scheduling', icon: CalendarClock, path: '/sow-scheduling', group: 'SOW & Planning' },
-  { title: 'Shift Capacity', icon: TimerReset, path: '/shift-definition', group: 'SOW & Planning' },
-  { title: 'Roster Operator', icon: Users, path: '/ews/roster', group: 'Production' },
-  { title: 'Notifikasi EWS', icon: Bell, path: '/ews/notifications', group: 'Production' },
-  { title: 'Kanban Board', icon: Factory, path: '/kanban-board', group: 'Production' },
-  { title: 'Component Tracking', icon: Boxes, path: '/component-tracking', group: 'Production' },
-  { title: 'Receiving & Shipping', icon: Truck, path: '/receiving-shipment', group: 'Production' },
-  { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control', group: 'Inventory & Tools' },
-  { title: 'Tools Management', icon: Hammer, path: '/tools-management', group: 'Inventory & Tools' },
-  { title: 'MS Project Admin', icon: ShieldCheck, path: '/ms-project-admin', group: 'Administration' },
-  { title: 'Configuration Rules', icon: Settings, path: '/config-rules', group: 'Administration' },
-  { title: 'Manage User', icon: UserCog, path: '/manage-user', group: 'Administration' },
-  // Pintu langsung ke NFC Users: sebelumnya HANYA bisa lewat kartu di /manage-user,
-  // jadi pemegang izin nfc_users tanpa manage_users tidak punya jalan masuk sama sekali.
-  { title: 'NFC Users', icon: CreditCard, path: '/nfc-users', group: 'Administration' },
-  { title: 'TimeSheet', icon: ShieldCheck, path: '/timesheet-validation', group: 'Administration' },
-  { title: 'Machine Hours', icon: Gauge, path: '/machine-hours-sqlserver', group: 'Administration' },
-  { title: 'SAP Log', icon: Database, path: '/sap-log', group: 'Administration' },
-];
 
 const emptyHubData = {
   kpi: {
@@ -264,10 +226,19 @@ function InsightStrip({ items }) {
 
 function Sidebar({ onNavigate }) {
   const { canRead } = usePermissions();
-  // Menu auto-follows permission: hide items the role can't read.
+  // Menu yang di-hide dari hub (per browser, dari Configuration Rules →
+  // "hide from hub"). HANYA visual — RBAC/permission tidak berubah.
+  const [hiddenMenus, setHiddenMenus] = useState(() => getHiddenHubMenus());
+  useEffect(() => {
+    const sync = () => setHiddenMenus(getHiddenHubMenus());
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, []);
+  // Menu auto-follows permission: hide items the role can't read, plus
+  // items the user chose to hide from the hub.
   const items = sidebarItems.filter((item) => {
     const feature = routeToFeature(item.path);
-    return !feature || canRead(feature);
+    return (!feature || canRead(feature)) && !hiddenMenus.includes(item.path);
   });
   // Kelompokkan menu berdasarkan fungsi (group), urut sesuai definisi sidebarItems.
   const groups = useMemo(() => {

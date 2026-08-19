@@ -1,7 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { Clock, Loader2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  Clock,
+  Eye,
+  EyeOff,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Save,
+  Settings2,
+  SlidersHorizontal,
+  Trash2,
+} from 'lucide-react';
 import { authHeaders } from '../rbac';
+import { sidebarItems, HUB_HIDDEN_MENUS_KEY, getHiddenHubMenus } from '../config/hubSidebarItems';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -18,18 +32,83 @@ const DAY_OPTIONS = [
 
 const EMPTY_WINDOW = { start: '12:00', end: '13:00', days: [] };
 
+// ── Config palsu (hanya tampilan, TIDAK berpengaruh ke sistem apa pun) ──────
+const FAKE_SETTINGS_KEY = 'mps2.configRulesFakeSettings';
+const FAKE_DEFAULTS = {
+  max_shift_hours: 8,
+  grace_minutes: 5,
+  auto_refresh_seconds: 60,
+  notify_on_post: true,
+  notify_on_failed: true,
+  dark_chart: false,
+  language: 'id',
+};
+
 function timeToMinutes(t) {
   const [h, m] = String(t || '').split(':').map(Number);
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : NaN;
 }
 
+function loadFakeSettings() {
+  try {
+    return { ...FAKE_DEFAULTS, ...(JSON.parse(localStorage.getItem(FAKE_SETTINGS_KEY) || '{}')) };
+  } catch {
+    return { ...FAKE_DEFAULTS };
+  }
+}
+
+function Toggle({ checked, onChange, label }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors duration-200 ${
+        checked ? 'bg-[#0077b6]' : 'bg-slate-200'
+      }`}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+    >
+      <span
+        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ${
+          checked ? 'translate-x-[22px]' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
+function SectionCard({ icon: Icon, title, subtitle, children, accent = '#0077b6' }) {
+  const IconComponent = Icon;
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
+      <header className="flex items-center gap-3 border-b border-slate-200 bg-slate-50/60 px-5 py-3.5">
+        <span
+          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-white shadow-sm"
+          style={{ background: accent }}
+        >
+          {IconComponent && <IconComponent size={17} />}
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-sm font-extrabold text-slate-900">{title}</h2>
+          {subtitle && <p className="truncate text-[11px] font-semibold text-slate-500">{subtitle}</p>}
+        </div>
+      </header>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
 export default function ConfigurationRulesPage() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [maxMinutes, setMaxMinutes] = useState(90);
   const [windows, setWindows] = useState([]);
   const [rebuildDate, setRebuildDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [hiddenMenus, setHiddenMenus] = useState(() => getHiddenHubMenus());
+  const [fake, setFake] = useState(() => loadFakeSettings());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,6 +133,7 @@ export default function ConfigurationRulesPage() {
     return !validTime || w.days.length === 0;
   }), [windows]);
 
+  // ── break windows ──────────────────────────────────────────────────────────
   const updateWindow = (index, patch) => {
     setWindows((prev) => prev.map((w, i) => (i === index ? { ...w, ...patch } : w)));
   };
@@ -88,6 +168,34 @@ export default function ConfigurationRulesPage() {
     }
   };
 
+  // ── hide from hub (visual only, per browser) ───────────────────────────────
+  const toggleMenuHidden = (path) => {
+    setHiddenMenus((prev) => {
+      const next = prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path];
+      localStorage.setItem(HUB_HIDDEN_MENUS_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const menuGroups = useMemo(() => {
+    const map = new Map();
+    for (const item of sidebarItems) {
+      const key = item.group || 'Other';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    }
+    return [...map.entries()];
+  }, []);
+
+  // ── config palsu (tidak berpengaruh apa pun) ───────────────────────────────
+  const updateFake = (key, value) => {
+    setFake((prev) => {
+      const next = { ...prev, [key]: value };
+      localStorage.setItem(FAKE_SETTINGS_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
   const handleRebuild = async () => {
     if (!rebuildDate) {
       toast.error('Pick a rebuild start date.');
@@ -111,17 +219,31 @@ export default function ConfigurationRulesPage() {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col bg-slate-50">
-      <header className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-300 bg-white px-4 py-3 md:px-6">
-        <div>
-          <h1 className="text-sm font-extrabold text-slate-900">Configuration Rules</h1>
-          <p className="mt-0.5 text-xs font-semibold text-slate-500">Break hours &amp; max record duration — SAP staging</p>
+    <div className="flex min-h-dvh flex-col bg-slate-100">
+      {/* Header */}
+      <header className="sticky top-0 z-20 flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-300 bg-white/95 px-4 py-3 backdrop-blur md:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate('/operations-hub')}
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 shadow-sm transition hover:border-[#90e0ef] hover:bg-cyan-50 hover:text-[#0077b6]"
+            title="Back to Operations Hub"
+            aria-label="Back to Operations Hub"
+          >
+            <ArrowLeft size={17} />
+          </button>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-extrabold text-slate-900">Configuration Rules</h1>
+            <p className="truncate text-[11px] font-semibold text-slate-500">
+              Break hours · max record duration · hub navigation
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={load}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm transition hover:bg-slate-50"
+            className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm transition hover:bg-slate-50"
           >
             <RefreshCw size={14} /> Refresh
           </button>
@@ -129,45 +251,45 @@ export default function ConfigurationRulesPage() {
             type="button"
             onClick={handleSave}
             disabled={saving || invalidWindows.length > 0}
-            className="flex min-h-[34px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-9 items-center gap-1.5 rounded-xl bg-[#0077b6] px-3.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save Rules
           </button>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 space-y-4 px-4 py-4 md:px-6">
+      <main className="mx-auto w-full max-w-5xl flex-1 space-y-5 px-4 py-6 md:px-6">
         {loading ? (
-          <div className="flex items-center justify-center py-16 text-sm font-semibold text-slate-400">
+          <div className="flex items-center justify-center py-24 text-sm font-semibold text-slate-400">
             <Loader2 size={16} className="mr-2 animate-spin" /> Loading rules…
           </div>
         ) : (
           <>
             {/* Break hours */}
-            <section className="rounded-xl border border-slate-300 bg-white p-5 shadow-sm">
-              <div className="flex items-center gap-2">
-                <Clock size={16} className="text-[#0077b6]" />
-                <h2 className="text-sm font-extrabold text-slate-900">Break Hours</h2>
-                <span className="text-xs font-semibold text-slate-500">— not counted from productive records</span>
-              </div>
-
-              <div className="mt-4 space-y-3">
+            <SectionCard
+              icon={Clock}
+              title="Break Hours"
+              subtitle="Non-productive activity inside these windows is not counted. Productive activity is always counted in full."
+            >
+              <div className="space-y-3">
                 {windows.map((w, index) => (
-                  <div key={index} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div key={index} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 transition hover:border-slate-300">
                     <div className="flex flex-wrap items-center gap-3">
-                      <input
-                        type="time"
-                        value={w.start}
-                        onChange={(e) => updateWindow(index, { start: e.target.value })}
-                        className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
-                      />
-                      <span className="text-xs font-bold text-slate-400">to</span>
-                      <input
-                        type="time"
-                        value={w.end}
-                        onChange={(e) => updateWindow(index, { end: e.target.value })}
-                        className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
-                      />
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={w.start}
+                          onChange={(e) => updateWindow(index, { start: e.target.value })}
+                          className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                        />
+                        <span className="text-xs font-bold text-slate-400">to</span>
+                        <input
+                          type="time"
+                          value={w.end}
+                          onChange={(e) => updateWindow(index, { end: e.target.value })}
+                          className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                        />
+                      </div>
                       <div className="flex flex-wrap items-center gap-1">
                         {DAY_OPTIONS.map((d) => {
                           const active = w.days.includes(d.value);
@@ -176,7 +298,7 @@ export default function ConfigurationRulesPage() {
                               key={d.value}
                               type="button"
                               onClick={() => toggleDay(index, d.value)}
-                              className={`min-h-[26px] rounded-md px-2 text-[11px] font-extrabold transition ${
+                              className={`min-h-[28px] rounded-lg px-2.5 text-[11px] font-extrabold transition ${
                                 active
                                   ? 'bg-[#0077b6] text-white shadow-sm'
                                   : 'border border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
@@ -190,14 +312,14 @@ export default function ConfigurationRulesPage() {
                       <button
                         type="button"
                         onClick={() => setWindows((prev) => prev.filter((_, i) => i !== index))}
-                        className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                        className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
                         title="Remove"
                       >
                         <Trash2 size={14} />
                       </button>
                     </div>
                     {w.days.length === 0 && (
-                      <p className="mt-1.5 text-[11px] font-semibold text-red-600">Select at least one day</p>
+                      <p className="mt-2 text-[11px] font-semibold text-red-600">Select at least one day</p>
                     )}
                   </div>
                 ))}
@@ -206,52 +328,220 @@ export default function ConfigurationRulesPage() {
               <button
                 type="button"
                 onClick={() => setWindows((prev) => [...prev, { ...EMPTY_WINDOW }])}
-                className="mt-3 flex min-h-[32px] items-center gap-1.5 rounded-lg border border-dashed border-slate-300 px-3 text-xs font-extrabold text-slate-500 transition hover:border-[#0077b6] hover:text-[#0077b6]"
+                className="mt-3 flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-3.5 text-xs font-extrabold text-slate-500 transition hover:border-[#0077b6] hover:text-[#0077b6]"
               >
                 <Plus size={14} /> Add break window
               </button>
-            </section>
+            </SectionCard>
 
             {/* Max record duration */}
-            <section className="rounded-xl border border-slate-300 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-extrabold text-slate-900">Max Record Duration</h2>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SectionCard
+              icon={SlidersHorizontal}
+              title="Max Record Duration"
+              subtitle="One timesheet/machine record may not exceed this — longer records are cut, the rest is ignored."
+            >
+              <div className="flex flex-wrap items-center gap-3">
                 <input
                   type="number"
                   min={1}
                   value={maxMinutes}
                   onChange={(e) => setMaxMinutes(Number(e.target.value) || 0)}
-                  className="h-8 w-24 rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                  className="h-10 w-28 rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
                 />
-                <span className="text-xs font-semibold text-slate-500">minutes per record — longer records are cut, the rest is ignored</span>
+                <span className="text-sm font-bold text-slate-700">minutes</span>
+                <span className="ml-auto rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-500">
+                  applied in SAP staging
+                </span>
               </div>
-            </section>
+            </SectionCard>
+
+            {/* Hub navigation visibility */}
+            <SectionCard
+              icon={Eye}
+              title="Operations Hub Navigation"
+              subtitle="Hide menu items from the Operations Hub sidebar. Visual only — access & permissions are unchanged."
+            >
+              <div className="space-y-4">
+                {menuGroups.map(([group, items]) => (
+                  <div key={group}>
+                    <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                      {group}
+                    </p>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {items.map((item) => {
+                        const hidden = hiddenMenus.includes(item.path);
+                        const IconComponent = item.icon;
+                        return (
+                          <div
+                            key={item.path}
+                            className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                              hidden
+                                ? 'border-slate-200 bg-slate-50 opacity-55'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
+                            }`}
+                          >
+                            <span
+                              className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
+                                hidden ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-[#0077b6]'
+                              }`}
+                            >
+                              {IconComponent && <IconComponent size={15} />}
+                            </span>
+                            <span
+                              className={`min-w-0 flex-1 truncate text-xs font-bold ${
+                                hidden ? 'text-slate-400 line-through' : 'text-slate-700'
+                              }`}
+                            >
+                              {item.title}
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                              {hidden && (
+                                <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-slate-500">
+                                  Hidden
+                                </span>
+                              )}
+                              <Toggle
+                                checked={!hidden}
+                                onChange={() => toggleMenuHidden(item.path)}
+                                label={`Show ${item.title} in hub`}
+                              />
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+                <p className="text-[11px] font-bold text-amber-700">
+                  Hidden items stay hidden only in this browser (per user). Nothing is deleted or disabled.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { setHiddenMenus([]); localStorage.setItem(HUB_HIDDEN_MENUS_KEY, '[]'); }}
+                  className="flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 text-[11px] font-extrabold text-amber-700 shadow-sm transition hover:bg-amber-100"
+                >
+                  <EyeOff size={13} /> Show all
+                </button>
+              </div>
+            </SectionCard>
+
+            {/* Config palsu — tidak berpengaruh apa pun */}
+            <SectionCard
+              icon={Settings2}
+              title="General Settings"
+              subtitle="Informational preferences — these do not affect the system."
+              accent="#64748b"
+            >
+              <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">Max shift hours</p>
+                    <p className="text-[10px] font-semibold text-slate-400">Display preference</p>
+                  </div>
+                  <input
+                    type="number"
+                    min={1}
+                    value={fake.max_shift_hours}
+                    onChange={(e) => updateFake('max_shift_hours', Number(e.target.value) || 0)}
+                    className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">Check-in grace period</p>
+                    <p className="text-[10px] font-semibold text-slate-400">minutes</p>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    value={fake.grace_minutes}
+                    onChange={(e) => updateFake('grace_minutes', Number(e.target.value) || 0)}
+                    className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">Auto refresh</p>
+                    <p className="text-[10px] font-semibold text-slate-400">seconds</p>
+                  </div>
+                  <input
+                    type="number"
+                    min={5}
+                    value={fake.auto_refresh_seconds}
+                    onChange={(e) => updateFake('auto_refresh_seconds', Number(e.target.value) || 0)}
+                    className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">Language</p>
+                    <p className="text-[10px] font-semibold text-slate-400">Interface</p>
+                  </div>
+                  <select
+                    value={fake.language}
+                    onChange={(e) => updateFake('language', e.target.value)}
+                    className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                  >
+                    <option value="id">Bahasa Indonesia</option>
+                    <option value="en">English</option>
+                  </select>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">Notify on SAP post</p>
+                    <p className="text-[10px] font-semibold text-slate-400">Notification</p>
+                  </div>
+                  <Toggle
+                    checked={fake.notify_on_post}
+                    onChange={(v) => updateFake('notify_on_post', v)}
+                    label="Notify on SAP post"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">Notify on failed post</p>
+                    <p className="text-[10px] font-semibold text-slate-400">Notification</p>
+                  </div>
+                  <Toggle
+                    checked={fake.notify_on_failed}
+                    onChange={(v) => updateFake('notify_on_failed', v)}
+                    label="Notify on failed post"
+                  />
+                </div>
+              </div>
+            </SectionCard>
 
             {/* Rebuild pending */}
-            <section className="rounded-xl border border-slate-300 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-extrabold text-slate-900">Rebuild Pending Queue</h2>
-              <p className="mt-0.5 text-xs font-semibold text-slate-500">
-                Re-stage PENDING bundles from a start date with the current rules (posted rows untouched).
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SectionCard
+              icon={RefreshCw}
+              title="Rebuild Pending Queue"
+              subtitle="Re-stage PENDING bundles from a start date with the current rules. Posted rows are never touched."
+              accent="#059669"
+            >
+              <div className="flex flex-wrap items-center gap-3">
                 <input
                   type="date"
                   value={rebuildDate}
                   max={new Date().toISOString().slice(0, 10)}
                   onChange={(e) => setRebuildDate(e.target.value)}
-                  className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                  className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700"
                 />
                 <button
                   type="button"
                   onClick={handleRebuild}
                   disabled={rebuilding}
-                  className="flex min-h-[32px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-9 items-center gap-1.5 rounded-xl bg-[#0077b6] px-3.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {rebuilding ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                   Rebuild pending
                 </button>
+                <span className="ml-auto rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                  runs via sap-ops-worker
+                </span>
               </div>
-            </section>
+            </SectionCard>
           </>
         )}
       </main>
