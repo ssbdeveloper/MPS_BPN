@@ -62,16 +62,16 @@ function Toggle({ checked, onChange, label }) {
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors duration-200 ${
-        checked ? 'bg-[#0077b6]' : 'bg-slate-200'
+      className={`relative inline-flex h-6 w-10 flex-shrink-0 items-center rounded-full border transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/30 ${
+        checked ? 'border-[#0077b6] bg-[#0077b6]' : 'border-slate-400 bg-slate-200'
       }`}
       role="switch"
       aria-checked={checked}
       aria-label={label}
     >
       <span
-        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ${
-          checked ? 'translate-x-[22px]' : 'translate-x-0.5'
+        className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+          checked ? 'translate-x-4' : 'translate-x-0'
         }`}
       />
     </button>
@@ -81,8 +81,8 @@ function Toggle({ checked, onChange, label }) {
 function SectionCard({ icon: Icon, title, subtitle, children, accent = '#0077b6' }) {
   const IconComponent = Icon;
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
-      <header className="flex items-center gap-3 border-b border-slate-200 bg-slate-50/60 px-5 py-3.5">
+    <section className="overflow-hidden rounded-2xl border border-slate-400/60 bg-white shadow-sm">
+      <header className="flex items-center gap-3 border-b border-slate-300 bg-slate-50/60 px-5 py-3.5">
         <span
           className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-white shadow-sm"
           style={{ background: accent }}
@@ -226,7 +226,7 @@ export default function ConfigurationRulesPage() {
           <button
             type="button"
             onClick={() => navigate('/operations-hub')}
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-600 shadow-sm transition hover:border-[#90e0ef] hover:bg-cyan-50 hover:text-[#0077b6]"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-slate-400 bg-white text-slate-600 shadow-sm transition hover:border-[#90e0ef] hover:bg-cyan-50 hover:text-[#0077b6]"
             title="Back to Operations Hub"
             aria-label="Back to Operations Hub"
           >
@@ -243,7 +243,7 @@ export default function ConfigurationRulesPage() {
           <button
             type="button"
             onClick={load}
-            className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm transition hover:bg-slate-50"
+            className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-400 bg-white px-3 text-xs font-extrabold text-slate-600 shadow-sm transition hover:bg-slate-50"
           >
             <RefreshCw size={14} /> Refresh
           </button>
@@ -275,21 +275,21 @@ export default function ConfigurationRulesPage() {
               >
                 <div className="space-y-3">
                   {windows.map((w, index) => (
-                    <div key={index} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 transition hover:border-slate-300">
+                    <div key={index} className="rounded-xl border border-slate-300 bg-slate-50/70 p-3.5 transition hover:border-slate-400">
                       <div className="flex flex-wrap items-center gap-3">
                         <div className="flex items-center gap-2">
                           <input
                             type="time"
                             value={w.start}
                             onChange={(e) => updateWindow(index, { start: e.target.value })}
-                            className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                            className="h-9 rounded-lg border border-slate-400 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
                           />
                           <span className="text-xs font-bold text-slate-400">to</span>
                           <input
                             type="time"
                             value={w.end}
                             onChange={(e) => updateWindow(index, { end: e.target.value })}
-                            className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                            className="h-9 rounded-lg border border-slate-400 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
                           />
                         </div>
                         <div className="flex flex-wrap items-center gap-1">
@@ -300,10 +300,10 @@ export default function ConfigurationRulesPage() {
                                 key={d.value}
                                 type="button"
                                 onClick={() => toggleDay(index, d.value)}
-                                className={`min-h-[28px] rounded-lg px-2.5 text-[11px] font-extrabold transition ${
+                                className={`min-h-[28px] rounded-lg border px-2.5 text-[11px] font-extrabold transition ${
                                   active
-                                    ? 'bg-[#0077b6] text-white shadow-sm'
-                                    : 'border border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
+                                    ? 'border-[#0077b6] bg-[#0077b6] text-white shadow-sm'
+                                    : 'border-slate-400 bg-white text-slate-500 hover:border-[#0077b6] hover:text-[#0077b6]'
                                 }`}
                               >
                                 {d.label}
@@ -330,7 +330,7 @@ export default function ConfigurationRulesPage() {
                 <button
                   type="button"
                   onClick={() => setWindows((prev) => [...prev, { ...EMPTY_WINDOW }])}
-                  className="mt-3 flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-3.5 text-xs font-extrabold text-slate-500 transition hover:border-[#0077b6] hover:text-[#0077b6]"
+                  className="mt-3 flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-slate-400 px-3.5 text-xs font-extrabold text-slate-500 transition hover:border-[#0077b6] hover:text-[#0077b6]"
                 >
                   <Plus size={14} /> Add break window
                 </button>
@@ -354,7 +354,7 @@ export default function ConfigurationRulesPage() {
                       min={1}
                       value={fake.max_shift_hours}
                       onChange={(e) => updateFake('max_shift_hours', Number(e.target.value) || 0)}
-                      className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                      className="h-9 w-20 rounded-lg border border-slate-400 bg-white px-2 text-xs font-bold text-slate-700"
                     />
                   </div>
                   <div className="flex items-center justify-between gap-3">
@@ -367,7 +367,7 @@ export default function ConfigurationRulesPage() {
                       min={0}
                       value={fake.grace_minutes}
                       onChange={(e) => updateFake('grace_minutes', Number(e.target.value) || 0)}
-                      className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                      className="h-9 w-20 rounded-lg border border-slate-400 bg-white px-2 text-xs font-bold text-slate-700"
                     />
                   </div>
                   <div className="flex items-center justify-between gap-3">
@@ -380,7 +380,7 @@ export default function ConfigurationRulesPage() {
                       min={5}
                       value={fake.auto_refresh_seconds}
                       onChange={(e) => updateFake('auto_refresh_seconds', Number(e.target.value) || 0)}
-                      className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                      className="h-9 w-20 rounded-lg border border-slate-400 bg-white px-2 text-xs font-bold text-slate-700"
                     />
                   </div>
                   <div className="flex items-center justify-between gap-3">
@@ -391,7 +391,7 @@ export default function ConfigurationRulesPage() {
                     <select
                       value={fake.language}
                       onChange={(e) => updateFake('language', e.target.value)}
-                      className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                      className="h-9 rounded-lg border border-slate-400 bg-white px-2 text-xs font-bold text-slate-700"
                     >
                       <option value="id">Bahasa Indonesia</option>
                       <option value="en">English</option>
@@ -437,7 +437,7 @@ export default function ConfigurationRulesPage() {
                     min={1}
                     value={maxMinutes}
                     onChange={(e) => setMaxMinutes(Number(e.target.value) || 0)}
-                    className="h-10 w-28 rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                    className="h-10 w-28 rounded-xl border border-slate-400 bg-white px-3 text-sm font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
                   />
                   <span className="text-sm font-bold text-slate-700">minutes</span>
                   <span className="mt-1 w-full rounded-full bg-slate-100 px-2.5 py-1 text-center text-[11px] font-bold text-slate-500">
@@ -459,7 +459,7 @@ export default function ConfigurationRulesPage() {
                     value={rebuildDate}
                     max={new Date().toISOString().slice(0, 10)}
                     onChange={(e) => setRebuildDate(e.target.value)}
-                    className="h-9 flex-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700"
+                    className="h-9 flex-1 rounded-lg border border-slate-400 bg-white px-2.5 text-xs font-bold text-slate-700"
                   />
                   <button
                     type="button"
@@ -499,8 +499,8 @@ export default function ConfigurationRulesPage() {
                               key={item.path}
                               className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
                                 hidden
-                                  ? 'border-slate-200 bg-slate-50 opacity-55'
-                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                                  ? 'border-slate-300 bg-slate-50 opacity-55'
+                                  : 'border-slate-300 bg-white hover:border-slate-400'
                               }`}
                             >
                               <span
