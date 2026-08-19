@@ -67,10 +67,13 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       FROM jsonb_array_elements(%s::jsonb) AS bw
       CROSS JOIN LATERAL jsonb_array_elements_text(bw -> 'days') AS d(day)
     ),
-    -- Durasi EFEKTIF per record: durasi asli DIKURANGI overlap jam istirahat
-    -- (break windows, HANYA untuk record produktif = activitytype kosong), lalu
-    -- DICAP di max_record_minutes. Record yang SELURUHNYA di jam istirahat
-    -- (efektif <= 0) dianggap tidak valid dan diabaikan (keputusan user 3/4).
+    -- Durasi EFEKTIF per record:
+    --   • record PRODUKTIF (activitytype kosong) -> dihitung PENUH (break bukan
+    --     exclusion window untuk productive activity; hanya dicap max_record_minutes)
+    --   • record NON-PRODUKTIF (activitytype terisi) -> overlap jam istirahat
+    --     DIKURANGI; record yang SELURUHNYA di jam istirahat (efektif <= 0)
+    --     dianggap tidak valid dan diabaikan
+    -- (Koreksi 2026-08-19: sebelumnya break memotong productive — SALAH.)
     -- IEDD/IEDZ jadi SINTETIS = checkin + durasi efektif (filosofi MCH: yang
     -- akurat adalah durasi, bukan jendela waktu aslinya).
     base AS (
@@ -97,7 +100,8 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       ) un ON TRUE
       LEFT JOIN LATERAL (
         -- Overlap record dengan break windows, per hari (record bisa lintas tengah
-        -- malam — night shift 23:00-07:00). Hanya untuk record PRODUKTIF.
+        -- malam — night shift 23:00-07:00). Hanya untuk record NON-PRODUKTIF
+        -- (activitytype terisi); productive tidak pernah dipotong break.
         SELECT SUM(EXTRACT(EPOCH FROM (
           LEAST(seg_end, day_bucket + bw.end_t)
             - GREATEST(seg_start, day_bucket + bw.start_t)
@@ -114,7 +118,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         ) seg
         CROSS JOIN break_windows bw
         WHERE EXTRACT(DOW FROM g.day_bucket) = bw.dow
-          AND COALESCE(t.activitytype, '') = ''
+          AND COALESCE(t.activitytype, '') <> ''
           AND seg.seg_start < g.day_bucket + bw.end_t
           AND seg.seg_end > g.day_bucket + bw.start_t
       ) b ON TRUE
@@ -158,7 +162,8 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       CASE WHEN COALESCE(activitytype, '') <> '' THEN activitytype ELSE '' END AS lstar,
       TO_CHAR(longdate_checkin AT TIME ZONE %s, 'YYYYMMDD') AS isdd,
       TO_CHAR(longdate_checkin AT TIME ZONE %s, 'HH24MISS') AS isdz,
-      -- IEDD/IEDZ SINTETIS: checkin + durasi efektif (sudah dipotong istirahat & cap).
+      -- IEDD/IEDZ SINTETIS: checkin + durasi efektif (non-produktif dipotong
+      -- istirahat; produktif tetap penuh; keduanya di-cap).
       TO_CHAR((longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
       TO_CHAR((longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
       '' AS aueru,

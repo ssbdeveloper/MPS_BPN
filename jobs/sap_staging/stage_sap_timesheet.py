@@ -269,11 +269,14 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         AND COALESCE(end_effective, enddatetime) > %s
         __SEGMENT_PROVENANCE_FILTER__
     ),
-    -- BREAK WINDOWS (rules config, 2026-08-19): jam istirahat yang TIDAK dihitung.
-    -- `days` = DOW Postgres (0=Sunday..6=Saturday). Berlaku HANYA untuk segmen
-    -- PRODUKTIF (keputusan user 3: "tidak dianggap jika status bukan produktif").
-    -- Segmen yang overlap break dikurangi durasinya; segmen yang habis (<= 0)
-    -- dianggap tidak valid dan diabaikan.
+    -- BREAK WINDOWS (rules config, 2026-08-19): jam istirahat menentukan aktivitas
+    -- NON-PRODUKTIF yang terjadi di dalam break = INVALID (tidak dihitung).
+    -- `days` = DOW Postgres (0=Sunday..6=Saturday).
+    --   • segmen PRODUKTIF (M1/M2) yang overlap break -> TETAP dihitung penuh (VALID)
+    --   • segmen NON-produktif yang overlap break -> bagian break dikurangi;
+    --     segmen yang habis (<= 0) dianggap tidak valid dan diabaikan
+    -- (Koreksi 2026-08-19: sebelumnya break memotong productive — SALAH terhadap
+    --  requirement bisnis. Break BUKAN exclusion window untuk productive activity.)
     break_windows AS (
       SELECT
         (bw ->> 'start')::time AS start_t,
@@ -304,12 +307,13 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     segments AS (
       SELECT
         s.*,
-        -- Durasi mentah segmen sebelum dipotong jam istirahat.
+        -- Durasi mentah segmen.
         EXTRACT(EPOCH FROM (segment_end - segment_start))::bigint AS segment_seconds,
         -- Potongan jam istirahat (rules config): overlap segmen dengan break window
-        -- pada hari itu, HANYA untuk segmen PRODUKTIF (M1/M2 — status_activitytype
-        -- sudah dipromosikan idle-pendek ke M2 di source_rows). Non-produktif
-        -- (LSTAR) tidak dipotong (keputusan user 3).
+        -- pada hari itu, HANYA untuk segmen NON-PRODUKTIF (bukan M1/M2).
+        -- Segmen PRODUKTIF (M1/M2, termasuk idle-pendek yang dipromosikan ke M2 di
+        -- source_rows) TIDAK dipotong walau overlap break — break bukan exclusion
+        -- window untuk productive activity (koreksi requirement 2026-08-19).
         COALESCE((
           SELECT SUM(EXTRACT(EPOCH FROM (
             LEAST(s.segment_end, s.day_bucket + bw.end_t)
@@ -317,7 +321,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
           ))::bigint)
           FROM break_windows bw
           WHERE EXTRACT(DOW FROM s.day_bucket) = bw.dow
-            AND s.status_activitytype IN ('M1', 'M2')
+            AND s.status_activitytype NOT IN ('M1', 'M2')
             -- overlap positif: segmen menyentuh window break
             AND s.segment_start < s.day_bucket + bw.end_t
             AND s.segment_end > s.day_bucket + bw.start_t
@@ -325,8 +329,9 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
       FROM split_rows s
       WHERE segment_end > segment_start
     ),
-    -- Segmen yang SELURUHNYA berada di jam istirahat (durasi efektif <= 0)
-    -- dianggap tidak valid dan diabaikan (keputusan user 3).
+    -- Segmen NON-PRODUKTIF yang SELURUHNYA berada di jam istirahat (durasi efektif
+    -- <= 0) dianggap tidak valid dan diabaikan. Segmen produktif tidak pernah kena
+    -- potongan (break_seconds = 0), jadi selalu lolos.
     valid_segments AS (
       SELECT
         *,
@@ -375,7 +380,8 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         COUNT(*)::integer AS source_row_count,
         MIN(segment_start) AS source_min_start,
         MAX(segment_end) AS source_max_end,
-        -- Durasi bundel = jumlah durasi EFEKTIF (sudah dipotong jam istirahat).
+        -- Durasi bundel = jumlah durasi EFEKTIF (segmen non-produktif sudah
+        -- dipotong jam istirahat; segmen produktif tetap penuh).
         SUM(effective_seconds)::bigint AS total_seconds,
         -- Provenance: segmen sumber pembentuk bundel ini (proddataid + detik).
         -- Ditulis ke sap_staging_source; jangkar guard anti-double-post — lihat

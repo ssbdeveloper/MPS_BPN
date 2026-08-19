@@ -12,11 +12,23 @@ User minta halaman "Configuration Rules" untuk mengatur logic pipeline SAP
 (break hours & max record). Keputusan user (1b 2a 3 4 5):
 - **1b**: simpan rules di `plant_config.sap_rules` JSONB (kolom sudah ada, tadinya `{}`).
 - **2a**: max record = 90 menit (default, configurable).
-- **3**: record/segmen yang berada di jam istirahat dianggap TIDAK VALID (diabaikan);
-  break windows hanya dipotong dari record PRODUKTIF (MCH: status_activitytype M1/M2,
-  TIMESHEET: activitytype kosong).
+- **3**: break hours menentukan aktivitas NON-PRODUKTIF yang terjadi di dalam break
+  = INVALID (tidak dihitung). **Productive activity TIDAK dipotong walau overlap
+  break** — break bukan exclusion window untuk productive (koreksi 2026-08-19,
+  implementasi awal salah arah: memotong productive. Sudah diperbaiki).
 - **4**: IEDD/IEDZ TIMESHEET jadi SINTETIS = checkin + durasi efektif (filosofi MCH).
 - **5**: tombol rebuild antrian PENDING dengan pilihan tanggal mulai.
+
+### Logika break yang benar (verified live, kasus uji dari user)
+
+| Kasus | Hasil |
+|---|---|
+| productive 11:30→13:30 (overlap break 12-13) | **120 menit penuh**, VALID — break TIDAK dipotong |
+| non-productive 12:30→13:00 (di dalam break) | 0 menit, INVALID — dibuang |
+| non-productive 11:30→12:30 (melintasi break) | 30 menit (hanya bagian di luar break) |
+| Segmen: 11:30-12:00 prod, 12:00-12:30 prod, 12:30-13:00 nonprod, 13:00-13:30 prod | 30+30+0+30 = **90 menit productive** |
+
+Konsep: `if is_productive: duration = original_duration; else: duration = duration_outside_breaks`.
 
 ## Temuan data BPN (sebelum implementasi)
 
@@ -55,12 +67,16 @@ User minta halaman "Configuration Rules" untuk mengatur logic pipeline SAP
 - `stage_sap_timesheet.py` (MCH bundling):
   - `source_rows`: CAP per record — `LEAST(end_effective, start + max_minutes)`.
   - CTE `break_windows` (dari JSON rules) + `segments`: hitung `break_seconds`
-    (overlap segmen dengan window, HANYA M1/M2), `valid_segments` membuang segmen
-    efektif <= 0, `bundled` pakai `SUM(effective_seconds)`.
+    (overlap segmen dengan window, HANYA segmen NON-produktif / bukan M1-M2),
+    `valid_segments` membuang segmen non-produktif yang habis (efektif <= 0);
+    segmen PRODUKTIF break_seconds=0 → selalu lolos & penuh. `bundled` pakai
+    `SUM(effective_seconds)`.
   - `fetch_machine_hour_rows` load rules + kirim param (max_minutes, break_windows_json).
 - `stage_timesheet_transaction.py` (TIMESHEET): CTE `break_windows` + `base` +
-  `effective` — raw_seconds − break_seconds (produktif saja), cap max_minutes,
-  `WHERE effective_seconds > 0`, IEDD/IEDZ = checkin + effective_seconds (SINTETIS),
+  `effective` — break overlap DIKURANGI hanya untuk record NON-produktif
+  (activitytype terisi); record PRODUKTIF (activitytype kosong) dihitung PENUH;
+  keduanya di-cap max_minutes; `WHERE effective_seconds > 0` (non-produktif yang
+  seluruhnya di break dibuang), IEDD/IEDZ = checkin + effective_seconds (SINTETIS),
   `source_max_end` ikut sintetis.
 - `rebuild_pending.py` (BARU): rebuild MCH (`rebuild_machinehours.py --from X --to Y`)
   + TIMESHEET (`stage_timesheet_transaction.py --from-ts/--to-ts`) dari tanggal pilihan
@@ -90,9 +106,10 @@ User minta halaman "Configuration Rules" untuk mengatur logic pipeline SAP
 - Python: py_compile 3 script; `stage_timesheet_transaction.py --dry-run` 724 rows OK;
   `stage_sap_timesheet.py mchours --dry-run` 56 rows OK; `rebuild_pending.py --dry-run`
   menjalankan 2 sub-perintah OK.
-- Break overlap terverifikasi live: record produktif melintasi 12:00-13:00 dipotong
-  tepat 3600 dtk; record berakhir tepat 12:00 overlap 3 dtk; record non-produktif
-  (activitytype 1590) TIDAK dipotong.
+- Break overlap terverifikasi live: record produktif melintasi 12:00-13:00 = 120 menit
+  penuh (break tidak dipotong); non-produktif di dalam break = 0 (dibuang);
+  non-produktif melintasi break = hanya bagian di luar break; segmentasi 4 segmen
+  (30+30+0+30) = 90 menit productive — semua sesuai contoh wajib user.
 - API: GET/PUT /config/rules 200 (PUT tulis test-hermes ke DB, GET balik sama);
   enqueue rebuild_pending 202, tanpa from_date 400, action unknown 400; cleanup OK.
 - FE: eslint 0 error baru (1 pre-existing di router NotFoundPage, bukan dari sesi ini),
