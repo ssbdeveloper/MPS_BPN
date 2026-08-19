@@ -71,6 +71,64 @@ def plant_code() -> str:
     return env_value("PLANT_SSB")
 
 
+def load_sap_rules(conn) -> dict:
+    """Rules SAP dari plant_config.sap_rules (kolom JSONB, diatur dari halaman
+    Configuration Rules). Fallback ke default bila baris/kunci belum ada.
+
+    Struktur:
+      {
+        "break_windows": [ {"start": "12:00", "end": "13:00", "days": [1,2,3,4,5,6,0]}, ... ],
+        "max_record_minutes": 90
+      }
+    `days` = DOW Postgres (0=Sunday..6=Saturday). break windows TIDAK dihitung
+    dari durasi record PRODUKTIF; max_record_minutes membatasi durasi SATU record
+    source (lebih dari itu dipotong, sisanya tidak dianggap).
+    """
+    DEFAULT_RULES = {
+        "break_windows": [
+            {"start": "12:00", "end": "13:00", "days": [1, 2, 3, 4, 5, 6, 0]},
+            {"start": "00:00", "end": "01:00", "days": [1, 2, 3, 4, 5]},
+            {"start": "18:30", "end": "19:00", "days": [6, 0]},
+            {"start": "22:00", "end": "22:30", "days": [6, 0]},
+        ],
+        "max_record_minutes": 90,
+    }
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sap_rules FROM public.plant_config WHERE id = 1 LIMIT 1"
+            )
+            row = cur.fetchone()
+        raw = (row[0] if row else None) or {}
+        rules = dict(DEFAULT_RULES)
+        rules.update({k: v for k, v in raw.items() if v is not None})
+        if not isinstance(rules.get("break_windows"), list):
+            rules["break_windows"] = list(DEFAULT_RULES["break_windows"])
+        try:
+            rules["max_record_minutes"] = max(1, int(rules.get("max_record_minutes") or 90))
+        except (TypeError, ValueError):
+            rules["max_record_minutes"] = DEFAULT_RULES["max_record_minutes"]
+        return rules
+    except Exception as exc:  # plant_config belum ada / tak bisa dibaca -> default aman
+        logging.getLogger("sap_staging").warning(
+            "load_sap_rules fallback ke default (%s)", exc
+        )
+        return dict(DEFAULT_RULES)
+
+
+def load_sap_rules_default() -> dict:
+    """Default rules tanpa koneksi DB (dipakai saat load_sap_rules gagal)."""
+    return {
+        "break_windows": [
+            {"start": "12:00", "end": "13:00", "days": [1, 2, 3, 4, 5, 6, 0]},
+            {"start": "00:00", "end": "01:00", "days": [1, 2, 3, 4, 5]},
+            {"start": "18:30", "end": "19:00", "days": [6, 0]},
+            {"start": "22:00", "end": "22:30", "days": [6, 0]},
+        ],
+        "max_record_minutes": 90,
+    }
+
+
 def app_timezone() -> str:
     # Configured once in the root .env (TIMEZONE). The default must match the rest of the
     # codebase (apps/api/config/timezone.js) — a divergent default silently shifts day

@@ -216,6 +216,10 @@ const MANIFEST = [
   // owner kalau maunya senada dengan gate halaman.
   { m: 'POST',   p: '/dashboard/machine-hours-override',      f: 'machine_hours', a: W },
 
+  // ---- Configuration Rules (/config/rules) — break hours + max record untuk
+  // pipeline SAP. Halaman FE /config-rules (feature `config_rules`). B-2026-08-19.
+  { m: 'PUT',    p: '/config/rules',                           f: 'config_rules', a: W },
+
   // ---- EWS (/ews) ----
   { m: 'PUT',    p: '/ews/issue-log/:id/resolve',             f: 'ews', a: W },
   { m: 'POST',   p: '/ews/issue-log/generate',                f: 'ews', a: W },

@@ -42,6 +42,9 @@ COMMANDS = {
     "retry_failed":  [sys.executable, "post_sap_staging.py", "--failed-only"],
     # post_corrections: perintah dilengkapi --ids dari params saat runtime (build_command).
     "post_corrections": [sys.executable, "post_sap_staging.py"],
+    # rebuild_pending: rebuild antrian PENDING (MCH + TIMESHEET) dari tanggal pilihan
+    # setelah rules config (break hours / max record) berubah. --from/--to dari params.
+    "rebuild_pending": [sys.executable, "rebuild_pending.py"],
 }
 
 # Batas waktu per aksi (detik). Posting ke SAP bisa lambat (~2 dtk/baris + retry).
@@ -49,11 +52,13 @@ TIMEOUTS = {
     "stage_catchup": 900,
     "retry_failed": 1800,
     "post_corrections": 1800,
+    "rebuild_pending": 3600,
 }
 
 
 def build_command(action: str, params: dict) -> list | None:
-    """Perintah untuk sebuah aksi. post_corrections butuh --ids dari params."""
+    """Perintah untuk sebuah aksi. post_corrections butuh --ids dari params;
+    rebuild_pending butuh --from (tanggal mulai)."""
     base = COMMANDS.get(action)
     if base is None:
         return None
@@ -63,6 +68,11 @@ def build_command(action: str, params: dict) -> list | None:
             return None
         # --allow-posted TIDAK dipakai: koreksi masih PENDING. Guard poster tetap jalan.
         return base + ["--ids", ",".join(ids), "--workers", "3"]
+    if action == "rebuild_pending":
+        from_date = str((params or {}).get("from_date", "")).strip()
+        if not from_date:
+            return None
+        return base + ["--from", from_date]
     return base
 
 

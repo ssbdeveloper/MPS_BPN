@@ -44,6 +44,7 @@ export const FEATURES = {
   machine_hours:        { id: 'machine_hours',         label: 'Machine Hours',       module: 'Machine',   routes: ['/machine-hours-sqlserver', '/machine-hours-validation', '/process-control', '/edit-parameter'] },
   nfc_users:            { id: 'nfc_users',             label: 'NFC Users',           module: 'Timesheet', routes: ['/nfc-users', '/create-edit-nfc'] },
   sap_log:              { id: 'sap_log',               label: 'SAP Log',             module: 'Core',      routes: ['/sap-log'] },
+  config_rules:         { id: 'config_rules',          label: 'Configuration Rules',  module: 'Core',      routes: ['/config-rules'] },
 
   manage_users:         { id: 'manage_users',          label: 'Manage Users',        module: 'Admin',     routes: ['/manage-users', '/manage-user'] },
 };

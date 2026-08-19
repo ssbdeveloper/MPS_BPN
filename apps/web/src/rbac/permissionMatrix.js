@@ -54,6 +54,7 @@ export const PERMISSION_MATRIX = {
     roster_operator: LEVELS.FULL_ACCESS,
     manage_users: LEVELS.NO_ACCESS,
     ms_project_admin: LEVELS.NO_ACCESS,
+    config_rules: LEVELS.FULL_ACCESS,
   },
 
   foreman: {

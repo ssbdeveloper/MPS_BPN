@@ -85,6 +85,10 @@ const router = createBrowserRouter([
     lazy: page(() => import('../pages/SapLogPage')),
   },
   {
+    path: '/config-rules',
+    lazy: guardedPage(() => import('../pages/ConfigurationRulesPage'), 'config_rules'),
+  },
+  {
     path: '/order-progress-dashboard',
     lazy: page(() => import('../pages/OrderProgressDashboardPage')),
   },

@@ -980,13 +980,22 @@ async function saveMachineHoursOverride(req, res) {
 // API TIDAK menjalankan Python — worker (ops_worker.py) yang mengeksekusi. Lihat migration
 // 20260715_sap_ops_request untuk alasannya.
 async function enqueueSapOps(req, res) {
-  const ALLOWED = new Set(["stage_catchup", "retry_failed"]);
+  const ALLOWED = new Set(["stage_catchup", "retry_failed", "rebuild_pending"]);
   try {
     const action = String(req.body?.action || "").trim();
     if (!ALLOWED.has(action)) {
       return res.status(400).json({ error: `Unknown action: ${action || "(empty)"}` });
     }
     const requestedBy = req.header("x-user-id") || null;
+    const params = req.body?.params && typeof req.body.params === "object" ? req.body.params : {};
+
+    // Validasi param wajib rebuild_pending: tanggal mulai (YYYY-MM-DD).
+    if (action === "rebuild_pending") {
+      const fromDate = String(params.from_date || "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+        return res.status(400).json({ error: "from_date (YYYY-MM-DD) is required for rebuild_pending" });
+      }
+    }
 
     // Self-heal: buang QUEUED basi (>15 mnt tak diproses = worker tak konsumsi antrian)
     // supaya tombol tak 409 selamanya kalau ops_worker mati/salah DB. RUNNING tidak
@@ -1001,10 +1010,10 @@ async function enqueueSapOps(req, res) {
     let result;
     try {
       result = await pool.query(
-        `INSERT INTO public.sap_ops_request (action, requested_by)
-         VALUES ($1, $2)
+        `INSERT INTO public.sap_ops_request (action, params, requested_by)
+         VALUES ($1, $2, $3)
          RETURNING id, action, status, requested_at`,
-        [action, requestedBy]
+        [action, params, requestedBy]
       );
     } catch (err) {
       if (err.code === "23505") {

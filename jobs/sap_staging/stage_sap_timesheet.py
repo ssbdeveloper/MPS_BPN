@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timedelta
 
@@ -12,6 +13,8 @@ from sap_staging_common import (
     connect_staging,
     ensure_staging_schema,
     insert_staging_rows,
+    load_sap_rules,
+    load_sap_rules_default,
     parse_csv_ints,
     ph3_order_table,
     plant_code,
@@ -126,11 +129,29 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     if not werks:
         raise ValueError("PLANT_SSB is required for machine-hour staging")
 
+    # Rules config (plant_config.sap_rules) — cap per record + jam istirahat.
+    rules = {}
+    try:
+        with connect_source() as conn:
+            rules = load_sap_rules(conn)
+    except Exception as exc:  # pragma: no cover — fallback aman ke default
+        log.warning("fetch_machine_hour_rows: load_sap_rules gagal, pakai default (%s)", exc)
+        rules = load_sap_rules_default()
+    break_windows_json = json.dumps(rules.get("break_windows", []))
+    max_minutes = int(rules.get("max_record_minutes", 90))
+
     sql = """
     WITH source_rows AS (
       SELECT
         proddataid,
         startdatetime,
+        -- CAP PER RECORD (rules config, 2026-08-19): 1 record mch_transaction maksimal
+        -- N menit (default 90). Lebih dari itu ekor record DIPOTONG di start + N menit,
+        -- sisanya tidak dianggap. Berlaku untuk SEMUA status (bukan hanya produktif).
+        LEAST(
+          COALESCE(end_effective, enddatetime),
+          startdatetime + (%s::int || ' minutes')::interval
+        ) AS enddatetime,
         -- LAPIS 1B — pakai akhir interval yang SUDAH dinormalisasi, bukan enddatetime mentah.
         -- end_effective = LEAST(enddatetime, start baris berikutnya di mesin yang sama), diisi
         -- oleh etl_mch_transaction_v3.recompute_end_effective. Tanpa ini, baris "nyangkut"
@@ -145,7 +166,8 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         --
         -- Alias tetap `enddatetime` supaya seluruh CTE di bawah (split per hari, segments,
         -- bundling) ikut memakai nilai terpotong tanpa perlu disentuh satu per satu.
-        COALESCE(end_effective, enddatetime) AS enddatetime,
+        -- (CATATAN: LEAST(end_effective, enddatetime) yang dulu ada di sini TIDAK dihapus —
+        --  diganti LEAST dengan cap di atas, yang juga memotong end_effective bila melebihi cap.)
         sn_employee,
         un.employee_category,
         confirmation_number,
@@ -247,6 +269,19 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         AND COALESCE(end_effective, enddatetime) > %s
         __SEGMENT_PROVENANCE_FILTER__
     ),
+    -- BREAK WINDOWS (rules config, 2026-08-19): jam istirahat yang TIDAK dihitung.
+    -- `days` = DOW Postgres (0=Sunday..6=Saturday). Berlaku HANYA untuk segmen
+    -- PRODUKTIF (keputusan user 3: "tidak dianggap jika status bukan produktif").
+    -- Segmen yang overlap break dikurangi durasinya; segmen yang habis (<= 0)
+    -- dianggap tidak valid dan diabaikan.
+    break_windows AS (
+      SELECT
+        (bw ->> 'start')::time AS start_t,
+        (bw ->> 'end')::time AS end_t,
+        d.day::int AS dow
+      FROM jsonb_array_elements(%s::jsonb) AS bw
+      CROSS JOIN LATERAL jsonb_array_elements_text(bw -> 'days') AS d(day)
+    ),
     -- BUNDLING PER HARI (aturan owner 2026-07-16): dulu per JAM, tapi pemecahan per jam
     -- melahirkan pecahan sub-menit di batas jam yang ditolak SAP (< 1 menit) dan terbuang.
     -- Per hari, segmen-segmen itu MENYATU ke total harian -> tidak ada detik terbuang.
@@ -268,10 +303,36 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     ),
     segments AS (
       SELECT
-        *,
-        EXTRACT(EPOCH FROM (segment_end - segment_start))::bigint AS segment_seconds
-      FROM split_rows
+        s.*,
+        -- Durasi mentah segmen sebelum dipotong jam istirahat.
+        EXTRACT(EPOCH FROM (segment_end - segment_start))::bigint AS segment_seconds,
+        -- Potongan jam istirahat (rules config): overlap segmen dengan break window
+        -- pada hari itu, HANYA untuk segmen PRODUKTIF (M1/M2 — status_activitytype
+        -- sudah dipromosikan idle-pendek ke M2 di source_rows). Non-produktif
+        -- (LSTAR) tidak dipotong (keputusan user 3).
+        COALESCE((
+          SELECT SUM(EXTRACT(EPOCH FROM (
+            LEAST(s.segment_end, s.day_bucket + bw.end_t)
+              - GREATEST(s.segment_start, s.day_bucket + bw.start_t)
+          ))::bigint)
+          FROM break_windows bw
+          WHERE EXTRACT(DOW FROM s.day_bucket) = bw.dow
+            AND s.status_activitytype IN ('M1', 'M2')
+            -- overlap positif: segmen menyentuh window break
+            AND s.segment_start < s.day_bucket + bw.end_t
+            AND s.segment_end > s.day_bucket + bw.start_t
+        ), 0)::bigint AS break_seconds
+      FROM split_rows s
       WHERE segment_end > segment_start
+    ),
+    -- Segmen yang SELURUHNYA berada di jam istirahat (durasi efektif <= 0)
+    -- dianggap tidak valid dan diabaikan (keputusan user 3).
+    valid_segments AS (
+      SELECT
+        *,
+        (segment_seconds - break_seconds)::bigint AS effective_seconds
+      FROM segments
+      WHERE segment_seconds - break_seconds > 0
     ),
     bundled AS (
       SELECT
@@ -314,15 +375,16 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         COUNT(*)::integer AS source_row_count,
         MIN(segment_start) AS source_min_start,
         MAX(segment_end) AS source_max_end,
-        SUM(segment_seconds)::bigint AS total_seconds,
+        -- Durasi bundel = jumlah durasi EFEKTIF (sudah dipotong jam istirahat).
+        SUM(effective_seconds)::bigint AS total_seconds,
         -- Provenance: segmen sumber pembentuk bundel ini (proddataid + detik).
         -- Ditulis ke sap_staging_source; jangkar guard anti-double-post — lihat
         -- migration 20260714_sap_staging_provenance.sql.
         jsonb_agg(jsonb_build_object(
           'id', proddataid,
-          'sec', segment_seconds
+          'sec', effective_seconds
         ) ORDER BY proddataid) AS segments
-      FROM segments
+      FROM valid_segments
       GROUP BY
         day_bucket,
         COALESCE(sn_employee, ''),
@@ -436,7 +498,11 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
 
     with connect_source() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, (to_ts, from_ts, from_ts, to_ts, from_ts, to_ts, werks, werks))
+            cur.execute(
+                sql,
+                (max_minutes, to_ts, from_ts, break_windows_json,
+                 from_ts, to_ts, from_ts, to_ts, werks, werks),
+            )
             return [dict(row) for row in cur.fetchall()]
 
 

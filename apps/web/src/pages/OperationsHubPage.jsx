@@ -68,6 +68,7 @@ const sidebarItems = [
   { title: 'Consumable Control', icon: ClipboardList, path: '/consumable-control', group: 'Inventory & Tools' },
   { title: 'Tools Management', icon: Hammer, path: '/tools-management', group: 'Inventory & Tools' },
   { title: 'MS Project Admin', icon: ShieldCheck, path: '/ms-project-admin', group: 'Administration' },
+  { title: 'Configuration Rules', icon: Settings, path: '/config-rules', group: 'Administration' },
   { title: 'Manage User', icon: UserCog, path: '/manage-user', group: 'Administration' },
   // Pintu langsung ke NFC Users: sebelumnya HANYA bisa lewat kartu di /manage-user,
   // jadi pemegang izin nfc_users tanpa manage_users tidak punya jalan masuk sama sekali.

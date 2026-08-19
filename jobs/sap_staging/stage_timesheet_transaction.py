@@ -17,6 +17,8 @@ from sap_staging_common import (
     ensure_staging_schema,
     get_stage_cursor,
     insert_staging_rows,
+    load_sap_rules,
+    load_sap_rules_default,
     ph3_order_table,
     plant_code,
     quote_table_name,
@@ -46,67 +48,142 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     ph3_table = quote_table_name(ph3_order_table())
     timezone = app_timezone()
 
+    # Rules config (plant_config.sap_rules) — cap per record + jam istirahat.
+    try:
+        with connect_source() as conn:
+            rules = load_sap_rules(conn)
+    except Exception as exc:
+        log.warning("fetch_rows: load_sap_rules gagal, pakai default (%s)", exc)
+        rules = load_sap_rules_default()
+    break_windows_json = json.dumps(rules.get("break_windows", []))
+    max_minutes = int(rules.get("max_record_minutes", 90))
+
     sql = f"""
+    WITH break_windows AS (
+      SELECT
+        (bw ->> 'start')::time AS start_t,
+        (bw ->> 'end')::time AS end_t,
+        d.day::int AS dow
+      FROM jsonb_array_elements(%s::jsonb) AS bw
+      CROSS JOIN LATERAL jsonb_array_elements_text(bw -> 'days') AS d(day)
+    ),
+    -- Durasi EFEKTIF per record: durasi asli DIKURANGI overlap jam istirahat
+    -- (break windows, HANYA untuk record produktif = activitytype kosong), lalu
+    -- DICAP di max_record_minutes. Record yang SELURUHNYA di jam istirahat
+    -- (efektif <= 0) dianggap tidak valid dan diabaikan (keputusan user 3/4).
+    -- IEDD/IEDZ jadi SINTETIS = checkin + durasi efektif (filosofi MCH: yang
+    -- akurat adalah durasi, bukan jendela waktu aslinya).
+    base AS (
+      SELECT
+        t.*,
+        un.employee_category,
+        po.confirmation_number,
+        po.sequence_category,
+        po.sequence_number,
+        po.branch_operation_no,
+        po.return_operation_no,
+        EXTRACT(EPOCH FROM (t.longdate_checkout - t.longdate_checkin))::bigint AS raw_seconds,
+        COALESCE(b.break_seconds, 0)::bigint AS break_seconds
+      FROM timesheet_transaction t
+      LEFT JOIN {ph3_table} po
+        ON LTRIM(COALESCE(po.order_no, ''), '0') = t.order_no
+       AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
+      LEFT JOIN LATERAL (
+        SELECT employee_category
+        FROM usernfc u
+        WHERE upper(regexp_replace(COALESCE(u.snssb, ''), '\\s+', '', 'g'))
+            = upper(regexp_replace(COALESCE(t.serialnumber, ''), '\\s+', '', 'g'))
+        LIMIT 1
+      ) un ON TRUE
+      LEFT JOIN LATERAL (
+        -- Overlap record dengan break windows, per hari (record bisa lintas tengah
+        -- malam — night shift 23:00-07:00). Hanya untuk record PRODUKTIF.
+        SELECT SUM(EXTRACT(EPOCH FROM (
+          LEAST(seg_end, day_bucket + bw.end_t)
+            - GREATEST(seg_start, day_bucket + bw.start_t)
+        ))::bigint)::bigint AS break_seconds
+        FROM generate_series(
+          date_trunc('day', t.longdate_checkin AT TIME ZONE %s),
+          date_trunc('day', t.longdate_checkout AT TIME ZONE %s),
+          interval '1 day'
+        ) AS g(day_bucket)
+        CROSS JOIN LATERAL (
+          SELECT
+            GREATEST(t.longdate_checkin AT TIME ZONE %s, g.day_bucket) AS seg_start,
+            LEAST(t.longdate_checkout AT TIME ZONE %s, g.day_bucket + interval '1 day') AS seg_end
+        ) seg
+        CROSS JOIN break_windows bw
+        WHERE EXTRACT(DOW FROM g.day_bucket) = bw.dow
+          AND COALESCE(t.activitytype, '') = ''
+          AND seg.seg_start < g.day_bucket + bw.end_t
+          AND seg.seg_end > g.day_bucket + bw.start_t
+      ) b ON TRUE
+      WHERE t.longdate_checkin IS NOT NULL
+        AND t.longdate_checkout IS NOT NULL
+        AND t.longdate_checkout > t.longdate_checkin
+        AND t.longdate_checkout >= (%s::timestamp AT TIME ZONE %s)
+        AND t.longdate_checkout <  (%s::timestamp AT TIME ZONE %s)
+        AND COALESCE(t.state_flag, 0) <> 5
+    ),
+    effective AS (
+      SELECT
+        *,
+        LEAST(GREATEST(raw_seconds - break_seconds, 0), %s::bigint * 60) AS effective_seconds
+      FROM base
+    )
     SELECT
       'TIMESHEET' AS source_system,
-      t.tsnumber::text AS source_key,
-      t.tsnumber::text AS source_ref_id,
-      COALESCE(t.plant, '') AS werks,
+      tsnumber::text AS source_key,
+      tsnumber::text AS source_ref_id,
+      COALESCE(plant, '') AS werks,
       CASE
-        WHEN COALESCE(un.employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
-        ELSE LPAD(COALESCE(t.serialnumber, ''), 8, '0')
+        WHEN COALESCE(employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
+        ELSE LPAD(COALESCE(serialnumber, ''), 8, '0')
       END AS pernr,
-      LPAD(COALESCE(t.serialnumber, ''), 8, '0') AS pernr_origin,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.confirmation_number, '') END AS rueck,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(t.order_no, ''), 12, '0') END AS aufnr,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(t.operation_no::text, ''), 4, '0') END AS vornr,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.sequence_category, '') END AS flgat,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.sequence_number, '') END AS plnfl,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.branch_operation_no, '') END AS vornr_b,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN '' ELSE COALESCE(po.return_operation_no, '') END AS vornr_r,
+      LPAD(COALESCE(serialnumber, ''), 8, '0') AS pernr_origin,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE COALESCE(confirmation_number, '') END AS rueck,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(order_no, ''), 12, '0') END AS aufnr,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE LPAD(COALESCE(operation_no::text, ''), 4, '0') END AS vornr,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE COALESCE(sequence_category, '') END AS flgat,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE COALESCE(sequence_number, '') END AS plnfl,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE COALESCE(branch_operation_no, '') END AS vornr_b,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN '' ELSE COALESCE(return_operation_no, '') END AS vornr_r,
       CASE
-        WHEN COALESCE(t.activitytype, '') <> '' THEN ''
-        WHEN COALESCE(t.workcentercode, '') LIKE '%%OT' THEN 'OV'
-        WHEN COALESCE(t.order_no, '') LIKE '32%%' THEN 'RW'
+        WHEN COALESCE(activitytype, '') <> '' THEN ''
+        WHEN COALESCE(workcentercode, '') LIKE '%%OT' THEN 'OV'
+        WHEN COALESCE(order_no, '') LIKE '32%%' THEN 'RW'
         ELSE 'RG'
       END AS zconf_type,
-      COALESCE(t.workcentercode, '') AS arbpl,
-      CASE WHEN COALESCE(t.activitytype, '') <> '' THEN t.activitytype ELSE '' END AS lstar,
-      TO_CHAR(t.longdate_checkin AT TIME ZONE %s, 'YYYYMMDD') AS isdd,
-      TO_CHAR(t.longdate_checkin AT TIME ZONE %s, 'HH24MISS') AS isdz,
-      TO_CHAR(t.longdate_checkout AT TIME ZONE %s, 'YYYYMMDD') AS iedd,
-      TO_CHAR(t.longdate_checkout AT TIME ZONE %s, 'HH24MISS') AS iedz,
+      COALESCE(workcentercode, '') AS arbpl,
+      CASE WHEN COALESCE(activitytype, '') <> '' THEN activitytype ELSE '' END AS lstar,
+      TO_CHAR(longdate_checkin AT TIME ZONE %s, 'YYYYMMDD') AS isdd,
+      TO_CHAR(longdate_checkin AT TIME ZONE %s, 'HH24MISS') AS isdz,
+      -- IEDD/IEDZ SINTETIS: checkin + durasi efektif (sudah dipotong istirahat & cap).
+      TO_CHAR((longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
+      TO_CHAR((longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
       '' AS aueru,
       '' AS zbarcodeid,
       NULL::timestamp AS bucket_start,
       NULL::timestamp AS synthetic_start,
       NULL::timestamp AS synthetic_end,
-      NULL::bigint AS total_seconds,
+      effective_seconds AS total_seconds,
       1::integer AS source_row_count,
-      t.longdate_checkin AT TIME ZONE %s AS source_min_start,
-      t.longdate_checkout AT TIME ZONE %s AS source_max_end
-    FROM timesheet_transaction t
-    LEFT JOIN {ph3_table} po
-      ON LTRIM(COALESCE(po.order_no, ''), '0') = t.order_no
-     AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
-    LEFT JOIN LATERAL (
-      SELECT employee_category
-      FROM usernfc u
-      WHERE upper(regexp_replace(COALESCE(u.snssb, ''), '\\s+', '', 'g'))
-          = upper(regexp_replace(COALESCE(t.serialnumber, ''), '\\s+', '', 'g'))
-      LIMIT 1
-    ) un ON TRUE
-    WHERE t.longdate_checkin IS NOT NULL
-      AND t.longdate_checkout IS NOT NULL
-      AND t.longdate_checkout > t.longdate_checkin
-      AND t.longdate_checkout >= (%s::timestamp AT TIME ZONE %s)
-      AND t.longdate_checkout <  (%s::timestamp AT TIME ZONE %s)
-      AND COALESCE(t.state_flag, 0) <> 5
-    ORDER BY t.longdate_checkout, t.tsnumber
+      longdate_checkin AT TIME ZONE %s AS source_min_start,
+      longdate_checkin AT TIME ZONE %s + (effective_seconds || ' seconds')::interval AS source_max_end
+    FROM effective
+    WHERE effective_seconds > 0
+    ORDER BY longdate_checkout, tsnumber
     LIMIT %s
     """
 
-    params = [timezone, timezone, timezone, timezone, timezone, timezone, from_ts, timezone, to_ts, timezone, limit]
+    params = [
+        break_windows_json,
+        timezone, timezone, timezone, timezone,
+        from_ts, timezone, to_ts, timezone,
+        max_minutes,
+        timezone, timezone, timezone, timezone, timezone, timezone,
+        limit,
+    ]
     with connect_source() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
