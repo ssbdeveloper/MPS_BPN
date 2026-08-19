@@ -197,31 +197,37 @@ async function getOperationsHub(req, res) {
           FROM public.timesheet_transaction
           WHERE state_flag != 5
         ),
-        sow_kpi AS (
-          SELECT
-            COUNT(DISTINCT TRIM(order_no)) FILTER (
-              WHERE COALESCE(systemstatus, '') NOT IN ('TECO', 'CLSD')
-            )::int AS active_orders,
-            COUNT(DISTINCT TRIM(order_no)) FILTER (
-              WHERE plan_finish < CURRENT_DATE
-                AND COALESCE(progress, 0) < 100
-                AND COALESCE(systemstatus, '') NOT IN ('TECO', 'CLSD')
-            )::int AS overdue_orders,
-            ROUND(AVG(progress) FILTER (WHERE progress IS NOT NULL), 1) AS avg_progress
+        sow_avg AS (
+          SELECT ROUND(AVG(progress) FILTER (WHERE progress IS NOT NULL), 1) AS avg_progress
           FROM public.sow
+        ),
+        ph3_kpi AS (
+          SELECT
+            COUNT(*)::int AS total_orders,
+            COUNT(*) FILTER (WHERE NOT has_teco)::int AS active_orders,
+            COUNT(*) FILTER (WHERE has_teco)::int AS teco_orders
+          FROM (
+            SELECT TRIM(order_no) AS order_no,
+                   bool_or(order_description = 'TECO') AS has_teco
+            FROM public.ph3_order
+            GROUP BY 1
+          ) o
         ),
         validation_kpi AS (
           SELECT
             COUNT(*) FILTER (
-              WHERE validation_status IS NULL OR validation_status = ''
+              WHERE validation_date IS NULL
+                AND COALESCE(state_flag::text, '') NOT IN ('3', '5')
             )::int AS validation_pending,
             COUNT(*)::int AS validation_total
-          FROM public.processcontroldata
+          FROM public.timesheet_transaction
+          WHERE (longdate_checkin AT TIME ZONE '${TZ}')::date = CURRENT_DATE
         )
         SELECT
-          COALESCE(s.active_orders, 0) AS active_orders,
-          COALESCE(s.overdue_orders, 0) AS overdue_orders,
-          COALESCE(s.avg_progress, 0)::float AS avg_progress,
+          COALESCE(p.total_orders, 0) AS total_orders,
+          COALESCE(p.active_orders, 0) AS active_orders,
+          COALESCE(p.teco_orders, 0) AS teco_orders,
+          COALESCE(a.avg_progress, 0)::float AS avg_progress,
           COALESCE(v.validation_pending, 0) AS validation_pending,
           COALESCE(v.validation_total, 0) AS validation_total,
           COALESCE((
@@ -235,20 +241,21 @@ async function getOperationsHub(req, res) {
             FROM machine_day
           ), 0) AS latest_machine_hours,
           COALESCE((
-            SELECT ROUND(SUM(CASE WHEN statusid = 1 THEN seconds ELSE 0 END) / NULLIF(SUM(seconds), 0) * 100.0, 1)::float
+            SELECT ROUND(SUM(CASE WHEN statusid IN (1, 2) THEN seconds ELSE 0 END) / NULLIF(SUM(seconds), 0) * 100.0, 1)::float
             FROM machine_day
           ), 0) AS machine_productive_pct,
           (SELECT to_char(day, 'YYYY-MM-DD') FROM latest_machine_day) AS machine_date,
           (SELECT to_char(day, 'YYYY-MM-DD') FROM latest_labor_day) AS labor_date
-        FROM sow_kpi s
+        FROM ph3_kpi p
+        CROSS JOIN sow_avg a
         CROSS JOIN validation_kpi v
       `),
       q(`
         WITH daily AS (
           SELECT
             startdatetime::date AS day,
-            SUM(CASE WHEN statusid = 1 THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(enddatetime, startdatetime) - startdatetime)), 0) ELSE 0 END) / 3600.0 AS productive_hours,
-            SUM(CASE WHEN statusid <> 1 THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(enddatetime, startdatetime) - startdatetime)), 0) ELSE 0 END) / 3600.0 AS support_loss_hours,
+            SUM(CASE WHEN statusid IN (1, 2) THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(enddatetime, startdatetime) - startdatetime)), 0) ELSE 0 END) / 3600.0 AS productive_hours,
+            SUM(CASE WHEN statusid NOT IN (1, 2) THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(enddatetime, startdatetime) - startdatetime)), 0) ELSE 0 END) / 3600.0 AS support_loss_hours,
             SUM(GREATEST(EXTRACT(EPOCH FROM (COALESCE(enddatetime, startdatetime) - startdatetime)), 0)) / 3600.0 AS total_hours
           FROM public.mch_productiondata
           GROUP BY startdatetime::date
@@ -365,8 +372,9 @@ async function getOperationsHub(req, res) {
     const payload = {
       data: {
         kpi: {
+          total_orders: num(overviewRow.total_orders),
           active_orders: num(overviewRow.active_orders),
-          overdue_orders: num(overviewRow.overdue_orders),
+          teco_orders: num(overviewRow.teco_orders),
           latest_labor_hours: num(overviewRow.latest_labor_hours),
           latest_machine_hours: num(overviewRow.latest_machine_hours),
           avg_progress: num(overviewRow.avg_progress),

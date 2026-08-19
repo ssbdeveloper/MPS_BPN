@@ -70,6 +70,7 @@ updated: 2026-07-24
 - [[log/2026-08-10-ews-issue-log-spesifik]] — analisa & saran issue log EWS lebih spesifik (kolom salah, PIC, cara perbaiki) — **menunggu keputusan user**, jangan coding dulu
 - [[log/2026-08-10-ews-issue-log-logic]] — detail lengkap logic EWS issue log dalam tabel: konsep, business day, semua threshold/env, schema, 7 generator, lifecycle upsert/auto-resolve, TTS notifier, API, temuan probe BPN/CKP
 - [[log/2026-08-12-bay-schedule-edit]] — edit reservasi bay: tombol Edit di modal detail → ReservationPanel mode EDIT (seed dari detail, exclude diri di occupants, fallback task list) → `PUT /bay-schedules/group/:id`
+- [[log/2026-08-19-operations-hub-kpi-cards]] — KPI cards hub diganti: Active vs Total + TECO (dari ph3_order, bukan sow.systemstatus), Machine Productive = status 1+2, Validation Pending = timesheet_transaction hari ini; StatCard modern + animasi count-up
 - [[log/2026-08-13-unknown-order-fix]] — fix false-positive badge "Unknown order": FE beralih ke `order_known` dari backend (EXISTS ke sow/ph3_order), konsolidasi `isUnknownOrder` di constants.js; task area tanpa sow_id tidak lagi salah-positif
 - [[log/2026-08-13-scheduling-area-back-fix]] — fix tombol Back detail area tidak kembali ke overview: efek deep-link `?area=` re-fire tiap Back; level diinisialisasi sekali di useState
 - [[log/2026-08-13-task-reservation-status]] — panel select tasks menampilkan status reservasi bay per task (area + bay + tanggal) untuk task yang sudah/belum punya reservasi

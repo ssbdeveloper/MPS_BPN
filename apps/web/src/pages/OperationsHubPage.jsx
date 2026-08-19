@@ -79,8 +79,9 @@ const sidebarItems = [
 
 const emptyHubData = {
   kpi: {
+    total_orders: 0,
     active_orders: 0,
-    overdue_orders: 0,
+    teco_orders: 0,
     latest_labor_hours: 0,
     latest_machine_hours: 0,
     avg_progress: 0,
@@ -154,27 +155,65 @@ function DashboardCard({ children, className = '', style }) {
   );
 }
 
-function StatCard({ title, value, helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0 }) {
+// Count-up animation for stat values — eases from previous value to the new one
+// each time `target` changes (rAF-driven, respects prefers-reduced-motion).
+function useCountUp(target, duration = 900) {
+  const [display, setDisplay] = useState(0);
+  const valueRef = useRef(0); // last displayed value (survives StrictMode remount)
+  const rafRef = useRef(null);
+
+  useEffect(() => {
+    const to = Number(target) || 0;
+    if (!Number.isFinite(to)) return;
+    const from = valueRef.current;
+    if (from === to) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const start = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const current = reduceMotion ? to : from + (to - from) * eased;
+      valueRef.current = current;
+      setDisplay(current);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [target, duration]);
+
+  return display;
+}
+
+function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0, progress = null }) {
   const IconComponent = icon;
   const hasDelta = Number.isFinite(Number(delta));
   const up = Number(delta) > 0;
   const flat = Number(delta) === 0;
+  const animated = useCountUp(value);
+  const barPct = progress != null ? Math.min(100, Math.max(0, Number(progress))) : null;
 
   return (
     <DashboardCard
-      className="hub-card p-4 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
-      style={{ animationDelay: `${index * 60}ms`, borderTop: `2px solid ${accent}` }}
+      className="hub-card group relative overflow-hidden p-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-200/60"
+      style={{ animationDelay: `${index * 70}ms` }}
     >
+      {/* gradient accent top bar */}
+      <span
+        className="absolute inset-x-0 top-0 h-[3px]"
+        style={{ background: `linear-gradient(90deg, ${accent}, ${accent}22)` }}
+      />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase text-slate-500">{title}</p>
-          <p className="mt-2 text-2xl font-extrabold text-slate-950">{value}</p>
+          <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{title}</p>
+          <p className="mt-1.5 text-[26px] font-extrabold leading-none tracking-tight tabular-nums text-slate-950">
+            {formatNumber(animated)}{suffix}
+          </p>
         </div>
-        <div className={`flex h-8 w-8 items-center justify-center rounded-md ${tone}`}>
+        <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${tone} transition-transform duration-300 group-hover:scale-110`}>
           {React.createElement(IconComponent, { size: 18 })}
         </div>
       </div>
-      <div className="mt-2 flex items-center gap-2">
+      <div className="mt-2.5 flex items-center gap-2">
         {hasDelta && (
           <span className={`inline-flex flex-shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${
             flat ? 'bg-slate-100 text-slate-500' : up ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
@@ -184,6 +223,14 @@ function StatCard({ title, value, helper, icon, tone, accent = '#0096c7', delta,
         )}
         <p className="min-w-0 truncate text-xs font-medium text-slate-500">{helper}</p>
       </div>
+      {barPct != null && (
+        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+          <div
+            className="hub-bar h-full rounded-full transition-all duration-700 ease-out"
+            style={{ width: `${barPct}%`, background: `linear-gradient(90deg, ${accent}, ${accent}cc)` }}
+          />
+        </div>
+      )}
     </DashboardCard>
   );
 }
@@ -838,31 +885,33 @@ function OperationsHubPage() {
   const productiveDelta = machineAvgPct != null
     ? toNum(kpi.machine_productive_pct) - machineAvgPct
     : null;
-  const onTimeOrders = Math.max(0, toNum(kpi.active_orders) - toNum(kpi.overdue_orders));
-  const overduePct = toNum(kpi.active_orders) > 0
-    ? (toNum(kpi.overdue_orders) / toNum(kpi.active_orders)) * 100
-    : 0;
+  const totalOrders = toNum(kpi.total_orders);
+  const activePct = totalOrders > 0 ? (toNum(kpi.active_orders) / totalOrders) * 100 : 0;
+  const tecoPct = totalOrders > 0 ? (toNum(kpi.teco_orders) / totalOrders) * 100 : 0;
 
   const summaryCards = useMemo(() => [
     {
       title: 'Active Orders',
-      value: formatNumber(kpi.active_orders),
-      helper: `${formatNumber(onTimeOrders)} on-time · avg ${formatNumber(kpi.avg_progress)}%`,
+      value: toNum(kpi.active_orders),
+      helper: `of ${formatNumber(kpi.total_orders)} total orders`,
       icon: Factory,
       tone: 'bg-sky-50 text-sky-700',
       accent: '#0096c7',
+      progress: activePct,
     },
     {
-      title: 'Overdue Orders',
-      value: formatNumber(kpi.overdue_orders),
-      helper: toNum(kpi.overdue_orders) > 0 ? `${overduePct.toFixed(0)}% of active orders` : 'All orders on schedule',
-      icon: TimerReset,
-      tone: toNum(kpi.overdue_orders) > 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700',
-      accent: toNum(kpi.overdue_orders) > 0 ? '#dc2626' : '#059669',
+      title: 'TECO Orders',
+      value: toNum(kpi.teco_orders),
+      helper: `of ${formatNumber(kpi.total_orders)} total orders`,
+      icon: CheckCircle2,
+      tone: 'bg-emerald-50 text-emerald-700',
+      accent: '#059669',
+      progress: tecoPct,
     },
     {
       title: 'Machine Productive',
-      value: `${formatNumber(kpi.machine_productive_pct)}%`,
+      value: toNum(kpi.machine_productive_pct),
+      suffix: '%',
       helper: machineAvgPct != null
         ? `7d avg ${machineAvgPct.toFixed(1)}%`
         : (hubData.basis_dates.machine_date ? formatDateLabel(hubData.basis_dates.machine_date) : 'No date'),
@@ -874,13 +923,14 @@ function OperationsHubPage() {
     },
     {
       title: 'Validation Pending',
-      value: formatNumber(kpi.validation_pending),
-      helper: `of ${formatNumber(kpi.validation_total)} process records`,
+      value: toNum(kpi.validation_pending),
+      helper: `of ${formatNumber(kpi.validation_total)} records today`,
       icon: ClipboardList,
       tone: toNum(kpi.validation_pending) > 0 ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
       accent: toNum(kpi.validation_pending) > 0 ? '#d97706' : '#059669',
+      progress: toNum(kpi.validation_total) > 0 ? (toNum(kpi.validation_pending) / toNum(kpi.validation_total)) * 100 : 0,
     },
-  ], [hubData.basis_dates.machine_date, kpi, machineAvgPct, onTimeOrders, overduePct, productiveDelta]);
+  ], [hubData.basis_dates.machine_date, kpi, machineAvgPct, productiveDelta, activePct, tecoPct]);
 
   const insights = useMemo(() => {
     const list = [];
@@ -888,7 +938,7 @@ function OperationsHubPage() {
       list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% di bawah rata-rata 7 hari (${machineAvgPct.toFixed(1)}%).` });
     }
     if (toNum(kpi.validation_pending) > 0) {
-      list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} proses menunggu validasi foreman/supervisor.` });
+      list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} records hari ini menunggu validasi foreman/supervisor.` });
     }
     return list.slice(0, 3);
   }, [kpi, machineAvgPct, productiveDelta]);
@@ -1096,7 +1146,7 @@ function OperationsHubPage() {
             <div>
               <h2 className="text-sm font-extrabold text-slate-900">Order Progress</h2>
               <p className="mt-1 text-xs font-semibold text-slate-500">
-                Avg progress {formatNumber(kpi.avg_progress)}% · {formatNumber(kpi.active_orders)} active · {formatNumber(kpi.overdue_orders)} overdue
+                Avg progress {formatNumber(kpi.avg_progress)}% · {formatNumber(kpi.active_orders)} active · {formatNumber(kpi.teco_orders)} teco
               </p>
             </div>
             <button
