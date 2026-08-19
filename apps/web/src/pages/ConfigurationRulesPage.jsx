@@ -258,291 +258,299 @@ export default function ConfigurationRulesPage() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 space-y-5 px-4 py-6 md:px-6">
+      <main className="flex-1 px-4 py-6 md:px-6">
         {loading ? (
           <div className="flex items-center justify-center py-24 text-sm font-semibold text-slate-400">
             <Loader2 size={16} className="mr-2 animate-spin" /> Loading rules…
           </div>
         ) : (
-          <>
-            {/* Break hours */}
-            <SectionCard
-              icon={Clock}
-              title="Break Hours"
-              subtitle="Non-productive activity inside these windows is not counted. Productive activity is always counted in full."
-            >
-              <div className="space-y-3">
-                {windows.map((w, index) => (
-                  <div key={index} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 transition hover:border-slate-300">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="time"
-                          value={w.start}
-                          onChange={(e) => updateWindow(index, { start: e.target.value })}
-                          className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
-                        />
-                        <span className="text-xs font-bold text-slate-400">to</span>
-                        <input
-                          type="time"
-                          value={w.end}
-                          onChange={(e) => updateWindow(index, { end: e.target.value })}
-                          className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
-                        />
-                      </div>
-                      <div className="flex flex-wrap items-center gap-1">
-                        {DAY_OPTIONS.map((d) => {
-                          const active = w.days.includes(d.value);
-                          return (
-                            <button
-                              key={d.value}
-                              type="button"
-                              onClick={() => toggleDay(index, d.value)}
-                              className={`min-h-[28px] rounded-lg px-2.5 text-[11px] font-extrabold transition ${
-                                active
-                                  ? 'bg-[#0077b6] text-white shadow-sm'
-                                  : 'border border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
-                              }`}
-                            >
-                              {d.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setWindows((prev) => prev.filter((_, i) => i !== index))}
-                        className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
-                        title="Remove"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                    {w.days.length === 0 && (
-                      <p className="mt-2 text-[11px] font-semibold text-red-600">Select at least one day</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setWindows((prev) => [...prev, { ...EMPTY_WINDOW }])}
-                className="mt-3 flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-3.5 text-xs font-extrabold text-slate-500 transition hover:border-[#0077b6] hover:text-[#0077b6]"
+          <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-12">
+            {/* ── Kolom utama (kiri) ─────────────────────────────────────── */}
+            <div className="space-y-5 xl:col-span-8">
+              {/* Break hours */}
+              <SectionCard
+                icon={Clock}
+                title="Break Hours"
+                subtitle="Non-productive activity inside these windows is not counted. Productive activity is always counted in full."
               >
-                <Plus size={14} /> Add break window
-              </button>
-            </SectionCard>
-
-            {/* Max record duration */}
-            <SectionCard
-              icon={SlidersHorizontal}
-              title="Max Record Duration"
-              subtitle="One timesheet/machine record may not exceed this — longer records are cut, the rest is ignored."
-            >
-              <div className="flex flex-wrap items-center gap-3">
-                <input
-                  type="number"
-                  min={1}
-                  value={maxMinutes}
-                  onChange={(e) => setMaxMinutes(Number(e.target.value) || 0)}
-                  className="h-10 w-28 rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
-                />
-                <span className="text-sm font-bold text-slate-700">minutes</span>
-                <span className="ml-auto rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-500">
-                  applied in SAP staging
-                </span>
-              </div>
-            </SectionCard>
-
-            {/* Hub navigation visibility */}
-            <SectionCard
-              icon={Eye}
-              title="Operations Hub Navigation"
-              subtitle="Hide menu items from the Operations Hub sidebar. Visual only — access & permissions are unchanged."
-            >
-              <div className="space-y-4">
-                {menuGroups.map(([group, items]) => (
-                  <div key={group}>
-                    <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
-                      {group}
-                    </p>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {items.map((item) => {
-                        const hidden = hiddenMenus.includes(item.path);
-                        const IconComponent = item.icon;
-                        return (
-                          <div
-                            key={item.path}
-                            className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
-                              hidden
-                                ? 'border-slate-200 bg-slate-50 opacity-55'
-                                : 'border-slate-200 bg-white hover:border-slate-300'
-                            }`}
-                          >
-                            <span
-                              className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
-                                hidden ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-[#0077b6]'
-                              }`}
-                            >
-                              {IconComponent && <IconComponent size={15} />}
-                            </span>
-                            <span
-                              className={`min-w-0 flex-1 truncate text-xs font-bold ${
-                                hidden ? 'text-slate-400 line-through' : 'text-slate-700'
-                              }`}
-                            >
-                              {item.title}
-                            </span>
-                            <span className="flex items-center gap-1.5">
-                              {hidden && (
-                                <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-slate-500">
-                                  Hidden
-                                </span>
-                              )}
-                              <Toggle
-                                checked={!hidden}
-                                onChange={() => toggleMenuHidden(item.path)}
-                                label={`Show ${item.title} in hub`}
-                              />
-                            </span>
-                          </div>
-                        );
-                      })}
+                <div className="space-y-3">
+                  {windows.map((w, index) => (
+                    <div key={index} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5 transition hover:border-slate-300">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="time"
+                            value={w.start}
+                            onChange={(e) => updateWindow(index, { start: e.target.value })}
+                            className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                          />
+                          <span className="text-xs font-bold text-slate-400">to</span>
+                          <input
+                            type="time"
+                            value={w.end}
+                            onChange={(e) => updateWindow(index, { end: e.target.value })}
+                            className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+                          />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {DAY_OPTIONS.map((d) => {
+                            const active = w.days.includes(d.value);
+                            return (
+                              <button
+                                key={d.value}
+                                type="button"
+                                onClick={() => toggleDay(index, d.value)}
+                                className={`min-h-[28px] rounded-lg px-2.5 text-[11px] font-extrabold transition ${
+                                  active
+                                    ? 'bg-[#0077b6] text-white shadow-sm'
+                                    : 'border border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
+                                }`}
+                              >
+                                {d.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setWindows((prev) => prev.filter((_, i) => i !== index))}
+                          className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                          title="Remove"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                      {w.days.length === 0 && (
+                        <p className="mt-2 text-[11px] font-semibold text-red-600">Select at least one day</p>
+                      )}
                     </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
-                <p className="text-[11px] font-bold text-amber-700">
-                  Hidden items stay hidden only in this browser (per user). Nothing is deleted or disabled.
-                </p>
+                  ))}
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => { setHiddenMenus([]); localStorage.setItem(HUB_HIDDEN_MENUS_KEY, '[]'); }}
-                  className="flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 text-[11px] font-extrabold text-amber-700 shadow-sm transition hover:bg-amber-100"
+                  onClick={() => setWindows((prev) => [...prev, { ...EMPTY_WINDOW }])}
+                  className="mt-3 flex h-9 items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-3.5 text-xs font-extrabold text-slate-500 transition hover:border-[#0077b6] hover:text-[#0077b6]"
                 >
-                  <EyeOff size={13} /> Show all
+                  <Plus size={14} /> Add break window
                 </button>
-              </div>
-            </SectionCard>
+              </SectionCard>
 
-            {/* Config palsu — tidak berpengaruh apa pun */}
-            <SectionCard
-              icon={Settings2}
-              title="General Settings"
-              subtitle="Informational preferences — these do not affect the system."
-              accent="#64748b"
-            >
-              <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Max shift hours</p>
-                    <p className="text-[10px] font-semibold text-slate-400">Display preference</p>
+              {/* General Settings (config palsu — tidak berpengaruh apa pun) */}
+              <SectionCard
+                icon={Settings2}
+                title="General Settings"
+                subtitle="Informational preferences — these do not affect the system."
+                accent="#64748b"
+              >
+                <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Max shift hours</p>
+                      <p className="text-[10px] font-semibold text-slate-400">Display preference</p>
+                    </div>
+                    <input
+                      type="number"
+                      min={1}
+                      value={fake.max_shift_hours}
+                      onChange={(e) => updateFake('max_shift_hours', Number(e.target.value) || 0)}
+                      className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                    />
                   </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Check-in grace period</p>
+                      <p className="text-[10px] font-semibold text-slate-400">minutes</p>
+                    </div>
+                    <input
+                      type="number"
+                      min={0}
+                      value={fake.grace_minutes}
+                      onChange={(e) => updateFake('grace_minutes', Number(e.target.value) || 0)}
+                      className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Auto refresh</p>
+                      <p className="text-[10px] font-semibold text-slate-400">seconds</p>
+                    </div>
+                    <input
+                      type="number"
+                      min={5}
+                      value={fake.auto_refresh_seconds}
+                      onChange={(e) => updateFake('auto_refresh_seconds', Number(e.target.value) || 0)}
+                      className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Language</p>
+                      <p className="text-[10px] font-semibold text-slate-400">Interface</p>
+                    </div>
+                    <select
+                      value={fake.language}
+                      onChange={(e) => updateFake('language', e.target.value)}
+                      className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                    >
+                      <option value="id">Bahasa Indonesia</option>
+                      <option value="en">English</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Notify on SAP post</p>
+                      <p className="text-[10px] font-semibold text-slate-400">Notification</p>
+                    </div>
+                    <Toggle
+                      checked={fake.notify_on_post}
+                      onChange={(v) => updateFake('notify_on_post', v)}
+                      label="Notify on SAP post"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold text-slate-700">Notify on failed post</p>
+                      <p className="text-[10px] font-semibold text-slate-400">Notification</p>
+                    </div>
+                    <Toggle
+                      checked={fake.notify_on_failed}
+                      onChange={(v) => updateFake('notify_on_failed', v)}
+                      label="Notify on failed post"
+                    />
+                  </div>
+                </div>
+              </SectionCard>
+            </div>
+
+            {/* ── Kolom kanan (rail) ─────────────────────────────────────── */}
+            <div className="space-y-5 xl:col-span-4">
+              {/* Max record duration */}
+              <SectionCard
+                icon={SlidersHorizontal}
+                title="Max Record Duration"
+                subtitle="One timesheet/machine record may not exceed this — longer records are cut, the rest is ignored."
+              >
+                <div className="flex flex-wrap items-center gap-3">
                   <input
                     type="number"
                     min={1}
-                    value={fake.max_shift_hours}
-                    onChange={(e) => updateFake('max_shift_hours', Number(e.target.value) || 0)}
-                    className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
+                    value={maxMinutes}
+                    onChange={(e) => setMaxMinutes(Number(e.target.value) || 0)}
+                    className="h-10 w-28 rounded-xl border border-slate-300 bg-white px-3 text-sm font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
                   />
+                  <span className="text-sm font-bold text-slate-700">minutes</span>
+                  <span className="mt-1 w-full rounded-full bg-slate-100 px-2.5 py-1 text-center text-[11px] font-bold text-slate-500">
+                    applied in SAP staging
+                  </span>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Check-in grace period</p>
-                    <p className="text-[10px] font-semibold text-slate-400">minutes</p>
-                  </div>
-                  <input
-                    type="number"
-                    min={0}
-                    value={fake.grace_minutes}
-                    onChange={(e) => updateFake('grace_minutes', Number(e.target.value) || 0)}
-                    className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Auto refresh</p>
-                    <p className="text-[10px] font-semibold text-slate-400">seconds</p>
-                  </div>
-                  <input
-                    type="number"
-                    min={5}
-                    value={fake.auto_refresh_seconds}
-                    onChange={(e) => updateFake('auto_refresh_seconds', Number(e.target.value) || 0)}
-                    className="h-9 w-20 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Language</p>
-                    <p className="text-[10px] font-semibold text-slate-400">Interface</p>
-                  </div>
-                  <select
-                    value={fake.language}
-                    onChange={(e) => updateFake('language', e.target.value)}
-                    className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700"
-                  >
-                    <option value="id">Bahasa Indonesia</option>
-                    <option value="en">English</option>
-                  </select>
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Notify on SAP post</p>
-                    <p className="text-[10px] font-semibold text-slate-400">Notification</p>
-                  </div>
-                  <Toggle
-                    checked={fake.notify_on_post}
-                    onChange={(v) => updateFake('notify_on_post', v)}
-                    label="Notify on SAP post"
-                  />
-                </div>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Notify on failed post</p>
-                    <p className="text-[10px] font-semibold text-slate-400">Notification</p>
-                  </div>
-                  <Toggle
-                    checked={fake.notify_on_failed}
-                    onChange={(v) => updateFake('notify_on_failed', v)}
-                    label="Notify on failed post"
-                  />
-                </div>
-              </div>
-            </SectionCard>
+              </SectionCard>
 
-            {/* Rebuild pending */}
-            <SectionCard
-              icon={RefreshCw}
-              title="Rebuild Pending Queue"
-              subtitle="Re-stage PENDING bundles from a start date with the current rules. Posted rows are never touched."
-              accent="#059669"
-            >
-              <div className="flex flex-wrap items-center gap-3">
-                <input
-                  type="date"
-                  value={rebuildDate}
-                  max={new Date().toISOString().slice(0, 10)}
-                  onChange={(e) => setRebuildDate(e.target.value)}
-                  className="h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700"
-                />
-                <button
-                  type="button"
-                  onClick={handleRebuild}
-                  disabled={rebuilding}
-                  className="flex h-9 items-center gap-1.5 rounded-xl bg-[#0077b6] px-3.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {rebuilding ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                  Rebuild pending
-                </button>
-                <span className="ml-auto rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
-                  runs via sap-ops-worker
-                </span>
-              </div>
-            </SectionCard>
-          </>
+              {/* Rebuild pending */}
+              <SectionCard
+                icon={RefreshCw}
+                title="Rebuild Pending Queue"
+                subtitle="Re-stage PENDING bundles from a start date with the current rules. Posted rows are never touched."
+                accent="#059669"
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    type="date"
+                    value={rebuildDate}
+                    max={new Date().toISOString().slice(0, 10)}
+                    onChange={(e) => setRebuildDate(e.target.value)}
+                    className="h-9 flex-1 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-bold text-slate-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRebuild}
+                    disabled={rebuilding}
+                    className="flex h-9 items-center gap-1.5 rounded-xl bg-[#0077b6] px-3.5 text-xs font-extrabold text-white shadow-sm transition hover:bg-[#023e8a] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {rebuilding ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    Rebuild pending
+                  </button>
+                  <span className="w-full rounded-full bg-emerald-50 px-2.5 py-1 text-center text-[11px] font-bold text-emerald-700">
+                    runs via sap-ops-worker
+                  </span>
+                </div>
+              </SectionCard>
+            </div>
+
+            {/* ── Full width (paling akhir): Hub navigation visibility ──── */}
+            <div className="xl:col-span-12">
+              <SectionCard
+                icon={Eye}
+                title="Operations Hub Navigation"
+                subtitle="Hide menu items from the Operations Hub sidebar. Visual only — access & permissions are unchanged."
+              >
+                <div className="space-y-4">
+                  {menuGroups.map(([group, items]) => (
+                    <div key={group}>
+                      <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                        {group}
+                      </p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                        {items.map((item) => {
+                          const hidden = hiddenMenus.includes(item.path);
+                          const IconComponent = item.icon;
+                          return (
+                            <div
+                              key={item.path}
+                              className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
+                                hidden
+                                  ? 'border-slate-200 bg-slate-50 opacity-55'
+                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                              }`}
+                            >
+                              <span
+                                className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${
+                                  hidden ? 'bg-slate-200 text-slate-400' : 'bg-slate-100 text-[#0077b6]'
+                                }`}
+                              >
+                                {IconComponent && <IconComponent size={15} />}
+                              </span>
+                              <span
+                                className={`min-w-0 flex-1 truncate text-xs font-bold ${
+                                  hidden ? 'text-slate-400 line-through' : 'text-slate-700'
+                                }`}
+                              >
+                                {item.title}
+                              </span>
+                              <span className="flex items-center gap-1.5">
+                                {hidden && (
+                                  <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-slate-500">
+                                    Hidden
+                                  </span>
+                                )}
+                                <Toggle
+                                  checked={!hidden}
+                                  onChange={() => toggleMenuHidden(item.path)}
+                                  label={`Show ${item.title} in hub`}
+                                />
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+                  <p className="text-[11px] font-bold text-amber-700">
+                    Hidden items stay hidden only in this browser (per user). Nothing is deleted or disabled.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => { setHiddenMenus([]); localStorage.setItem(HUB_HIDDEN_MENUS_KEY, '[]'); }}
+                    className="flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 text-[11px] font-extrabold text-amber-700 shadow-sm transition hover:bg-amber-100"
+                  >
+                    <EyeOff size={13} /> Show all
+                  </button>
+                </div>
+              </SectionCard>
+            </div>
+          </div>
         )}
       </main>
     </div>
