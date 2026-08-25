@@ -1164,6 +1164,93 @@ function OperationRow({ op, onEdit, onDelete, deleting, nnvaExpanded, onToggleNn
   );
 }
 
+// ─── ComponentEditModal ───────────────────────────────────────────────────────
+function ComponentEditModal({ group, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    part_name: group.part_name || '',
+    part_number: group.part_number || '',
+    model: group.model || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [formErr, setFormErr] = useState(null);
+
+  const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
+
+  const handleSave = async () => {
+    if (!form.part_name.trim() || !form.part_number.trim()) {
+      setFormErr('Part Name dan Part Number wajib diisi.');
+      return;
+    }
+    setSaving(true);
+    setFormErr(null);
+    try {
+      const res = await fetch(`${API_BASE}/sow/standard/component/${group.component_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Server ${res.status}`);
+      }
+      const json = await res.json();
+      toast.success('Komponen diperbarui');
+      onSaved(json.data);
+      onClose();
+    } catch (err) {
+      setFormErr(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm p-0 md:p-4">
+      <div className="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+        <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h2 className="text-base font-bold text-slate-800">Edit Komponen</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {formErr && (
+            <div className="mb-4 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700">
+              <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />{formErr}
+            </div>
+          )}
+          <div className="flex flex-col gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5">Part Name *</label>
+              <input value={form.part_name} onChange={set('part_name')} className={INPUT_CLS} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5">Part Number *</label>
+              <input value={form.part_number} onChange={set('part_number')} className={INPUT_CLS} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1.5">Model</label>
+              <input value={form.model} onChange={set('model')} className={INPUT_CLS} />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-shrink-0 flex gap-2 justify-end px-5 py-4 border-t border-slate-100">
+          <button onClick={onClose} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95">
+            Batal
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex items-center gap-1.5 bg-[#0096c7] hover:bg-[#0077b6] text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ComponentGroup ───────────────────────────────────────────────────────────
 function ConfirmDeletePanel({ open, title, message, details, confirmLabel = 'Hapus', loading, onCancel, onConfirm }) {
   if (!open) return null;
@@ -1212,7 +1299,7 @@ function ConfirmDeletePanel({ open, title, message, details, confirmLabel = 'Hap
   );
 }
 
-function ComponentGroup({ group, onDeleted }) {
+function ComponentGroup({ group, onDeleted, onUpdated }) {
   const canWrite = useCan('sow_management', 'write');
   const [open, setOpen]             = useState(false);
   const [operations, setOperations] = useState([]);
@@ -1224,6 +1311,7 @@ function ComponentGroup({ group, onDeleted }) {
   const [deletingComponent, setDeletingComponent] = useState(false);
   const [deletingTemplate, setDeletingTemplate] = useState(null);
   const [templateModal, setTemplateModal] = useState(null); // { mode, template }
+  const [editModal, setEditModal] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [nnvaExpanded, setNnvaExpanded] = useState(new Set());
   const fetched = useRef(false);
@@ -1368,7 +1456,17 @@ function ComponentGroup({ group, onDeleted }) {
           </div>
         </button>
         {canWrite && (
-          <div className="flex items-center pr-3">
+          <div className="flex items-center gap-1 pr-3">
+            <button
+              type="button"
+              onClick={() => setEditModal(true)}
+              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg
+                        bg-white border border-slate-200 text-slate-500 hover:bg-slate-50
+                        hover:text-[#0096c7] transition-all active:scale-95"
+              title="Edit komponen"
+            >
+              <Pencil size={15} />
+            </button>
             <button
               type="button"
               onClick={() => setConfirm({
@@ -1379,8 +1477,8 @@ function ComponentGroup({ group, onDeleted }) {
               })}
               disabled={deletingComponent}
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg
-                         bg-white border border-red-200 text-red-500 hover:bg-red-50
-                         transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                        bg-white border border-red-200 text-red-500 hover:bg-red-50
+                        transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Hapus komponen"
             >
               {deletingComponent ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
@@ -1567,6 +1665,15 @@ function ComponentGroup({ group, onDeleted }) {
         />
       )}
 
+      {/* Component Edit Modal */}
+      {editModal && (
+        <ComponentEditModal
+          group={group}
+          onClose={() => setEditModal(false)}
+          onSaved={(updated) => onUpdated?.(group.component_id, updated)}
+        />
+      )}
+
       <ConfirmDeletePanel
         open={!!confirm}
         title={confirm?.title}
@@ -1601,6 +1708,7 @@ const SowStandardListPage = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState(null);
+  const [downloading, setDownloading] = useState(false);
   const debounceRef = useRef(null);
 
   const fetchGroups = useCallback(async (searchTerm, pageNum) => {
@@ -1647,6 +1755,41 @@ const SowStandardListPage = () => {
     if (groups.length <= 1 && page > 1) setPage((prev) => Math.max(1, prev - 1));
   };
 
+  const handleGroupUpdated = (componentId, updated) => {
+    setGroups((prev) =>
+      prev.map((g) => (g.component_id === componentId ? { ...g, ...updated } : g))
+    );
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('search', search.trim());
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/sow/standard/download${qs ? `?${qs}` : ''}`);
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Server ${res.status}`);
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      const date = new Date().toISOString().slice(0, 10);
+      const slug = search.trim() ? `_${search.trim().replace(/[^\w.-]+/g, '_')}` : '';
+      a.download = `standard_sow${slug}_${date}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error('Download gagal', { description: err.message });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const pageRange = () => {
     const left  = Math.max(1, page - 2);
     const right = Math.min(totalPages, page + 2);
@@ -1681,6 +1824,17 @@ const SowStandardListPage = () => {
               <span>{total.toLocaleString()} komponen</span>
             )}
           </div>
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={downloading}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-700
+                       hover:bg-slate-50 rounded-lg text-sm font-semibold transition-all active:scale-95
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            Download Excel
+          </button>
         </div>
       </div>
 
@@ -1707,6 +1861,7 @@ const SowStandardListPage = () => {
               key={g.component_id}
               group={g}
               onDeleted={handleGroupDeleted}
+              onUpdated={handleGroupUpdated}
             />
           ))
         )}

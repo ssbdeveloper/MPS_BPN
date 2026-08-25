@@ -4163,6 +4163,133 @@ exports.getSowStandardGrouped = async (req, res) => {
   }
 };
 
+// PUT /sow/standard/component/:component_id — update komponen (nama part, part number, model).
+exports.updateSowStandardComponent = async (req, res) => {
+  try {
+    const { component_id } = req.params;
+    const { part_name, part_number, model } = req.body || {};
+    const fields = [];
+    const params = [];
+    const push = (col, value) => {
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        params.push(String(value).trim());
+        fields.push(`${col} = $${params.length}`);
+      }
+    };
+    push("part_name", part_name);
+    push("part_number", part_number);
+    push("model", model);
+    if (fields.length === 0) {
+      return res.status(400).json({ error: "part_name, part_number, atau model wajib diisi" });
+    }
+    params.push(component_id);
+    const result = await db.query(
+      `UPDATE components SET ${fields.join(", ")} WHERE component_id = $${params.length}
+       RETURNING component_id, part_name, part_number, model`,
+      params
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "Component not found" });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(409).json({ error: "Model + Part Number sudah dipakai komponen lain" });
+    }
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /sow/standard/download?search= — export seluruh sow_standard ke Excel.
+// Format kolom MENGIKUTI template upload (standard_sow.csv / seed_sow.js):
+//   template_name, operation_no, operation_text, part_name, model, part_number,
+//   wct_group, std_hours (= VA hours, konvensi template), loading, setting,
+//   measurement, unloading (4 NNVA), total_std (= total VA+NNVA), remark, source_plant
+exports.downloadSowStandard = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const params = [];
+    let where = "";
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      where = ` WHERE (c.part_name ILIKE $1 OR c.part_number ILIKE $1 OR c.model ILIKE $1)`;
+    }
+
+    const result = await db.query(
+      `SELECT
+         c.part_name, c.model, c.part_number,
+         ss.operation_no, ss.operation_text, ss.machineid AS wct_group, ss.workcenter,
+         ss.std_hours, ss.va_hours, ss.remark, ss.source_plant,
+         COALESCE((
+           SELECT string_agg(t.template_name, ', ' ORDER BY COALESCE(t.sort_order, 0), t.template_name)
+           FROM sow_template_lines tl
+           JOIN sow_templates t ON t.template_id = tl.template_id
+           WHERE tl.standard_id = ss.id AND COALESCE(t.is_active, true) = true
+         ), '') AS template_name,
+         COALESCE(SUM(ns.standard_hours) FILTER (WHERE lower(nb.name) = 'loading'), 0)::float AS loading,
+         COALESCE(SUM(ns.standard_hours) FILTER (WHERE lower(nb.name) = 'setting'), 0)::float AS setting,
+         COALESCE(SUM(ns.standard_hours) FILTER (WHERE lower(nb.name) = 'measurement'), 0)::float AS measurement,
+         COALESCE(SUM(ns.standard_hours) FILTER (WHERE lower(nb.name) = 'unloading'), 0)::float AS unloading
+       FROM sow_standard ss
+       JOIN components c ON c.component_id = ss.component_id
+       LEFT JOIN sow_nnva_standard ns ON ns.sow_standard_id = ss.id
+       LEFT JOIN sow_nnva_base nb ON nb.id = ns.nnva_base_id
+       ${where}
+       GROUP BY ss.id, c.component_id
+       ORDER BY c.part_name ASC, c.part_number ASC, ss.operation_no ASC`,
+      params
+    );
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Standard SOW");
+    const headers = [
+      "template_name", "operation_no", "operation_text", "part_name", "model",
+      "part_number", "wct_group", "std_hours", "loading", "setting",
+      "measurement", "unloading", "total_std", "remark", "source_plant",
+    ];
+    ws.columns = headers.map((h) => ({ header: h, key: h, width: h === "operation_text" || h === "template_name" ? 32 : h === "remark" ? 24 : 14 }));
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+
+    for (const r of result.rows) {
+      const loading = Number(r.loading) || 0;
+      const setting = Number(r.setting) || 0;
+      const measurement = Number(r.measurement) || 0;
+      const unloading = Number(r.unloading) || 0;
+      const nnvaTotal = loading + setting + measurement + unloading;
+      const totalStd = Number(r.std_hours) || 0;
+      const va = r.va_hours != null ? Number(r.va_hours) : Math.max(0, totalStd - nnvaTotal);
+      const round2 = (v) => Math.round(v * 100) / 100;
+      ws.addRow({
+        template_name: r.template_name || "",
+        operation_no: r.operation_no,
+        operation_text: r.operation_text || "",
+        part_name: r.part_name || "",
+        model: r.model || "",
+        part_number: r.part_number || "",
+        wct_group: r.wct_group || "",
+        std_hours: round2(va),
+        loading: round2(loading),
+        setting: round2(setting),
+        measurement: round2(measurement),
+        unloading: round2(unloading),
+        total_std: round2(totalStd),
+        remark: r.remark || "",
+        source_plant: r.source_plant || "",
+      });
+    }
+
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = search && search.trim() ? `standard_sow_${search.trim().replace(/[^\w.-]+/g, "_")}_${date}.xlsx` : `standard_sow_${date}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    await wb.xlsx.write(res);
+    return res.end();
+  } catch (err) {
+    console.error("sow-standard download error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // GET operations for a single component (by component_id)
 exports.getSowStandardByComponent = async (req, res) => {
   try {

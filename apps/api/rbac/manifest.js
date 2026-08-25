@@ -17,6 +17,7 @@ const MANIFEST = [
   { m: 'PUT',    p: '/sow/templates/:id',                     f: 'sow_management', a: W },
   { m: 'DELETE', p: '/sow/templates/:id',                     f: 'sow_management', a: W },
   { m: 'DELETE', p: '/sow/standard/component/:id',            f: 'sow_management', a: W },
+  { m: 'PUT',    p: '/sow/standard/component/:id',            f: 'sow_management', a: W },
   { m: 'POST',   p: '/sow/standard/operation',                f: 'sow_management', a: W },
   { m: 'PUT',    p: '/sow/standard/operation/:id',            f: 'sow_management', a: W },
   { m: 'DELETE', p: '/sow/standard/operation/:id',            f: 'sow_management', a: W },
