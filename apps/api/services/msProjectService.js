@@ -2125,7 +2125,7 @@ async function listBaySchedules(query = {}) {
        t.workcenter,
        so.people_required,
        so.planhours,
-       so.part_name,
+       coalesce(so.part_name, ph.material_description) as part_name,
        so.customer,
        -- D7: apakah order_no reservasi ini dikenal di sow/ph3_order. FE sebelumnya menebak
        -- lewat "part_name & customer NULL", dan itu SALAH: part_name/customer datang dari
@@ -2170,6 +2170,15 @@ async function listBaySchedules(query = {}) {
        on t.project_id = s.project_id
       and t.task_id = s.task_id
      left join sow so on so.idsow = t.sow_id
+     -- Fallback deskripsi: task yang belum di-map (sow_id NULL, .mpp tanpa metadata operasi)
+     -- tidak punya part_name via t.sow_id — ambil material_description dari ph3_order
+     -- (order-level, 1 baris) supaya modal edit tidak tampil kosong.
+     left join lateral (
+       select min(k.material_description) as material_description
+       from ph3_order k
+       where ltrim(k.order_no, '0') = ltrim(s.order_no, '0')
+         and nullif(btrim(k.material_description), '') is not null
+     ) ph on true
      where ${where.join(" and ")}
      order by s.start_date, s.area_code, s.bay_codes[1], s.order_no
      limit $${values.length - 1} offset $${values.length}`,
@@ -2177,6 +2186,29 @@ async function listBaySchedules(query = {}) {
   );
 
   return { rows: result.rows, limit, offset };
+}
+
+// Sync forward-only (keputusan user 3a): reservasi masa depan yang terhubung task
+// mengikuti tanggal schedule ms_project_task (plan_start/plan_finish). Riwayat
+// (start_date < hari ini) tidak disentuh. Idempotent — hanya baris yang beda.
+// TZ eksplisit Asia/Jakarta: FE menampilkan tanggal via slice(0,10) string ISO
+// (literal +07); cast timestamptz→date tanpa TZ tergantung session (kena:
+// session Asia/Makassar menggeser plan 23:xx+07 ke tanggal berikutnya).
+async function syncBayScheduleDates() {
+  const result = await pool().query(
+    `update ms_project_bay_schedule s
+     set start_date = (t.plan_start at time zone 'Asia/Jakarta')::date,
+         end_date = (t.plan_finish at time zone 'Asia/Jakarta')::date,
+         updated_at = now(), updated_by = 'bay-schedule-sync'
+     from ms_project_task t
+     where s.task_id = t.task_id
+       and s.status <> 'CANCELLED'
+       and s.start_date::date >= current_date
+       and t.plan_start is not null and t.plan_finish is not null
+       and ((t.plan_start at time zone 'Asia/Jakarta')::date <> s.start_date::date
+         or (t.plan_finish at time zone 'Asia/Jakarta')::date <> s.end_date::date)`
+  );
+  return result.rowCount;
 }
 
 async function listBayScheduleTasks(query = {}) {
@@ -4818,6 +4850,7 @@ module.exports = {
   listBayOccupants,
   listBayScheduleTasks,
   listBaySchedules,
+  syncBayScheduleDates,
   listCalendars,
   listProjectRevisions,
   listProjectTasks,

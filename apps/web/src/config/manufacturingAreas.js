@@ -32,7 +32,7 @@ export const AREA_OPTIONS = [
   { areaCode: 'AREA-17', areaName: 'Area 17', bays: ['B13', 'B12', 'B11', 'B10'] },
   // AREA-18: 3 Painting (PT1-3) + 2 Blasting (BL1-2). Kode dibedakan PT vs BL biar
   // scheduler tahu painting vs blasting — bukan 'BP' seragam seperti dulu.
-  { areaCode: 'AREA-18', areaName: 'Blasting & Prime', bays: ['PT1', 'PT2', 'PT3', 'BL1', 'BL2'] },
+  { areaCode: 'AREA-18', areaName: 'Blasting & Painting', bays: ['PT1', 'PT2', 'PT3', 'BL1', 'BL2'] },
 ];
 
 // Canonical blasting area code. SelectJobPage's old value was 'BLASTING'.

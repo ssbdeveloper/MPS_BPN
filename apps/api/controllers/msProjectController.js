@@ -185,6 +185,10 @@ exports.mapSowOperationToTask = route(async (req) => {
 // terpotong `limit` (temuan review #5). Sekarang limit/offset selalu ikut, total bila ada.
 exports.listBaySchedules = route(async (req) => {
   const result = await service.listBaySchedules(req.query);
+  // Sync 3a: tanggal reservasi masa depan ikut jadwal task (idempotent, forward-only).
+  if (!req.query.ignore_sync) {
+    await service.syncBayScheduleDates();
+  }
   return (res) => success(res, result.rows, 200, paginationSummary(result));
 });
 

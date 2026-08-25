@@ -109,8 +109,17 @@ function InlineError({ message, onRetry }) {
 // Pool order (Tingkat 2). Hook-nya sengaja dipanggil DI SINI, bukan di halaman:
 // dengan begitu perubahan query/pencarian berhenti di subtree ini dan tidak pernah
 // menyentuh props FloorMapOverview / BayAreaDetail.
-const OrderPoolPanel = React.memo(function OrderPoolPanel({ selectedOrder, onSelectOrder, onDragStart }) {
+const OrderPoolPanel = React.memo(function OrderPoolPanel({
+  selectedOrder, onSelectOrder, onDragStart, onSearchChange, registerSearch,
+}) {
   const pool = useSowOrders();
+  useEffect(() => {
+    if (typeof registerSearch === 'function') registerSearch(pool.setSearch);
+  }, [registerSearch, pool.setSearch]);
+  const handleSearch = (value) => {
+    pool.setSearch(value);
+    if (typeof onSearchChange === 'function') onSearchChange(value);
+  };
   return (
     <OrderPanel
       orders={pool.orders}
@@ -119,7 +128,7 @@ const OrderPoolPanel = React.memo(function OrderPoolPanel({ selectedOrder, onSel
       loading={pool.loading}
       error={pool.error}
       search={pool.search}
-      onSearchChange={pool.setSearch}
+      onSearchChange={handleSearch}
       tab={pool.tab}
       onTabChange={pool.setTab}
       selectedOrder={selectedOrder}
@@ -169,6 +178,11 @@ export default function SchedulingAreaPage() {
   const [reservation, setReservation] = useState(null); // { mode, bayCode, order }
   const [detail, setDetail] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [areaFilter, setAreaFilter] = useState('');
+  const poolSearchRef = useRef(null);
+  const registerPoolSearch = useCallback((fn) => {
+    poolSearchRef.current = fn;
+  }, []);
 
   // Fetch schedule SEMUA tanggal dalam bounds (bukan cuma 7 hari) — peta bisa
   // melihat reservasi pada tanggal berapa pun. Filter 7/14/30 hari hanya untuk
@@ -403,6 +417,8 @@ export default function SchedulingAreaPage() {
           selectedOrder={selectedOrder}
           onSelectOrder={handleSelectOrder}
           onDragStart={handleOrderDragStart}
+          onSearchChange={setAreaFilter}
+          registerSearch={registerPoolSearch}
         />
         <div className="flex min-h-0 flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
@@ -453,6 +469,11 @@ export default function SchedulingAreaPage() {
         cursorDate={cursorDate}
         selectedAreaCode={selectedAreaCode}
         onSelectArea={handleSelectArea}
+        orderFilter={areaFilter}
+        onClearFilter={() => {
+          setAreaFilter('');
+          if (typeof poolSearchRef.current === 'function') poolSearchRef.current('');
+        }}
       />
     );
   }

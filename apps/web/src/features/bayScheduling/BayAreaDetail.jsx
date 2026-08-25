@@ -6,6 +6,7 @@ import {
   BOOKING_TYPES,
   RESERVATION_STATUS,
   ZONE_BY_KEY,
+  areaRangeLabel,
   bayCode as makeBayCode,
   splitBayCode,
   zoneOrderFor,
@@ -386,7 +387,7 @@ export default function BayAreaDetail({
           </button>
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">{area.areaCode}</p>
-            <h3 className="truncate text-sm font-extrabold text-slate-800">{area.areaName}</h3>
+            <h3 className="truncate text-sm font-extrabold text-slate-800">{areaRangeLabel(area)}</h3>
           </div>
         </div>
 

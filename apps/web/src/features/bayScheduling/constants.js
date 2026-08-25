@@ -7,15 +7,40 @@
 // Aturan file ini: tidak boleh meng-import React dan tidak boleh melakukan fetch.
 // Semuanya deterministik dari argumen -> aman dipakai di dalam useMemo.
 
-import { areaDef } from '../../config/manufacturingAreas';
+import { areaDef, bayCodesOf as bayCodesOfRaw } from '../../config/manufacturingAreas';
+
+export const bayCodesOf = bayCodesOfRaw;
+
+// Label cakupan area untuk peta: AREA-01 (bays A38..A35) -> "A38-A35",
+// satu bay -> "A1", AREA-18 -> nama aslinya ("Blasting & Painting").
+export function areaRangeLabel(area) {
+  if (!area) return '';
+  if (area.areaCode === 'AREA-18') return area.areaName || 'Blasting & Painting';
+  const bays = Array.isArray(area.bays) ? area.bays : [];
+  if (bays.length === 0) return area.areaName || area.areaCode || '';
+  if (bays.length === 1) return bays[0];
+  return `${bays[0]}-${bays[bays.length - 1]}`;
+}
+
+// Semua reservasi AKTIF milik satu area (flatten semua kode bay area, dedupe by
+// schedule_id, urut start_date). Dipakai FloorMapOverview per area.
+export function buildAreaReservations(schedulesByBay, area) {
+  const seen = new Map();
+  for (const code of bayCodesOf(area.areaCode)) {
+    for (const row of schedulesByBay?.get(code) || []) {
+      if (row.status === 'CANCELLED') continue;
+      if (!seen.has(row.schedule_id)) seen.set(row.schedule_id, row);
+    }
+  }
+  return [...seen.values()].sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)));
+}
 
 // Helper zona bay (Edge/Center) di-re-export dari topologi supaya komponen fitur ini
 // punya SATU sumber impor. Definisinya tetap di config/manufacturingAreas.js — file itu
 // juga dipakai layar operator, jadi tidak boleh bergantung pada folder features/.
 export {
-  BAY_ZONES, ZONE_BY_KEY, bayCode, bayLabel, splitBayCode, zoneOrderFor, isZonedArea, bayCodesOf,
+  BAY_ZONES, ZONE_BY_KEY, bayCode, bayLabel, splitBayCode, zoneOrderFor, isZonedArea,
 } from '../../config/manufacturingAreas';
-
 /* ── Topologi lantai ─────────────────────────────────────────────────────────
    Nama area + daftar bay berasal dari config/manufacturingAreas.js (satu sumber
    bersama dengan SelectJobPage timesheet). Yang lokal di sini HANYA metadata
