@@ -197,6 +197,32 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
   );
 }
 
+function HeatmapCell({ row, selected, inRect, onStart, onExtend, ri, ci, name, date }) {
+  const recorded = Number(row?.recorded_hours || 0);
+  const required = Number(row?.scheduled_standard_hours || 0);
+  const { bg } = CellColor({ row, recorded, required });
+  const strip = row ? (row.scheduled_shift === 'DAY' ? 'border-t-2 border-amber-400' : 'border-t-2 border-indigo-400') : '';
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => onStart(e, ri, ci)}
+      onMouseEnter={() => onExtend(ri, ci)}
+      title={row
+        ? `${name} · ${date} · ${row.scheduled_shift} · ${row.attendance}${row.half_day ? ' · half day' : ''}`
+        : `${name} · ${date} · no schedule`}
+      className={`relative block h-7 w-7 rounded-md border transition-colors duration-150 ${bg} ${strip} ${
+        selected || inRect ? 'ring-2 ring-[#0077b6]' : 'border-transparent'
+      } ${row ? 'cursor-pointer' : 'cursor-default'}`}
+    >
+      {row?.half_day && (
+        <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span>
+      )}
+    </button>
+  );
+}
+
+const MemoHeatmapCell = React.memo(HeatmapCell);
+
 function EwsRosterPage() {
   const navigate = useNavigate();
   const [month, setMonth] = useState(monthOf(todayLocalISO()));
@@ -270,14 +296,14 @@ function EwsRosterPage() {
     setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
   };
 
-  const startDrag = (e, ri, ci) => {
+  const startDrag = useCallback((e, ri, ci) => {
     e.preventDefault();
     dragging.current = true;
     setDragSel({ r1: ri, c1: ci, r2: ri, c2: ci });
-  };
-  const extendDrag = (ri, ci) => {
+  }, []);
+  const extendDrag = useCallback((ri, ci) => {
     if (dragging.current) setDragSel((s) => (s ? { ...s, r2: ri, c2: ci } : s));
-  };
+  }, []);
   const endDrag = () => {
     if (!dragging.current) return;
     dragging.current = false;
@@ -484,7 +510,25 @@ function EwsRosterPage() {
             </div>
 
             <div className="overflow-auto" style={{ maxHeight: '62vh' }}>
-              <table className="border-separate border-spacing-0 text-left text-sm">
+              {isLoading && operators.length === 0 ? (
+                <div className="p-3" aria-hidden="true">
+                  <div className="flex gap-1.5 pb-3">
+                    <div className="h-4 w-44 rounded bg-slate-100 animate-pulse" />
+                    {days.map((d) => (
+                      <div key={d.date} className="h-4 flex-1 rounded bg-slate-100 animate-pulse" />
+                    ))}
+                  </div>
+                  {Array.from({ length: 8 }, (_, i) => (
+                    <div key={i} className="flex items-center gap-1.5 py-0.5">
+                      <div className="h-5 w-44 rounded bg-slate-100 animate-pulse" />
+                      {days.map((d) => (
+                        <div key={d.date} className="h-7 w-7 flex-none rounded-md bg-slate-100 animate-pulse" />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+              <table key={`${month}|${scope}`} className="border-separate border-spacing-0 text-left text-sm" style={{ animation: 'hm-fade 0.35s ease-out' }}>
                 <thead>
                   <tr>
                     <th className="sticky left-0 top-0 z-20 w-44 min-w-44 border-b border-r border-[#90e0ef] bg-[#caf0f8] px-2 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-600">Operator</th>
@@ -497,9 +541,6 @@ function EwsRosterPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {isLoading && (
-                    <tr><td colSpan={days.length + 1} className="px-3 py-8 text-center text-xs font-bold text-slate-400">Loading…</td></tr>
-                  )}
                   {!isLoading && operators.length === 0 && (
                     <tr><td colSpan={days.length + 1} className="px-3 py-8 text-center text-xs font-bold text-slate-500">
                       {search ? 'No operator matches the search.' : 'No roster for this month (maybe not generated yet).'}
@@ -512,33 +553,25 @@ function EwsRosterPage() {
                         <div className="font-mono text-[10px] text-slate-400">{sn}</div>
                       </td>
                       {days.map((d, ci) => {
-                        const row = rowsByKey.get(cellKey(sn, d.date));
-                        const recorded = Number(row?.recorded_hours || 0);
-                        const required = Number(row?.scheduled_standard_hours || 0);
-                        const { bg } = CellColor({ row, recorded, required });
                         const key = cellKey(sn, d.date);
+                        const row = rowsByKey.get(key);
                         const isSel = selected.has(key);
                         const inRect = dragSel
                           && ri >= Math.min(dragSel.r1, dragSel.r2) && ri <= Math.max(dragSel.r1, dragSel.r2)
                           && ci >= Math.min(dragSel.c1, dragSel.c2) && ci <= Math.max(dragSel.c1, dragSel.c2);
-                        const strip = row ? (row.scheduled_shift === 'DAY' ? 'border-t-2 border-amber-400' : 'border-t-2 border-indigo-400') : '';
                         return (
                           <td key={d.date} className="p-0.5">
-                            <button
-                              type="button"
-                              onMouseDown={(e) => startDrag(e, ri, ci)}
-                              onMouseEnter={() => extendDrag(ri, ci)}
-                              title={row
-                                ? `${name} · ${d.date} · ${row.scheduled_shift} · ${row.attendance}${row.half_day ? ' · half day' : ''}`
-                                : `${name} · ${d.date} · no schedule`}
-                              className={`relative block h-7 w-7 rounded-md border transition ${bg} ${strip} ${
-                                isSel || inRect ? 'ring-2 ring-[#0077b6]' : 'border-transparent'
-                              } ${row ? 'cursor-pointer' : 'cursor-default'}`}
-                            >
-                              {row?.half_day && (
-                                <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span>
-                              )}
-                            </button>
+                            <MemoHeatmapCell
+                              row={row}
+                              selected={isSel}
+                              inRect={inRect}
+                              onStart={startDrag}
+                              onExtend={extendDrag}
+                              ri={ri}
+                              ci={ci}
+                              name={name}
+                              date={d.date}
+                            />
                           </td>
                         );
                       })}
@@ -546,6 +579,7 @@ function EwsRosterPage() {
                   ))}
                 </tbody>
               </table>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 px-4 py-2.5 text-[10px] font-semibold text-slate-500">
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-emerald-400/80" /> ≥100%</span>

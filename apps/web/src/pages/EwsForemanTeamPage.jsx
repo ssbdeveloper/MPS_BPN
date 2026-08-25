@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Search, Users, UserRound, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const ANIM_IN = { animation: 'hm-in 0.25s ease-out' };
 
 function EwsForemanTeamPage() {
   const navigate = useNavigate();
@@ -12,36 +13,34 @@ function EwsForemanTeamPage() {
   const [loading, setLoading] = useState(true);
   const [selectedForeman, setSelectedForeman] = useState(null);
   const [search, setSearch] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [dragOverId, setDragOverId] = useState(null);
+  const dragDepth = useRef(new Map());
 
   const authUser = useMemo(() => JSON.parse(sessionStorage.getItem('authUser') || 'null'), []);
   const myId = authUser?.id != null ? String(authUser.id) : null;
   const isForeman = String(authUser?.roles || '').toLowerCase().includes('foreman');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
       const res = await fetch(`${API_BASE}/ews/roster/foreman-team`);
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
-      const payload = await res.json();
-      const d = payload.data;
+      const d = (await res.json()).data;
       setData(d);
-      if (!selectedForeman && d.foremen?.length) {
-        setSelectedForeman(isForeman ? myId : String(d.foremen[0].id));
-      }
+      setSelectedForeman((prev) => prev || (isForeman ? myId : String(d.foremen?.[0]?.id ?? '')));
     } catch (err) {
-      setError(err.message || 'Failed to load foreman team');
+      if (!silent) setError(err.message || 'Failed to load foreman team');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [isForeman, myId, selectedForeman]);
+  }, [isForeman, myId]);
 
   useEffect(() => { load(); }, [load]);
 
-  const members = data?.members || [];
-  const operators = data?.operators || [];
-  const foremen = data?.foremen || [];
+  const members = useMemo(() => data?.members || [], [data]);
+  const operators = useMemo(() => data?.operators || [], [data]);
+  const foremen = useMemo(() => data?.foremen || [], [data]);
 
   const membersOf = (uid) => members.filter((m) => String(m.foreman_user_id) === String(uid));
   const assignedTo = useMemo(() => {
@@ -56,7 +55,17 @@ function EwsForemanTeamPage() {
   }, [operators, search]);
 
   const assign = useCallback(async (foremanId, sn) => {
-    setBusy(true);
+    const f = foremen.find((x) => String(x.id) === String(foremanId));
+    const op = operators.find((o) => o.snssb === sn);
+    const prev = data;
+    setData((d) => {
+      if (!d) return d;
+      const next = d.members.filter((m) => m.member_serialnumber !== sn);
+      next.push({ foreman_user_id: Number(foremanId), member_serialnumber: sn, full_name: op?.full_name || null });
+      return { ...d, members: next };
+    });
+    setSelectedForeman(String(foremanId));
+    setDragOverId(null);
     try {
       const res = await fetch(`${API_BASE}/ews/roster/foreman-team/member`, {
         method: 'PUT',
@@ -64,18 +73,18 @@ function EwsForemanTeamPage() {
         body: JSON.stringify({ foreman_user_id: Number(foremanId), member_serialnumber: sn, updated_by: 'ews-roster-ui' }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
-      const f = foremen.find((x) => String(x.id) === String(foremanId));
-      toast.success(`${sn} → ${f?.name || foremanId}`);
-      await load();
+      toast.success(`${op?.full_name || sn} → ${f?.name || foremanId}`);
+      load(true);
     } catch (err) {
+      setData(prev);
       toast.error(err.message || 'Failed to assign operator');
-    } finally {
-      setBusy(false);
     }
-  }, [foremen, load]);
+  }, [data, foremen, operators, load]);
 
   const removeMember = useCallback(async (sn) => {
-    setBusy(true);
+    const op = operators.find((o) => o.snssb === sn);
+    const prev = data;
+    setData((d) => (d ? { ...d, members: d.members.filter((m) => m.member_serialnumber !== sn) } : d));
     try {
       const res = await fetch(`${API_BASE}/ews/roster/foreman-team/member`, {
         method: 'DELETE',
@@ -83,14 +92,13 @@ function EwsForemanTeamPage() {
         body: JSON.stringify({ member_serialnumber: sn }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
-      toast.success(`${sn} removed from team`);
-      await load();
+      toast.success(`${op?.full_name || sn} removed from team`);
+      load(true);
     } catch (err) {
+      setData(prev);
       toast.error(err.message || 'Failed to remove member');
-    } finally {
-      setBusy(false);
     }
-  }, [load]);
+  }, [data, operators, load]);
 
   const onDrop = (e, foremanId) => {
     e.preventDefault();
@@ -98,7 +106,28 @@ function EwsForemanTeamPage() {
     if (sn) assign(foremanId, sn);
   };
 
+  const cardDragEnter = (id) => {
+    const m = dragDepth.current;
+    m.set(id, (m.get(id) || 0) + 1);
+    setDragOverId(String(id));
+  };
+  const cardDragLeave = (id) => {
+    const m = dragDepth.current;
+    const n = (m.get(id) || 1) - 1;
+    if (n <= 0) {
+      m.delete(id);
+      setDragOverId((v) => (v === String(id) ? null : v));
+    } else {
+      m.set(id, n);
+    }
+  };
+  const clearDrag = () => {
+    dragDepth.current.clear();
+    setDragOverId(null);
+  };
+
   const selectedMembers = membersOf(selectedForeman);
+  const selectedForemanName = foremen.find((f) => String(f.id) === String(selectedForeman))?.name || '—';
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800">
@@ -128,7 +157,7 @@ function EwsForemanTeamPage() {
         {loading ? (
           <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-[#0096c7]" /></div>
         ) : (
-          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[340px_1fr]">
+          <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[340px_1fr]" style={ANIM_IN}>
             <section className="rounded-2xl border border-slate-300 bg-white shadow-sm">
               <header className="flex items-center gap-2 border-b border-slate-300 bg-slate-50/60 px-4 py-3">
                 <UserRound size={15} className="text-[#0077b6]" />
@@ -139,20 +168,25 @@ function EwsForemanTeamPage() {
                 {foremen.map((f) => {
                   const n = membersOf(f.id).length;
                   const isMe = String(f.id) === myId;
+                  const over = dragOverId === String(f.id);
                   return (
                     <button
                       key={f.id}
                       type="button"
                       onClick={() => setSelectedForeman(String(f.id))}
                       onDragOver={(e) => e.preventDefault()}
+                      onDragEnter={() => cardDragEnter(f.id)}
+                      onDragLeave={() => cardDragLeave(f.id)}
                       onDrop={(e) => onDrop(e, f.id)}
-                      className={`mb-1.5 flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition active:scale-[0.99] ${
+                      className={`mb-1.5 flex w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all duration-150 ${
                         String(f.id) === String(selectedForeman)
                           ? 'border-[#0096c7] bg-[#caf0f8]/50 ring-1 ring-[#0096c7]'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                          : over
+                            ? 'scale-[1.02] border-[#0096c7] bg-[#caf0f8]/40 ring-2 ring-[#0096c7]/40'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
                       }`}
                     >
-                      <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#0077b6] text-[11px] font-black text-white">
+                      <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-black text-white transition-colors duration-150 ${over ? 'bg-[#0096c7]' : 'bg-[#0077b6]'}`}>
                         {(f.name || '?').trim().charAt(0).toUpperCase()}
                       </span>
                       <span className="min-w-0 flex-1">
@@ -162,7 +196,7 @@ function EwsForemanTeamPage() {
                         </span>
                         <span className="block truncate font-mono text-[10px] text-slate-400">{f.username}</span>
                       </span>
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-black tabular-nums text-slate-600">{n}</span>
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black tabular-nums transition-colors duration-150 ${over ? 'border-[#0096c7] bg-white text-[#0096c7]' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>{n}</span>
                     </button>
                   );
                 })}
@@ -174,18 +208,18 @@ function EwsForemanTeamPage() {
               <section className="rounded-2xl border border-slate-300 bg-white shadow-sm">
                 <header className="flex items-center gap-2 border-b border-slate-300 bg-slate-50/60 px-4 py-3">
                   <UserRound size={15} className="text-[#0077b6]" />
-                  <h2 className="text-sm font-extrabold text-slate-900">
-                    Team of {foremen.find((f) => String(f.id) === String(selectedForeman))?.name || '—'}
-                  </h2>
+                  <h2 className="text-sm font-extrabold text-slate-900">Team of {selectedForemanName}</h2>
                   <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold tabular-nums text-slate-500">{selectedMembers.length}</span>
                 </header>
                 <div
                   onDragOver={(e) => e.preventDefault()}
+                  onDragEnter={() => selectedForeman && cardDragEnter(selectedForeman)}
+                  onDragLeave={() => selectedForeman && cardDragLeave(selectedForeman)}
                   onDrop={(e) => { if (selectedForeman) onDrop(e, selectedForeman); }}
                   className="grid max-h-[34vh] grid-cols-1 gap-1.5 overflow-y-auto p-3 md:grid-cols-2 xl:grid-cols-3"
                 >
                   {selectedMembers.map((m) => (
-                    <div key={m.member_serialnumber} className="group flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+                    <div key={m.member_serialnumber} style={ANIM_IN} className="group flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 transition-colors duration-150 hover:border-slate-300">
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs font-bold text-slate-800">{m.full_name || m.member_serialnumber}</span>
                         <span className="block font-mono text-[10px] text-slate-400">{m.member_serialnumber}</span>
@@ -193,8 +227,7 @@ function EwsForemanTeamPage() {
                       <button
                         type="button"
                         onClick={() => removeMember(m.member_serialnumber)}
-                        disabled={busy}
-                        className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition-colors duration-150 hover:bg-red-50 hover:text-red-600"
                         title="Remove from team"
                       >
                         <X size={13} />
@@ -229,10 +262,11 @@ function EwsForemanTeamPage() {
                     return (
                       <div
                         key={o.snssb}
-                        draggable={!busy}
+                        draggable
                         onDragStart={(e) => e.dataTransfer.setData('text/plain', o.snssb)}
-                        className={`flex cursor-grab items-center gap-2 rounded-lg border px-2.5 py-2 transition active:cursor-grabbing ${
-                          owner != null ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-white hover:border-[#0096c7] hover:bg-[#caf0f8]/30'
+                        onDragEnd={clearDrag}
+                        className={`flex cursor-grab items-center gap-2 rounded-lg border px-2.5 py-2 transition-all duration-150 active:cursor-grabbing ${
+                          owner != null ? 'border-emerald-200 bg-emerald-50/60' : 'border-slate-200 bg-white hover:-translate-y-0.5 hover:border-[#0096c7] hover:bg-[#caf0f8]/30 hover:shadow-sm'
                         }`}
                       >
                         <span className="min-w-0 flex-1">
