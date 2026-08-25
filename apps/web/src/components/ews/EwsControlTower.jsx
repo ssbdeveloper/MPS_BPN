@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { badgeStyle, dotStyle, solidColor } from '../../theme/ewsStatus';
 import { cosmeticizeKpi, cosmeticTrendFor } from '../../theme/ewsCosmetic';
+import { isManufacturing } from '../../config/appVariant';
 
 // Icon per KPI dipilih sesuai definisi masing-masing:
 //  Uptime   → Wifi          (konektivitas / mesin online)
@@ -283,7 +284,7 @@ function EwsControlTower() {
 
   // Correction queue dari ews.issue_log (open, semua kategori) — action_table pensiun
   // (IL-last 2026-07-12). Row di-map ke bentuk lama supaya render di bawah tak berubah;
-  // escalation ladder direplikasi dari aturan lama (Critical >3h → Manajer Plant, >1h →
+  // escalation ladder replicated from legacy rules (Critical >3h → Plant Manager, >1h →
   // Supervisor/Foreman, selain itu PIC Monitor).
   const loadCorrectionQueue = useCallback(async () => {
     try {
@@ -295,7 +296,7 @@ function EwsControlTower() {
         const ageMs = Date.now() - new Date(r.created_at || 0).getTime();
         const isCritical = String(r.severity || '').toLowerCase() === 'critical';
         const escalation = isCritical && ageMs > 3 * 3600e3
-          ? 'Manajer Plant'
+          ? 'Plant Manager'
           : isCritical && ageMs > 3600e3
             ? 'Supervisor/Foreman'
             : 'PIC Monitor';
@@ -400,7 +401,7 @@ function EwsControlTower() {
   }, []);
 
   const liveKpis = useMemo(() => (
-    kpis.map((item) => {
+    (isManufacturing() ? kpis.filter((item) => item.group !== 'machine') : kpis).map((item) => {
       const apiItem = summary?.kpis?.find((kpi) => kpi.key === item.key);
       // cosmeticizeKpi: override kosmetik sementara uptime_tablet (lihat theme/ewsCosmetic.js)
       return cosmeticizeKpi({
@@ -548,7 +549,7 @@ function EwsControlTower() {
 
         {[
           { group: 'labour', label: 'Labour (Operator)' },
-          { group: 'machine', label: 'Machine' },
+          ...(isManufacturing() ? [] : [{ group: 'machine', label: 'Machine' }]),
         ].map((row) => (
           <div key={row.group} className="mb-3 last:mb-0">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -618,7 +619,7 @@ function EwsControlTower() {
             <div className="mt-3 space-y-2">
               {openCount === 0 ? (
                 <div className="rounded-lg border border-dashed border-emerald-200 bg-emerald-50/50 px-3 py-3 text-center text-[11px] font-bold text-emerald-600">
-                  ✓ Semua koreksi sudah selesai.
+                  ✓ All corrections are done.
                 </div>
               ) : (
                 agedActions.slice(0, 4).map((action) => {
@@ -646,7 +647,7 @@ function EwsControlTower() {
                 })
               )}
               {openCount > 4 && (
-                <p className="pt-1 text-center text-[10px] font-bold text-slate-400">+{openCount - 4} issue lain di queue</p>
+                <p className="pt-1 text-center text-[10px] font-bold text-slate-400">+{openCount - 4} more issues in queue</p>
               )}
             </div>
           </div>
