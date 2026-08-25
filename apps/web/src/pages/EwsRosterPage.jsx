@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, CalendarDays, RefreshCw, Search, Settings, Users } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CalendarDays, Loader2, RefreshCw, Search, Settings, Trash2, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -53,6 +53,66 @@ function StatTile({ label, value, tone = 'neutral' }) {
   );
 }
 
+function DeleteRosterModal({ date, rowsCount, onClose, onConfirm }) {
+  const [shift, setShift] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const handleConfirm = async () => {
+    setBusy(true);
+    await onConfirm(shift);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/30 backdrop-blur-sm p-0 md:p-4">
+      <div className="bg-white w-full md:max-w-md rounded-t-2xl md:rounded-2xl shadow-xl flex flex-col max-h-[90vh]">
+        <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h2 className="text-base font-bold text-slate-800">Delete roster rows</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
+            <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+            <div>
+              Deleting removes the generated rows for <b>{date}</b> ({rowsCount} operators). The
+              operators will no longer appear on this date and will not be counted as absent. This
+              cannot be undone.
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className="block text-xs font-semibold text-slate-600 mb-1.5">Delete shift</label>
+            <select
+              value={shift}
+              onChange={(e) => setShift(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
+            >
+              <option value="">All shifts (DAY + NIGHT)</option>
+              <option value="DAY">DAY only</option>
+              <option value="NIGHT">NIGHT only</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex-shrink-0 flex gap-2 justify-end px-5 py-4 border-t border-slate-100">
+          <button onClick={onClose} className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95">
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={busy}
+            className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EwsRosterPage() {
   const navigate = useNavigate();
   const [date, setDate] = useState(todayLocalISO());
@@ -62,6 +122,9 @@ function EwsRosterPage() {
   const [savingKey, setSavingKey] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const today = todayLocalISO();
+  const canDelete = date >= today;
 
   const load = useCallback(async (d) => {
     setIsLoading(true);
@@ -142,6 +205,24 @@ function EwsRosterPage() {
     }
   }, [date, load]);
 
+  const deleteRows = useCallback(async (shift) => {
+    try {
+      const res = await fetch(`${API_BASE}/ews/roster`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ business_date: date, shift: shift || undefined, updated_by: 'ews-roster-ui' }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
+      const payload = await res.json();
+      toast.success(`${payload.data.rows_deleted} roster rows deleted`);
+      await load(date);
+    } catch (err) {
+      toast.error(err.message || 'Failed to delete roster');
+    } finally {
+      setDeleteOpen(false);
+    }
+  }, [date, load]);
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
       <header className="sticky top-0 z-20 border-b border-slate-300 bg-white/95 backdrop-blur">
@@ -189,6 +270,16 @@ function EwsRosterPage() {
             >
               <Settings size={14} />
               Config
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(true)}
+              disabled={!canDelete}
+              title={canDelete ? 'Delete generated rows for this date' : 'Past dates are frozen (adoption already counted)'}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 text-xs font-extrabold text-red-600 shadow-sm transition hover:bg-red-50 active:scale-95 focus:outline-none focus:ring-2 focus:ring-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Trash2 size={14} />
+              Delete
             </button>
           </div>
         </div>
@@ -328,9 +419,18 @@ function EwsRosterPage() {
         <p className="text-[11px] font-semibold text-slate-400">
           Scheduled operators with no logs count as <b>Absent</b> (0) in the adoption KPI. Mark{' '}
           <b>Leave/Sick/Permit/Off</b> to exclude them from the calculation. <b>Half day</b> requires
-          only half of the shift's standard hours.
+          only half of the shift's standard hours. <b>Delete</b> removes generated rows (future dates only).
         </p>
       </main>
+
+      {deleteOpen && (
+        <DeleteRosterModal
+          date={date}
+          rowsCount={rows.length}
+          onClose={() => setDeleteOpen(false)}
+          onConfirm={deleteRows}
+        />
+      )}
     </div>
   );
 }

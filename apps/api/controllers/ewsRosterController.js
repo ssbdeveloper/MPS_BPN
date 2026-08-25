@@ -117,6 +117,53 @@ async function updateHalfDay(req, res) {
   }
 }
 
+// DELETE /ews/roster  { business_date, shift?, serialnumber? }
+// Hapus baris roster yang SUDAH di-generate. Forward-only: tanggal yang sudah lewat
+// (atau hari ini) TIDAK bisa dihapus — barisnya dipakai perhitungan adoption KPI.
+// Filter opsional: shift (DAY/NIGHT) dan/atau serialnumber untuk hapus sebagian.
+async function deleteRoster(req, res) {
+  try {
+    const business_date = req.body?.business_date;
+    const shift = String(req.body?.shift || "").toUpperCase();
+    const serialnumber = clampText(req.body?.serialnumber, "", 80);
+    assertIsoDate(business_date);
+    if (shift && shift !== "DAY" && shift !== "NIGHT") {
+      return res.status(400).json({ error: "shift must be DAY or NIGHT" });
+    }
+
+    const todayRes = await db.query(`SELECT (now() AT TIME ZONE $1)::date AS today`, [TZ]);
+    if (String(business_date) < todayRes.rows[0].today) {
+      return res.status(400).json({
+        error: "Past dates are frozen (adoption already counted). Only today or future dates can be deleted.",
+      });
+    }
+
+    const params = [business_date];
+    let where = `business_date = $1::date`;
+    if (shift) {
+      params.push(shift);
+      where += ` AND scheduled_shift = $${params.length}`;
+    }
+    if (serialnumber) {
+      params.push(serialnumber);
+      where += ` AND serialnumber = $${params.length}`;
+    }
+
+    const result = await db.query(`DELETE FROM ews.shift_roster WHERE ${where}`, params);
+    res.json({
+      data: {
+        business_date,
+        shift: shift || null,
+        serialnumber: serialnumber || null,
+        rows_deleted: result.rowCount,
+      },
+    });
+  } catch (err) {
+    console.error("ews roster delete error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
 // GET /ews/roster/config — shift defs, workday rules, active rotation config, group counts.
 async function getConfig(req, res) {
   try {
@@ -342,4 +389,4 @@ async function listLocks(req, res) {
   }
 }
 
-module.exports = { getRoster, updateStatus, updateHalfDay, getConfig, updateWorkday, updateGroup, generate, setLock, cancelLock, listLocks };
+module.exports = { getRoster, updateStatus, updateHalfDay, deleteRoster, getConfig, updateWorkday, updateGroup, generate, setLock, cancelLock, listLocks };

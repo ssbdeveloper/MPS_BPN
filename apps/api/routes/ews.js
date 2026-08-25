@@ -25,6 +25,7 @@ router.get("/tts/playlist", requireAdmin, controller.getTtsPlaylist);
 
 // Roster (R3): foreman roster view + status editing, config, group, generate.
 router.get("/roster", roster.getRoster);
+router.delete("/roster", roster.deleteRoster);
 router.put("/roster/status", roster.updateStatus);
 router.put("/roster/half-day", roster.updateHalfDay);
 router.get("/roster/config", roster.getConfig);
