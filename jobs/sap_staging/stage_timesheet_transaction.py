@@ -56,7 +56,9 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         log.warning("fetch_rows: load_sap_rules gagal, pakai default (%s)", exc)
         rules = load_sap_rules_default()
     break_windows_json = json.dumps(rules.get("break_windows", []))
-    max_minutes = int(rules.get("max_record_minutes", 90))
+    max_record = rules.get("max_record_minutes") or {}
+    max_va = int(max_record.get("va", 90))
+    max_nva = int(max_record.get("nva", 90))
 
     sql = f"""
     WITH break_windows AS (
@@ -69,11 +71,13 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     ),
     -- Durasi EFEKTIF per record:
     --   • record PRODUKTIF (activitytype kosong) -> dihitung PENUH (break bukan
-    --     exclusion window untuk productive activity; hanya dicap max_record_minutes)
+    --     exclusion window untuk productive activity; dicap max_record_minutes.va)
     --   • record NON-PRODUKTIF (activitytype terisi) -> overlap jam istirahat
     --     DIKURANGI; record yang SELURUHNYA di jam istirahat (efektif <= 0)
-    --     dianggap tidak valid dan diabaikan
-    -- (Koreksi 2026-08-19: sebelumnya break memotong productive — SALAH.)
+    --     dianggap tidak valid dan diabaikan; dicap max_record_minutes.nva
+    -- (Koreksi 2026-08-19: sebelumnya break memotong productive — SALAH.
+    --  Per-kategori 2026-08-25: timesheet tidak punya NNVA — productive = VA,
+    --  semua activitytype terisi = NVA.)
     -- IEDD/IEDZ jadi SINTETIS = checkin + durasi efektif (filosofi MCH: yang
     -- akurat adalah durasi, bukan jendela waktu aslinya).
     base AS (
@@ -132,7 +136,10 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     effective AS (
       SELECT
         *,
-        LEAST(GREATEST(raw_seconds - break_seconds, 0), %s::bigint * 60) AS effective_seconds
+        LEAST(
+          GREATEST(raw_seconds - break_seconds, 0),
+          CASE WHEN COALESCE(activitytype, '') = '' THEN %s::bigint ELSE %s::bigint END * 60
+        ) AS effective_seconds
       FROM base
     )
     SELECT
@@ -185,7 +192,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         break_windows_json,
         timezone, timezone, timezone, timezone,
         from_ts, timezone, to_ts, timezone,
-        max_minutes,
+        max_va, max_nva,
         timezone, timezone, timezone, timezone, timezone, timezone,
         limit,
     ]

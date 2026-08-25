@@ -71,6 +71,33 @@ def plant_code() -> str:
     return env_value("PLANT_SSB")
 
 
+MAX_RECORD_CATEGORIES = ("va", "nnva", "nva")
+MAX_RECORD_DEFAULT_MINUTES = 90
+
+
+def normalize_max_record_minutes(raw) -> dict:
+    """Terima angka lama (berlaku untuk semua kategori) ATAU object per kategori.
+
+    Struktur baru:
+      "max_record_minutes": {"va": 90, "nnva": 90, "nva": 90}
+    Nilai yang hilang/rusak jatuh ke default 90. Angka lama dipetakan sama ke
+    ketiga kategori supaya rules yang tersimpan sebelum fitur ini tetap berlaku.
+    """
+    if isinstance(raw, dict):
+        result = {}
+        for key in MAX_RECORD_CATEGORIES:
+            try:
+                result[key] = max(1, int(raw.get(key) or MAX_RECORD_DEFAULT_MINUTES))
+            except (TypeError, ValueError):
+                result[key] = MAX_RECORD_DEFAULT_MINUTES
+        return result
+    try:
+        value = max(1, int(raw or MAX_RECORD_DEFAULT_MINUTES))
+    except (TypeError, ValueError):
+        value = MAX_RECORD_DEFAULT_MINUTES
+    return {key: value for key in MAX_RECORD_CATEGORIES}
+
+
 def load_sap_rules(conn) -> dict:
     """Rules SAP dari plant_config.sap_rules (kolom JSONB, diatur dari halaman
     Configuration Rules). Fallback ke default bila baris/kunci belum ada.
@@ -78,11 +105,13 @@ def load_sap_rules(conn) -> dict:
     Struktur:
       {
         "break_windows": [ {"start": "12:00", "end": "13:00", "days": [1,2,3,4,5,6,0]}, ... ],
-        "max_record_minutes": 90
+        "max_record_minutes": {"va": 90, "nnva": 90, "nva": 90}
       }
     `days` = DOW Postgres (0=Sunday..6=Saturday). break windows TIDAK dihitung
     dari durasi record PRODUKTIF; max_record_minutes membatasi durasi SATU record
-    source (lebih dari itu dipotong, sisanya tidak dianggap).
+    source per kategori (VA/NNVA/NVA — lebih dari itu dipotong, sisanya tidak
+    dianggap). Angka lama (sebelum fitur per-kategori) diterima dan dipetakan ke
+    ketiga kategori.
     """
     DEFAULT_RULES = {
         "break_windows": [
@@ -91,7 +120,9 @@ def load_sap_rules(conn) -> dict:
             {"start": "18:30", "end": "19:00", "days": [6, 0]},
             {"start": "22:00", "end": "22:30", "days": [6, 0]},
         ],
-        "max_record_minutes": 90,
+        "max_record_minutes": {
+            key: MAX_RECORD_DEFAULT_MINUTES for key in MAX_RECORD_CATEGORIES
+        },
     }
     try:
         with conn.cursor() as cur:
@@ -104,10 +135,9 @@ def load_sap_rules(conn) -> dict:
         rules.update({k: v for k, v in raw.items() if v is not None})
         if not isinstance(rules.get("break_windows"), list):
             rules["break_windows"] = list(DEFAULT_RULES["break_windows"])
-        try:
-            rules["max_record_minutes"] = max(1, int(rules.get("max_record_minutes") or 90))
-        except (TypeError, ValueError):
-            rules["max_record_minutes"] = DEFAULT_RULES["max_record_minutes"]
+        rules["max_record_minutes"] = normalize_max_record_minutes(
+            rules.get("max_record_minutes", MAX_RECORD_DEFAULT_MINUTES)
+        )
         return rules
     except Exception as exc:  # plant_config belum ada / tak bisa dibaca -> default aman
         logging.getLogger("sap_staging").warning(
@@ -125,7 +155,9 @@ def load_sap_rules_default() -> dict:
             {"start": "18:30", "end": "19:00", "days": [6, 0]},
             {"start": "22:00", "end": "22:30", "days": [6, 0]},
         ],
-        "max_record_minutes": 90,
+        "max_record_minutes": {
+            key: MAX_RECORD_DEFAULT_MINUTES for key in MAX_RECORD_CATEGORIES
+        },
     }
 
 

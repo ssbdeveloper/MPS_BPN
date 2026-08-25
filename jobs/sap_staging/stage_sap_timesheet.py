@@ -138,19 +138,33 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         log.warning("fetch_machine_hour_rows: load_sap_rules gagal, pakai default (%s)", exc)
         rules = load_sap_rules_default()
     break_windows_json = json.dumps(rules.get("break_windows", []))
-    max_minutes = int(rules.get("max_record_minutes", 90))
+    max_record = rules.get("max_record_minutes") or {}
+    max_va = int(max_record.get("va", 90))
+    max_nnva = int(max_record.get("nnva", 90))
+    max_nva = int(max_record.get("nva", 90))
 
     sql = """
     WITH source_rows AS (
       SELECT
         proddataid,
         startdatetime,
-        -- CAP PER RECORD (rules config, 2026-08-19): 1 record mch_transaction maksimal
-        -- N menit (default 90). Lebih dari itu ekor record DIPOTONG di start + N menit,
-        -- sisanya tidak dianggap. Berlaku untuk SEMUA status (bukan hanya produktif).
+        -- CAP PER RECORD per KATEGORI (rules config, 2026-08-25): 1 record
+        -- mch_transaction maksimal N menit sesuai kategorinya — M1 = VA,
+        -- M2 (termasuk idle pendek yang dipromosikan ke M2 di bawah) = NNVA,
+        -- selain itu (activity type numerik) = NVA. Lebih dari itu ekor record
+        -- DIPOTONG di start + N menit, sisanya tidak dianggap.
         LEAST(
           COALESCE(end_effective, enddatetime),
-          startdatetime + (%s::int || ' minutes')::interval
+          startdatetime + (
+            CASE
+              WHEN status_activitytype = 'M1' THEN %s::int
+              WHEN status_activitytype = 'M2'
+                OR (statusid = 2 AND previoustatusid = 1
+                    AND COALESCE(duration_seconds, EXTRACT(EPOCH FROM (enddatetime - startdatetime))) <= 300)
+                THEN %s::int
+              ELSE %s::int
+            END || ' minutes'
+          )::interval
         ) AS enddatetime,
         -- LAPIS 1B — pakai akhir interval yang SUDAH dinormalisasi, bukan enddatetime mentah.
         -- end_effective = LEAST(enddatetime, start baris berikutnya di mesin yang sama), diisi
@@ -506,7 +520,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 sql,
-                (max_minutes, to_ts, from_ts, break_windows_json,
+                (max_va, max_nnva, max_nva, to_ts, from_ts, break_windows_json,
                  from_ts, to_ts, from_ts, to_ts, werks, werks),
             )
             return [dict(row) for row in cur.fetchall()]

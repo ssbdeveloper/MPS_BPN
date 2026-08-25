@@ -4,8 +4,12 @@
 // Menyimpan rules yang dipakai pipeline SAP di plant_config.sap_rules (JSONB):
 //   {
 //     "break_windows": [ {"start":"12:00","end":"13:00","days":[1,2,3,4,5,6,0]}, ... ],
-//     "max_record_minutes": 90
+//     "max_record_minutes": { "va": 90, "nnva": 90, "nva": 90 }
 //   }
+// max_record_minutes per KATEGORI record: VA (produktif, MCH M1 / timesheet
+// tanpa activitytype), NNVA (produktif setup, MCH M2), NVA (unproduktif,
+// activity type numerik di kedua sumber). Angka lama (sebelum fitur ini)
+// diterima dan dipetakan sama ke ketiga kategori.
 // Python staging (jobs/sap_staging) membaca kolom yang sama — jadi simpan di sini
 // = langsung berlaku untuk staging berikutnya (rebuild untuk antrian PENDING lama).
 
@@ -15,6 +19,8 @@ const { reloadPlantConfig } = require("../config/plantConfig");
 // DOW Postgres: 0=Sunday..6=Saturday. Semua 7 hari = [0,1,2,3,4,5,6].
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MAX_RECORD_KEYS = ["va", "nnva", "nva"];
+const MAX_RECORD_DEFAULT = 90;
 
 const DEFAULT_RULES = {
   break_windows: [
@@ -23,8 +29,25 @@ const DEFAULT_RULES = {
     { start: "18:30", end: "19:00", days: [6, 0] },
     { start: "22:00", end: "22:30", days: [6, 0] },
   ],
-  max_record_minutes: 90,
+  max_record_minutes: { va: 90, nnva: 90, nva: 90 },
 };
+
+function normalizeMaxRecordMinutes(raw) {
+  const parse = (v) => {
+    const n = Number.parseInt(v, 10);
+    return Number.isFinite(n) && n >= 1 ? n : MAX_RECORD_DEFAULT;
+  };
+  if (raw && typeof raw === "object") {
+    const out = {};
+    for (const key of MAX_RECORD_KEYS) {
+      out[key] = parse(raw[key]);
+    }
+    return out;
+  }
+  // Legacy: angka tunggal berlaku untuk semua kategori.
+  const minutes = parse(raw);
+  return { va: minutes, nnva: minutes, nva: minutes };
+}
 
 function normalizeRules(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
@@ -40,10 +63,9 @@ function normalizeRules(raw) {
         }))
         .filter((w) => w.days.length > 0)
     : [];
-  const minutes = Number.parseInt(src.max_record_minutes, 10);
   return {
     break_windows: windows,
-    max_record_minutes: Number.isFinite(minutes) && minutes >= 1 ? minutes : DEFAULT_RULES.max_record_minutes,
+    max_record_minutes: normalizeMaxRecordMinutes(src.max_record_minutes),
   };
 }
 

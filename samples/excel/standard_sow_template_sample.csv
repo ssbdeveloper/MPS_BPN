@@ -1,5 +1,0 @@
-template_name;operation_no;operation_text;part_name;model;part_number;wct_group;std_hours;loading;setting;measurement;unloading;total_std;remark;source_plant
-Contoh paket 1;10;Order bushing;Head As Booms;6015/6015B;4250681;PPC;10;1;1;1;1;;contoh 1;5051
-Contoh paket 1;20;Inspection new bushing;Head As Booms;6015/6015B;4250681;QCP;11;0.5;0.5;0.5;0.5;;contoh 2;5051
-Contoh paket 1;30;Remove old bushing;Head As Booms;6015/6015B;4250681;DIS;12;0.5;0.5;0.5;0.5;;contoh 3;5051
-Contoh paket 1;40;Install new bushing;Head As Booms;6015/6015B;4250681;DIS;13;0.5;0.5;0.5;0.5;;;5051

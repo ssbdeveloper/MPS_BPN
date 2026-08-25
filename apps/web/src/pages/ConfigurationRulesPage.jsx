@@ -44,6 +44,28 @@ const FAKE_DEFAULTS = {
   language: 'id',
 };
 
+const MAX_RECORD_KEYS = ['va', 'nnva', 'nva'];
+const MAX_RECORD_DEFAULT = 90;
+const MAX_RECORD_LABELS = {
+  va: 'VA',
+  nnva: 'NNVA',
+  nva: 'NVA',
+};
+
+function normalizeMaxRecord(raw) {
+  if (raw && typeof raw === 'object') {
+    const out = {};
+    for (const key of MAX_RECORD_KEYS) {
+      const n = Number(raw[key]);
+      out[key] = Number.isFinite(n) && n >= 1 ? n : MAX_RECORD_DEFAULT;
+    }
+    return out;
+  }
+  const n = Number(raw);
+  const minutes = Number.isFinite(n) && n >= 1 ? n : MAX_RECORD_DEFAULT;
+  return { va: minutes, nnva: minutes, nva: minutes };
+}
+
 function timeToMinutes(t) {
   const [h, m] = String(t || '').split(':').map(Number);
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : NaN;
@@ -78,6 +100,24 @@ function Toggle({ checked, onChange, label }) {
   );
 }
 
+function MaxRecordRow({ label, value, onChange }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <p className="text-xs font-bold text-slate-700">{label}</p>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={1}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value) || 0)}
+          className="h-9 w-20 rounded-lg border border-slate-400 bg-white px-2 text-xs font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+        />
+        <span className="text-xs font-bold text-slate-400">min</span>
+      </div>
+    </div>
+  );
+}
+
 function SectionCard({ icon: Icon, title, subtitle, children, accent = '#0077b6' }) {
   const IconComponent = Icon;
   return (
@@ -104,7 +144,7 @@ export default function ConfigurationRulesPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
-  const [maxMinutes, setMaxMinutes] = useState(90);
+  const [maxRules, setMaxRules] = useState({ va: MAX_RECORD_DEFAULT, nnva: MAX_RECORD_DEFAULT, nva: MAX_RECORD_DEFAULT });
   const [windows, setWindows] = useState([]);
   const [rebuildDate, setRebuildDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [hiddenMenus, setHiddenMenus] = useState(() => getHiddenHubMenus());
@@ -118,7 +158,7 @@ export default function ConfigurationRulesPage() {
       const payload = await res.json();
       const rules = payload?.data || {};
       setWindows(Array.isArray(rules.break_windows) ? rules.break_windows : []);
-      setMaxMinutes(Number(rules.max_record_minutes) || 90);
+      setMaxRules(normalizeMaxRecord(rules.max_record_minutes));
     } catch (err) {
       toast.error(`Failed to load rules: ${err.message}`);
     } finally {
@@ -156,7 +196,7 @@ export default function ConfigurationRulesPage() {
       const res = await fetch(`${API_BASE}/config/rules`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ break_windows: windows, max_record_minutes: maxMinutes }),
+        body: JSON.stringify({ break_windows: windows, max_record_minutes: maxRules }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
@@ -429,18 +469,37 @@ export default function ConfigurationRulesPage() {
               <SectionCard
                 icon={SlidersHorizontal}
                 title="Max Record Duration"
-                subtitle="One timesheet/machine record may not exceed this — longer records are cut, the rest is ignored."
+                subtitle="Per record type — longer records are cut, the rest is ignored."
               >
-                <div className="flex flex-wrap items-center gap-3">
-                  <input
-                    type="number"
-                    min={1}
-                    value={maxMinutes}
-                    onChange={(e) => setMaxMinutes(Number(e.target.value) || 0)}
-                    className="h-10 w-28 rounded-xl border border-slate-400 bg-white px-3 text-sm font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
-                  />
-                  <span className="text-sm font-bold text-slate-700">minutes</span>
-                  <span className="mt-1 w-full rounded-full bg-slate-100 px-2.5 py-1 text-center text-[11px] font-bold text-slate-500">
+                <div className="space-y-4">
+                  <div>
+                    <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                      Productive
+                    </p>
+                    <div className="space-y-2.5">
+                      <MaxRecordRow
+                        label={MAX_RECORD_LABELS.va}
+                        value={maxRules.va}
+                        onChange={(v) => setMaxRules((prev) => ({ ...prev, va: v }))}
+                      />
+                      <MaxRecordRow
+                        label={MAX_RECORD_LABELS.nnva}
+                        value={maxRules.nnva}
+                        onChange={(v) => setMaxRules((prev) => ({ ...prev, nnva: v }))}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                      Unproductive
+                    </p>
+                    <MaxRecordRow
+                      label={MAX_RECORD_LABELS.nva}
+                      value={maxRules.nva}
+                      onChange={(v) => setMaxRules((prev) => ({ ...prev, nva: v }))}
+                    />
+                  </div>
+                  <span className="block rounded-full bg-slate-100 px-2.5 py-1 text-center text-[11px] font-bold text-slate-500">
                     applied in SAP staging
                   </span>
                 </div>

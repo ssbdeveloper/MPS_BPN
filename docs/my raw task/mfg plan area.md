@@ -1,4 +1,0 @@
-aku butuh fitur untuk bagian area saat schedule itu filter yang hanya 7 hari kedepan dan yang belum selesai. schedule ini dapat dari ms project, berarti task di database. 
-tampilan sow-scheduling/area tidak efesien dan berat, rombak total. buat improvisasi mu yang UI UX lebih baik. aku ingin tampilan pertama hanya nampilin layout area saja, full satu screen, jadi user pilih misal bay berapa baru muncul kiri untuk order yang bisa dipilih (harus sesuai range schedule 7 hari kedepan atau yang belum selesai defaultnya). user bisa booking ke area bay untuk bikin booking diluar job misal untuk kebutuhan tertentu booking area untuk parkir unit, taruh barang atau lain lain.  
-di scheduling area aku mau bisa multiple order jadi bisa ditumpuk beberapa order. 
-di SOW table, ppc bisa ganti workcenter ke C5100SUB, ini maksudnya untuk menandakan bahwa operation tersebut akan dikerjakan subcont, jadi hours ditagihkan ke vendor bukan hours yang dikonsumi internal
