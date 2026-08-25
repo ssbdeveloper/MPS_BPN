@@ -125,12 +125,6 @@ function EwsForemanTeamPage() {
       <main className="w-full space-y-4 px-4 py-5 md:px-6">
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div>}
 
-        <div className="rounded-xl border border-[#90e0ef] bg-[#caf0f8] px-4 py-3 text-xs text-slate-700 md:text-sm">
-          Drag an operator from the list onto a foreman to assign them as a subordinate. One operator
-          belongs to one foreman — dragging again moves them. A foreman sees only their team in the
-          roster heatmap (toggle "All operators" to view everyone).
-        </div>
-
         {loading ? (
           <div className="flex justify-center py-16"><Loader2 size={22} className="animate-spin text-[#0096c7]" /></div>
         ) : (

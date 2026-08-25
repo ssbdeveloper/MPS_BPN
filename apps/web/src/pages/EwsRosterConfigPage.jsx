@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, X, Eye, Info } from 'lucide-react';
+import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, X, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -226,15 +226,6 @@ function EwsRosterConfigPage() {
 
       <main className="w-full space-y-5 px-4 py-5 md:px-6">
         {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div>}
-
-        <div className="flex items-start gap-2.5 rounded-xl border border-[#90e0ef] bg-[#caf0f8] px-4 py-3 text-xs text-slate-700 md:text-sm">
-          <Info size={18} className="mt-0.5 flex-shrink-0 text-[#0077b6]" />
-          <p>
-            <b>Workdays</b> &amp; <b>Groups</b> apply <b>after Generate</b> (forward-only — existing roster
-            rows are not changed). <b>Shift Lock</b> is a separate path: it applies immediately{' '}
-            <b>without regenerating</b>.
-          </p>
-        </div>
 
         <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
           <Card title="Workdays per Shift" icon={CalendarCog}>

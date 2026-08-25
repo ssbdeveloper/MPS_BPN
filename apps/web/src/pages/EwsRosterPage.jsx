@@ -563,12 +563,6 @@ function EwsRosterPage() {
               <span className="flex items-center gap-1"><span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span> half day</span>
             </div>
           </section>
-
-          <p className="text-[11px] font-semibold text-slate-400">
-            Scheduled operators with no logs count as <b>Absent</b> in the adoption KPI. Click or drag
-            across cells to select, then edit status / half-day in the panel. <b>Delete</b> works for
-            today and future dates only.
-          </p>
         </div>
 
         {panelOpen && selectedKeys.length > 0 && (
