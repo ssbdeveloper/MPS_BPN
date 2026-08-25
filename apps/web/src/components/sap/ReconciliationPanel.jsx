@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, ChevronRight,
-  Clock, Cpu, Factory, Info, Loader2, RefreshCw, XCircle,
+  Clock, Cpu, Download, Factory, Info, Loader2, RefreshCw, XCircle,
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -175,6 +176,7 @@ function ReconciliationPanel() {
   const [error, setError] = useState(null);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   // Drill: selected date (level-2) & selected confirmation (level-3).
   const [day, setDay] = useState(null);       // { date }
@@ -214,6 +216,32 @@ function ReconciliationPanel() {
     return () => c.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Export rekonsiliasi rentang terpilih ke Excel (.xlsx dari backend).
+  const handleExport = useCallback(async () => {
+    if (!from || !to) { toast.warning('Pick From and To dates first.'); return; }
+    setExporting(true);
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-reconciliation-export?from=${from}&to=${to}`);
+      if (!res.ok) {
+        const p = await res.json().catch(() => ({}));
+        throw new Error(p.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = `sap_reconciliation_${from}_to_${to}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error('Export failed', { description: err.message });
+    } finally {
+      setExporting(false);
+    }
+  }, [from, to]);
 
   // Staging job status: poll while one is running, stop when finished.
   const pollOps = useCallback(async () => {
@@ -347,6 +375,15 @@ function ReconciliationPanel() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <h2 className="text-sm font-extrabold text-slate-800">Machine hours → SAP</h2>
         <form onSubmit={(e) => { e.preventDefault(); setDay(null); setRec(null); load(); }} className="flex items-end gap-2">
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || !from || !to}
+            title="Export reconciliation to Excel"
+            className="flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export
+          </button>
           <label className="flex flex-col text-[11px] font-semibold text-slate-500">From
             <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
               className="mt-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
@@ -380,7 +417,9 @@ function ReconciliationPanel() {
             <>
               {/* 3-step flow */}
               <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
-                <StepCard icon={Factory} label="Machine hours" hours={f.mch_clamped_hrs} tone="blue" />
+                <StepCard icon={Factory} label="Machine hours" hours={f.mch_clamped_hrs} tone="blue">
+                  {f.cap_cut_hrs > 0.01 && <>cut {fmtDur(f.cap_cut_hrs)} by max record rule</>}
+                </StepCard>
                 <ArrowRight size={18} className="mx-auto hidden flex-shrink-0 text-slate-300 sm:block" />
                 <StepCard icon={CheckCircle2} label="Posted to SAP" hours={f.posted_hrs} tone="green">
                   order {fmtDur(f.posted_order_hrs)} · activity {fmtDur(f.posted_cc_hrs)}
@@ -436,6 +475,7 @@ function ReconciliationPanel() {
                       <tr style={{ background: '#caf0f8' }} className="text-left text-[11px] uppercase tracking-wide text-slate-600">
                         <th className="px-4 py-2 font-semibold">Date</th>
                         <th className="px-3 py-2 text-right font-semibold">Machine hrs</th>
+                        <th className="px-3 py-2 text-right font-semibold text-amber-700">Cut (max record)</th>
                         <th className="px-3 py-2 text-right font-semibold text-emerald-700">Posted</th>
                         <th className="px-3 py-2 text-right font-semibold text-amber-700">Not posted</th>
                         <th className="px-2 py-2 font-semibold" />
@@ -462,6 +502,9 @@ function ReconciliationPanel() {
                               )}
                             </td>
                             <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{fmtDur(r.mch_clamped_hrs)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: r.cap_cut_hrs > 0.05 ? '#d97706' : '#cbd5e1' }}>
+                              {r.cap_cut_hrs > 0.05 ? fmtDur(r.cap_cut_hrs) : '·'}
+                            </td>
                             <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-emerald-700">{r.posted_hrs > 0 ? fmtDur(r.posted_hrs) : '·'}</td>
                             <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: belum > 0.05 ? '#d97706' : '#cbd5e1' }}>{belum > 0.05 ? fmtDur(belum) : '·'}</td>
                             <td className="px-2 py-2.5 text-right"><ChevronRight size={16} className="ml-auto text-slate-300" /></td>
@@ -469,7 +512,7 @@ function ReconciliationPanel() {
                         );
                       })}
                       {(data.by_date || []).length === 0 && (
-                        <tr><td colSpan={5} className="px-3 py-8 text-center text-sm text-slate-400">No data in this range.</td></tr>
+                        <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-slate-400">No data in this range.</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -505,6 +548,7 @@ function ReconciliationPanel() {
                         <th className="px-3 py-2 font-semibold">Type</th>
                         <th className="px-3 py-2 font-semibold">Machine</th>
                         <th className="px-3 py-2 text-right font-semibold">Machine hrs</th>
+                        <th className="px-3 py-2 text-right font-semibold text-amber-700">Cut</th>
                         <th className="px-3 py-2 text-right font-semibold">Sent</th>
                         <th className="px-3 py-2 font-semibold">Status</th>
                         <th className="px-2 py-2 font-semibold" />
@@ -534,7 +578,7 @@ function ReconciliationPanel() {
                                 </div>
                               </div>
                             </td>
-                            <td colSpan={4} className="px-3 py-2.5 text-right text-[11px]">
+                            <td colSpan={5} className="px-3 py-2.5 text-right text-[11px]">
                               <span className="text-slate-400">machine </span>
                               <span className="font-bold tabular-nums text-slate-700">{fmtDur(g.source_hrs)}</span>
                               <span className="ml-3 text-slate-400">posted </span>
@@ -578,6 +622,9 @@ function ReconciliationPanel() {
                                   {fmtDur(src)}
                                   {b.has_stuck && <span title="Machine signal dropped for a while" className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle" />}
                                 </td>
+                                <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums" style={{ color: Number(b.cap_cut_hrs || 0) > 0.02 ? '#d97706' : '#cbd5e1' }}>
+                                  {Number(b.cap_cut_hrs || 0) > 0.02 ? fmtDur(b.cap_cut_hrs) : '·'}
+                                </td>
                                 <td className="px-3 py-2.5 text-right tabular-nums">
                                   <span className={diff > 0.1 ? 'font-bold text-amber-700' : 'text-slate-700'}>{fmtDur(sent)}</span>
                                   {diff > 0.1 && (
@@ -596,7 +643,7 @@ function ReconciliationPanel() {
                     })}
                     {dayGroups.length === 0 && (
                       <tbody>
-                        <tr><td colSpan={10} className="px-3 py-8 text-center text-sm text-slate-400">No confirmations{dayFilter !== 'all' ? ' for this filter' : ''} on this date.</td></tr>
+                        <tr><td colSpan={11} className="px-3 py-8 text-center text-sm text-slate-400">No confirmations{dayFilter !== 'all' ? ' for this filter' : ''} on this date.</td></tr>
                       </tbody>
                     )}
                   </table>
@@ -679,6 +726,14 @@ function ReconciliationPanel() {
                                 ) : trimmed ? (
                                   <span className="text-[10px] text-slate-400">trimmed</span>
                                 ) : null}
+                                {Number(m.cap_cut_hrs || 0) > 0.02 && (
+                                  <span
+                                    title="Trimmed by the max record duration rule"
+                                    className={`inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 ${m.is_stuck || trimmed ? 'ml-1' : ''}`}
+                                  >
+                                    cap cut {fmtDur(m.cap_cut_hrs)}
+                                  </span>
+                                )}
                               </td>
                             </tr>
                           );

@@ -17,6 +17,7 @@ router.get("/operations-hub", controller.getOperationsHub);
 router.get("/sap-timesheet-staging-log", controller.getSapTimesheetStagingLog);
 router.get("/sap-timesheet-staging-summary", controller.getSapTimesheetStagingSummary);
 router.get("/sap-reconciliation", controller.getSapReconciliation);
+router.get("/sap-reconciliation-export", controller.exportSapReconciliation);
 router.get("/sap-reconciliation-day", controller.getSapReconciliationDay);
 router.get("/sap-reconciliation-record", controller.getSapReconciliationRecord);
 router.post("/sap-ops/enqueue", controller.enqueueSapOps);

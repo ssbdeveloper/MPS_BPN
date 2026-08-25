@@ -1,6 +1,7 @@
 const pool = global.pool || require("../db");
 const { resolveTimezone } = require("../config/timezone");
 const { classifySapError } = require("../utils/sapErrorClassifier");
+const ExcelJS = require("exceljs");
 
 // Timezone comes from the root .env (TIMEZONE). Never hardcode it here: the daily buckets
 // below compare against CURRENT_DATE, which follows the Postgres session timezone, so a
@@ -1458,6 +1459,182 @@ const CLAMPED_SEG_SECONDS = `
   ))::bigint, 0)
 `;
 
+// Cap max record duration per kategori (plant_config.sap_rules) — normalisasi sama
+// seperti configRulesController.normalizeMaxRecordMinutes. Angka lama (legacy)
+// dipetakan sama ke semua kategori.
+async function loadMaxRecordMinutes() {
+  try {
+    const r = await pool.query("SELECT sap_rules FROM public.plant_config WHERE id = 1 LIMIT 1");
+    const raw = r.rows[0]?.sap_rules || {};
+    const m = raw.max_record_minutes;
+    const pick = (v) => {
+      const n = Number.parseInt(v, 10);
+      return Number.isFinite(n) && n >= 1 ? n : 90;
+    };
+    if (m && typeof m === "object") return { va: pick(m.va), nnva: pick(m.nnva), nva: pick(m.nva) };
+    const v = pick(m);
+    return { va: v, nnva: v, nva: v };
+  } catch (err) {
+    console.error("loadMaxRecordMinutes error:", err.message);
+    return { va: 90, nnva: 90, nva: 90 };
+  }
+}
+
+// Detik yang DIPOTONG dari satu record mch_transaction karena melebihi max record
+// duration (rules per kategori: M1=VA, M2/idle-promotable=NNVA, selain itu=NVA).
+// CASE-nya IDENTIK dengan cap di jobs/sap_staging/stage_sap_timesheet.py source_rows
+// — jangan sampai beda arah (rekonsiliasi harus mencerminkan yang benar-benar di-stage).
+// va/nnva/nva adalah integer tervalidasi (parseInt) — aman di-interpolasi.
+const CAP_CUT_SECONDS = (va, nnva, nva) => `
+  GREATEST(
+    EXTRACT(EPOCH FROM (COALESCE(m.end_effective, m.enddatetime) - m.startdatetime))
+    - (CASE
+        WHEN m.status_activitytype = 'M1' THEN ${va}
+        WHEN m.status_activitytype = 'M2'
+          OR (m.statusid = 2 AND m.previoustatusid = 1
+              AND COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime))) <= 300)
+          THEN ${nnva}
+        ELSE ${nva}
+      END * 60),
+    0
+  )`;
+
+// Data rekonsiliasi (dipakai endpoint JSON dan export Excel — satu sumber kebenaran).
+async function loadSapReconciliationData(fromDate, toDate) {
+  const { rows: rr } = await pool.query(
+    `SELECT COALESCE($1::date, (now() AT TIME ZONE '${TZ}')::date - 29) AS from_d,
+            COALESCE($2::date, (now() AT TIME ZONE '${TZ}')::date)      AS to_d`,
+    [fromDate, toDate],
+  );
+  const fromD = rr[0].from_d;
+  const toD = rr[0].to_d;
+  const caps = await loadMaxRecordMinutes();
+  const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
+
+  const [mchByDate, stgByDate, actions] = await Promise.all([
+    // mch_transaction eligible per hari kerja: jam mentah, clamp, potongan max record,
+    // overlap (nyangkut).
+    pool.query(
+      `SELECT m.startdatetime::date AS d,
+         round(sum(EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))/3600.0, 2) AS raw_hrs,
+         round(sum(EXTRACT(EPOCH FROM (COALESCE(m.end_effective, m.enddatetime) - m.startdatetime)))/3600.0, 2) AS clamped_hrs,
+         round(sum(${cutSec})/3600.0, 2) AS cap_cut_hrs,
+         round(sum(m.overlap_seconds)/3600.0, 2) AS overlap_hrs,
+         count(*)::int AS rows_eligible,
+         count(*) FILTER (WHERE m.is_stuck)::int AS rows_stuck
+       FROM public.mch_transaction m
+       WHERE m.startdatetime::date BETWEEN $1 AND $2 AND ${MCH_SAP_ELIGIBLE}
+       GROUP BY 1 ORDER BY 1`,
+      [fromD, toD],
+    ),
+    // staging bundel per hari-bundel + status + jenis (produktif=ke order, unproduktif=cost-center).
+    // Pemisahan is_productive PENTING: CSV konfirmasi-order SAP hanya memuat yang PRODUKTIF,
+    // jadi tanpa split, "POSTED" total (prod+unprod) tak akan pernah cocok dengan CSV.
+    pool.query(
+      `SELECT st.bucket_start::date AS d, st.status, st.is_productive,
+         round(sum(st.total_seconds)/3600.0, 2) AS hrs, count(*)::int AS n
+       FROM public.sap_timesheet_staging st
+       WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date BETWEEN $1 AND $2
+       GROUP BY 1, 2, 3`,
+      [fromD, toD],
+    ),
+    // Perlu diperbaiki: bundel PENDING yang disuapi baris nyangkut (mengecil saat re-stage),
+    // plus FAILED & SKIPPED.
+    pool.query(
+      `WITH pend AS (
+         SELECT src.staging_id,
+           sum(src.seconds) AS raw_sec,
+           sum(${CLAMPED_SEG_SECONDS}) AS clamp_sec
+         FROM public.sap_staging_source src
+         JOIN public.sap_timesheet_staging st
+           ON st.id = src.staging_id AND st.status = 'PENDING' AND st.source_system = 'MCH_HOURS'
+         JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+         WHERE st.bucket_start::date BETWEEN $1 AND $2
+         GROUP BY src.staging_id
+         HAVING sum(src.seconds) > sum(${CLAMPED_SEG_SECONDS})
+       )
+       SELECT
+         (SELECT count(*) FROM pend)::int AS stuck_pending_bundles,
+         round(COALESCE((SELECT sum(raw_sec - clamp_sec) FROM pend), 0)/3600.0, 2) AS stuck_pending_reduction_hrs,
+         (SELECT count(*) FROM public.sap_timesheet_staging
+            WHERE source_system='MCH_HOURS' AND status='FAILED' AND bucket_start::date BETWEEN $1 AND $2)::int AS failed_bundles,
+         (SELECT count(*) FROM public.sap_timesheet_staging
+            WHERE source_system='MCH_HOURS' AND status='SKIPPED' AND bucket_start::date BETWEEN $1 AND $2)::int AS skipped_bundles`,
+      [fromD, toD],
+    ),
+  ]);
+
+  // Gabung per tanggal.
+  const byDate = new Map();
+  const row = (d) => {
+    const key = String(d);
+    if (!byDate.has(key)) {
+      byDate.set(key, {
+        date: key, mch_clamped_hrs: 0, mch_raw_hrs: 0, cap_cut_hrs: 0, overlap_hrs: 0,
+        rows_eligible: 0, rows_stuck: 0,
+        staged_hrs: 0, posted_hrs: 0, pending_hrs: 0, failed_hrs: 0, skipped_hrs: 0,
+        posted_n: 0, pending_n: 0, failed_n: 0, skipped_n: 0,
+        // POSTED dipecah: ke ORDER (produktif, muncul di CSV konfirmasi SAP) vs
+        // COST-CENTER (unproduktif/LSTAR, TIDAK di CSV order).
+        posted_order_hrs: 0, posted_cc_hrs: 0,
+      });
+    }
+    return byDate.get(key);
+  };
+  for (const r of mchByDate.rows) {
+    const e = row(r.d);
+    e.mch_clamped_hrs = num(r.clamped_hrs);
+    e.mch_raw_hrs = num(r.raw_hrs);
+    e.cap_cut_hrs = num(r.cap_cut_hrs);
+    e.overlap_hrs = num(r.overlap_hrs);
+    e.rows_eligible = num(r.rows_eligible);
+    e.rows_stuck = num(r.rows_stuck);
+  }
+  const STG_KEY = { POSTED: ["posted_hrs", "posted_n"], PENDING: ["pending_hrs", "pending_n"], FAILED: ["failed_hrs", "failed_n"], SKIPPED: ["skipped_hrs", "skipped_n"] };
+  for (const r of stgByDate.rows) {
+    const e = row(r.d);
+    e.staged_hrs += num(r.hrs);
+    const k = STG_KEY[r.status];
+    if (k) { e[k[0]] += num(r.hrs); e[k[1]] += num(r.n); }
+    if (r.status === "POSTED") {
+      if (r.is_productive) e.posted_order_hrs += num(r.hrs);
+      else e.posted_cc_hrs += num(r.hrs);
+    }
+    // POSTING (langka, transient) dijumlahkan ke staged tapi tak dikolomkan sendiri.
+  }
+  const by_date = [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)); // terbaru dulu
+
+  // Funnel total (agregat rentang).
+  const sum = (f) => by_date.reduce((s, r) => s + f(r), 0);
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const funnel = {
+    mch_raw_hrs: r2(sum((r) => r.mch_raw_hrs)),
+    mch_clamped_hrs: r2(sum((r) => r.mch_clamped_hrs)),
+    cap_cut_hrs: r2(sum((r) => r.cap_cut_hrs)),
+    overlap_hrs: r2(sum((r) => r.overlap_hrs)),
+    staged_hrs: r2(sum((r) => r.staged_hrs)),
+    posted_hrs: r2(sum((r) => r.posted_hrs)),
+    posted_order_hrs: r2(sum((r) => r.posted_order_hrs)),  // = CSV konfirmasi-order SAP
+    posted_cc_hrs: r2(sum((r) => r.posted_cc_hrs)),        // cost-center, tak di CSV
+    pending_hrs: r2(sum((r) => r.pending_hrs)),
+    failed_hrs: r2(sum((r) => r.failed_hrs)),
+    skipped_hrs: r2(sum((r) => r.skipped_hrs)),
+    rows_eligible: sum((r) => r.rows_eligible),
+    rows_stuck: sum((r) => r.rows_stuck),
+    posted_n: sum((r) => r.posted_n),
+    pending_n: sum((r) => r.pending_n),
+    failed_n: sum((r) => r.failed_n),
+    skipped_n: sum((r) => r.skipped_n),
+  };
+
+  return {
+    range: { from: String(fromD), to: String(toD) },
+    funnel,
+    by_date,
+    action_items: actions.rows[0] || {},
+  };
+}
+
 // GET /dashboard/sap-reconciliation?from=YYYY-MM-DD&to=YYYY-MM-DD
 // Rekonsiliasi rantai jam mesin: mch_transaction (sumber, mentah vs clamp) -> staging
 // (bundel yang dikirim) -> status SAP (POSTED/PENDING/FAILED/SKIPPED). Menjelaskan KENAPA
@@ -1466,139 +1643,83 @@ async function getSapReconciliation(req, res) {
   try {
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") ? req.query.from : null;
     const toDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "") ? req.query.to : null;
-
-    // Default: 30 hari terakhir (kalender lokal). $1/$2 = batas tanggal inklusif.
-    const { rows: rr } = await pool.query(
-      `SELECT COALESCE($1::date, (now() AT TIME ZONE '${TZ}')::date - 29) AS from_d,
-              COALESCE($2::date, (now() AT TIME ZONE '${TZ}')::date)      AS to_d`,
-      [fromDate, toDate],
-    );
-    const fromD = rr[0].from_d;
-    const toD = rr[0].to_d;
-
-    const [mchByDate, stgByDate, actions] = await Promise.all([
-      // mch_transaction eligible per hari kerja: jam mentah, clamp, overlap (nyangkut).
-      pool.query(
-        `SELECT m.startdatetime::date AS d,
-           round(sum(EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))/3600.0, 2) AS raw_hrs,
-           round(sum(EXTRACT(EPOCH FROM (COALESCE(m.end_effective, m.enddatetime) - m.startdatetime)))/3600.0, 2) AS clamped_hrs,
-           round(sum(m.overlap_seconds)/3600.0, 2) AS overlap_hrs,
-           count(*)::int AS rows_eligible,
-           count(*) FILTER (WHERE m.is_stuck)::int AS rows_stuck
-         FROM public.mch_transaction m
-         WHERE m.startdatetime::date BETWEEN $1 AND $2 AND ${MCH_SAP_ELIGIBLE}
-         GROUP BY 1 ORDER BY 1`,
-        [fromD, toD],
-      ),
-      // staging bundel per hari-bundel + status + jenis (produktif=ke order, unproduktif=cost-center).
-      // Pemisahan is_productive PENTING: CSV konfirmasi-order SAP hanya memuat yang PRODUKTIF,
-      // jadi tanpa split, "POSTED" total (prod+unprod) tak akan pernah cocok dengan CSV.
-      pool.query(
-        `SELECT st.bucket_start::date AS d, st.status, st.is_productive,
-           round(sum(st.total_seconds)/3600.0, 2) AS hrs, count(*)::int AS n
-         FROM public.sap_timesheet_staging st
-         WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date BETWEEN $1 AND $2
-         GROUP BY 1, 2, 3`,
-        [fromD, toD],
-      ),
-      // Perlu diperbaiki: bundel PENDING yang disuapi baris nyangkut (mengecil saat re-stage),
-      // plus FAILED & SKIPPED.
-      pool.query(
-        `WITH pend AS (
-           SELECT src.staging_id,
-             sum(src.seconds) AS raw_sec,
-             sum(${CLAMPED_SEG_SECONDS}) AS clamp_sec
-           FROM public.sap_staging_source src
-           JOIN public.sap_timesheet_staging st
-             ON st.id = src.staging_id AND st.status = 'PENDING' AND st.source_system = 'MCH_HOURS'
-           JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-           WHERE st.bucket_start::date BETWEEN $1 AND $2
-           GROUP BY src.staging_id
-           HAVING sum(src.seconds) > sum(${CLAMPED_SEG_SECONDS})
-         )
-         SELECT
-           (SELECT count(*) FROM pend)::int AS stuck_pending_bundles,
-           round(COALESCE((SELECT sum(raw_sec - clamp_sec) FROM pend), 0)/3600.0, 2) AS stuck_pending_reduction_hrs,
-           (SELECT count(*) FROM public.sap_timesheet_staging
-              WHERE source_system='MCH_HOURS' AND status='FAILED' AND bucket_start::date BETWEEN $1 AND $2)::int AS failed_bundles,
-           (SELECT count(*) FROM public.sap_timesheet_staging
-              WHERE source_system='MCH_HOURS' AND status='SKIPPED' AND bucket_start::date BETWEEN $1 AND $2)::int AS skipped_bundles`,
-        [fromD, toD],
-      ),
-    ]);
-
-    // Gabung per tanggal.
-    const byDate = new Map();
-    const row = (d) => {
-      const key = String(d);
-      if (!byDate.has(key)) {
-        byDate.set(key, {
-          date: key, mch_clamped_hrs: 0, mch_raw_hrs: 0, overlap_hrs: 0,
-          rows_eligible: 0, rows_stuck: 0,
-          staged_hrs: 0, posted_hrs: 0, pending_hrs: 0, failed_hrs: 0, skipped_hrs: 0,
-          posted_n: 0, pending_n: 0, failed_n: 0, skipped_n: 0,
-          // POSTED dipecah: ke ORDER (produktif, muncul di CSV konfirmasi SAP) vs
-          // COST-CENTER (unproduktif/LSTAR, TIDAK di CSV order).
-          posted_order_hrs: 0, posted_cc_hrs: 0,
-        });
-      }
-      return byDate.get(key);
-    };
-    for (const r of mchByDate.rows) {
-      const e = row(r.d);
-      e.mch_clamped_hrs = num(r.clamped_hrs);
-      e.mch_raw_hrs = num(r.raw_hrs);
-      e.overlap_hrs = num(r.overlap_hrs);
-      e.rows_eligible = num(r.rows_eligible);
-      e.rows_stuck = num(r.rows_stuck);
-    }
-    const STG_KEY = { POSTED: ["posted_hrs", "posted_n"], PENDING: ["pending_hrs", "pending_n"], FAILED: ["failed_hrs", "failed_n"], SKIPPED: ["skipped_hrs", "skipped_n"] };
-    for (const r of stgByDate.rows) {
-      const e = row(r.d);
-      e.staged_hrs += num(r.hrs);
-      const k = STG_KEY[r.status];
-      if (k) { e[k[0]] += num(r.hrs); e[k[1]] += num(r.n); }
-      if (r.status === "POSTED") {
-        if (r.is_productive) e.posted_order_hrs += num(r.hrs);
-        else e.posted_cc_hrs += num(r.hrs);
-      }
-      // POSTING (langka, transient) dijumlahkan ke staged tapi tak dikolomkan sendiri.
-    }
-    const by_date = [...byDate.values()].sort((a, b) => (a.date < b.date ? 1 : -1)); // terbaru dulu
-
-    // Funnel total (agregat rentang).
-    const sum = (f) => by_date.reduce((s, r) => s + f(r), 0);
-    const r2 = (n) => Math.round(n * 100) / 100;
-    const funnel = {
-      mch_raw_hrs: r2(sum((r) => r.mch_raw_hrs)),
-      mch_clamped_hrs: r2(sum((r) => r.mch_clamped_hrs)),
-      overlap_hrs: r2(sum((r) => r.overlap_hrs)),
-      staged_hrs: r2(sum((r) => r.staged_hrs)),
-      posted_hrs: r2(sum((r) => r.posted_hrs)),
-      posted_order_hrs: r2(sum((r) => r.posted_order_hrs)),  // = CSV konfirmasi-order SAP
-      posted_cc_hrs: r2(sum((r) => r.posted_cc_hrs)),        // cost-center, tak di CSV
-      pending_hrs: r2(sum((r) => r.pending_hrs)),
-      failed_hrs: r2(sum((r) => r.failed_hrs)),
-      skipped_hrs: r2(sum((r) => r.skipped_hrs)),
-      rows_eligible: sum((r) => r.rows_eligible),
-      rows_stuck: sum((r) => r.rows_stuck),
-      posted_n: sum((r) => r.posted_n),
-      pending_n: sum((r) => r.pending_n),
-      failed_n: sum((r) => r.failed_n),
-      skipped_n: sum((r) => r.skipped_n),
-    };
-
-    res.json({
-      data: {
-        range: { from: String(fromD), to: String(toD) },
-        funnel,
-        by_date,
-        action_items: actions.rows[0] || {},
-      },
-      meta: meta(),
-    });
+    const data = await loadSapReconciliationData(fromDate, toDate);
+    res.json({ data, meta: meta() });
   } catch (err) {
     console.error("sap-reconciliation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// GET /dashboard/sap-reconciliation-export?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Export rekonsiliasi (summary + per tanggal) ke Excel .xlsx untuk rentang terpilih.
+async function exportSapReconciliation(req, res) {
+  try {
+    const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") ? req.query.from : null;
+    const toDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "") ? req.query.to : null;
+    const data = await loadSapReconciliationData(fromDate, toDate);
+    const { funnel: f, by_date } = data;
+
+    const wb = new ExcelJS.Workbook();
+    const fmt = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
+
+    const sum = wb.addWorksheet("Summary");
+    sum.columns = [
+      { header: "Metric", key: "label", width: 32 },
+      { header: "Hours", key: "hrs", width: 12 },
+    ];
+    [
+      ["Machine hours (raw)", fmt(f.mch_raw_hrs)],
+      ["Machine hours (after clamp)", fmt(f.mch_clamped_hrs)],
+      ["Cut (max record duration)", fmt(f.cap_cut_hrs)],
+      ["Posted to SAP", fmt(f.posted_hrs)],
+      ["Posted (order)", fmt(f.posted_order_hrs)],
+      ["Posted (cost center)", fmt(f.posted_cc_hrs)],
+      ["Pending", fmt(f.pending_hrs)],
+      ["Failed", fmt(f.failed_hrs)],
+      ["Skipped", fmt(f.skipped_hrs)],
+    ].forEach(([label, hrs]) => sum.addRow({ label, hrs }));
+    sum.getRow(1).font = { bold: true };
+    sum.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
+    sum.getColumn(2).numFmt = "0.00";
+
+    const by = wb.addWorksheet("By Date");
+    by.columns = [
+      { header: "Date", key: "date", width: 12 },
+      { header: "Raw hrs", key: "raw", width: 10 },
+      { header: "Clamped hrs", key: "clamped", width: 12 },
+      { header: "Cut (max record)", key: "cut", width: 16 },
+      { header: "Posted", key: "posted", width: 10 },
+      { header: "Not posted", key: "notposted", width: 12 },
+      { header: "Rows", key: "rows", width: 8 },
+      { header: "Stuck", key: "stuck", width: 8 },
+    ];
+    for (const r of by_date) {
+      by.addRow({
+        date: r.date,
+        raw: fmt(r.mch_raw_hrs),
+        clamped: fmt(r.mch_clamped_hrs),
+        cut: fmt(r.cap_cut_hrs),
+        posted: fmt(r.posted_hrs),
+        notposted: fmt(r.pending_hrs + r.failed_hrs),
+        rows: r.rows_eligible,
+        stuck: r.rows_stuck,
+      });
+    }
+    by.getRow(1).font = { bold: true };
+    by.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
+    by.views = [{ state: "frozen", ySplit: 1 }];
+
+    const filename = `sap_reconciliation_${data.range.from}_to_${data.range.to}.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    await wb.xlsx.write(res);
+    return res.end();
+  } catch (err) {
+    console.error("sap-reconciliation-export error:", err);
     res.status(500).json({ error: err.message });
   }
 }
@@ -1612,6 +1733,8 @@ async function getSapReconciliationDay(req, res) {
       return res.status(400).json({ error: "date (YYYY-MM-DD) wajib" });
     }
     const day = req.query.date;
+    const caps = await loadMaxRecordMinutes();
+    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
     const { rows } = await pool.query(
       `SELECT
          st.id, st.pernr, st.aufnr, st.vornr, st.lstar, st.zbarcodeid, st.is_productive,
@@ -1624,6 +1747,10 @@ async function getSapReconciliationDay(req, res) {
           FROM public.sap_staging_source src
           JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
           WHERE src.staging_id = st.id) AS source_hrs,
+         (SELECT round(sum(${cutSec})/3600.0, 2)::float
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS cap_cut_hrs,
          (SELECT bool_or(m.is_stuck)
           FROM public.sap_staging_source src
           JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
@@ -1662,6 +1789,8 @@ async function getSapReconciliationRecord(req, res) {
     if (!Number.isInteger(stagingId)) {
       return res.status(400).json({ error: "staging_id wajib" });
     }
+    const caps = await loadMaxRecordMinutes();
+    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
     const [head, rows] = await Promise.all([
       pool.query(
         `SELECT id, status, aufnr, vornr, lstar, pernr, zbarcodeid, is_productive,
@@ -1678,6 +1807,7 @@ async function getSapReconciliationRecord(req, res) {
            round(src.seconds/3600.0, 2)::float AS contributed_hrs,
            round(EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime))/3600.0, 2)::float AS raw_hrs,
            round(EXTRACT(EPOCH FROM (COALESCE(m.end_effective, m.enddatetime) - m.startdatetime))/3600.0, 2)::float AS clamp_hrs,
+           round(${cutSec}/3600.0, 2)::float AS cap_cut_hrs,
            COALESCE(m.is_stuck, false) AS is_stuck
          FROM public.sap_staging_source src
          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
@@ -1696,6 +1826,7 @@ async function getSapReconciliationRecord(req, res) {
 module.exports = {
   getKpi,
   getSapReconciliation,
+  exportSapReconciliation,
   getSapReconciliationDay,
   getSapReconciliationRecord,
   getOrderStatus,
