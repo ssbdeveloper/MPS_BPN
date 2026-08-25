@@ -164,6 +164,225 @@ async function deleteRoster(req, res) {
   }
 }
 
+// GET /ews/roster/month?month=YYYY-MM&scope=team|all
+// Heatmap bulanan: SEMUA baris roster sebulan + attendance + recorded hours.
+// scope=team → hanya anggota foreman_team milik user login (header x-user-id).
+async function getRosterMonth(req, res) {
+  try {
+    const month = String(req.query.month || "");
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: "Invalid month. Use YYYY-MM." });
+    }
+    const scope = String(req.query.scope || "all") === "team" ? "team" : "all";
+    const userId = String(req.headers["x-user-id"] || "");
+    const params = [`${month}-01`, TZ];
+    let teamFilter = "";
+    if (scope === "team") {
+      if (!/^\d+$/.test(userId)) return res.json({ data: [], meta: { month, scope } });
+      params.push(userId);
+      teamFilter = ` AND r.serialnumber IN (
+        SELECT member_serialnumber FROM ews.foreman_team WHERE foreman_user_id = $${params.length}
+      )`;
+    }
+    const result = await db.query(
+      `
+      WITH logged AS (
+        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op, SUM(t.duration::float) AS recorded
+        FROM public.timesheet_transaction t
+        WHERE t.longdate_checkin >= ($1::date)::timestamp
+          AND t.longdate_checkin <  ($1::date + interval '1 month')::timestamp
+          AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
+          AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+        GROUP BY 1
+      )
+      SELECT r.serialnumber, u.full_name AS operator_name, r.business_date::text,
+             r.eff_shift AS scheduled_shift, r.eff_std AS scheduled_standard_hours,
+             r.status, r.half_day, r.shift_locked,
+             COALESCE(lg.recorded, 0)::float AS recorded_hours,
+             ((r.business_date + os.end_time
+               + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now() AS completed,
+             CASE WHEN r.status <> 'SCHEDULED' THEN r.status
+                  WHEN ((r.business_date + os.end_time + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
+                  WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT'
+                  ELSE 'ABSENT' END AS attendance
+      FROM ews.roster_effective r
+      JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
+      LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
+      LEFT JOIN logged lg ON lg.op = r.serialnumber
+      WHERE r.business_date >= $1::date AND r.business_date < ($1::date + interval '1 month')::date
+      ${teamFilter}
+      ORDER BY u.full_name NULLS LAST, r.serialnumber, r.business_date
+      `,
+      params
+    );
+    res.json({ data: result.rows, meta: { month, scope, count: result.rows.length } });
+  } catch (err) {
+    if (err.code === "42P01") return res.status(503).json({ error: "Roster tables not created. Run the roster migration." });
+    console.error("ews roster month error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// PUT /ews/roster/bulk  { serialnumbers[], business_dates[], status?, half_day? }
+// Apply status/half-day ke kombinasi serialnumber × tanggal sekaligus (bulk select).
+// Forward-only: semua tanggal harus >= hari ini (guard per tanggal).
+async function bulkUpdateRoster(req, res) {
+  try {
+    const serialnumbers = (req.body?.serialnumbers || []).map((s) => String(s).trim()).filter(Boolean);
+    const businessDates = (req.body?.business_dates || []).map((d) => String(d).trim()).filter(Boolean);
+    const status = String(req.body?.status || "").toUpperCase();
+    const hasHalfDay = req.body?.half_day !== undefined;
+    const halfDay = Boolean(req.body?.half_day);
+    const updated_by = clampText(req.body?.updated_by, "ews-roster-ui", 120);
+
+    if (!serialnumbers.length || !businessDates.length) {
+      return res.status(400).json({ error: "serialnumbers dan business_dates wajib diisi" });
+    }
+    if (status && !VALID_STATUS.has(status)) return res.status(400).json({ error: "Invalid status" });
+    if (!status && !hasHalfDay) return res.status(400).json({ error: "status atau half_day wajib diisi" });
+    for (const d of businessDates) assertIsoDate(d);
+
+    const todayRes = await db.query(`SELECT (now() AT TIME ZONE $1)::date AS today`, [TZ]);
+    const today = todayRes.rows[0].today;
+    if (businessDates.some((d) => d < today)) {
+      return res.status(400).json({
+        error: "Past dates are frozen (adoption already counted). Only today or future dates can be updated.",
+      });
+    }
+
+    const sets = [];
+    const params = [serialnumbers, businessDates];
+    if (status) {
+      params.push(status);
+      sets.push(`status = $${params.length}`);
+    }
+    if (hasHalfDay) {
+      params.push(halfDay);
+      sets.push(`half_day = $${params.length}`);
+    }
+    params.push(updated_by);
+    sets.push(`source = 'manual', updated_by = $${params.length}, updated_at = now()`);
+
+    const result = await db.query(
+      `UPDATE ews.shift_roster SET ${sets.join(", ")}
+       WHERE serialnumber = ANY($1::text[]) AND business_date = ANY($2::date[])`,
+      params
+    );
+    res.json({
+      data: {
+        rows_updated: result.rowCount,
+        serialnumbers: serialnumbers.length,
+        business_dates: businessDates.length,
+        status: status || null,
+        half_day: hasHalfDay ? halfDay : null,
+      },
+    });
+  } catch (err) {
+    console.error("ews roster bulk error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// GET /ews/foreman-team — foremen (users role foreman) + members + semua operator NFC.
+async function getForemanTeam(req, res) {
+  try {
+    const [foremen, members, operators] = await Promise.all([
+      db.query(
+        `SELECT id, username, name FROM public.users
+         WHERE COALESCE(NULLIF(roles, ''), role) = 'foreman'
+         ORDER BY lower(name), username`
+      ),
+      db.query(
+        `SELECT ft.foreman_user_id, ft.member_serialnumber, u.full_name
+         FROM ews.foreman_team ft
+         LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = ft.member_serialnumber
+         ORDER BY ft.member_serialnumber`
+      ),
+      db.query(
+        `SELECT snssb, full_name FROM public.usernfc
+         WHERE snssb IS NOT NULL AND btrim(snssb) <> '' AND full_name IS NOT NULL AND btrim(full_name) <> ''
+           AND (inactive_from IS NULL OR inactive_from > (now() AT TIME ZONE $1)::date)
+         ORDER BY lower(full_name), snssb`,
+        [TZ]
+      ),
+    ]);
+    res.json({
+      data: {
+        foremen: foremen.rows,
+        members: members.rows,
+        operators: operators.rows,
+      },
+    });
+  } catch (err) {
+    if (err.code === "42P01") return res.status(503).json({ error: "Foreman team table not created. Run the migration." });
+    console.error("ews foreman team error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
+// PUT /ews/foreman-team/member  { foreman_user_id, member_serialnumber }
+// Assign operator ke foreman (pindah: 1 operator = 1 foreman).
+async function setForemanMember(req, res) {
+  try {
+    const foremanUserId = Number.parseInt(req.body?.foreman_user_id, 10);
+    const memberSerialnumber = clampText(req.body?.member_serialnumber, "", 80);
+    const created_by = clampText(req.body?.updated_by, "ews-roster-ui", 120);
+    if (!Number.isInteger(foremanUserId) || foremanUserId < 1) {
+      return res.status(400).json({ error: "foreman_user_id wajib diisi" });
+    }
+    if (!memberSerialnumber) return res.status(400).json({ error: "member_serialnumber wajib diisi" });
+
+    const f = await db.query(
+      `SELECT id FROM public.users WHERE id = $1 AND COALESCE(NULLIF(roles, ''), role) = 'foreman'`,
+      [foremanUserId]
+    );
+    if (!f.rows.length) return res.status(404).json({ error: "Foreman tidak ditemukan (users role foreman)" });
+    const m = await db.query(
+      `SELECT 1 FROM public.usernfc WHERE NULLIF(BTRIM(snssb), '') = $1`,
+      [memberSerialnumber]
+    );
+    if (!m.rows.length) return res.status(404).json({ error: "Operator NFC tidak ditemukan" });
+
+    const client = await (db.pool || db).connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`DELETE FROM ews.foreman_team WHERE member_serialnumber = $1`, [memberSerialnumber]);
+      const ins = await client.query(
+        `INSERT INTO ews.foreman_team (foreman_user_id, member_serialnumber, created_by)
+         VALUES ($1, $2, $3) RETURNING id, foreman_user_id, member_serialnumber`,
+        [foremanUserId, memberSerialnumber, created_by]
+      );
+      await client.query("COMMIT");
+      res.json({ data: ins.rows[0] });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.error("ews foreman set member error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// DELETE /ews/foreman-team/member  { member_serialnumber }
+async function removeForemanMember(req, res) {
+  try {
+    const memberSerialnumber = clampText(req.body?.member_serialnumber, "", 80);
+    if (!memberSerialnumber) return res.status(400).json({ error: "member_serialnumber wajib diisi" });
+    const result = await db.query(
+      `DELETE FROM ews.foreman_team WHERE member_serialnumber = $1 RETURNING id, foreman_user_id, member_serialnumber`,
+      [memberSerialnumber]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Member tidak ada di tim mana pun" });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    console.error("ews foreman remove member error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
 // GET /ews/roster/config — shift defs, workday rules, active rotation config, group counts.
 async function getConfig(req, res) {
   try {
@@ -389,4 +608,4 @@ async function listLocks(req, res) {
   }
 }
 
-module.exports = { getRoster, updateStatus, updateHalfDay, deleteRoster, getConfig, updateWorkday, updateGroup, generate, setLock, cancelLock, listLocks };
+module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, updateGroup, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember };

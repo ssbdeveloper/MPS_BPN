@@ -21,6 +21,7 @@ export const FEATURES = {
   sow_scheduling:      { id: 'sow_scheduling',        label: 'SOW Scheduling',      module: 'PPC',       routes: ['/sow-scheduling'] },
   shift_rules:          { id: 'shift_rules',           label: 'Shift Capacity',      module: 'PPC',       routes: ['/shift-definition'] },
   roster_operator:      { id: 'roster_operator',       label: 'Roster Operator',     module: 'Timesheet', routes: ['/ews/roster'] },
+  roster_foreman_team:  { id: 'roster_foreman_team',   label: 'Foreman Team',        module: 'Timesheet', routes: ['/ews/foreman-team'] },
   // MS Project / bay scheduling — `ms_project_admin` was one coarse feature covering
   // bay booking, SAP-operation mapping, .mpp collaboration AND the admin panel. Split
   // into four so booking rights no longer imply control over the .mpp files.

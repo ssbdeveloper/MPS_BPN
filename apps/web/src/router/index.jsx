@@ -81,6 +81,10 @@ const router = createBrowserRouter([
     lazy: guardedPage(() => import('../pages/EwsRosterConfigPage'), 'roster_operator'),
   },
   {
+    path: '/ews/foreman-team',
+    lazy: guardedPage(() => import('../pages/EwsForemanTeamPage'), 'roster_foreman_team'),
+  },
+  {
     path: '/sap-log',
     lazy: page(() => import('../pages/SapLogPage')),
   },

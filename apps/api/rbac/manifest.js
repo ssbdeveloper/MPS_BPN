@@ -228,8 +228,11 @@ const MANIFEST = [
 
   // ---- EWS roster / attendance (/ews/roster) ----
   { m: 'PUT',    p: '/ews/roster/status',                     f: 'roster_operator', a: W },
+  { m: 'PUT',    p: '/ews/roster/bulk',                       f: 'roster_operator', a: W },
   { m: 'DELETE', p: '/ews/roster',                            f: 'roster_operator', a: W },
   { m: 'PUT',    p: '/ews/roster/half-day',                   f: 'roster_operator', a: W },
+  { m: 'PUT',    p: '/ews/roster/foreman-team/member',        f: 'roster_foreman_team', a: W },
+  { m: 'DELETE', p: '/ews/roster/foreman-team/member',        f: 'roster_foreman_team', a: W },
   { m: 'PUT',    p: '/ews/roster/config/workday',             f: 'roster_operator', a: W },
   { m: 'PUT',    p: '/ews/roster/group',                      f: 'roster_operator', a: W },
   { m: 'POST',   p: '/ews/roster/generate',                   f: 'roster_operator', a: W },
