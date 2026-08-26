@@ -4,11 +4,10 @@ import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Loa
 import { toast } from 'sonner';
 import { goBackOrFallback } from '../../../utils/navigation';
 import { normalizeNfcId } from '../../../utils/nfcId';
-import { AREA_OPTIONS, BLASTING_AREA_CODE, bayCodesOf, bayLabel } from '../../../config/manufacturingAreas';
+import { AREA_OPTIONS, BLASTING_AREA_CODE } from '../../../config/manufacturingAreas';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const AREA_STORAGE_KEY = 'mps.manufacturing.timesheet.deviceArea';
-const BAY_STORAGE_KEY = 'mps.manufacturing.timesheet.selectedBay';
 // Ubah device area = foreman-only via NFC (tabel usernfc, roles FOREMAN).
 // Bay bebas untuk semua user. Client-side check — cukup untuk trust model LAN/tablet.
 const FOREMAN_ROLE = 'FOREMAN';
@@ -102,7 +101,6 @@ function isOrderLevelJob(job) {
 export default function ManufacturingSelectJobPage() {
   const navigate = useNavigate();
   const [deviceAreaCode, setDeviceAreaCode] = useState(() => readStoredDeviceArea());
-  const [selectedBay, setSelectedBay] = useState(() => readStoredValue(BAY_STORAGE_KEY));
   const [sessionWorkcenter, setSessionWorkcenter] = useState(() => readSessionWorkcenter());
   const [searchText, setSearchText] = useState('');
   const [jobs, setJobs] = useState([]);
@@ -124,23 +122,22 @@ export default function ManufacturingSelectJobPage() {
     [deviceAreaCode]
   );
 
-  useEffect(() => {
-    // bayCodesOf = kode LENGKAP berzona (A38E/A38C). selectedArea.bays hanya kode kolom,
-    // jadi memakainya di sini akan menganggap setiap bay tersimpan tidak valid.
-    if (!selectedArea || !bayCodesOf(selectedArea.areaCode).includes(selectedBay)) {
-      setSelectedBay('');
-      writeStoredValue(BAY_STORAGE_KEY, '');
-      setJobs([]);
-    }
-  }, [selectedArea, selectedBay]);
+  // Window schedule: minggu ini (Senin-Minggu) + 11 minggu ke belakang — jadwal
+  // yang sudah lewat tetap muncul (keputusan user 2026-08-25).
+  const weekBounds = useMemo(() => {
+    const now = new Date();
+    const dayOffset = (now.getDay() + 6) % 7;
+    const monday = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() - dayOffset));
+    const toISO = (d) => d.toISOString().slice(0, 10);
+    return {
+      start: toISO(new Date(monday.getTime() - 11 * 7 * 86400000)),
+      end: toISO(new Date(monday.getTime() + 6 * 86400000)),
+    };
+  }, []);
 
   const loadJobs = useCallback(async (searchOverride) => {
     if (!deviceAreaCode) {
       toast.warning('Pilih area device terlebih dahulu');
-      return;
-    }
-    if (!selectedBay) {
-      toast.warning('Pilih bay terlebih dahulu');
       return;
     }
     const currentWorkcenter = readSessionWorkcenter();
@@ -155,8 +152,9 @@ export default function ManufacturingSelectJobPage() {
     try {
       const response = await fetch(apiUrl('/ms-project/bay-schedule-tasks', {
         area_code: deviceAreaCode,
-        bay_code: selectedBay,
         workcenter: currentWorkcenter,
+        start_date: weekBounds.start,
+        end_date: weekBounds.end,
         q: searchOverride ?? searchText,
       }));
       const payload = await response.json().catch(() => ({}));
@@ -172,7 +170,7 @@ export default function ManufacturingSelectJobPage() {
       setExpandedProjects(new Set());
       setExpandedUnits(new Set());
       if (!rows.length) {
-        toast.info('Tidak ada task aktif untuk area, bay, dan workcenter ini');
+        toast.info('Tidak ada task untuk area dan workcenter ini (window minggu ini ke belakang)');
       }
     } catch (error) {
       console.error('Failed to load manufacturing jobs:', error);
@@ -181,36 +179,26 @@ export default function ManufacturingSelectJobPage() {
     } finally {
       setLoading(false);
     }
-  }, [deviceAreaCode, searchText, selectedBay]);
+  }, [deviceAreaCode, searchText, weekBounds]);
 
   useEffect(() => {
-    if (deviceAreaCode && selectedBay) {
+    if (deviceAreaCode) {
       loadJobs('');
     }
-  }, [deviceAreaCode, selectedBay]);
+  }, [deviceAreaCode]);
 
   // --- Actual device mutations (dijalankan setelah gate foreman NFC lolos) ---
   const applyAreaChange = (nextArea) => {
     setDeviceAreaCode(nextArea);
-    setSelectedBay('');
     setJobs([]);
     writeStoredValue(AREA_STORAGE_KEY, nextArea);
-    writeStoredValue(BAY_STORAGE_KEY, '');
     if (nextArea) toast.success(`Area device disimpan: ${nextArea}`);
-  };
-
-  const applyBayChange = (nextBay) => {
-    setSelectedBay(nextBay);
-    setJobs([]);
-    writeStoredValue(BAY_STORAGE_KEY, nextBay);
   };
 
   const applyResetDeviceArea = () => {
     setDeviceAreaCode('');
-    setSelectedBay('');
     setJobs([]);
     writeStoredValue(AREA_STORAGE_KEY, '');
-    writeStoredValue(BAY_STORAGE_KEY, '');
     toast.info('Setting area device dihapus');
   };
 
@@ -264,11 +252,6 @@ export default function ManufacturingSelectJobPage() {
     setNfcInput('');
     setNfcError('');
     setDeviceModal('nfc');
-  };
-
-  const handleBayChange = (event) => {
-    // Bay bebas untuk semua user — tanpa gate (keputusan 2a).
-    applyBayChange(event.target.value);
   };
 
   const openGear = () => {
@@ -363,7 +346,7 @@ export default function ManufacturingSelectJobPage() {
       workcenter: job.workcenter,
       manufacturing_area_code: job.area_code,
       manufacturing_area_name: job.area_name,
-      manufacturing_bay_code: selectedBay,
+      manufacturing_bay_code: job.bay_codes?.[0] || '',
       manufacturing_bay_codes: job.bay_codes,
       schedule_id: job.schedule_id,
       task_id: job.task_id,
@@ -419,25 +402,7 @@ export default function ManufacturingSelectJobPage() {
 
         {filterOpen && (
           <div className="px-4 pb-3">
-            <div className="grid gap-3 md:grid-cols-[minmax(150px,190px)_minmax(0,1fr)_auto_auto]">
-              <label className="grid gap-1 text-xs font-bold text-slate-700">
-                <span className="inline-flex items-center gap-1.5">
-                  <MapPin size={14} className="text-[#0096c7]" />
-                  Bay
-                </span>
-                <select
-                  value={selectedBay}
-                  onChange={handleBayChange}
-                  disabled={!selectedArea}
-                  className={`${inputClass} disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60`}
-                >
-                  <option value="">Pilih bay</option>
-                  {(selectedArea ? bayCodesOf(selectedArea.areaCode) : []).map((code) => (
-                    <option key={code} value={code}>{bayLabel(code)}</option>
-                  ))}
-                </select>
-              </label>
-
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
               <label className="grid gap-1 text-xs font-bold text-slate-700">
                 <span className="inline-flex items-center gap-1.5">
                   <Search size={14} className="text-[#0096c7]" />
@@ -468,11 +433,9 @@ export default function ManufacturingSelectJobPage() {
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1">
                 Area tersimpan: {selectedArea ? `${selectedArea.areaCode} - ${selectedArea.areaName}` : 'Belum diset'}
               </span>
-              {selectedBay && (
-                <span className="rounded-full border border-[#90e0ef] bg-[#caf0f8] px-2 py-1 text-[#0077b6]">
-                  Bay aktif: {selectedBay}
-                </span>
-              )}
+              <span className="rounded-full border border-[#90e0ef] bg-[#caf0f8] px-2 py-1 text-[#0077b6]">
+                Window: minggu ini + 11 minggu ke belakang
+              </span>
               <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">
                 Workcenter session: {sessionWorkcenter || 'Tidak ada'}
               </span>
@@ -514,9 +477,9 @@ export default function ManufacturingSelectJobPage() {
                       <ClipboardList size={22} />
                     </span>
                     <span className="text-sm font-semibold text-slate-500">
-                      {deviceAreaCode && selectedBay
-                        ? 'Tidak ada task schedule untuk area dan bay ini.'
-                        : 'Set area device dan pilih bay terlebih dahulu.'}
+                      {deviceAreaCode
+                        ? 'Tidak ada task schedule untuk area ini (minggu ini ke belakang).'
+                        : 'Set area device terlebih dahulu.'}
                     </span>
                   </div>
                 </td>
@@ -584,7 +547,7 @@ export default function ManufacturingSelectJobPage() {
                         >
                           <td className={`${cellBase} text-center`}>
                             <div className="font-mono font-extrabold tabular-nums text-[#0096c7]">{job.task_order_no || job.order_no}</div>
-                            <div className="mt-0.5 text-[11px] font-semibold text-slate-500">{selectedBay}</div>
+                            <div className="mt-0.5 text-[11px] font-semibold text-slate-500">{(job.bay_codes || []).join(', ')}</div>
                           </td>
                           <td className={`${cellBase} text-left`}>
                             {isOrderLevel ? (
