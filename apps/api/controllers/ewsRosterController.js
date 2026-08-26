@@ -442,6 +442,11 @@ async function updateGroup(req, res) {
     const group = String(req.body?.rotation_group || "").toUpperCase();
     const updated_by = clampText(req.body?.updated_by, "ews-roster-ui", 120);
     if (!serialnumber) return res.status(400).json({ error: "serialnumber is required" });
+    // rotation_group kosong = UNASSIGN (hapus dari operator_rotation_group).
+    if (group === "") {
+      await db.query(`DELETE FROM ews.operator_rotation_group WHERE serialnumber = $1`, [serialnumber]);
+      return res.json({ data: { serialnumber, rotation_group: null, source: null } });
+    }
     if (group !== "A" && group !== "B") return res.status(400).json({ error: "rotation_group must be A or B" });
     const result = await db.query(
       `

@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, X, Eye } from 'lucide-react';
+import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, Search, X, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
@@ -38,8 +38,10 @@ function EwsRosterConfigPage() {
   const [config, setConfig] = useState(null);
   const [workdays, setWorkdays] = useState([]);
   const [error, setError] = useState('');
-  const [serial, setSerial] = useState('');
   const [group, setGroup] = useState('A');
+  const [groupSearch, setGroupSearch] = useState('');
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
   const [genFrom, setGenFrom] = useState(todayLocalISO());
   const [genTo, setGenTo] = useState(todayLocalISO(14));
   const [lockForm, setLockForm] = useState({ serial: '', shift: 'DAY', weeks: 2, from: todayLocalISO() });
@@ -88,22 +90,58 @@ function EwsRosterConfigPage() {
     });
   };
 
-  const assignGroup = useCallback(async () => {
-    if (!serial.trim()) { toast.error('Select an operator'); return; }
+  const assignGroup = useCallback(async (sn, target = group) => {
+    if (!sn) { toast.error('Select an operator'); return; }
+    const prevMembers = config?.group_members || [];
+    const operatorName = (operators.find((o) => o.snssb === sn) || {}).full_name || sn;
+    // Optimistic: pindahkan operator ke group target di state lokal.
+    setConfig((c) => (c ? {
+      ...c,
+      group_members: prevMembers
+        .filter((m) => m.serialnumber !== sn)
+        .concat([{ serialnumber: sn, rotation_group: target, full_name: operatorName, source: 'manual' }]),
+    } : c));
+    setAssignBusy(true);
     try {
       const res = await fetch(`${API_BASE}/ews/roster/group`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serialnumber: serial.trim(), rotation_group: group, updated_by: 'ews-roster-ui' }),
+        body: JSON.stringify({ serialnumber: sn, rotation_group: target, updated_by: 'ews-roster-ui' }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
-      toast.success(`${serial.trim()} → Group ${group}`);
-      setSerial('');
+      toast.success(`${operatorName} → ${target === 'A' ? 'Dayshift' : 'Nightshift'}`);
+      setGroupSearch('');
+      setGroupOpen(false);
       load();
     } catch (err) {
+      setConfig((c) => (c ? { ...c, group_members: prevMembers } : c));
       toast.error(err.message);
+    } finally {
+      setAssignBusy(false);
     }
-  }, [serial, group, load]);
+  }, [group, config, operators, load]);
+
+  // Unassign: rotation_group kosong dihapus dari operator_rotation_group.
+  const unassignMember = useCallback(async (sn) => {
+    const prevMembers = config?.group_members || [];
+    setConfig((c) => (c ? { ...c, group_members: prevMembers.filter((m) => m.serialnumber !== sn) } : c));
+    setAssignBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/ews/roster/group`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serialnumber: sn, rotation_group: '', updated_by: 'ews-roster-ui' }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
+      toast.success('Operator removed from group');
+      load();
+    } catch (err) {
+      setConfig((c) => (c ? { ...c, group_members: prevMembers } : c));
+      toast.error(err.message);
+    } finally {
+      setAssignBusy(false);
+    }
+  }, [config, load]);
 
   const runGenerate = useCallback(async () => {
     try {
@@ -199,8 +237,20 @@ function EwsRosterConfigPage() {
 
   const rc = config?.rotation_config;
   const groupCounts = Object.fromEntries((config?.group_counts || []).map((g) => [g.rotation_group, g.n]));
-  const groupMembers = config?.group_members || [];
-  const operators = config?.operators || [];
+  const groupMembers = useMemo(() => config?.group_members || [], [config]);
+  const operators = useMemo(() => config?.operators || [], [config]);
+  const groupBySn = useMemo(
+    () => new Map(groupMembers.map((m) => [m.serialnumber, m.rotation_group])),
+    [groupMembers],
+  );
+  const groupResults = useMemo(() => {
+    const q = groupSearch.trim().toLowerCase();
+    if (!q) return [];
+    return operators
+      .filter((o) => String(o.full_name || '').toLowerCase().includes(q) || String(o.snssb).includes(q))
+      .sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')))
+      .slice(0, 50);
+  }, [groupSearch, operators]);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800">
@@ -283,61 +333,122 @@ function EwsRosterConfigPage() {
           </Card>
 
           <Card title="Operator Group Assignment" icon={Users} accent="#7c3aed">
-            <div className="mb-3 flex gap-2">
-              <span className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-extrabold text-slate-600">Group A: {groupCounts.A ?? 0}</span>
-              <span className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-extrabold text-slate-600">Group B: {groupCounts.B ?? 0}</span>
-            </div>
-            <div className="flex flex-wrap items-end gap-2">
-              <select
-                value={serial}
-                onChange={(e) => setSerial(e.target.value)}
-                className="min-w-[200px] flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7]"
-              >
-                <option value="">Select operator…</option>
-                {operators.map((o) => (
-                  <option key={o.snssb} value={o.snssb}>{o.full_name || o.snssb} ({o.snssb})</option>
+            <div className="flex flex-col gap-3">
+              {/* Segmented Dayshift / Nightshift */}
+              <div className="inline-flex w-full rounded-xl border border-slate-300 bg-slate-100 p-1" role="group" aria-label="Group">
+                {[
+                  { code: 'A', label: 'Dayshift', sub: `${groupCounts.A ?? 0}`, dot: 'bg-amber-400', active: 'bg-white text-slate-900 shadow' },
+                  { code: 'B', label: 'Nightshift', sub: `${groupCounts.B ?? 0}`, dot: 'bg-indigo-500', active: 'bg-white text-slate-900 shadow' },
+                ].map((g) => (
+                  <button
+                    key={g.code}
+                    type="button"
+                    onClick={() => setGroup(g.code)}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-extrabold transition-all active:scale-95 ${
+                      group === g.code ? g.active : 'text-slate-500 hover:bg-white/60'
+                    }`}
+                  >
+                    <span className={`h-2 w-2 rounded-full ${g.dot}`} />
+                    {g.label}
+                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${group === g.code ? 'bg-slate-100 text-slate-600' : 'bg-white/70 text-slate-400'}`}>
+                      {g.sub}
+                    </span>
+                  </button>
                 ))}
-              </select>
-              <select value={group} onChange={(e) => setGroup(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
-                <option value="A">Group A</option>
-                <option value="B">Group B</option>
-              </select>
-              <button type="button" onClick={assignGroup} className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 text-sm font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95">
-                <Save size={15} /> Save
-              </button>
-            </div>
+              </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-              {['A', 'B'].map((g) => {
-                const members = groupMembers.filter((m) => m.rotation_group === g);
-                return (
-                  <div key={g} className="rounded-lg border border-slate-300 bg-slate-50">
-                    <div className="border-b border-slate-300 px-3 py-1.5 text-[11px] font-black uppercase tracking-wide text-slate-500">
-                      Group {g} · {members.length}
-                    </div>
-                    {members.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-slate-400">No operators yet.</div>
-                    ) : (
-                      <ul className="max-h-56 divide-y divide-slate-100 overflow-y-auto">
-                        {members.map((m) => {
-                          const inactiveNow = m.inactive_from && m.inactive_from <= todayLocalISO();
-                          return (
-                            <li key={m.serialnumber} className="flex items-baseline gap-1.5 px-3 py-1.5 text-xs">
-                              <span className={`font-semibold ${inactiveNow ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{m.full_name || m.serialnumber}</span>
-                              {m.full_name && <span className="font-mono text-[11px] text-slate-400">({m.serialnumber})</span>}
-                              {m.inactive_from && (
-                                <span className={`ml-auto rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${inactiveNow ? 'border-slate-300 bg-slate-100 text-slate-500' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-                                  {inactiveNow ? 'Inactive' : 'Resign'} {m.inactive_from}
-                                </span>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
+              {/* Searchable combobox operator */}
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+                <input
+                  type="text"
+                  value={groupSearch}
+                  onChange={(event) => { setGroupSearch(event.target.value); setGroupOpen(true); }}
+                  onFocus={() => setGroupOpen(true)}
+                  onBlur={() => setTimeout(() => setGroupOpen(false), 150)}
+                  placeholder={`Search operator to add to ${group === 'A' ? 'Dayshift' : 'Nightshift'}…`}
+                  className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm font-semibold text-slate-800 shadow-sm placeholder-slate-400 transition focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                />
+                {groupOpen && groupSearch.trim() && (
+                  <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-300 bg-white py-1 shadow-xl" style={{ animation: 'hm-fade 0.15s ease-out' }}>
+                    {groupResults.length === 0 && (
+                      <li className="px-3 py-2 text-xs font-semibold text-slate-400">No operator found.</li>
                     )}
-                  </div>
-                );
-              })}
+                    {groupResults.map((o) => {
+                      const current = groupBySn.get(o.snssb);
+                      return (
+                        <li key={o.snssb}>
+                          <button
+                            type="button"
+                            onClick={() => assignGroup(o.snssb)}
+                            className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition hover:bg-[#e8f6fb] active:scale-[0.99]"
+                          >
+                            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white ${current === 'B' ? 'bg-indigo-500' : 'bg-[#0096c7]'}`}>
+                              {(o.full_name || o.snssb).trim().charAt(0).toUpperCase()}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs font-bold text-slate-800">{o.full_name || o.snssb}</span>
+                              <span className="block font-mono text-[10px] text-slate-400">{o.snssb}</span>
+                            </span>
+                            {current && (
+                              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${current === 'B' ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                                {current === 'B' ? 'Nightshift' : 'Dayshift'}
+                              </span>
+                            )}
+                            {!current && (
+                              <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">Unassigned</span>
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              {/* Member list group terpilih */}
+              <div className="overflow-hidden rounded-xl border border-slate-300 bg-slate-50">
+                <div className="flex items-center justify-between border-b border-slate-300 px-3 py-2">
+                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">
+                    {group === 'A' ? 'Dayshift' : 'Nightshift'} members · {groupMembers.filter((m) => m.rotation_group === group).length}
+                  </span>
+                  <span className="text-[10px] font-semibold text-slate-400">
+                    {group === 'A' ? 'Group A · starts DAY' : 'Group B · starts NIGHT'}
+                  </span>
+                </div>
+                {groupMembers.filter((m) => m.rotation_group === group).length === 0 ? (
+                  <div className="px-3 py-3 text-xs font-semibold text-slate-400">No operators yet — search above to add.</div>
+                ) : (
+                  <ul className="max-h-64 divide-y divide-slate-100 overflow-y-auto">
+                    {groupMembers.filter((m) => m.rotation_group === group).map((m) => {
+                      const inactiveNow = m.inactive_from && m.inactive_from <= todayLocalISO();
+                      return (
+                        <li key={m.serialnumber} className="flex items-center gap-2.5 px-3 py-1.5" style={{ animation: 'hm-in 0.25s ease-out' }}>
+                          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white ${group === 'B' ? 'bg-indigo-500' : 'bg-amber-500'}`}>
+                            {(m.full_name || m.serialnumber).trim().charAt(0).toUpperCase()}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className={`block truncate text-xs font-bold ${inactiveNow ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{m.full_name || m.serialnumber}</span>
+                            <span className="block font-mono text-[10px] text-slate-400">
+                              {m.serialnumber}
+                              {m.inactive_from ? ` · ${inactiveNow ? 'Inactive' : 'Resign'} ${m.inactive_from}` : ''}
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => unassignMember(m.serialnumber)}
+                            disabled={assignBusy}
+                            title="Remove from group"
+                            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <X size={14} />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
             </div>
           </Card>
 
@@ -493,7 +604,7 @@ function EwsRosterConfigPage() {
                 <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Rotation</div>
                 {rc ? (
                   <div className="text-sm text-slate-700">
-                    Anchor <b>{rc.anchor_week_start}</b> (Group A = {rc.anchor_group_a_shift}) · flip every {rc.rotation_period_weeks} week{rc.rotation_period_weeks > 1 ? 's' : ''}
+                    Anchor <b>{rc.anchor_week_start}</b> (Dayshift = {rc.anchor_group_a_shift}) · flip every {rc.rotation_period_weeks} week{rc.rotation_period_weeks > 1 ? 's' : ''}
                   </div>
                 ) : <div className="text-sm text-slate-400">—</div>}
               </div>
