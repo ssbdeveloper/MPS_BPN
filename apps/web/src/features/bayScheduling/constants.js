@@ -11,16 +11,7 @@ import { areaDef, bayCodesOf as bayCodesOfRaw } from '../../config/manufacturing
 
 export const bayCodesOf = bayCodesOfRaw;
 
-// Label cakupan area untuk peta: AREA-01 (bays A38..A35) -> "A38-A35",
-// satu bay -> "A1", AREA-18 -> nama aslinya ("Blasting & Painting").
-export function areaRangeLabel(area) {
-  if (!area) return '';
-  if (area.areaCode === 'AREA-18') return area.areaName || 'Blasting & Painting';
-  const bays = Array.isArray(area.bays) ? area.bays : [];
-  if (bays.length === 0) return area.areaName || area.areaCode || '';
-  if (bays.length === 1) return bays[0];
-  return `${bays[0]}-${bays[bays.length - 1]}`;
-}
+export { areaRangeLabel } from '../../config/manufacturingAreas';
 
 // Semua reservasi AKTIF milik satu area (flatten semua kode bay area, dedupe by
 // schedule_id, urut start_date). Dipakai FloorMapOverview per area.

@@ -2317,6 +2317,7 @@ async function listBayScheduleTasks(query = {}) {
        t.planned_work_minutes,
        t.actual_progress,
        t.is_summary,
+       act.actual_hours,
        mp.project_name,
        u.unit_name
        from ms_project_bay_schedule s
@@ -2335,6 +2336,13 @@ async function listBayScheduleTasks(query = {}) {
          from ph3_order k
          where ltrim(k.order_no, '0') = ltrim(s.order_no, '0')
        ) ph on true
+       -- Actual hours per order dari timesheet_transaction (duration dalam JAM).
+       left join lateral (
+         select coalesce(sum(coalesce(tt.duration, 0)), 0) as actual_hours
+         from timesheet_transaction tt
+         where ltrim(tt.order_no, '0') = ltrim(s.order_no, '0')
+           and tt.duration is not null and tt.duration > 0
+       ) act on true
        -- Grouping job per "Unit": naikkan rantai parent sampai summary yang namanya mengandung
        -- 'unit' (mis. "UNIT 1", "UNIT 01"). Kalau tidak ada (project berbasis proses seperti
        -- FABRICATION/BLASTING), unit_name NULL → FE menampilkan bucket "No Unit".

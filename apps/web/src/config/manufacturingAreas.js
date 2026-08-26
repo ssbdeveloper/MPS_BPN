@@ -38,6 +38,18 @@ export const AREA_OPTIONS = [
 // Canonical blasting area code. SelectJobPage's old value was 'BLASTING'.
 export const BLASTING_AREA_CODE = 'AREA-18';
 
+// Label cakupan area: AREA-01 (bays A38..A35) -> "A38-A35", satu bay -> "A1",
+// AREA-18 -> nama aslinya ("Blasting & Painting"). Sumber bersama untuk semua
+// layar (peta scheduling + dropdown select-job).
+export function areaRangeLabel(area) {
+  if (!area) return '';
+  if (area.areaCode === BLASTING_AREA_CODE) return area.areaName || 'Blasting & Painting';
+  const bays = Array.isArray(area.bays) ? area.bays : [];
+  if (bays.length === 0) return area.areaName || area.areaCode || '';
+  if (bays.length === 1) return bays[0];
+  return `${bays[0]}-${bays[bays.length - 1]}`;
+}
+
 /* ── Zona bay: Edge & Center ──────────────────────────────────────────────────
    Tiap bay strip di lane dibelah JALAN sungguhan jadi dua zona. Edge = sisi
    terluar (menempel dinding), Center = sisi yang menghadap aisle utama. Karena

@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, ChevronUp, ClipboardList, Loa
 import { toast } from 'sonner';
 import { goBackOrFallback } from '../../../utils/navigation';
 import { normalizeNfcId } from '../../../utils/nfcId';
-import { AREA_OPTIONS, BLASTING_AREA_CODE } from '../../../config/manufacturingAreas';
+import { AREA_OPTIONS, BLASTING_AREA_CODE, areaRangeLabel } from '../../../config/manufacturingAreas';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const AREA_STORAGE_KEY = 'mps.manufacturing.timesheet.deviceArea';
@@ -176,7 +176,7 @@ export default function ManufacturingSelectJobPage() {
       setExpandedProjects(new Set());
       setExpandedUnits(new Set());
       if (!rows.length) {
-        toast.info('Tidak ada task untuk area dan workcenter ini (window minggu ini ke belakang)');
+        // Empty state di tabel sudah cukup — tanpa toast spam.
       }
     } catch (error) {
       console.error('Failed to load manufacturing jobs:', error);
@@ -445,7 +445,6 @@ export default function ManufacturingSelectJobPage() {
 
     setSelectedJob(rowData);
     sessionStorage.setItem('selectedactivity', JSON.stringify(rowData));
-    toast.success(`Task dipilih: ${job.task_name || rowData.order}`, { duration: 1500 });
     setTimeout(() => navigate('/timesheet-mainmenu'), 350);
   };
 
@@ -494,10 +493,6 @@ export default function ManufacturingSelectJobPage() {
           <div className="px-4 pb-3">
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
               <label className="grid gap-1 text-xs font-bold text-slate-700">
-                <span className="inline-flex items-center gap-1.5">
-                  <Search size={14} className="text-[#0096c7]" />
-                  Search
-                </span>
                 <input
                   type="text"
                   value={searchText}
@@ -521,10 +516,7 @@ export default function ManufacturingSelectJobPage() {
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1">
-                Area tersimpan: {selectedArea ? `${selectedArea.areaCode} - ${selectedArea.areaName}` : 'Belum diset'}
-              </span>
-              <span className="rounded-full border border-[#90e0ef] bg-[#caf0f8] px-2 py-1 text-[#0077b6]">
-                Window: minggu ini + 11 minggu ke belakang
+                Area tersimpan: {selectedArea ? `${selectedArea.areaCode} - ${areaRangeLabel(selectedArea)}` : 'Belum diset'}
               </span>
               <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">
                 Workcenter session: {sessionWorkcenter || 'Tidak ada'}
@@ -551,7 +543,7 @@ export default function ManufacturingSelectJobPage() {
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Order</th>
               <th className={`${cellBase} text-left font-semibold text-slate-700`}>Task</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Operation</th>
-              <th className={`${cellBase} text-center font-semibold text-slate-700`}>SSBR</th>
+              <th className={`${cellBase} text-center font-semibold text-slate-700`}>Actual (h)</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Hours</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Schedule</th>
               <th className={`${cellBase} text-center font-semibold text-slate-700`}>Workcenter</th>
@@ -628,12 +620,14 @@ export default function ManufacturingSelectJobPage() {
                       const isSelected = selectedJob?.schedule_id === job.schedule_id
                         && selectedJob?.task_id === job.task_id;
                       const plannedMinutes = Number(job.planned_work_minutes || job.duration_minutes || 0);
+                      const actualHours = Number(job.actual_hours || 0);
+                      const overPlan = actualHours > plannedMinutes / 60;
 
                       return (
                         <tr
                           key={`${job.schedule_id}-${job.task_id || index}`}
                           onClick={() => handleSelectJob(job)}
-                          className={`${isSelected ? 'bg-[#caf0f8]' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} cursor-pointer border-b border-slate-100 transition-colors duration-100 hover:bg-[#ade8f4] active:bg-[#90e0ef]`}
+                          className={`${overPlan ? 'bg-red-100' : isSelected ? 'bg-[#caf0f8]' : index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} cursor-pointer border-b border-slate-100 transition-colors duration-100 hover:bg-[#ade8f4] active:bg-[#90e0ef]`}
                         >
                           <td className={`${cellBase} text-center`}>
                             <div className="font-mono font-extrabold tabular-nums text-[#0096c7]">{job.task_order_no || job.order_no}</div>
@@ -655,7 +649,9 @@ export default function ManufacturingSelectJobPage() {
                             )}
                           </td>
                           <td className={`${cellBase} text-center font-mono text-slate-700`}>{job.operation_no || '-'}</td>
-                          <td className={`${cellBase} text-center font-mono text-slate-700`}>{job.ssbr_id || '-'}</td>
+                          <td className={`${cellBase} text-center tabular-nums ${overPlan ? 'font-extrabold text-red-700' : 'text-slate-700'}`}>
+                            {actualHours > 0 ? `${actualHours.toFixed(1)}h` : '-'}
+                          </td>
                           <td className={`${cellBase} text-center tabular-nums text-slate-700`}>{formatHoursFromMinutes(plannedMinutes)}</td>
                           <td className={`${cellBase} text-center text-slate-700`}>
                             {formatDate(job.start_date)} - {formatDate(job.end_date)}
@@ -781,7 +777,7 @@ export default function ManufacturingSelectJobPage() {
                   <option value="">Pilih area</option>
                   {AREA_OPTIONS.map((area) => (
                     <option key={area.areaCode} value={area.areaCode}>
-                      {area.areaCode} - {area.areaName}
+                      {area.areaCode} - {areaRangeLabel(area)}
                     </option>
                   ))}
                 </select>
