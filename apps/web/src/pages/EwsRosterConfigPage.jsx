@@ -51,6 +51,23 @@ function EwsRosterConfigPage() {
   const [lastLock, setLastLock] = useState(null);
   const [preview, setPreview] = useState({ open: false, loading: false, error: '', rows: [] });
 
+  const rc = config?.rotation_config;
+  const groupCounts = Object.fromEntries((config?.group_counts || []).map((g) => [g.rotation_group, g.n]));
+  const groupMembers = useMemo(() => config?.group_members || [], [config]);
+  const operators = useMemo(() => config?.operators || [], [config]);
+  const groupBySn = useMemo(
+    () => new Map(groupMembers.map((m) => [m.serialnumber, m.rotation_group])),
+    [groupMembers],
+  );
+  const groupResults = useMemo(() => {
+    const q = groupSearch.trim().toLowerCase();
+    if (!q) return [];
+    return operators
+      .filter((o) => String(o.full_name || '').toLowerCase().includes(q) || String(o.snssb).includes(q))
+      .sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')))
+      .slice(0, 50);
+  }, [groupSearch, operators]);
+
   const load = useCallback(async () => {
     setError('');
     try {
@@ -234,23 +251,6 @@ function EwsRosterConfigPage() {
       setPreview({ open: true, loading: false, error: err.message || 'Failed to load preview', rows: [] });
     }
   }, [locks]);
-
-  const rc = config?.rotation_config;
-  const groupCounts = Object.fromEntries((config?.group_counts || []).map((g) => [g.rotation_group, g.n]));
-  const groupMembers = useMemo(() => config?.group_members || [], [config]);
-  const operators = useMemo(() => config?.operators || [], [config]);
-  const groupBySn = useMemo(
-    () => new Map(groupMembers.map((m) => [m.serialnumber, m.rotation_group])),
-    [groupMembers],
-  );
-  const groupResults = useMemo(() => {
-    const q = groupSearch.trim().toLowerCase();
-    if (!q) return [];
-    return operators
-      .filter((o) => String(o.full_name || '').toLowerCase().includes(q) || String(o.snssb).includes(q))
-      .sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')))
-      .slice(0, 50);
-  }, [groupSearch, operators]);
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800">
