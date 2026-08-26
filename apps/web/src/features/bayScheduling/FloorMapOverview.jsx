@@ -1,137 +1,55 @@
-// FloorMapOverview — TINGKAT 1 peta lantai (keputusan owner D5 + perombakan 2026-08-25).
+// FloorMapOverview — TINGKAT 1 peta lantai area (perombakan 2026-08-25).
 //
-// Perubahan 2026-08-25 (keputusan user 1a/2a/4a/5a/6a):
+// Perubahan 2026-08-25 (keputusan user 1a/2a/4a/5a/6a + umpan balik visual):
 //  - Label area = CAKUPAN bay (AREA-01 -> "A38-A35"; AREA-18 -> "Blasting & Painting").
+//  - Isi area = CARD DISTINCT ORDER (order_no + project name + rentang tanggal),
+//    BUKAN kotak angka okupansi per bay — angka tidak informatif dan membingungkan.
+//  - Satu order yang di-booking di banyak bay/tanggal TIDAK boleh berulang
+//    (groupAreaOrders). Maks 3 card + "+N more" expand.
 //  - Search project/order_no (prop `orderFilter`) -> area tanpa reservasi order itu
 //    di-HIDE total; kalau semua area hidden -> empty state.
-//  - Container area LEBAR STATIK (w-60) supaya Order_no + Project name kebaca; lane
-//    jadi flex row + horizontal scroll (bukan grid 38 kolom yang menyusut).
-//  - Stack reservasi per area: maks 3 card + tombol "+N more" expand.
-//  - Sel bay tetap dirender (info okupansi), tapi h-9 -> h-7 biar card menonjol.
-//
-// Yang bisa diklik: blok AREA (div role=button, bukan <button> bersarang — tombol
-// "+N more" ada DI DALAM blok). Sel bay presentasi murni (aria-hidden).
+//  - Container area LEBAR STATIK (w-60); lane flex row + horizontal scroll.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, MapPin, Warehouse } from 'lucide-react';
 import {
-  ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, areaRangeLabel, bayCode, bayLabel,
-  buildAreaReservations, formatDate, groupKeyOf, plural, zoneOrderFor,
+  ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, areaRangeLabel,
+  buildAreaReservations, formatDate, groupAreaOrders, plural,
 } from './constants';
 
-const OCCUPANCY = [
-  { bg: '#ffffff', border: '#e2e8f0', dashed: true },
-  { bg: '#caf0f8', border: '#90e0ef' },
-  { bg: '#90e0ef', border: '#00b4d8' },
-  { bg: '#00b4d8', border: '#0077b6' },
-];
-
-const EMPTY_COUNT = Object.freeze({ reservations: 0, activities: 0 });
 const MAX_STACK = 3;
 
-function countBay(rows) {
-  if (!rows || rows.length === 0) return EMPTY_COUNT;
-  const groups = new Set();
-  const tasks = new Set();
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    groups.add(groupKeyOf(row));
-    const taskId = row.task_id;
-    if (taskId != null && taskId !== '') {
-      tasks.add(`${row.project_id == null ? '' : row.project_id}:${taskId}`);
-    }
-  }
-  return { reservations: groups.size, activities: tasks.size };
-}
-
-const BayMiniCell = React.memo(function BayMiniCell({ code, reservations, activities, withCode }) {
-  const tone = OCCUPANCY[Math.min(reservations, OCCUPANCY.length - 1)];
-  const occupied = reservations > 0;
-
+function OrderCard({ order }) {
+  const isNonJob = !order.order_no;
   return (
-    <div
-      aria-hidden="true"
-      title={`${bayLabel(code)} — ${plural(reservations, 'reservation')}, ${plural(activities, 'activity', 'activities')}`}
-      className={`flex min-w-0 items-center justify-center overflow-hidden rounded ${
-        withCode ? 'h-6 gap-1 px-1' : 'h-7 flex-col'
-      } ${tone.dashed ? 'border border-dashed' : 'border'}`}
-      style={{ background: tone.bg, borderColor: tone.border }}
-    >
-      {withCode && (
-        <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wide tabular-nums text-slate-500">
-          {code}
-        </span>
-      )}
-      {occupied && (
-        <>
-          <span className="text-[11px] font-extrabold leading-none tabular-nums text-slate-800">
-            {reservations}
-          </span>
-          {withCode ? (
-            <span aria-hidden="true" className="h-3 w-px shrink-0 bg-slate-800/25" />
-          ) : (
-            <span aria-hidden="true" className="my-0.5 h-px w-3 bg-slate-800/25" />
-          )}
-          <span className="text-[11px] font-normal leading-none tabular-nums text-slate-800">
-            {activities}
-          </span>
-        </>
-      )}
-    </div>
-  );
-});
-
-// Semua reservasi AKTIF milik satu area (flatten semua kode bay area, dedupe by
-// schedule_id, urut start_date). Dipakai parent (sekali per fetch) -> dikirim
-// sebagai prop ke AreaBlock supaya memo tidak batal.
-function ReservationCard({ row }) {
-  return (
-    <div className="rounded border border-slate-200 bg-white px-1.5 py-1">
-      <div className="truncate text-[11px] font-extrabold tabular-nums text-slate-800">
-        {row.order_no || row.purpose || '—'}
-      </div>
-      <div className="truncate text-[10px] font-semibold text-slate-500">
-        {row.project_name || row.part_name || ''}
-      </div>
-      <div className="truncate font-mono text-[9px] text-slate-400">
-        {formatDate(row.start_date)}–{formatDate(row.end_date)}
+    <div className="group flex items-stretch gap-1.5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow">
+      <span
+        aria-hidden="true"
+        className={`w-1 shrink-0 rounded-l-lg ${isNonJob ? 'bg-amber-400' : 'bg-[#0077b6]'}`}
+      />
+      <div className="min-w-0 flex-1 px-1 py-1">
+        <div className="truncate text-[11px] font-extrabold tabular-nums text-slate-800">
+          {order.order_no || order.purpose || '—'}
+        </div>
+        <div className="truncate text-[10px] font-semibold text-slate-500">
+          {order.project_name || ''}
+        </div>
+        <div className="truncate font-mono text-[9px] text-slate-400">
+          {order.count > 1 ? `${order.count} bookings · ` : ''}
+          {formatDate(order.start_date)}–{formatDate(order.end_date)}
+        </div>
       </div>
     </div>
   );
 }
 
 const AreaBlock = React.memo(function AreaBlock({
-  area, schedulesByBay, cursorDate, selected, onSelect, layout, reservations = [],
+  area, cursorDate, selected, onSelect, reservations = [],
 }) {
   const [expanded, setExpanded] = useState(false);
-  const rows = useMemo(() => {
-    if (!area.zoned) {
-      return [{
-        zoneKey: null,
-        cells: area.bays.map((base) => ({ code: base, ...countBay(schedulesByBay?.get(base)) })),
-      }];
-    }
-    return zoneOrderFor(layout).map((zoneKey) => ({
-      zoneKey,
-      cells: area.bays.map((base) => {
-        const code = bayCode(base, zoneKey);
-        return { code, ...countBay(schedulesByBay?.get(code)) };
-      }),
-    }));
-  }, [area, schedulesByBay, layout]);
-
-  const totals = useMemo(
-    () => rows.flatMap((row) => row.cells).reduce(
-      (acc, cell) => ({
-        reservations: acc.reservations + cell.reservations,
-        activities: acc.activities + cell.activities,
-      }),
-      { reservations: 0, activities: 0 },
-    ),
-    [rows],
-  );
-
-  const bayCount = rows.reduce((acc, row) => acc + row.cells.length, 0);
+  const orders = useMemo(() => groupAreaOrders(reservations), [reservations]);
+  const shown = expanded ? orders : orders.slice(0, MAX_STACK);
+  const hiddenCount = orders.length - shown.length;
   const handleClick = useCallback(() => onSelect(area.areaCode), [onSelect, area.areaCode]);
   const handleKey = useCallback((e) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -140,45 +58,6 @@ const AreaBlock = React.memo(function AreaBlock({
     }
   }, [onSelect, area.areaCode]);
 
-  const isAside = layout === 'aside';
-  const label = areaRangeLabel(area);
-  const shown = expanded ? reservations : reservations.slice(0, MAX_STACK);
-  const hiddenCount = reservations.length - shown.length;
-
-  const labelNode = (
-    <span
-      className={`block h-4 truncate text-[11px] font-extrabold uppercase tracking-wide ${
-        selected ? 'text-[#0077b6]' : 'text-slate-600'
-      }`}
-    >
-      {label}
-    </span>
-  );
-
-  const gridNode = (
-    <div className="flex flex-col gap-px">
-      {rows.map((row, index) => (
-        <React.Fragment key={row.zoneKey || 'single'}>
-          {index > 0 && <span aria-hidden="true" className="my-px h-0.5 w-full rounded bg-slate-300" />}
-          <div
-            className={isAside ? 'grid gap-1' : 'grid gap-px'}
-            style={isAside ? undefined : { gridTemplateColumns: `repeat(${area.bays.length}, minmax(0, 1fr))` }}
-          >
-            {row.cells.map((cell) => (
-              <BayMiniCell
-                key={cell.code}
-                code={cell.code}
-                reservations={cell.reservations}
-                activities={cell.activities}
-                withCode={isAside}
-              />
-            ))}
-          </div>
-        </React.Fragment>
-      ))}
-    </div>
-  );
-
   return (
     <div
       role="button"
@@ -186,58 +65,57 @@ const AreaBlock = React.memo(function AreaBlock({
       onClick={handleClick}
       onKeyDown={handleKey}
       aria-pressed={selected}
-      title={`${area.areaName}: ${plural(bayCount, 'bay')}, ${totals.reservations} reservations on ${formatDate(cursorDate)}`}
-      className={`flex w-60 shrink-0 cursor-pointer flex-col gap-0.5 rounded-lg border p-1 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
+      title={`${area.areaName}: ${plural(orders.length, 'order')} reserved on ${formatDate(cursorDate)}`}
+      className={`flex w-60 shrink-0 cursor-pointer flex-col overflow-hidden rounded-xl border bg-white text-left shadow-sm outline-none transition-all focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
         selected
-          ? 'border-[#0077b6] bg-[#eaf8fd] ring-2 ring-[#90e0ef]'
-          : 'border-slate-200 bg-white hover:border-[#90e0ef] hover:bg-slate-50'
+          ? 'border-[#0077b6] ring-2 ring-[#90e0ef] shadow-md'
+          : 'border-slate-300 hover:border-[#90e0ef] hover:shadow-md'
       }`}
     >
-      {layout === 'bottom' ? (
-        <>
-          {gridNode}
-          {labelNode}
-        </>
-      ) : (
-        <>
-          {labelNode}
-          {gridNode}
-        </>
-      )}
+      <span
+        className={`block bg-gradient-to-r px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide text-white ${
+          selected ? 'from-[#0077b6] to-[#00b4d8]' : 'from-[#023e8a] to-[#0096c7]'
+        }`}
+      >
+        {areaRangeLabel(area)}
+      </span>
 
-      {reservations.length > 0 && (
-        <div className="mt-0.5 space-y-1">
-          {shown.map((row) => (
-            <ReservationCard key={row.schedule_id} row={row} />
-          ))}
-          {hiddenCount > 0 && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-              className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-slate-300 bg-slate-50 py-0.5 text-[10px] font-bold text-slate-500 transition hover:border-[#0096c7] hover:text-[#0077b6]"
-            >
-              {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-              {expanded ? 'Show less' : `+${hiddenCount} more`}
-            </button>
-          )}
-        </div>
-      )}
+      <div className="flex flex-col gap-1 p-1.5">
+        {orders.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-300 px-1.5 py-2 text-center text-[10px] font-semibold text-slate-400">
+            No reservations
+          </div>
+        ) : (
+          <>
+            {shown.map((order) => (
+              <OrderCard key={order.key} order={order} />
+            ))}
+            {hiddenCount > 0 && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+                className="flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-[#90e0ef] bg-[#f0faff] py-1 text-[10px] font-bold text-[#0077b6] transition hover:border-[#0096c7] hover:bg-[#e6f6fd]"
+              >
+                {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                {expanded ? 'Show less' : `+${hiddenCount} more`}
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 });
 
 const WarehouseBlock = React.memo(function WarehouseBlock() {
   return (
-    <div className="flex w-60 shrink-0 flex-col justify-end gap-0.5 rounded-lg border border-transparent p-1">
+    <div className="flex w-60 shrink-0 flex-col justify-end gap-1 rounded-lg border border-transparent p-1">
       <div className="flex h-7 min-w-0 items-center justify-center gap-1 rounded border border-slate-200 bg-slate-100 px-1">
         <Warehouse className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
         <span className="truncate text-[11px] font-semibold uppercase tracking-wide tabular-nums text-slate-500">
           Warehouse B1–B8
         </span>
       </div>
-      <span className="block h-4 truncate text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-        Not bookable
-      </span>
     </div>
   );
 });
@@ -250,9 +128,9 @@ function AisleGap() {
   );
 }
 
-const Lane = React.memo(function Lane({ items, schedulesByBay, areaReservations, cursorDate, selectedAreaCode, onSelectArea, hiddenAreas }) {
+const Lane = React.memo(function Lane({ items, areaReservations, cursorDate, selectedAreaCode, onSelectArea, hiddenAreas }) {
   return (
-    <div className="flex min-w-0 items-end gap-1.5 overflow-x-auto pb-1">
+    <div className="flex min-w-0 items-start gap-1.5 overflow-x-auto pb-1">
       {items.map((item) => {
         if (item.type === 'warehouse') return <WarehouseBlock key="warehouse" />;
         if (item.type !== 'area') return <AisleGap key={`aisle-${item.code}`} />;
@@ -261,11 +139,9 @@ const Lane = React.memo(function Lane({ items, schedulesByBay, areaReservations,
           <AreaBlock
             key={item.areaCode}
             area={item}
-            schedulesByBay={schedulesByBay}
             cursorDate={cursorDate}
             selected={selectedAreaCode === item.areaCode}
             onSelect={onSelectArea}
-            layout={item.label === 'bottom' ? 'bottom' : 'top'}
             reservations={areaReservations.get(item.areaCode) || []}
           />
         );
@@ -273,18 +149,6 @@ const Lane = React.memo(function Lane({ items, schedulesByBay, areaReservations,
     </div>
   );
 });
-
-function LegendSwatch({ tone, label }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        className={`h-3 w-4 shrink-0 rounded ${tone.dashed ? 'border border-dashed' : 'border'}`}
-        style={{ background: tone.bg, borderColor: tone.border }}
-      />
-      {label}
-    </span>
-  );
-}
 
 export default function FloorMapOverview({
   schedulesByBay, cursorDate, selectedAreaCode, onSelectArea, orderFilter = '', onClearFilter,
@@ -297,7 +161,6 @@ export default function FloorMapOverview({
     if (typeof selectRef.current === 'function') selectRef.current(areaCode);
   }, []);
 
-  // Reservasi per area (sekali per fetch, dibagikan ke semua AreaBlock).
   const areaReservations = useMemo(() => {
     const map = new Map();
     for (const area of ALL_AREAS) {
@@ -306,7 +169,6 @@ export default function FloorMapOverview({
     return map;
   }, [schedulesByBay]);
 
-  // Filter 2a: search project/order_no -> area TANPA reservasi order itu di-hide.
   const hiddenAreas = useMemo(() => {
     const hidden = new Set();
     const q = String(orderFilter || '').trim();
@@ -371,16 +233,14 @@ export default function FloorMapOverview({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
-          <div className="flex min-w-0 items-stretch gap-1.5">
+          <div className="flex min-w-0 items-start gap-1.5">
             {!hiddenAreas.has(BLASTING_AREA.areaCode) && (
               <div className="w-60 shrink-0">
                 <AreaBlock
                   area={BLASTING_AREA}
-                  schedulesByBay={schedulesByBay}
                   cursorDate={cursorDate}
                   selected={selectedAreaCode === BLASTING_AREA.areaCode}
                   onSelect={handleSelectArea}
-                  layout="aside"
                   reservations={areaReservations.get(BLASTING_AREA.areaCode) || []}
                 />
               </div>
@@ -388,7 +248,6 @@ export default function FloorMapOverview({
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Lane
                 items={LANE_A}
-                schedulesByBay={schedulesByBay}
                 areaReservations={areaReservations}
                 cursorDate={cursorDate}
                 selectedAreaCode={selectedAreaCode}
@@ -402,7 +261,6 @@ export default function FloorMapOverview({
               </div>
               <Lane
                 items={LANE_B}
-                schedulesByBay={schedulesByBay}
                 areaReservations={areaReservations}
                 cursorDate={cursorDate}
                 selectedAreaCode={selectedAreaCode}
@@ -414,11 +272,9 @@ export default function FloorMapOverview({
         </div>
       )}
 
-      <div className="mt-auto flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 pt-2 text-[10px] font-semibold text-slate-500">
-        {OCCUPANCY.map((tone, index) => (
-          <LegendSwatch key={tone.bg} tone={tone} label={index === 0 ? 'empty' : index === 1 ? '1' : index === 2 ? '2' : '3+'} />
-        ))}
-        <span className="ml-auto text-slate-400">Card stack = reservations, max 3 shown (expandable)</span>
+      <div className="mt-auto flex items-center gap-3 border-t border-slate-100 pt-2 text-[10px] font-semibold text-slate-500">
+        <span>Each card = one order booked in this area (order_no + project name)</span>
+        <span className="ml-auto text-slate-400">Max 3 shown, expandable</span>
       </div>
     </section>
   );
