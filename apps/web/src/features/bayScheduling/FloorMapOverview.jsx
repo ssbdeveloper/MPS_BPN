@@ -177,7 +177,7 @@ export default function FloorMapOverview({
     for (const area of ALL_AREAS) {
       const has = (areaReservations.get(area.areaCode) || []).some((r) => {
         const on = String(r.order_no || '').replace(/^0+(?=\d)/, '');
-        return on === qNorm || String(r.project_name || '').toLowerCase().includes(q.toLowerCase());
+        return on.includes(qNorm) || String(r.project_name || '').toLowerCase().includes(q.toLowerCase());
       });
       if (!has) hidden.add(area.areaCode);
     }
