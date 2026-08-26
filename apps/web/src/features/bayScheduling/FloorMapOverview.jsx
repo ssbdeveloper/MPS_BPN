@@ -221,9 +221,7 @@ export default function FloorMapOverview({
             Clear filter
           </button>
         </p>
-      ) : (
-        <p className="text-xs text-slate-500">Select an area to see its bays.</p>
-      )}
+      ) : null}
 
       {allHidden ? (
         <div className="flex flex-1 items-center justify-center py-12 text-center">
@@ -272,10 +270,6 @@ export default function FloorMapOverview({
         </div>
       )}
 
-      <div className="mt-auto flex items-center gap-3 border-t border-slate-100 pt-2 text-[10px] font-semibold text-slate-500">
-        <span>Each card = one order booked in this area (order_no + project name)</span>
-        <span className="ml-auto text-slate-400">Max 3 shown, expandable</span>
-      </div>
     </section>
   );
 }

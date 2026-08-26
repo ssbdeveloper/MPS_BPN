@@ -17,7 +17,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, CalendarRange, ChevronLeft, ChevronRight, LayoutGrid, Loader2,
-  PackagePlus, ParkingSquare, RefreshCw,
+  PackagePlus, ParkingSquare, RefreshCw, Search, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -481,8 +481,8 @@ export default function SchedulingAreaPage() {
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
       <section className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        {/* Baris 1: pilihan view (Refresh ada di PageHeader, sejajar tombol Back). */}
-        <div className="flex items-center">
+        {/* Baris 1: view toggle KIRI + kontrol tanggal KANAN (sejajar). */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="View">
             <button
               type="button"
@@ -501,81 +501,90 @@ export default function SchedulingAreaPage() {
               <CalendarRange className="h-3.5 w-3.5" /> Timeline
             </button>
           </div>
-        </div>
 
-        {/* Baris 2: kontrol tanggal KONTEKSTUAL — tiap mode cuma satu konsep.
-            Map = as-of day bebas SEMUA tanggal (bounds); Timeline = range
-            From/To (7/14/30 hari HANYA untuk lebar sumbu timeline & filter
-            order, bukan pembatas schedule area — feedback 2026-08-06). */}
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5">
           {viewMode === 'map' ? (
-            <>
-              {/* Kursor tanggal (A-08): hari yang ditampilkan peta. Tanpa "as-of day",
-                  dua reservasi berurutan pada satu bay tampak seperti dua yang barengan. */}
-              <div className="flex items-center gap-2.5">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Map date</span>
-                <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= bounds.min} aria-label="Previous day" className={STEP_BTN}>
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <input
-                  type="date"
-                  value={cursorDate}
-                  min={bounds.min}
-                  max={bounds.max}
-                  onChange={(event) => setCursorDate(event.target.value)}
-                  aria-label="Map date"
-                  className={DATE_INPUT}
-                />
-                <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= bounds.max} aria-label="Next day" className={STEP_BTN}>
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCursorDate(today)}
-                  className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
-                >
-                  Today
-                </button>
-              </div>
-            </>
+            <div className="flex items-center gap-2.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Map date</span>
+              <button type="button" onClick={() => stepCursor(-1)} disabled={cursorDate <= bounds.min} aria-label="Previous day" className={STEP_BTN}>
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <input
+                type="date"
+                value={cursorDate}
+                min={bounds.min}
+                max={bounds.max}
+                onChange={(event) => setCursorDate(event.target.value)}
+                aria-label="Map date"
+                className={DATE_INPUT}
+              />
+              <button type="button" onClick={() => stepCursor(1)} disabled={cursorDate >= bounds.max} aria-label="Next day" className={STEP_BTN}>
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setCursorDate(today)}
+                className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+              >
+                Today
+              </button>
+            </div>
           ) : (
-            <>
-              {/* Window RESERVASI — terpisah dari window task MSP milik pool order (D6). */}
-              <div className="flex flex-wrap items-center gap-2.5">
-                <label className="flex items-center gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</span>
-                  <input type="date" value={range.start} min={bounds.min} max={maxEnd} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
-                </label>
-                <label className="flex items-center gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</span>
-                  <input type="date" value={range.end} min={range.start} max={maxEnd} onChange={(event) => applyRange(range.start, event.target.value)} className={DATE_INPUT} />
-                </label>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <label className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">From</span>
+                <input type="date" value={range.start} min={bounds.min} max={maxEnd} onChange={(event) => applyRange(event.target.value, range.end)} className={DATE_INPUT} />
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">To</span>
+                <input type="date" value={range.end} min={range.start} max={maxEnd} onChange={(event) => applyRange(range.start, event.target.value)} className={DATE_INPUT} />
+              </label>
+              <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Date window presets">
+                {RANGE_PRESETS.map((days) => (
+                  <button
+                    key={days}
+                    type="button"
+                    onClick={() => applyRange(today, addDaysText(today, days - 1))}
+                    className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
+                  >
+                    {days} days
+                  </button>
+                ))}
               </div>
-            </>
-          )}
-
-          {/* Preset window HANYA untuk timeline (lebar sumbu-x) — di map mode
-              tidak ditampilkan karena peta sudah bebas semua tanggal. */}
-          {viewMode === 'timeline' && (
-            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Date window presets">
-              {RANGE_PRESETS.map((days) => (
-                <button
-                  key={days}
-                  type="button"
-                  onClick={() => applyRange(today, addDaysText(today, days - 1))}
-                  className={`${TOGGLE_BASE} tabular-nums text-slate-600 hover:bg-slate-50`}
-                >
-                  {days} days
-                </button>
-              ))}
             </div>
           )}
         </div>
-        <p className="text-xs tabular-nums text-slate-500">
-          {viewMode === 'timeline'
-            ? `Read-only · max ${MAX_RANGE_DAYS} days`
-            : 'Map shows reservations active on the selected date (all dates)'}
-        </p>
+
+        {/* Search order_no / project name — filter AREA di peta (overview saja;
+            di area level, search OrderPanel kiri yang dipakai). */}
+        {viewMode === 'map' && !showAreaLevel && (
+          <div className="relative max-w-md">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+            <input
+              type="search"
+              value={areaFilter}
+              onChange={(event) => {
+                const value = event.target.value;
+                setAreaFilter(value);
+                if (typeof poolSearchRef.current === 'function') poolSearchRef.current(value);
+              }}
+              placeholder="Search order no / project name…"
+              className="w-full rounded-lg border border-slate-300 bg-white py-1.5 pl-8 pr-8 text-xs font-semibold text-slate-800 shadow-sm transition focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+            />
+            {areaFilter && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAreaFilter('');
+                  if (typeof poolSearchRef.current === 'function') poolSearchRef.current('');
+                }}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
       </section>
 
       <div className="flex min-h-0 flex-1 flex-col">{content}</div>
