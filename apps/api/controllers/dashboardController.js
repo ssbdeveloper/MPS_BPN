@@ -2076,7 +2076,7 @@ async function excludeSapRecord(req, res) {
     const excludedBy = req.header("x-user-id") || null;
 
     const { rows } = await pool.query(
-      `SELECT st.bucket_start::date AS d FROM public.sap_staging_source ss
+      `SELECT to_char(st.bucket_start, 'YYYY-MM-DD') AS d FROM public.sap_staging_source ss
        JOIN public.sap_timesheet_staging st ON st.id = ss.staging_id
        WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = $1
        ORDER BY st.bucket_start DESC LIMIT 1`,
@@ -2097,11 +2097,11 @@ async function excludeSapRecord(req, res) {
         const r = await pool.query(
           `INSERT INTO public.sap_ops_request (action, params, requested_by)
            VALUES ('recalc_date', $1::jsonb, $2) RETURNING id, status`,
-          [JSON.stringify({ date: date.toISOString().slice(0, 10) }), excludedBy],
+          [JSON.stringify({ date }), excludedBy],
         );
         recalc = r.rows[0];
       } catch (err) {
-        if (err.code !== "23505") throw err; // 23505 = recalc sudah antri
+        if (err.code !== "23505") throw err;
       }
     }
     res.json({ data: { excluded: true, source_row_id: sourceRowId, date, recalc }, meta: meta() });
@@ -2118,7 +2118,7 @@ async function unexcludeSapRecord(req, res) {
     if (!sourceRowId) return res.status(400).json({ error: "source_row_id wajib" });
 
     const { rows } = await pool.query(
-      `SELECT startdatetime::date AS d FROM public.mch_transaction WHERE proddataid = $1::int LIMIT 1`,
+      `SELECT to_char(startdatetime, 'YYYY-MM-DD') AS d FROM public.mch_transaction WHERE proddataid = $1::int LIMIT 1`,
       [sourceRowId],
     );
     const date = rows[0]?.d || null;
@@ -2134,7 +2134,7 @@ async function unexcludeSapRecord(req, res) {
         const r = await pool.query(
           `INSERT INTO public.sap_ops_request (action, params, requested_by)
            VALUES ('recalc_date', $1::jsonb, $2) RETURNING id, status`,
-          [JSON.stringify({ date: date.toISOString().slice(0, 10) }), req.header("x-user-id") || null],
+          [JSON.stringify({ date }), req.header("x-user-id") || null],
         );
         recalc = r.rows[0];
       } catch (err) {
