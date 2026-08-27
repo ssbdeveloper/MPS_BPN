@@ -106,6 +106,8 @@ def claim_rows(
     productive: bool | None = None,
     failed_only: bool = False,
     include_today: bool = False,
+    date_filter: str | None = None,
+    pernr_filter: str | None = None,
 ) -> list[dict]:
     # failed_only: HANYA baris FAILED (untuk tombol "kirim ulang gagal" di UI — supaya
     # tidak ikut mem-blast ribuan PENDING). Menang atas include_failed.
@@ -143,6 +145,26 @@ def claim_rows(
     if productive is not None:
         filters.append("is_productive = %s")
         params.append(productive)
+
+    # Posting manual via UI (2026-08-27): filter per tanggal bucket atau per operator.
+    if date_filter:
+        filters.append("bucket_start::date = %s")
+        params.append(date_filter)
+    if pernr_filter:
+        filters.append("(pernr = %s OR pernr_origin = %s)")
+        params.extend([pernr_filter, pernr_filter])
+
+    # GUARD EXCLUSION (2026-08-27): bundle yang masih mengandung record yang ditandai
+    # excluded TIDAK boleh di-post — nilainya belum di-recalculate (bisa over-post).
+    # Recalculate dulu (recalc_date), baru post.
+    filters.append("""
+      NOT EXISTS (
+        SELECT 1 FROM public.sap_staging_source ss
+        JOIN public.sap_staging_exclusion ex
+          ON ex.source_system = ss.source_system AND ex.source_row_id = ss.source_row_id
+        WHERE ss.staging_id = public.sap_timesheet_staging.id
+      )
+    """)
 
     where_sql = " AND ".join(filters)
     sql = f"""
@@ -518,7 +540,7 @@ def process_rows(args: argparse.Namespace) -> None:
             productive = True
         elif args.unproductive_only:
             productive = False
-        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive, args.failed_only, args.include_today)
+        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive, args.failed_only, args.include_today, args.date, args.pernr)
     if not rows:
         log.info("No staging rows to post")
         return
@@ -624,6 +646,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ids", help="Comma-separated staging id list to post for manual testing")
     parser.add_argument("--ztimesheetids", help="Comma-separated ZTIMESHEETID list to post for manual testing")
     parser.add_argument("--allow-posted", action="store_true", help="Allow selected --ids/--ztimesheetids even if already POSTED")
+    parser.add_argument("--date", help="Posting manual per tanggal bucket (YYYY-MM-DD) via UI")
+    parser.add_argument("--pernr", help="Posting manual per operator (PERNR) via UI")
     return parser
 
 

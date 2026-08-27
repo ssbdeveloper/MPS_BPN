@@ -13,6 +13,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Send,
   X,
 } from 'lucide-react';
 import ConfirmationModal from '../components/ui/ConfirmationModal';
@@ -243,6 +244,8 @@ function SapLogPage() {
   const [detailRow, setDetailRow] = useState(null);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const [acting, setActing] = useState(false);
+  const [postDate, setPostDate] = useState('');
+  const [postPernr, setPostPernr] = useState('');
 
   const fetchSummary = useCallback(async (signal) => {
     try {
@@ -296,25 +299,26 @@ function SapLogPage() {
   const handleSearchSubmit = (e) => { e.preventDefault(); setSearch(searchInput.trim()); };
 
   // ── actions ──────────────────────────────────────────────────────────────
-  const enqueue = useCallback(async (action, label) => {
+  const enqueue = useCallback(async (action, label, params = {}) => {
     setActing(true);
     try {
       const res = await fetch(`${API_BASE}/dashboard/sap-ops/enqueue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, params }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(payload.error || 'Failed to send request');
       toast.success('Request queued', {
         description: `${label} — running in the background. Refresh to see changes.`,
       });
+      refreshAll();
     } catch (err) {
       toast.error('Request could not be queued', { description: `${label}: ${err.message}` });
     } finally {
       setActing(false);
     }
-  }, []);
+  }, [refreshAll]);
 
   const failedCount = summary?.by_status?.FAILED || 0;
   const bc = summary?.by_status || {};
@@ -393,15 +397,40 @@ function SapLogPage() {
               active={status === 'all'} onClick={() => setStatus('all')} />
           </div>
 
-          {/* Action bar — PENDING di-post server otomatis; di sini hanya retry FAILED */}
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Action bar — PENDING di-post server otomatis; di sini post MANUAL + retry FAILED */}
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+            <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">Post manual</span>
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+              <input type="date" value={postDate} onChange={(e) => setPostDate(e.target.value)}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-800 focus:border-[#0096c7] focus:outline-none" />
+              <button
+                type="button" disabled={acting || !postDate}
+                onClick={() => enqueue('post_date', 'Post by date', { date: postDate })}
+                className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#0077b6] px-3 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send size={13} /> Post date
+              </button>
+            </label>
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+              <input
+                value={postPernr} onChange={(e) => setPostPernr(e.target.value)}
+                placeholder="PERNR / operator…"
+                className="h-9 w-36 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0096c7] focus:outline-none"
+              />
+              <button
+                type="button" disabled={acting || !postPernr.trim()}
+                onClick={() => enqueue('post_operator', 'Post by operator', { pernr: postPernr.trim() })}
+                className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#0077b6] px-3 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send size={13} /> Post operator
+              </button>
+            </label>
             <button
               type="button" disabled={acting || failedCount === 0}
               onClick={() => setConfirmRetry(true)}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-[#0077b6] px-4 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
-                focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <RotateCcw size={16} /> Retry failed{failedCount ? ` (${failedCount})` : ''}
+              <RotateCcw size={14} /> Retry failed{failedCount ? ` (${failedCount})` : ''}
             </button>
             <p className="ml-auto text-[11px] text-slate-400">
               {failedCount === 0 ? 'Nothing failed — PENDING posted automatically' : 'PENDING posted automatically'}
@@ -473,6 +502,7 @@ function SapLogPage() {
                         <th className="whitespace-nowrap px-3 py-2 font-semibold">Employee</th>
                         <th className="whitespace-nowrap px-3 py-2 font-semibold">Details</th>
                         <th className="whitespace-nowrap px-3 py-2 font-semibold">Created</th>
+                        <th className="whitespace-nowrap px-2 py-2 font-semibold">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -501,6 +531,19 @@ function SapLogPage() {
                               </span>
                             </td>
                             <td className="whitespace-nowrap px-3 py-2.5 text-xs tabular-nums text-slate-500">{formatDateTime(row.created_at)}</td>
+                            <td className="whitespace-nowrap px-2 py-2.5">
+                              {(row.status === 'PENDING' || row.status === 'FAILED') && (
+                                <button
+                                  type="button"
+                                  disabled={acting}
+                                  onClick={(e) => { e.stopPropagation(); enqueue('post_bundles', `Post bundle #${row.ztimesheetid || row.id}`, { ids: [row.id] }); }}
+                                  title="Post bundle ini sekarang"
+                                  className="inline-flex h-7 items-center gap-1 rounded-lg border border-[#0077b6] bg-white px-2 text-[11px] font-semibold text-[#0077b6] transition-all hover:bg-[#e0f4fc] active:scale-95 disabled:opacity-40"
+                                >
+                                  <Send size={11} /> Post
+                                </button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { toast } from 'sonner';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, ChevronRight,
-  Clock, Cpu, Download, Factory, Info, Loader2, RefreshCw, XCircle,
+  Clock, Cpu, Download, Factory, Info, Loader2, RefreshCw, Send, Trash2, X, XCircle,
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -195,6 +195,11 @@ function ReconciliationPanel() {
   const [recsError, setRecsError] = useState(null);
   const [recsPageSize, setRecsPageSize] = useState(50);
   const [recsQ, setRecsQ] = useState('');
+  const [exclusions, setExclusions] = useState([]);
+  const [confirmExclude, setConfirmExclude] = useState(null);
+  const [excludeNote, setExcludeNote] = useState('');
+  const [excludeBusy, setExcludeBusy] = useState(false);
+  const [postDayBusy, setPostDayBusy] = useState(false);
   const opsTimer = useRef(null);
   const panelRef = useRef(null);          // root panel (to find scroll parent)
   const scrollParentRef = useRef(null);   // container scrolled while drilling
@@ -289,6 +294,82 @@ function ReconciliationPanel() {
   useEffect(() => {
     if (view === 'records' && from && to) loadRecords(1);
   }, [view, from, to, loadRecords]);
+
+  const loadExclusions = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-staging-exclusion`);
+      const json = await res.json();
+      if (res.ok) setExclusions(json.data?.exclusions || []);
+    } catch (err) {
+      console.error('loadExclusions error', err);
+    }
+  }, []);
+
+  useEffect(() => { loadExclusions(); }, [loadExclusions]);
+
+  const enqueueOps = useCallback(async (action, params, label) => {
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-ops/enqueue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, params }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Gagal antre');
+      toast.success('Request diantre', { description: `${label} — berjalan di background.` });
+      return json.data;
+    } catch (err) {
+      toast.error('Gagal antre', { description: `${label}: ${err.message}` });
+      return null;
+    }
+  }, []);
+
+  const doExclude = useCallback(async () => {
+    if (!confirmExclude) return;
+    setExcludeBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-staging-exclusion`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_row_id: confirmExclude.source_row_id, note: excludeNote.trim() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Gagal exclude');
+      toast.success('Record di-exclude', {
+        description: json.data?.recalc ? `Bundle akan di-recalculate (antrian #${json.data.recalc.id})` : 'Record ditandai tidak dipakai.',
+      });
+      setConfirmExclude(null);
+      setExcludeNote('');
+      loadExclusions();
+      loadRecords(1);
+    } catch (err) {
+      toast.error('Gagal exclude', { description: err.message });
+    } finally {
+      setExcludeBusy(false);
+    }
+  }, [confirmExclude, excludeNote, loadExclusions, loadRecords]);
+
+  const doUnexclude = useCallback(async (sourceRowId) => {
+    setExcludeBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/dashboard/sap-staging-exclusion?source_row_id=${encodeURIComponent(sourceRowId)}`, { method: 'DELETE' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Gagal un-exclude');
+      toast.success('Record dikembalikan', { description: 'Bundle akan di-recalculate.' });
+      loadExclusions();
+      loadRecords(1);
+    } catch (err) {
+      toast.error('Gagal un-exclude', { description: err.message });
+    } finally {
+      setExcludeBusy(false);
+    }
+  }, [loadExclusions, loadRecords]);
+
+  const postAllDay = useCallback(async (date) => {
+    setPostDayBusy(true);
+    await enqueueOps('post_date', { date }, `Post semua pending ${date}`);
+    setPostDayBusy(false);
+  }, [enqueueOps]);
 
   const stageCatchup = useCallback(async () => {
     setOpsBusy(true);
@@ -429,6 +510,7 @@ function ReconciliationPanel() {
                   <th className="px-2 py-2 font-semibold">Op</th>
                   <th className="px-2.5 py-2 font-semibold">Op text</th>
                   <th className="px-2 py-2 font-semibold">Stuck</th>
+                  <th className="px-2 py-2 font-semibold">Exclude</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -461,11 +543,26 @@ function ReconciliationPanel() {
                     <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
                     <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-center">
+                      {r.excluded ? (
+                        <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700" title="Record ini di-exclude (tidak dikirim)">Excluded</span>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={excludeBusy}
+                          onClick={(e) => { e.stopPropagation(); setConfirmExclude(r); setExcludeNote(''); }}
+                          title="Tandai record ini TIDAK dipakai (bundle akan di-recalculate)"
+                          className="rounded-lg border border-red-200 bg-white px-1.5 py-0.5 text-[9px] font-bold text-red-600 transition-all hover:bg-red-50 active:scale-95 disabled:opacity-40"
+                        >
+                          Exclude
+                        </button>
+                      )}
+                    </td>
                   </tr>
                   );
                 })}
                 {recs.records.length === 0 && (
-                  <tr><td colSpan={20} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
+                  <tr><td colSpan={21} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
                 )}
               </tbody>
             </table>
@@ -480,6 +577,35 @@ function ReconciliationPanel() {
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 active:scale-95 disabled:opacity-40">Next ›</button>
             </div>
           </div>
+          {exclusions.length > 0 && (
+            <div className="border-t border-slate-100 px-4 py-3">
+              <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-red-600">
+                Excluded records ({exclusions.length}) — tidak ikut dibundle/dikirim
+              </div>
+              <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-red-100 bg-red-50/40">
+                {exclusions.map((ex) => (
+                  <li key={ex.source_row_id} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
+                    <span className="min-w-0 flex-1 text-[11px]">
+                      <span className="font-mono font-bold text-slate-700">{ex.pernr}</span>{' '}
+                      <span className="font-semibold text-slate-600">{ex.name}</span>
+                      <span className="text-slate-400"> · {ex.machinename} · {ex.activity} · {ex.source_row_id}</span>
+                      {ex.note && <span className="italic text-slate-500"> — {ex.note}</span>}
+                    </span>
+                    <span className="text-[10px] text-slate-400">{ex.excluded_at ? String(ex.excluded_at).slice(0, 16) : ''}</span>
+                    <button
+                      type="button"
+                      disabled={excludeBusy}
+                      onClick={() => doUnexclude(ex.source_row_id)}
+                      title="Kembalikan record ini (bundle di-recalculate)"
+                      className="inline-flex h-6 items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 text-[10px] font-bold text-emerald-700 transition-all hover:bg-emerald-50 active:scale-95 disabled:opacity-40"
+                    >
+                      <Trash2 size={10} /> Un-exclude
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       ) : null}
     </section>
@@ -694,7 +820,16 @@ function ReconciliationPanel() {
                   <ArrowLeft size={13} /> Back
                 </button>
                 <h3 className="text-sm font-bold text-slate-800">{dayLabel(day.date).full}</h3>
-                <div className="ml-auto"><FilterToggle value={dayFilter} onChange={setDayFilter} /></div>
+                <button
+                  type="button"
+                  disabled={postDayBusy}
+                  onClick={() => postAllDay(day.date)}
+                  title="Post semua bundel PENDING pada tanggal ini"
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-[#0077b6] px-2.5 py-1.5 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50"
+                >
+                  {postDayBusy ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Post pending
+                </button>
+                <div className="ml-1"><FilterToggle value={dayFilter} onChange={setDayFilter} /></div>
               </div>
 
               {dayLoading ? (
@@ -914,6 +1049,48 @@ function ReconciliationPanel() {
             </section>
           )}
         </>
+      )}
+
+      {/* Modal konfirmasi exclude record */}
+      {confirmExclude && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-extrabold text-slate-800">Exclude record ini?</h3>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Record <b className="font-mono">{confirmExclude.source_row_id}</b> ({confirmExclude.pernr} {confirmExclude.name} · {confirmExclude.machine} · {hm(confirmExclude.start)}) tidak akan ikut dibundle/dikirim ke SAP. Bundle-nya otomatis di-recalculate.
+                </p>
+              </div>
+              <button type="button" onClick={() => setConfirmExclude(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+                <X size={16} />
+              </button>
+            </div>
+            <input
+              value={excludeNote}
+              onChange={(e) => setExcludeNote(e.target.value)}
+              placeholder="Alasan (opsional)…"
+              className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmExclude(null)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={excludeBusy}
+                onClick={doExclude}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-xs font-bold text-white transition-all hover:bg-red-700 active:scale-95 disabled:opacity-50"
+              >
+                {excludeBusy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Exclude & recalculate
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

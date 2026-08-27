@@ -45,6 +45,12 @@ COMMANDS = {
     # rebuild_pending: rebuild antrian PENDING (MCH + TIMESHEET) dari tanggal pilihan
     # setelah rules config (break hours / max record) berubah. --from/--to dari params.
     "rebuild_pending": [sys.executable, "rebuild_pending.py"],
+    # Aksi manual UI (2026-08-27): posting per bundle/tanggal/operator + recalc hari
+    # setelah record di-exclude.
+    "post_bundles":   [sys.executable, "post_sap_staging.py", "--workers", "3"],
+    "post_date":      [sys.executable, "post_sap_staging.py", "--workers", "3", "--include-today"],
+    "post_operator":  [sys.executable, "post_sap_staging.py", "--workers", "3", "--include-today"],
+    "recalc_date":    [sys.executable, "rebuild_machinehours.py"],
 }
 
 # Batas waktu per aksi (detik). Posting ke SAP bisa lambat (~2 dtk/baris + retry).
@@ -53,12 +59,16 @@ TIMEOUTS = {
     "retry_failed": 1800,
     "post_corrections": 1800,
     "rebuild_pending": 3600,
+    "post_bundles": 1800,
+    "post_date": 1800,
+    "post_operator": 1800,
+    "recalc_date": 900,
 }
 
 
 def build_command(action: str, params: dict) -> list | None:
     """Perintah untuk sebuah aksi. post_corrections butuh --ids dari params;
-    rebuild_pending butuh --from (tanggal mulai)."""
+    rebuild_pending butuh --from (tanggal mulai); aksi manual UI butuh id/tanggal/pernr."""
     base = COMMANDS.get(action)
     if base is None:
         return None
@@ -67,12 +77,35 @@ def build_command(action: str, params: dict) -> list | None:
         if not ids:
             return None
         # --allow-posted TIDAK dipakai: koreksi masih PENDING. Guard poster tetap jalan.
-        return base + ["--ids", ",".join(ids), "--workers", "3"]
+        return base + ["--ids", ",".join(ids)]
     if action == "rebuild_pending":
         from_date = str((params or {}).get("from_date", "")).strip()
         if not from_date:
             return None
         return base + ["--from", from_date]
+    if action == "post_bundles":
+        ids = [str(int(i)) for i in (params or {}).get("ids", []) if str(i).strip()]
+        if not ids:
+            return None
+        return base + ["--ids", ",".join(ids)]
+    if action == "post_date":
+        date = str((params or {}).get("date", "")).strip()
+        if not date:
+            return None
+        return base + ["--date", date]
+    if action == "post_operator":
+        pernr = str((params or {}).get("pernr", "")).strip()
+        if not pernr:
+            return None
+        return base + ["--pernr", pernr]
+    if action == "recalc_date":
+        date = str((params or {}).get("date", "")).strip()
+        if not date:
+            return None
+        # rebuild_machinehours --from/--to (to EKSKLUSIF) → recalc satu hari.
+        from datetime import datetime, timedelta
+        to = (datetime.strptime(date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        return base + ["--from", date, "--to", to]
     return base
 
 

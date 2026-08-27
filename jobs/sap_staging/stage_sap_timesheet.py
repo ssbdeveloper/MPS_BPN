@@ -281,6 +281,14 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         )
         AND startdatetime < %s
         AND COALESCE(end_effective, enddatetime) > %s
+        -- EXCLUDED (soft delete per record, 2026-08-27): record yang ditandai lewat UI
+        -- tidak pernah ikut di-bundle/dikirim. Berlaku juga saat rebuild (tabel exclusion
+        -- terpisah dari provenance, jadi bertahan). Un-exclude = hapus baris dari tabel.
+        AND NOT EXISTS (
+          SELECT 1 FROM public.sap_staging_exclusion ex
+          WHERE ex.source_system = 'MCH_HOURS'
+            AND ex.source_row_id = mch_transaction.proddataid::text
+        )
         __SEGMENT_PROVENANCE_FILTER__
     ),
     -- BREAK WINDOWS (rules config, 2026-08-19): jam istirahat menentukan aktivitas
