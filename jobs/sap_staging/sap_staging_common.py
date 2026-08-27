@@ -406,7 +406,10 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
     if not rows:
         return 0
 
-    values = [[row.get(column) for column in STAGING_COLUMNS] for row in rows]
+    values = [
+        [row.get(column) if column != "is_correction" else row.get("is_correction", False) for column in STAGING_COLUMNS]
+        for row in rows
+    ]
     columns_sql = ", ".join(STAGING_COLUMNS)
     # Refresh rows that are still PENDING so corrected source data (e.g. fixed machine-hour
     # durations) flows through on a re-stage. Rows already handed to SAP
