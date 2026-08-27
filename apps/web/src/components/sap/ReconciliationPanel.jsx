@@ -423,6 +423,7 @@ function ReconciliationPanel() {
                   <th className="px-2.5 py-2 text-right font-semibold">Raw s</th>
                   <th className="px-2.5 py-2 text-right font-semibold">Clamp s</th>
                   <th className="px-2.5 py-2 text-right font-semibold text-amber-700">Cap cut s</th>
+                  <th className="px-2.5 py-2 text-right font-semibold text-amber-700">Break s</th>
                   <th className="px-2.5 py-2 text-right font-semibold text-emerald-700">Recog s</th>
                   <th className="px-2.5 py-2 font-semibold">Order</th>
                   <th className="px-2 py-2 font-semibold">Op</th>
@@ -431,8 +432,11 @@ function ReconciliationPanel() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {recs.records.map((r) => (
-                  <tr key={`${r.staging_id}-${r.start}`} className="align-top transition-colors hover:bg-slate-50">
+                {recs.records.map((r) => {
+                  const hitBreak = Number(r.breakcut) > 0;
+                  const hitCap = Number(r.capcut) > 0;
+                  return (
+                  <tr key={`${r.staging_id}-${r.start}`} className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-600">{r.date}</td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-[11px] text-slate-500">{r.staging_id}</td>
                     <td className="whitespace-nowrap px-2 py-1.5">
@@ -448,16 +452,20 @@ function ReconciliationPanel() {
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono font-semibold text-[#0077b6]">{hm(r.end_capped)}</td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.raw}</td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.clamped}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${r.capcut > 0 ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
+                    <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitCap ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
+                    <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitBreak ? 'text-orange-600' : 'text-slate-300'}`}>
+                      {hitBreak ? `${r.breakcut} ⏸` : r.breakcut}
+                    </td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums text-emerald-700">{r.recognized}</td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
                     <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
                   </tr>
-                ))}
+                  );
+                })}
                 {recs.records.length === 0 && (
-                  <tr><td colSpan={19} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
+                  <tr><td colSpan={20} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
                 )}
               </tbody>
             </table>

@@ -1514,6 +1514,23 @@ const END_CAPPED_EXPR = (va, nnva, nva) => `
       END || ' minutes')::interval
   )`;
 
+// Detik yang DIBUANG karena overlap break hours (rules break_windows) — hanya untuk
+// segmen NON-PRODUKTIF (M1/M2 dikecualikan, identik dengan stage_sap_timesheet.py).
+const BREAK_CUT_SECONDS = `
+  COALESCE((
+    SELECT SUM(EXTRACT(EPOCH FROM (
+      LEAST(COALESCE(m.end_effective, m.enddatetime), date_trunc('day', m.startdatetime) + (bw->>'end')::time)
+      - GREATEST(m.startdatetime, date_trunc('day', m.startdatetime) + (bw->>'start')::time)
+    ))::bigint)
+    FROM jsonb_array_elements((SELECT sap_rules->'break_windows' FROM public.plant_config WHERE id = 1)) bw
+    CROSS JOIN LATERAL jsonb_array_elements_text(bw->'days') d(day)
+    WHERE d.day::int = EXTRACT(DOW FROM m.startdatetime)::int
+      AND m.status_activitytype NOT IN ('M1', 'M2')
+      AND m.startdatetime < date_trunc('day', m.startdatetime) + (bw->>'end')::time
+      AND COALESCE(m.end_effective, m.enddatetime) > date_trunc('day', m.startdatetime) + (bw->>'start')::time
+  ), 0)::bigint
+`;
+
 // Data rekonsiliasi (dipakai endpoint JSON dan export Excel — satu sumber kebenaran).
 async function loadSapReconciliationData(fromDate, toDate) {
   const { rows: rr } = await pool.query(
@@ -1826,6 +1843,7 @@ async function exportSapReconciliation(req, res) {
       { header: "Raw secs", key: "raw", width: 10 },
       { header: "Clamped secs", key: "clamped", width: 12 },
       { header: "Cap cut secs", key: "capcut", width: 13 },
+      { header: "Break cut secs", key: "breakcut", width: 14 },
       { header: "Duration recognized", key: "recognized", width: 17 },
       { header: "Order", key: "order_no", width: 14 },
       { header: "Operation", key: "operation_no", width: 10 },
@@ -1845,7 +1863,8 @@ async function exportSapReconciliation(req, res) {
          COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
          (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
          (${cutSec})::bigint AS capcut,
-         (${CLAMPED_SEG_SECONDS} - ${cutSec})::bigint AS recognized,
+         (${BREAK_CUT_SECONDS}) AS breakcut,
+         (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
          m.order_no, m.operation_no,
          COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
          m.confirmation_number AS confirmation, m.is_stuck AS stuck
@@ -1873,6 +1892,7 @@ async function exportSapReconciliation(req, res) {
         raw: r.raw,
         clamped: r.clamped,
         capcut: r.capcut,
+        breakcut: Math.max(Number(r.breakcut) || 0, 0),
         recognized: Math.max(Number(r.recognized) || 0, 0),
         order_no: r.order_no,
         operation_no: r.operation_no,
@@ -2002,7 +2022,8 @@ async function getSapReconciliationRecords(req, res) {
          COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
          (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
          (${cutSec})::bigint AS capcut,
-         (${CLAMPED_SEG_SECONDS} - ${cutSec})::bigint AS recognized,
+         (${BREAK_CUT_SECONDS}) AS breakcut,
+         (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
          m.order_no, m.operation_no,
          COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
          m.confirmation_number AS confirmation, m.is_stuck AS stuck
