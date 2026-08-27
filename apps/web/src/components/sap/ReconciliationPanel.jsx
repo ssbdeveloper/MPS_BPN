@@ -504,7 +504,7 @@ function ReconciliationPanel() {
   );
 
   return (
-    <div ref={panelRef} className="mx-auto flex max-w-6xl flex-col gap-4">
+    <div ref={panelRef} className="mx-auto flex w-full max-w-full flex-col gap-4">
       {/* Header + date range */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <h2 className="text-sm font-extrabold text-slate-800">Machine hours → SAP</h2>
