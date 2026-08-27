@@ -189,6 +189,12 @@ function ReconciliationPanel() {
   const [dayFilter, setDayFilter] = useState('all');       // all | posted | belum
   const [ops, setOps] = useState(null);                    // latest stage_catchup job status
   const [opsBusy, setOpsBusy] = useState(false);
+  const [view, setView] = useState('records');             // records | overview
+  const [recs, setRecs] = useState(null);                  // { records, total, page, pageSize }
+  const [recsLoading, setRecsLoading] = useState(false);
+  const [recsError, setRecsError] = useState(null);
+  const [recsPageSize, setRecsPageSize] = useState(50);
+  const [recsQ, setRecsQ] = useState('');
   const opsTimer = useRef(null);
   const panelRef = useRef(null);          // root panel (to find scroll parent)
   const scrollParentRef = useRef(null);   // container scrolled while drilling
@@ -263,6 +269,27 @@ function ReconciliationPanel() {
 
   // Queue eligible-but-unstaged records (Python worker does the staging; correction mode for
   // already-closed days). Node only enqueues the request — it never runs bundling.
+  const loadRecords = useCallback(async (page = 1) => {
+    setRecsLoading(true);
+    setRecsError(null);
+    try {
+      const params = new URLSearchParams({ from, to, page: String(page), pageSize: String(recsPageSize) });
+      if (recsQ.trim()) params.set('q', recsQ.trim());
+      const res = await fetch(`${API_BASE}/dashboard/sap-reconciliation-records?${params.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Gagal ambil records');
+      setRecs(json.data);
+    } catch (e) {
+      setRecsError(e.message);
+    } finally {
+      setRecsLoading(false);
+    }
+  }, [from, to, recsPageSize, recsQ]);
+
+  useEffect(() => {
+    if (view === 'records' && from && to) loadRecords(1);
+  }, [view, from, to, loadRecords]);
+
   const stageCatchup = useCallback(async () => {
     setOpsBusy(true);
     try {
@@ -343,6 +370,113 @@ function ReconciliationPanel() {
   const stuckPending = Number(act.stuck_pending_bundles) || 0;
 
   // ── Breadcrumb ──
+  const statusTone = (s) => {
+    if (s === 'POSTED') return 'bg-emerald-100 text-emerald-700';
+    if (s === 'PENDING') return 'bg-amber-100 text-amber-700';
+    if (s === 'FAILED') return 'bg-red-100 text-red-700';
+    if (s === 'SKIPPED') return 'bg-slate-100 text-slate-500';
+    return 'bg-slate-100 text-slate-600';
+  };
+  const hm = (dt) => (dt ? dt.slice(11, 19) : '');
+
+  const renderRecords = () => (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">Records · per segment MCH</h3>
+        <div className="ml-auto flex items-center gap-2">
+          <input
+            value={recsQ}
+            onChange={(e) => setRecsQ(e.target.value)}
+            placeholder="Search pernr / name / machine / order…"
+            className="w-52 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+          />
+          <select
+            value={recsPageSize}
+            onChange={(e) => setRecsPageSize(Number(e.target.value))}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 focus:border-[#0096c7] focus:outline-none"
+          >
+            {[25, 50, 100].map((n) => <option key={n} value={n}>{n}/pg</option>)}
+          </select>
+        </div>
+      </div>
+      {recsLoading && !recs ? (
+        <div className="space-y-2 p-4">{[0, 1, 2].map((i) => <div key={i} className="h-10 animate-pulse rounded-lg bg-slate-100" />)}</div>
+      ) : recsError ? (
+        <div className="p-4 text-sm text-red-600">{recsError}</div>
+      ) : recs ? (
+        <>
+          <div className="max-w-full overflow-x-auto">
+            <table className="w-full text-xs" style={{ minWidth: 1480 }}>
+              <thead>
+                <tr style={{ background: '#caf0f8' }} className="text-left text-[10px] uppercase tracking-wide text-slate-600">
+                  <th className="px-2.5 py-2 font-semibold">Date</th>
+                  <th className="px-2.5 py-2 font-semibold">Staging</th>
+                  <th className="px-2 py-2 font-semibold">Bundle</th>
+                  <th className="px-2.5 py-2 font-semibold">PERNR</th>
+                  <th className="px-2.5 py-2 font-semibold">Name</th>
+                  <th className="px-2.5 py-2 font-semibold">Machine</th>
+                  <th className="px-2 py-2 font-semibold">Act</th>
+                  <th className="px-2.5 py-2 font-semibold">Status</th>
+                  <th className="px-2.5 py-2 text-right font-semibold">Start</th>
+                  <th className="px-2.5 py-2 text-right font-semibold">End (orig)</th>
+                  <th className="px-2.5 py-2 text-right font-semibold">End (capped)</th>
+                  <th className="px-2.5 py-2 text-right font-semibold">Raw s</th>
+                  <th className="px-2.5 py-2 text-right font-semibold">Clamp s</th>
+                  <th className="px-2.5 py-2 text-right font-semibold text-amber-700">Cap cut s</th>
+                  <th className="px-2.5 py-2 text-right font-semibold text-emerald-700">Recog s</th>
+                  <th className="px-2.5 py-2 font-semibold">Order</th>
+                  <th className="px-2 py-2 font-semibold">Op</th>
+                  <th className="px-2.5 py-2 font-semibold">Op text</th>
+                  <th className="px-2 py-2 font-semibold">Stuck</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {recs.records.map((r) => (
+                  <tr key={`${r.staging_id}-${r.start}`} className="align-top transition-colors hover:bg-slate-50">
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-600">{r.date}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-[11px] text-slate-500">{r.staging_id}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5">
+                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${statusTone(r.bundle_status)}`}>{r.bundle_status}</span>
+                    </td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.pernr}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">{r.name || '—'}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-700">{r.machine}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 font-mono text-slate-600">{r.activity}</td>
+                    <td className="max-w-[160px] truncate px-2.5 py-1.5 text-slate-500" title={r.status_desc}>{r.status_desc}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-700">{hm(r.start)}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-500">{hm(r.end_orig)}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono font-semibold text-[#0077b6]">{hm(r.end_capped)}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.raw}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.clamped}</td>
+                    <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${r.capcut > 0 ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums text-emerald-700">{r.recognized}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
+                    <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
+                  </tr>
+                ))}
+                {recs.records.length === 0 && (
+                  <tr><td colSpan={19} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-2">
+            <span className="text-[11px] font-semibold text-slate-500">{recs.total.toLocaleString('id-ID')} records</span>
+            <div className="flex items-center gap-1.5">
+              <button type="button" disabled={recs.page <= 1 || recsLoading} onClick={() => loadRecords(recs.page - 1)}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 active:scale-95 disabled:opacity-40">‹ Prev</button>
+              <span className="text-[11px] font-semibold text-slate-600">page {recs.page} / {Math.max(1, Math.ceil(recs.total / recs.pageSize))}</span>
+              <button type="button" disabled={recs.page >= Math.ceil(recs.total / recs.pageSize) || recsLoading} onClick={() => loadRecords(recs.page + 1)}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 active:scale-95 disabled:opacity-40">Next ›</button>
+            </div>
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+
   const crumb = (
     <nav className="flex flex-wrap items-center gap-1 text-xs">
       <button
@@ -414,6 +548,29 @@ function ReconciliationPanel() {
 
           {/* ══ LEVEL 1: Summary + date list ══ */}
           {!day && (
+            <>
+              {/* Tab: Records (default) | Overview */}
+              <div className="inline-flex rounded-xl border border-slate-300 bg-slate-100 p-1">
+                {[
+                  { code: 'records', label: 'Records' },
+                  { code: 'overview', label: 'Overview' },
+                ].map((t) => (
+                  <button
+                    key={t.code}
+                    type="button"
+                    onClick={() => setView(t.code)}
+                    className={`rounded-lg px-4 py-1.5 text-xs font-bold transition-all active:scale-95 ${view === t.code ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:bg-white/60'}`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {view === 'records' && renderRecords()}
+            </>
+          )}
+
+          {!day && view === 'overview' && (
             <>
               {/* 3-step flow */}
               <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
