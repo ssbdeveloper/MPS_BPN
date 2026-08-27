@@ -1872,7 +1872,7 @@ async function exportSapReconciliation(req, res) {
     const { rows: recRows } = await pool.query(
       `SELECT
          to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
-         st.id AS staging_id, m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+         st.id AS staging_id, m.proddataid AS source_row_id, m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
          m.machinename AS machine, m.status_activitytype AS activity,
          m.status_description AS status_desc,
          to_char(m.startdatetime, 'YYYY-MM-DD HH24:MI:SS') AS start,
