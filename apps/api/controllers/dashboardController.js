@@ -1659,6 +1659,8 @@ async function exportSapReconciliation(req, res) {
     const toDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "") ? req.query.to : null;
     const data = await loadSapReconciliationData(fromDate, toDate);
     const { funnel: f, by_date } = data;
+    const caps = await loadMaxRecordMinutes();
+    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
 
     const wb = new ExcelJS.Workbook();
     const fmt = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
