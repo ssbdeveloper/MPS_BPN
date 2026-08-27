@@ -2031,6 +2031,7 @@ async function getSapReconciliationRecords(req, res) {
       `SELECT
          to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
          st.id AS staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+         m.proddataid AS source_row_id,
          m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
          m.machinename AS machine, m.status_activitytype AS activity,
          m.status_description AS status_desc,
