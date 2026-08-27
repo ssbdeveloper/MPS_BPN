@@ -1710,6 +1710,157 @@ async function exportSapReconciliation(req, res) {
     by.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
     by.views = [{ state: "frozen", ySplit: 1 }];
 
+    // --- Sheet 3: Bundles (per konfirmasi staging, rentang penuh) ---
+    const bd = wb.addWorksheet("Bundles");
+    bd.columns = [
+      { header: "Date", key: "date", width: 12 },
+      { header: "Staging ID", key: "staging_id", width: 10 },
+      { header: "Source", key: "src_sys", width: 12 },
+      { header: "PERNR", key: "pernr", width: 10 },
+      { header: "Name", key: "name", width: 22 },
+      { header: "Status", key: "status", width: 10 },
+      { header: "Prod", key: "prod", width: 6 },
+      { header: "Sent hrs", key: "sent", width: 10 },
+      { header: "Source hrs", key: "src_hrs", width: 11 },
+      { header: "Cut (max rec)", key: "cut", width: 13 },
+      { header: "Records", key: "nrows", width: 8 },
+      { header: "Stuck", key: "stuck", width: 7 },
+      { header: "Order", key: "aufnr", width: 14 },
+      { header: "LSTAR", key: "lstar", width: 8 },
+      { header: "Operation", key: "operation", width: 24 },
+      { header: "Machine", key: "machine", width: 14 },
+      { header: "Posted at", key: "posted", width: 17 },
+    ];
+    const { rows: bundleRows } = await pool.query(
+      `SELECT
+         to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+         st.id AS staging_id, st.source_system AS source, st.pernr,
+         COALESCE(u.full_name, '') AS name, st.status, st.is_productive AS prod,
+         round(st.total_seconds/3600.0, 2)::float AS sent,
+         (SELECT round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS source_hrs,
+         (SELECT round(sum(${cutSec})/3600.0, 2)::float
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS cut,
+         (SELECT count(*) FROM public.sap_staging_source src WHERE src.staging_id = st.id)::int AS nrows,
+         (SELECT bool_or(m.is_stuck)
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS stuck,
+         st.aufnr, st.lstar,
+         (SELECT COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), ''))
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS operation,
+         (SELECT max(m.machinename)
+          FROM public.sap_staging_source src
+          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+          WHERE src.staging_id = st.id) AS machine,
+         to_char(st.posted_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS posted
+       FROM public.sap_timesheet_staging st
+       LEFT JOIN public.usernfc u
+         ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
+       WHERE st.bucket_start::date BETWEEN $1::date AND $2::date
+       ORDER BY st.bucket_start, st.id`,
+      [data.range.from, data.range.to],
+    );
+    for (const r of bundleRows) {
+      bd.addRow({
+        date: r.date,
+        staging_id: r.staging_id,
+        src_sys: r.source,
+        pernr: r.pernr,
+        name: r.name,
+        status: r.status,
+        prod: r.prod ? "Y" : "",
+        sent: fmt(r.sent),
+        src_hrs: r.source_hrs == null ? "-" : fmt(r.source_hrs),
+        cut: r.cut == null ? "-" : fmt(r.cut),
+        nrows: r.nrows,
+        stuck: r.stuck ? "Y" : "",
+        aufnr: r.aufnr,
+        lstar: r.lstar,
+        operation: r.operation,
+        machine: r.machine,
+        posted: r.posted,
+      });
+    }
+    bd.getRow(1).font = { bold: true };
+    bd.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
+    bd.views = [{ state: "frozen", ySplit: 1 }];
+
+    // --- Sheet 4: Records (per segmen sumber MCH, detail penuh per record) ---
+    const rc = wb.addWorksheet("Records");
+    rc.columns = [
+      { header: "Date", key: "date", width: 12 },
+      { header: "Staging ID", key: "staging_id", width: 10 },
+      { header: "PERNR", key: "pernr", width: 10 },
+      { header: "Name", key: "name", width: 22 },
+      { header: "Machine", key: "machine", width: 14 },
+      { header: "Activity", key: "activity", width: 8 },
+      { header: "Status desc", key: "status_desc", width: 22 },
+      { header: "Start", key: "start", width: 20 },
+      { header: "End (effective)", key: "end", width: 20 },
+      { header: "Raw secs", key: "raw", width: 10 },
+      { header: "Clamped secs", key: "clamped", width: 12 },
+      { header: "Cap cut secs", key: "capcut", width: 13 },
+      { header: "Order", key: "order_no", width: 14 },
+      { header: "Operation", key: "operation_no", width: 10 },
+      { header: "Op text", key: "operation_text", width: 26 },
+      { header: "Confirmation", key: "confirmation", width: 13 },
+      { header: "Stuck", key: "stuck", width: 7 },
+    ];
+    const { rows: recRows } = await pool.query(
+      `SELECT
+         to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+         st.id AS staging_id, m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+         m.machinename AS machine, m.status_activitytype AS activity,
+         m.status_description AS status_desc,
+         to_char(m.startdatetime, 'YYYY-MM-DD HH24:MI:SS') AS start,
+         to_char(COALESCE(m.end_effective, m.enddatetime), 'YYYY-MM-DD HH24:MI:SS') AS end,
+         COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
+         (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
+         (${cutSec})::bigint AS capcut,
+         m.order_no, m.operation_no,
+         COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
+         m.confirmation_number AS confirmation, m.is_stuck AS stuck
+       FROM public.sap_staging_source src
+       JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
+       JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+       LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
+       WHERE src.source_system = 'MCH_HOURS'
+         AND st.bucket_start::date BETWEEN $1::date AND $2::date
+       ORDER BY st.bucket_start, st.id, m.startdatetime`,
+      [data.range.from, data.range.to],
+    );
+    for (const r of recRows) {
+      rc.addRow({
+        date: r.date,
+        staging_id: r.staging_id,
+        pernr: r.pernr,
+        name: r.name,
+        machine: r.machine,
+        activity: r.activity,
+        status_desc: r.status_desc,
+        start: r.start,
+        end: r.end,
+        raw: r.raw,
+        clamped: r.clamped,
+        capcut: r.capcut,
+        order_no: r.order_no,
+        operation_no: r.operation_no,
+        operation_text: r.operation_text,
+        confirmation: r.confirmation,
+        stuck: r.stuck ? "Y" : "",
+      });
+    }
+    rc.getRow(1).font = { bold: true };
+    rc.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
+    rc.views = [{ state: "frozen", ySplit: 1 }];
+
     const filename = `sap_reconciliation_${data.range.from}_to_${data.range.to}.xlsx`;
     res.setHeader(
       "Content-Type",
