@@ -48,8 +48,10 @@ COMMANDS = {
     # Aksi manual UI (2026-08-27): posting per bundle/tanggal/operator + recalc hari
     # setelah record di-exclude.
     "post_bundles":   [sys.executable, "post_sap_staging.py", "--workers", "3"],
-    "post_date":      [sys.executable, "post_sap_staging.py", "--workers", "3", "--include-today"],
-    "post_operator":  [sys.executable, "post_sap_staging.py", "--workers", "3", "--include-today"],
+    # --limit 1000: posting manual per tanggal/operator harus HABIS dalam satu request
+    # (default argparse 50 → cuma 50 bundle terkirim per klik — sisanya tetap PENDING).
+    "post_date":      [sys.executable, "post_sap_staging.py", "--workers", "4", "--limit", "1000", "--include-today"],
+    "post_operator":  [sys.executable, "post_sap_staging.py", "--workers", "4", "--limit", "1000", "--include-today"],
     "recalc_date":    [sys.executable, "rebuild_machinehours.py"],
 }
 
