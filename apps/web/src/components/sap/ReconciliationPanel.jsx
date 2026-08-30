@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { toast } from 'sonner';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, ChevronRight,
-  Clock, Cpu, Download, Factory, House, Info, Layers, Loader2, RefreshCw, Send, Trash2, X, XCircle,
+  Clock, Cpu, Download, Factory, Info, Layers, Loader2, RefreshCw, Send, Trash2, X, XCircle,
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -292,6 +292,7 @@ function ReconciliationPanel() {
   const [recsQ, setRecsQ] = useState('');
   const [recsSource, setRecsSource] = useState('all'); // all | mch | timesheet
   const [exclusions, setExclusions] = useState([]);
+  const [exQ, setExQ] = useState('');
   const [confirmExclude, setConfirmExclude] = useState(null);
   const [excludeNote, setExcludeNote] = useState('');
   const [excludeBusy, setExcludeBusy] = useState(false);
@@ -394,15 +395,23 @@ function ReconciliationPanel() {
 
   const loadExclusions = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/dashboard/sap-staging-exclusion`);
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      if (exQ.trim()) params.set('q', exQ.trim());
+      const res = await fetch(`${API_BASE}/dashboard/sap-staging-exclusion?${params.toString()}`);
       const json = await res.json();
       if (res.ok) setExclusions(json.data?.exclusions || []);
     } catch (err) {
       console.error('loadExclusions error', err);
     }
-  }, []);
+  }, [from, to, exQ]);
 
-  useEffect(() => { loadExclusions(); }, [loadExclusions]);
+  // Reload exclusions saat rentang tanggal / search berubah (search di-debounce).
+  useEffect(() => {
+    const t = setTimeout(loadExclusions, exQ ? 350 : 0);
+    return () => clearTimeout(t);
+  }, [loadExclusions, exQ]);
 
   const enqueueOps = useCallback(async (action, params, label) => {
     try {
@@ -633,14 +642,21 @@ function ReconciliationPanel() {
   );
 
   // Tab terpisah: daftar record yang di-exclude (tidak ikut dibundle/dikirim).
+  // Rentang tanggal (from/to) + search dikirim ke backend sehingga ikut terfilter.
   const renderExcluded = () => (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
         <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">Excluded records</h3>
         <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">{exclusions.length}</span>
+        <input
+          value={exQ}
+          onChange={(e) => setExQ(e.target.value)}
+          placeholder="Search pernr / name / machine / activity…"
+          className="ml-auto w-56 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+        />
       </div>
       {exclusions.length === 0 ? (
-        <p className="px-4 py-10 text-center text-sm text-slate-400">No excluded records.</p>
+        <p className="px-4 py-10 text-center text-sm text-slate-400">No excluded records{exQ ? ' matching the search' : ''}.</p>
       ) : (
         <ul className="max-h-[62vh] divide-y divide-slate-100 overflow-y-auto">
           {exclusions.map((ex) => (
@@ -649,9 +665,10 @@ function ReconciliationPanel() {
                 <span className="font-mono font-bold text-slate-700">{ex.pernr}</span>{' '}
                 <span className="font-semibold text-slate-600">{ex.name}</span>
                 <span className="text-slate-400"> · {ex.machinename} · {ex.activity} · {ex.source_row_id}</span>
+                {ex.record_date && <span className="text-slate-400"> · {shortDate(ex.record_date)}</span>}
                 {ex.note && <span className="italic text-slate-500"> — {ex.note}</span>}
               </span>
-              <span className="text-[10px] text-slate-400">{ex.excluded_at ? String(ex.excluded_at).slice(0, 16) : ''}</span>
+              <span className="text-[10px] text-slate-400">excluded {ex.excluded_at ? String(ex.excluded_at).slice(0, 16) : ''}</span>
               <button
                 type="button"
                 disabled={excludeBusy}
@@ -668,15 +685,16 @@ function ReconciliationPanel() {
     </section>
   );
 
-  const crumb = (
+  // Breadcrumb hanya tampil saat drill (day/rec) — di level summary tidak ada agar rapat.
+  const crumb = !day && !rec ? null : (
     <nav className="flex flex-wrap items-center gap-1 text-xs">
       <button
         type="button"
         onClick={() => { setDay(null); setRec(null); }}
         title="Back to summary"
-        className={`flex h-7 w-7 items-center justify-center rounded-lg transition ${day ? 'text-[#0077b6] hover:bg-slate-100' : 'text-slate-500'}`}
+        className="flex h-6 items-center gap-1 rounded-lg px-2 font-bold text-[#0077b6] transition hover:bg-slate-100"
       >
-        <House size={14} />
+        <ArrowLeft size={13} /> All dates
       </button>
       {day && (
         <>
@@ -699,33 +717,6 @@ function ReconciliationPanel() {
 
   return (
     <div ref={panelRef} className="mx-auto flex w-full max-w-full flex-col gap-3">
-      {/* Header + date range */}
-      <div className="flex flex-wrap items-end justify-end gap-3">
-        <form onSubmit={(e) => { e.preventDefault(); setDay(null); setRec(null); load(); }} className="flex items-end gap-2">
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={exporting || !from || !to}
-            title="Export reconciliation to Excel"
-            className="flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
-          >
-            {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export
-          </button>
-          <label className="flex flex-col text-[11px] font-semibold text-slate-500">From
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-              className="mt-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
-          </label>
-          <label className="flex flex-col text-[11px] font-semibold text-slate-500">To
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-              className="mt-0.5 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
-          </label>
-          <button type="submit" disabled={loading}
-            className="flex min-h-[38px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 text-xs font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Apply
-          </button>
-        </form>
-      </div>
-
       {error && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
           <span className="flex items-center gap-2 text-sm font-semibold text-red-700"><AlertCircle size={16} /> {error}</span>
@@ -742,22 +733,50 @@ function ReconciliationPanel() {
           {/* ══ LEVEL 1: Summary + date list ══ */}
           {!day && (
             <>
-              {/* Tab: Records (default) | Overview | Excluded */}
-              <div className="inline-flex rounded-xl border border-slate-300 bg-slate-100 p-1">
-                {[
-                  { code: 'records', label: 'Records' },
-                  { code: 'overview', label: 'Overview' },
-                  { code: 'excluded', label: 'Excluded' },
-                ].map((t) => (
+              {/* Tab bar + date range filter — satu baris agar hemat tempat */}
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-300 bg-slate-100 p-1.5">
+                <div className="inline-flex rounded-lg bg-slate-200/60 p-0.5">
+                  {[
+                    { code: 'records', label: 'Records' },
+                    { code: 'overview', label: 'Overview' },
+                    { code: 'excluded', label: 'Excluded' },
+                  ].map((t) => (
+                    <button
+                      key={t.code}
+                      type="button"
+                      onClick={() => setView(t.code)}
+                      className={`rounded-lg px-4 py-1.5 text-xs font-bold transition-all active:scale-95 ${view === t.code ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:bg-white/60'}`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <form
+                  onSubmit={(e) => { e.preventDefault(); setDay(null); setRec(null); load(); }}
+                  className="ml-auto flex flex-wrap items-center gap-2"
+                >
                   <button
-                    key={t.code}
                     type="button"
-                    onClick={() => setView(t.code)}
-                    className={`rounded-lg px-4 py-1.5 text-xs font-bold transition-all active:scale-95 ${view === t.code ? 'bg-white text-slate-900 shadow' : 'text-slate-500 hover:bg-white/60'}`}
+                    onClick={handleExport}
+                    disabled={exporting || !from || !to}
+                    title="Export reconciliation to Excel"
+                    className="flex h-[30px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-slate-700 transition-all hover:bg-slate-50 active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
                   >
-                    {t.label}
+                    {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Export
                   </button>
-                ))}
+                  <label className="flex items-center gap-1 text-[11px] font-bold text-slate-500">From
+                    <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                      className="h-[30px] rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
+                  </label>
+                  <label className="flex items-center gap-1 text-[11px] font-bold text-slate-500">To
+                    <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+                      className="h-[30px] rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
+                  </label>
+                  <button type="submit" disabled={loading}
+                    className="flex h-[30px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-2.5 text-[11px] font-semibold text-white transition-all hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
+                    {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Apply
+                  </button>
+                </form>
               </div>
 
               {view === 'records' && renderRecords()}
