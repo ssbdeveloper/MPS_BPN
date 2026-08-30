@@ -1477,60 +1477,217 @@ const CLAMPED_SEG_SECONDS = `
   ))::bigint, 0)
 `;
 
-// Cap max record duration per kategori (plant_config.sap_rules) — normalisasi sama
-// seperti configRulesController.normalizeMaxRecordMinutes. Angka lama (legacy)
-// dipetakan sama ke semua kategori.
-async function loadMaxRecordMinutes() {
+// Cap max record duration PER JENIS AKTIVITAS (plant_config.sap_rules) — normalisasi
+// + ekspansi config lama memakai helper yang sama dengan configRulesController, supaya
+// rekonsiliasi tidak pernah beda arah dengan staging.
+const {
+  normalizeMaxRecordMinutes,
+  legacyCategoryMinutes,
+  expandLegacyIntoTypeMaps,
+  loadActivityCatalog,
+} = require("./configRulesController");
+
+async function loadMaxRecordConfig() {
   try {
     const r = await pool.query("SELECT sap_rules FROM public.plant_config WHERE id = 1 LIMIT 1");
     const raw = r.rows[0]?.sap_rules || {};
-    const m = raw.max_record_minutes;
-    const pick = (v) => {
-      const n = Number.parseInt(v, 10);
-      return Number.isFinite(n) && n >= 1 ? n : 90;
-    };
-    if (m && typeof m === "object") return { va: pick(m.va), nnva: pick(m.nnva), nva: pick(m.nva) };
-    const v = pick(m);
-    return { va: v, nnva: v, nva: v };
+    const maps = normalizeMaxRecordMinutes(raw.max_record_minutes);
+    const legacy = legacyCategoryMinutes(raw.max_record_minutes);
+    if (!legacy) return { ...maps, fallback: null };
+    const catalog = await loadActivityCatalog().catch(() => null);
+    const expanded = catalog ? expandLegacyIntoTypeMaps(maps, legacy, catalog) : maps;
+    return { ...expanded, fallback: legacy };
   } catch (err) {
-    console.error("loadMaxRecordMinutes error:", err.message);
-    return { va: 90, nnva: 90, nva: 90 };
+    console.error("loadMaxRecordConfig error:", err.message);
+    return { mch: {}, timesheet: {}, fallback: { va: 90, nnva: 90, nva: 90 } };
   }
 }
 
-// Detik yang DIPOTONG dari satu record mch_transaction karena melebihi max record
-// duration (rules per kategori: M1=VA, M2/idle-promotable=NNVA, selain itu=NVA).
-// CASE-nya IDENTIK dengan cap di jobs/sap_staging/stage_sap_timesheet.py source_rows
-// — jangan sampai beda arah (rekonsiliasi harus mencerminkan yang benar-benar di-stage).
-// va/nnva/nva adalah integer tervalidasi (parseInt) — aman di-interpolasi.
-const CAP_CUT_SECONDS = (va, nnva, nva) => `
+// Map cap di-inline sebagai literal jsonb: key hanya digit, nilai integer/null hasil
+// normalizer, jadi tidak ada risiko injeksi (escape kutip tetap dilakukan).
+const jsonbLiteral = (obj) => `'${JSON.stringify(obj || {}).replace(/'/g, "''")}'::jsonb`;
+const intOrNull = (v) => {
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) && n >= 1 ? String(n) : "NULL";
+};
+
+// Menit cap untuk satu record mch_transaction (alias m). NULL = No Limit.
+// CASE-nya IDENTIK dengan stage_sap_timesheet.py source_rows.
+const MCH_CAP_MINUTES = (cfg) => {
+  const L = jsonbLiteral(cfg.mch);
+  const fb = cfg.fallback || {};
+  return `(CASE
+      WHEN jsonb_typeof(${L} -> m.statusid::text) = 'null' THEN NULL
+      WHEN (${L} ->> m.statusid::text) ~ '^[0-9]+$' THEN (${L} ->> m.statusid::text)::int
+      WHEN m.status_activitytype = 'M1' THEN ${intOrNull(fb.va)}
+      WHEN m.status_activitytype = 'M2'
+        OR (m.statusid = 2 AND m.previoustatusid = 1
+            AND COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime))) <= 300)
+        THEN ${intOrNull(fb.nnva)}
+      ELSE ${intOrNull(fb.nva)}
+    END)`;
+};
+
+// Detik yang DIPOTONG dari satu record mch_transaction karena melebihi cap jenisnya.
+// Cap NULL (No Limit) -> GREATEST(NULL, 0) = 0 detik dipotong.
+const CAP_CUT_SECONDS = (cfg) => `
   GREATEST(
     EXTRACT(EPOCH FROM (COALESCE(m.end_effective, m.enddatetime) - m.startdatetime))
-    - (CASE
-        WHEN m.status_activitytype = 'M1' THEN ${va}
-        WHEN m.status_activitytype = 'M2'
-          OR (m.statusid = 2 AND m.previoustatusid = 1
-              AND COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime))) <= 300)
-          THEN ${nnva}
-        ELSE ${nva}
-      END * 60),
+    - (${MCH_CAP_MINUTES(cfg)} * 60),
     0
   )`;
 
-// Akhir record SETELAH cap max record duration (start + N menit sesuai kategori) —
-// nilai yang benar-benar dipakai staging. Dipakai di export Records & tabel records.
-const END_CAPPED_EXPR = (va, nnva, nva) => `
+// Akhir record SETELAH cap (start + N menit sesuai jenis) — nilai yang benar-benar
+// dipakai staging. Cap NULL -> LEAST mengabaikan NULL -> akhir asli (tidak dipotong).
+const END_CAPPED_EXPR = (cfg) => `
   LEAST(
     COALESCE(m.end_effective, m.enddatetime),
-    m.startdatetime + (CASE
-        WHEN m.status_activitytype = 'M1' THEN ${va}
-        WHEN m.status_activitytype = 'M2'
-          OR (m.statusid = 2 AND m.previoustatusid = 1
-              AND COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime))) <= 300)
-          THEN ${nnva}
-        ELSE ${nva}
-      END || ' minutes')::interval
+    m.startdatetime + (${MCH_CAP_MINUTES(cfg)} || ' minutes')::interval
   )`;
+
+// ---- TIMESHEET (alias t = timesheet_transaction) -----------------------------
+// Cap per activitytype ("" = productive). IDENTIK dengan stage_timesheet_transaction.py.
+const TS_CAP_MINUTES = (cfg) => {
+  const L = jsonbLiteral(cfg.timesheet);
+  const fb = cfg.fallback || {};
+  return `(CASE
+      WHEN jsonb_typeof(${L} -> BTRIM(COALESCE(t.activitytype, ''))) = 'null' THEN NULL
+      WHEN (${L} ->> BTRIM(COALESCE(t.activitytype, ''))) ~ '^[0-9]+$'
+        THEN (${L} ->> BTRIM(COALESCE(t.activitytype, '')))::int
+      WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN ${intOrNull(fb.va)}
+      ELSE ${intOrNull(fb.nva)}
+    END)`;
+};
+
+const TS_RAW_SECONDS = `EXTRACT(EPOCH FROM (t.longdate_checkout - t.longdate_checkin))::bigint`;
+
+// Potongan break hours untuk record timesheet — HANYA non-produktif (activitytype
+// terisi), per hari (record bisa lintas tengah malam). Sama dengan CTE break di
+// stage_timesheet_transaction.py.
+const TS_BREAK_CUT_SECONDS = `
+  COALESCE((
+    SELECT SUM(EXTRACT(EPOCH FROM (
+      LEAST(seg.seg_end, g.day_bucket + (bw->>'end')::time)
+        - GREATEST(seg.seg_start, g.day_bucket + (bw->>'start')::time)
+    ))::bigint)
+    FROM generate_series(
+      date_trunc('day', t.longdate_checkin AT TIME ZONE '${TZ}'),
+      date_trunc('day', t.longdate_checkout AT TIME ZONE '${TZ}'),
+      interval '1 day'
+    ) AS g(day_bucket)
+    CROSS JOIN LATERAL (
+      SELECT GREATEST(t.longdate_checkin AT TIME ZONE '${TZ}', g.day_bucket) AS seg_start,
+             LEAST(t.longdate_checkout AT TIME ZONE '${TZ}', g.day_bucket + interval '1 day') AS seg_end
+    ) seg
+    CROSS JOIN LATERAL jsonb_array_elements(
+      COALESCE((SELECT sap_rules->'break_windows' FROM public.plant_config WHERE id = 1), '[]'::jsonb)
+    ) bw
+    CROSS JOIN LATERAL jsonb_array_elements_text(bw->'days') d(day)
+    WHERE d.day::int = EXTRACT(DOW FROM g.day_bucket)::int
+      AND BTRIM(COALESCE(t.activitytype, '')) <> ''
+      AND seg.seg_start < g.day_bucket + (bw->>'end')::time
+      AND seg.seg_end > g.day_bucket + (bw->>'start')::time
+  ), 0)::bigint`;
+
+// Detik dipotong cap untuk timesheet (setelah potongan break, seperti staging).
+const TS_CAP_CUT_SECONDS = (cfg) => `
+  GREATEST(
+    GREATEST(${TS_RAW_SECONDS} - (${TS_BREAK_CUT_SECONDS}), 0)
+    - (${TS_CAP_MINUTES(cfg)}::bigint * 60),
+    0
+  )`;
+
+// Records rekonsiliasi dalam SATU bentuk kolom untuk dua sumber:
+//   MCH_HOURS = 1 baris per segmen mch_transaction (bundel bisa banyak segmen)
+//   TIMESHEET = 1 baris staging = 1 tsnumber (tidak ada provenance/bundling)
+// Dipakai endpoint records (paginated) DAN sheet Records di export (kolom Source).
+// $1 = from date, $2 = to date, $3 = pola search (kalau search=true).
+function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
+  const cutSec = CAP_CUT_SECONDS(cfg);
+  const endCapped = END_CAPPED_EXPR(cfg);
+  const tsCut = TS_CAP_CUT_SECONDS(cfg);
+  const mchSearch = search
+    ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
+    : "";
+  const tsSearch = search
+    ? "AND (t.serialnumber ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
+    : "";
+
+  const mchSql = `
+    SELECT
+      'MCH_HOURS'::text AS source,
+      st.bucket_start::date AS sort_day,
+      to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+      st.id AS staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+      m.proddataid::text AS source_row_id,
+      m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+      COALESCE(m.machinename, '') AS machine,
+      COALESCE(m.status_activitytype, '') AS activity,
+      COALESCE(m.status_description, '') AS status_desc,
+      to_char(m.startdatetime, 'YYYY-MM-DD HH24:MI:SS') AS start,
+      to_char(m.enddatetime, 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
+      to_char(${endCapped}, 'YYYY-MM-DD HH24:MI:SS') AS end_capped,
+      COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
+      (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
+      (${cutSec})::bigint AS capcut,
+      (${BREAK_CUT_SECONDS}) AS breakcut,
+      (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
+      COALESCE(m.order_no, '') AS order_no, COALESCE(m.operation_no, '') AS operation_no,
+      COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
+      COALESCE(m.confirmation_number, '') AS confirmation,
+      COALESCE(m.is_stuck, false) AS stuck,
+      (ex2.source_row_id IS NOT NULL) AS excluded,
+      true AS can_exclude
+    FROM public.sap_staging_source src
+    JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
+    JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+    LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
+    LEFT JOIN public.sap_staging_exclusion ex2
+      ON ex2.source_system = 'MCH_HOURS' AND ex2.source_row_id = m.proddataid::text
+    WHERE src.source_system = 'MCH_HOURS'
+      AND st.bucket_start::date BETWEEN $1::date AND $2::date ${mchSearch}`;
+
+  // TIMESHEET: bucket_start NULL by design -> tanggal dari source_min_start (= checkin
+  // yang sudah dikonversi ke TZ aplikasi saat staging). end_capped = jam sintetis yang
+  // benar-benar dikirim ke SAP (checkin + total_seconds).
+  const tsSql = `
+    SELECT
+      'TIMESHEET'::text AS source,
+      st.source_min_start::date AS sort_day,
+      to_char(st.source_min_start, 'YYYY-MM-DD') AS date,
+      st.id AS staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+      t.tsnumber::text AS source_row_id,
+      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr, COALESCE(u.full_name, '') AS name,
+      COALESCE(t.workcentercode, '') AS machine,
+      BTRIM(COALESCE(t.activitytype, '')) AS activity,
+      COALESCE(NULLIF(r.description, ''),
+               CASE WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN 'Productive (order work)' ELSE '' END) AS status_desc,
+      to_char(t.longdate_checkin AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS start,
+      to_char(t.longdate_checkout AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
+      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (st.total_seconds || ' seconds')::interval,
+              'YYYY-MM-DD HH24:MI:SS') AS end_capped,
+      ${TS_RAW_SECONDS} AS raw,
+      ${TS_RAW_SECONDS} AS clamped,
+      (${tsCut})::bigint AS capcut,
+      (${TS_BREAK_CUT_SECONDS}) AS breakcut,
+      st.total_seconds::bigint AS recognized,
+      COALESCE(t.order_no, '') AS order_no, COALESCE(t.operation_no::text, '') AS operation_no,
+      NULL::text AS operation_text,
+      COALESCE(st.rueck, '') AS confirmation,
+      false AS stuck,
+      false AS excluded,
+      false AS can_exclude
+    FROM public.sap_timesheet_staging st
+    JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
+    LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
+    LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
+    WHERE st.source_system = 'TIMESHEET'
+      AND st.source_min_start::date BETWEEN $1::date AND $2::date ${tsSearch}`;
+
+  if (source === "mch") return mchSql;
+  if (source === "timesheet") return tsSql;
+  return `${mchSql}\n    UNION ALL\n${tsSql}`;
+}
 
 // Detik yang DIBUANG karena overlap break hours (rules break_windows) — hanya untuk
 // segmen NON-PRODUKTIF (M1/M2 dikecualikan, identik dengan stage_sap_timesheet.py).
@@ -1558,8 +1715,8 @@ async function loadSapReconciliationData(fromDate, toDate) {
   );
   const fromD = rr[0].from_d;
   const toD = rr[0].to_d;
-  const caps = await loadMaxRecordMinutes();
-  const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
+  const capCfg = await loadMaxRecordConfig();
+  const cutSec = CAP_CUT_SECONDS(capCfg);
 
   const [mchByDate, stgByDate, actions] = await Promise.all([
     // mch_transaction eligible per hari kerja: jam mentah, clamp, potongan max record,
@@ -1709,9 +1866,9 @@ async function exportSapReconciliation(req, res) {
     const toDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "") ? req.query.to : null;
     const data = await loadSapReconciliationData(fromDate, toDate);
     const { funnel: f, by_date } = data;
-    const caps = await loadMaxRecordMinutes();
-    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
-    const endCappedExpr = END_CAPPED_EXPR(caps.va, caps.nnva, caps.nva);
+    const capCfg = await loadMaxRecordConfig();
+    const cutSec = CAP_CUT_SECONDS(capCfg);
+    const endCappedExpr = END_CAPPED_EXPR(capCfg);
 
     const wb = new ExcelJS.Workbook();
     const fmt = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : 0);
@@ -1845,10 +2002,11 @@ async function exportSapReconciliation(req, res) {
     bd.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
     bd.views = [{ state: "frozen", ySplit: 1 }];
 
-    // --- Sheet 4: Records (per segmen sumber MCH, detail penuh per record) ---
+    // --- Sheet 4: Records (per segmen MCH + per tsnumber TIMESHEET, kolom Source) ---
     const rc = wb.addWorksheet("Records");
     rc.columns = [
       { header: "Date", key: "date", width: 12 },
+      { header: "Source", key: "source", width: 11 },
       { header: "Staging ID", key: "staging_id", width: 10 },
       { header: "PERNR", key: "pernr", width: 10 },
       { header: "Name", key: "name", width: 22 },
@@ -1870,34 +2028,15 @@ async function exportSapReconciliation(req, res) {
       { header: "Stuck", key: "stuck", width: 7 },
     ];
     const { rows: recRows } = await pool.query(
-      `SELECT
-         to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
-         st.id AS staging_id, m.proddataid AS source_row_id, m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
-         m.machinename AS machine, m.status_activitytype AS activity,
-         m.status_description AS status_desc,
-         to_char(m.startdatetime, 'YYYY-MM-DD HH24:MI:SS') AS start,
-         to_char(m.enddatetime, 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
-         to_char(${endCappedExpr}, 'YYYY-MM-DD HH24:MI:SS') AS end_capped,
-         COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
-         (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
-         (${cutSec})::bigint AS capcut,
-         (${BREAK_CUT_SECONDS}) AS breakcut,
-         (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
-         m.order_no, m.operation_no,
-         COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
-         m.confirmation_number AS confirmation, m.is_stuck AS stuck
-       FROM public.sap_staging_source src
-       JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
-       JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-       LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
-       WHERE src.source_system = 'MCH_HOURS'
-         AND st.bucket_start::date BETWEEN $1::date AND $2::date
-       ORDER BY st.bucket_start, st.id, m.startdatetime`,
+      `SELECT *
+       FROM (${buildRecordsSql(capCfg, { source: "all" })}) x
+       ORDER BY x.sort_day, x.staging_id, x.start`,
       [data.range.from, data.range.to],
     );
     for (const r of recRows) {
       rc.addRow({
         date: r.date,
+        source: r.source,
         staging_id: r.staging_id,
         pernr: r.pernr,
         name: r.name,
@@ -1946,8 +2085,8 @@ async function getSapReconciliationDay(req, res) {
       return res.status(400).json({ error: "date (YYYY-MM-DD) wajib" });
     }
     const day = req.query.date;
-    const caps = await loadMaxRecordMinutes();
-    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
+    const capCfg = await loadMaxRecordConfig();
+    const cutSec = CAP_CUT_SECONDS(capCfg);
     const { rows } = await pool.query(
       `SELECT
          st.id, st.pernr, st.aufnr, st.vornr, st.lstar, st.zbarcodeid, st.is_productive,
@@ -2005,61 +2144,26 @@ async function getSapReconciliationRecords(req, res) {
     const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 100, 10), 500);
     const q = String(req.query.q || "").trim();
 
-    const caps = await loadMaxRecordMinutes();
-    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
-    const endCappedExpr = END_CAPPED_EXPR(caps.va, caps.nnva, caps.nva);
+    const capCfg = await loadMaxRecordConfig();
+    const sourceParam = String(req.query.source || "all").toLowerCase();
+    const source = ["mch", "timesheet", "all"].includes(sourceParam) ? sourceParam : "all";
 
-    const search = q
-      ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
-      : "";
     const params = [fromDate, toDate];
     if (q) params.push(`%${q}%`);
+    const inner = buildRecordsSql(capCfg, { source, search: Boolean(q) });
+    const limitIdx = params.length + 1;
 
-    const { rows: countRows } = await pool.query(
-      `SELECT count(*)::int AS total
-       FROM public.sap_staging_source src
-       JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
-       JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-       LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
-       WHERE src.source_system = 'MCH_HOURS'
-         AND st.bucket_start::date BETWEEN $1::date AND $2::date ${search}`,
-      params,
-    );
-    const total = countRows[0]?.total || 0;
-
+    // count(*) OVER () = total tanpa query kedua (CTE-nya berat kalau diulang).
     const { rows } = await pool.query(
-      `SELECT
-         to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
-         st.id AS staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
-         m.proddataid AS source_row_id,
-         m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
-         m.machinename AS machine, m.status_activitytype AS activity,
-         m.status_description AS status_desc,
-         to_char(m.startdatetime, 'YYYY-MM-DD HH24:MI:SS') AS start,
-         to_char(m.enddatetime, 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
-         to_char(${endCappedExpr}, 'YYYY-MM-DD HH24:MI:SS') AS end_capped,
-         COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
-         (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
-         (${cutSec})::bigint AS capcut,
-         (${BREAK_CUT_SECONDS}) AS breakcut,
-         (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
-         m.order_no, m.operation_no,
-         COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
-         m.confirmation_number AS confirmation, m.is_stuck AS stuck,
-         (ex2.source_row_id IS NOT NULL) AS excluded
-       FROM public.sap_staging_source src
-       JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
-       JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-       LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
-       LEFT JOIN public.sap_staging_exclusion ex2
-         ON ex2.source_system = 'MCH_HOURS' AND ex2.source_row_id = m.proddataid::text
-       WHERE src.source_system = 'MCH_HOURS'
-         AND st.bucket_start::date BETWEEN $1::date AND $2::date ${search}
-       ORDER BY st.bucket_start DESC, st.id DESC, m.startdatetime
-       LIMIT $${q ? 4 : 3} OFFSET $${q ? 5 : 4}`,
+      `SELECT x.*, count(*) OVER ()::int AS total_count
+       FROM (${inner}) x
+       ORDER BY x.sort_day DESC, x.staging_id DESC, x.start
+       LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
       [...params, pageSize, (page - 1) * pageSize],
     );
-    res.json({ data: { records: rows, total, page, pageSize }, meta: meta() });
+    const total = rows[0]?.total_count || 0;
+    for (const r of rows) delete r.total_count;
+    res.json({ data: { records: rows, total, page, pageSize, source }, meta: meta() });
   } catch (err) {
     console.error("sap-reconciliation-records error:", err);
     res.status(500).json({ error: err.message });
@@ -2178,8 +2282,8 @@ async function getSapReconciliationRecord(req, res) {
     if (!Number.isInteger(stagingId)) {
       return res.status(400).json({ error: "staging_id wajib" });
     }
-    const caps = await loadMaxRecordMinutes();
-    const cutSec = CAP_CUT_SECONDS(caps.va, caps.nnva, caps.nva);
+    const capCfg = await loadMaxRecordConfig();
+    const cutSec = CAP_CUT_SECONDS(capCfg);
     const [head, rows] = await Promise.all([
       pool.query(
         `SELECT id, status, aufnr, vornr, lstar, pernr, zbarcodeid, is_productive,
@@ -2213,6 +2317,8 @@ async function getSapReconciliationRecord(req, res) {
 }
 
 module.exports = {
+  loadMaxRecordConfig,
+  buildRecordsSql,
   getKpi,
   getSapReconciliation,
   exportSapReconciliation,

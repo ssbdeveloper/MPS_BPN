@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -73,29 +74,143 @@ def plant_code() -> str:
 
 MAX_RECORD_CATEGORIES = ("va", "nnva", "nva")
 MAX_RECORD_DEFAULT_MINUTES = 90
+NOT_STAGED_STATUSIDS = (0, 3, 4)
+
+
+def _parse_minutes(value):
+    """Menit valid (integer >= 1) atau None kalau bukan angka yang masuk akal."""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return None
+    return minutes if minutes >= 1 else None
+
+
+def _normalize_type_map(raw, key_pattern) -> dict:
+    """Map per jenis aktivitas: nilai menit integer, atau None = NO LIMIT.
+
+    Key tidak valid / nilai sampah DIBUANG (bukan diganti default) supaya tidak
+    lahir cap yang tidak pernah diminta.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for key, value in raw.items():
+        text = str(key)
+        if not re.fullmatch(key_pattern, text):
+            continue
+        if value is None:
+            result[text] = None
+            continue
+        minutes = _parse_minutes(value)
+        if minutes is not None:
+            result[text] = minutes
+    return result
+
+
+def legacy_category_minutes(raw):
+    """Nilai kategori lama ({va,nnva,nva} atau angka tunggal) atau None.
+
+    Dipakai HANYA untuk mengekspansi config lama ke map per jenis aktivitas.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        present = [k for k in MAX_RECORD_CATEGORIES if raw.get(k) is not None]
+        if not present:
+            return None
+        return {
+            key: (_parse_minutes(raw.get(key)) or MAX_RECORD_DEFAULT_MINUTES)
+            for key in MAX_RECORD_CATEGORIES
+        }
+    minutes = _parse_minutes(raw)
+    if minutes is None:
+        return None
+    return {key: minutes for key in MAX_RECORD_CATEGORIES}
+
+
+def category_of_activitytype(activitytype) -> str:
+    value = str(activitytype or "").strip().upper()
+    if value == "M1":
+        return "va"
+    if value == "M2":
+        return "nnva"
+    return "nva"
 
 
 def normalize_max_record_minutes(raw) -> dict:
-    """Terima angka lama (berlaku untuk semua kategori) ATAU object per kategori.
+    """Cap per JENIS aktivitas.
 
-    Struktur baru:
-      "max_record_minutes": {"va": 90, "nnva": 90, "nva": 90}
-    Nilai yang hilang/rusak jatuh ke default 90. Angka lama dipetakan sama ke
-    ketiga kategori supaya rules yang tersimpan sebelum fitur ini tetap berlaku.
+    Struktur:
+      "max_record_minutes": {
+        "mch":       {"1": 300, "2": 150, "12": 30, "20": None},
+        "timesheet": {"": 300, "1510": 150, "1670": None}
+      }
+    - "mch" key = mch_statustypes.statusid, "timesheet" key = activitytype
+      ("" = productive/kerja order).
+    - nilai = menit (>= 1) atau None = NO LIMIT (tidak pernah dipotong).
+    - jenis yang TIDAK ada di map = tanpa cap (No Limit).
+    Struktur lama (angka tunggal / {va,nnva,nva}) TIDAK dibuang di sini — lihat
+    expand_legacy_into_type_maps yang mengekspansinya lewat katalog DB.
     """
-    if isinstance(raw, dict):
-        result = {}
-        for key in MAX_RECORD_CATEGORIES:
-            try:
-                result[key] = max(1, int(raw.get(key) or MAX_RECORD_DEFAULT_MINUTES))
-            except (TypeError, ValueError):
-                result[key] = MAX_RECORD_DEFAULT_MINUTES
-        return result
+    src = raw if isinstance(raw, dict) else {}
+    return {
+        "mch": _normalize_type_map(src.get("mch"), r"\d+"),
+        "timesheet": _normalize_type_map(src.get("timesheet"), r"\d*"),
+    }
+
+
+def load_activity_catalog(conn) -> dict:
+    """Jenis aktivitas dari master DB (mch_statustypes + ews.activity_type_ref)."""
+    mch = []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT statusid, activitytype FROM public.mch_statustypes ORDER BY statusid"
+        )
+        for statusid, activitytype in cur.fetchall():
+            mch.append(
+                {
+                    "statusid": int(statusid),
+                    "category": category_of_activitytype(activitytype),
+                }
+            )
+    timesheet = [{"activitytype": "", "category": "va"}]
     try:
-        value = max(1, int(raw or MAX_RECORD_DEFAULT_MINUTES))
-    except (TypeError, ValueError):
-        value = MAX_RECORD_DEFAULT_MINUTES
-    return {key: value for key in MAX_RECORD_CATEGORIES}
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT activitytype FROM ews.activity_type_ref ORDER BY activitytype"
+            )
+            for (activitytype,) in cur.fetchall():
+                timesheet.append(
+                    {"activitytype": str(activitytype or "").strip(), "category": "nva"}
+                )
+    except Exception as exc:
+        logging.getLogger("sap_staging").warning(
+            "load_activity_catalog: ews.activity_type_ref tidak terbaca (%s)", exc
+        )
+    return {"mch": mch, "timesheet": timesheet}
+
+
+def expand_legacy_into_type_maps(max_record: dict, legacy, catalog) -> dict:
+    """Isi jenis yang belum ada di map dengan nilai kategori lama.
+
+    Idempoten: entry yang sudah ada (termasuk None = No Limit) tidak ditimpa.
+    Tanpa ini, config lama ({va,nnva,nva}) akan terbaca sebagai "tidak ada cap"
+    dan seluruh record lolos tanpa potongan — perubahan perilaku yang berbahaya.
+    """
+    if not legacy or not catalog:
+        return max_record
+    mch = dict(max_record.get("mch") or {})
+    timesheet = dict(max_record.get("timesheet") or {})
+    for row in catalog.get("mch", []):
+        key = str(row["statusid"])
+        if key not in mch:
+            mch[key] = legacy.get(row["category"], MAX_RECORD_DEFAULT_MINUTES)
+    for row in catalog.get("timesheet", []):
+        key = str(row.get("activitytype") or "")
+        if key not in timesheet:
+            timesheet[key] = legacy.get(row["category"], MAX_RECORD_DEFAULT_MINUTES)
+    return {"mch": mch, "timesheet": timesheet}
 
 
 def load_sap_rules(conn) -> dict:
@@ -105,13 +220,15 @@ def load_sap_rules(conn) -> dict:
     Struktur:
       {
         "break_windows": [ {"start": "12:00", "end": "13:00", "days": [1,2,3,4,5,6,0]}, ... ],
-        "max_record_minutes": {"va": 90, "nnva": 90, "nva": 90}
+        "max_record_minutes": {"mch": {"1": 300, ...}, "timesheet": {"": 300, ...}},
+        "max_record_fallback": {"va": 300, "nnva": 150, "nva": 150} | None
       }
     `days` = DOW Postgres (0=Sunday..6=Saturday). break windows TIDAK dihitung
     dari durasi record PRODUKTIF; max_record_minutes membatasi durasi SATU record
-    source per kategori (VA/NNVA/NVA — lebih dari itu dipotong, sisanya tidak
-    dianggap). Angka lama (sebelum fitur per-kategori) diterima dan dipetakan ke
-    ketiga kategori.
+    source PER JENIS aktivitas (statusid untuk MCH, activitytype untuk TIMESHEET;
+    None = No Limit). `max_record_fallback` = nilai kategori dari config LAMA,
+    dipakai hanya untuk jenis yang tidak ada di map (None kalau config sudah
+    per-jenis) — pengaman supaya config lama berperilaku sama persis.
     """
     DEFAULT_RULES = {
         "break_windows": [
@@ -120,7 +237,8 @@ def load_sap_rules(conn) -> dict:
             {"start": "18:30", "end": "19:00", "days": [6, 0]},
             {"start": "22:00", "end": "22:30", "days": [6, 0]},
         ],
-        "max_record_minutes": {
+        "max_record_minutes": {"mch": {}, "timesheet": {}},
+        "max_record_fallback": {
             key: MAX_RECORD_DEFAULT_MINUTES for key in MAX_RECORD_CATEGORIES
         },
     }
@@ -135,9 +253,21 @@ def load_sap_rules(conn) -> dict:
         rules.update({k: v for k, v in raw.items() if v is not None})
         if not isinstance(rules.get("break_windows"), list):
             rules["break_windows"] = list(DEFAULT_RULES["break_windows"])
-        rules["max_record_minutes"] = normalize_max_record_minutes(
-            rules.get("max_record_minutes", MAX_RECORD_DEFAULT_MINUTES)
-        )
+        raw_max = raw.get("max_record_minutes")
+        max_record = normalize_max_record_minutes(raw_max)
+        legacy = legacy_category_minutes(raw_max)
+        if legacy:
+            try:
+                max_record = expand_legacy_into_type_maps(
+                    max_record, legacy, load_activity_catalog(conn)
+                )
+            except Exception as exc:
+                logging.getLogger("sap_staging").warning(
+                    "load_sap_rules: katalog aktivitas gagal dibaca, pakai fallback kategori (%s)",
+                    exc,
+                )
+        rules["max_record_minutes"] = max_record
+        rules["max_record_fallback"] = legacy
         return rules
     except Exception as exc:  # plant_config belum ada / tak bisa dibaca -> default aman
         logging.getLogger("sap_staging").warning(
@@ -155,7 +285,8 @@ def load_sap_rules_default() -> dict:
             {"start": "18:30", "end": "19:00", "days": [6, 0]},
             {"start": "22:00", "end": "22:30", "days": [6, 0]},
         ],
-        "max_record_minutes": {
+        "max_record_minutes": {"mch": {}, "timesheet": {}},
+        "max_record_fallback": {
             key: MAX_RECORD_DEFAULT_MINUTES for key in MAX_RECORD_CATEGORIES
         },
     }

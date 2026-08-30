@@ -195,6 +195,7 @@ function ReconciliationPanel() {
   const [recsError, setRecsError] = useState(null);
   const [recsPageSize, setRecsPageSize] = useState(50);
   const [recsQ, setRecsQ] = useState('');
+  const [recsSource, setRecsSource] = useState('all'); // all | mch | timesheet
   const [exclusions, setExclusions] = useState([]);
   const [confirmExclude, setConfirmExclude] = useState(null);
   const [excludeNote, setExcludeNote] = useState('');
@@ -280,6 +281,7 @@ function ReconciliationPanel() {
     try {
       const params = new URLSearchParams({ from, to, page: String(page), pageSize: String(recsPageSize) });
       if (recsQ.trim()) params.set('q', recsQ.trim());
+      if (recsSource !== 'all') params.set('source', recsSource);
       const res = await fetch(`${API_BASE}/dashboard/sap-reconciliation-records?${params.toString()}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Gagal ambil records');
@@ -289,7 +291,7 @@ function ReconciliationPanel() {
     } finally {
       setRecsLoading(false);
     }
-  }, [from, to, recsPageSize, recsQ]);
+  }, [from, to, recsPageSize, recsQ, recsSource]);
 
   useEffect(() => {
     if (view === 'records' && from && to) loadRecords(1);
@@ -463,8 +465,17 @@ function ReconciliationPanel() {
   const renderRecords = () => (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5">
-        <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">Records · per segment MCH</h3>
+        <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">Records · MCH &amp; Timesheet</h3>
         <div className="ml-auto flex items-center gap-2">
+          <select
+            value={recsSource}
+            onChange={(e) => { setRecsSource(e.target.value); }}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700 focus:border-[#0096c7] focus:outline-none"
+          >
+            <option value="all">All sources</option>
+            <option value="mch">Machine hours</option>
+            <option value="timesheet">Timesheet</option>
+          </select>
           <input
             value={recsQ}
             onChange={(e) => setRecsQ(e.target.value)}
@@ -491,6 +502,7 @@ function ReconciliationPanel() {
               <thead>
                 <tr style={{ background: '#caf0f8' }} className="text-left text-[10px] uppercase tracking-wide text-slate-600">
                   <th className="px-2.5 py-2 font-semibold">Date</th>
+                  <th className="px-2 py-2 font-semibold">Source</th>
                   <th className="px-2.5 py-2 font-semibold">Staging</th>
                   <th className="px-2 py-2 font-semibold">Bundle</th>
                   <th className="px-2.5 py-2 font-semibold">PERNR</th>
@@ -518,8 +530,11 @@ function ReconciliationPanel() {
                   const hitBreak = Number(r.breakcut) > 0;
                   const hitCap = Number(r.capcut) > 0;
                   return (
-                  <tr key={`${r.staging_id}-${r.start}`} className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}>
+                  <tr key={`${r.source}-${r.staging_id}-${r.start}`} className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-600">{r.date}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5">
+                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${r.source === 'TIMESHEET' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}>{r.source === 'TIMESHEET' ? 'TS' : 'MCH'}</span>
+                    </td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-[11px] text-slate-500">{r.staging_id}</td>
                     <td className="whitespace-nowrap px-2 py-1.5">
                       <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${statusTone(r.bundle_status)}`}>{r.bundle_status}</span>
@@ -544,7 +559,9 @@ function ReconciliationPanel() {
                     <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-center">
-                      {r.excluded ? (
+                      {!r.can_exclude ? (
+                        <span className="text-slate-300" title="Exclude hanya untuk record machine hours">—</span>
+                      ) : r.excluded ? (
                         <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700" title="Record ini di-exclude (tidak dikirim)">Excluded</span>
                       ) : (
                         <button
@@ -562,7 +579,7 @@ function ReconciliationPanel() {
                   );
                 })}
                 {recs.records.length === 0 && (
-                  <tr><td colSpan={21} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
+                  <tr><td colSpan={22} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
                 )}
               </tbody>
             </table>

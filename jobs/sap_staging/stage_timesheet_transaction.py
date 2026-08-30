@@ -57,11 +57,19 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         rules = load_sap_rules_default()
     break_windows_json = json.dumps(rules.get("break_windows", []))
     max_record = rules.get("max_record_minutes") or {}
-    max_va = int(max_record.get("va", 90))
-    max_nva = int(max_record.get("nva", 90))
+    # Cap per JENIS: key = activitytype ("" = productive), nilai menit atau null = No Limit.
+    max_record_ts_json = json.dumps(max_record.get("timesheet") or {})
+    # Fallback kategori HANYA untuk activitytype yang tidak ada di map (config lama /
+    # kode baru yang belum diatur). None -> tanpa cap.
+    fallback = rules.get("max_record_fallback") or {}
+    fb_va = fallback.get("va")
+    fb_nva = fallback.get("nva")
 
     sql = f"""
-    WITH break_windows AS (
+    WITH cap_cfg AS (
+      SELECT %s::jsonb AS ts
+    ),
+    break_windows AS (
       SELECT
         (bw ->> 'start')::time AS start_t,
         (bw ->> 'end')::time AS end_t,
@@ -71,13 +79,13 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     ),
     -- Durasi EFEKTIF per record:
     --   • record PRODUKTIF (activitytype kosong) -> dihitung PENUH (break bukan
-    --     exclusion window untuk productive activity; dicap max_record_minutes.va)
+    --     exclusion window untuk productive activity; cap = timesheet[''])
     --   • record NON-PRODUKTIF (activitytype terisi) -> overlap jam istirahat
     --     DIKURANGI; record yang SELURUHNYA di jam istirahat (efektif <= 0)
-    --     dianggap tidak valid dan diabaikan; dicap max_record_minutes.nva
+    --     dianggap tidak valid dan diabaikan; cap = timesheet[activitytype]
     -- (Koreksi 2026-08-19: sebelumnya break memotong productive — SALAH.
-    --  Per-kategori 2026-08-25: timesheet tidak punya NNVA — productive = VA,
-    --  semua activitytype terisi = NVA.)
+    --  Per-jenis 2026-08-30: cap dibaca dari map per activitytype; null = No Limit;
+    --  kode yang belum diatur memakai fallback kategori config lama.)
     -- IEDD/IEDZ jadi SINTETIS = checkin + durasi efektif (filosofi MCH: yang
     -- akurat adalah durasi, bukan jendela waktu aslinya).
     base AS (
@@ -90,8 +98,16 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         po.branch_operation_no,
         po.return_operation_no,
         EXTRACT(EPOCH FROM (t.longdate_checkout - t.longdate_checkin))::bigint AS raw_seconds,
-        COALESCE(b.break_seconds, 0)::bigint AS break_seconds
+        COALESCE(b.break_seconds, 0)::bigint AS break_seconds,
+        CASE
+          WHEN jsonb_typeof(cc.ts -> BTRIM(COALESCE(t.activitytype, ''))) = 'null' THEN NULL
+          WHEN (cc.ts ->> BTRIM(COALESCE(t.activitytype, ''))) ~ '^[0-9]+$'
+            THEN (cc.ts ->> BTRIM(COALESCE(t.activitytype, '')))::int
+          WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN %s::int
+          ELSE %s::int
+        END AS cap_minutes
       FROM timesheet_transaction t
+      CROSS JOIN cap_cfg cc
       LEFT JOIN {ph3_table} po
         ON LTRIM(COALESCE(po.order_no, ''), '0') = t.order_no
        AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
@@ -136,9 +152,11 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     effective AS (
       SELECT
         *,
+        -- cap_minutes NULL = No Limit: LEAST mengabaikan NULL sehingga durasi
+        -- (setelah potongan break untuk non-produktif) lolos utuh.
         LEAST(
           GREATEST(raw_seconds - break_seconds, 0),
-          CASE WHEN COALESCE(activitytype, '') = '' THEN %s::bigint ELSE %s::bigint END * 60
+          cap_minutes::bigint * 60
         ) AS effective_seconds
       FROM base
     )
@@ -189,10 +207,11 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     """
 
     params = [
+        max_record_ts_json,
         break_windows_json,
+        fb_va, fb_nva,
         timezone, timezone, timezone, timezone,
         from_ts, timezone, to_ts, timezone,
-        max_va, max_nva,
         timezone, timezone, timezone, timezone, timezone, timezone,
         limit,
     ]
