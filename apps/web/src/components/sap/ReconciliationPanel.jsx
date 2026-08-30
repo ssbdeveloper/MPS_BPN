@@ -89,6 +89,74 @@ const RECORD_COLS = [
   { en: 'Action' },
 ];
 
+const statusTone = (s) => {
+  if (s === 'POSTED') return 'bg-emerald-100 text-emerald-700';
+  if (s === 'PENDING') return 'bg-amber-100 text-amber-700';
+  if (s === 'FAILED') return 'bg-red-100 text-red-700';
+  if (s === 'SKIPPED') return 'bg-slate-100 text-slate-500';
+  return 'bg-slate-100 text-slate-600';
+};
+const hm = (dt) => (dt ? dt.slice(11, 19) : '');
+
+// Satu baris tabel Records — di-memo supaya re-render panel (polling ops, loading, dll)
+// tidak menggambar ulang semua baris. content-visibility membuat baris di luar layar
+// tidak di-paint browser (kunci performa saat pageSize besar).
+const RecordRow = React.memo(function RecordRow({ r, excludeBusy, onExclude }) {
+  const hitBreak = Number(r.breakcut) > 0;
+  const hitCap = Number(r.capcut) > 0;
+  return (
+    <tr
+      className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 42px' }}
+    >
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-600">{r.date}</td>
+      <td className="whitespace-nowrap px-2 py-1.5">
+        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${r.source === 'TIMESHEET' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}>{r.source === 'TIMESHEET' ? 'TS' : 'MCH'}</span>
+      </td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-[11px] text-slate-500">{r.staging_id}</td>
+      <td className="whitespace-nowrap px-2 py-1.5">
+        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${statusTone(r.bundle_status)}`}>{r.bundle_status}</span>
+      </td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.pernr}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">{r.name || '—'}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
+      <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-700">{r.machine}</td>
+      <td className="whitespace-nowrap px-2 py-1.5 font-mono text-slate-600">{r.activity}</td>
+      <td className="max-w-[160px] truncate px-2.5 py-1.5 text-slate-500" title={r.status_desc}>{r.status_desc}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-700">{hm(r.start)}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-500">{hm(r.end_orig)}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono font-semibold text-[#0077b6]">{hm(r.end_capped)}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.raw}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.clamped}</td>
+      <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitCap ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
+      <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitBreak ? 'text-orange-600' : 'text-slate-300'}`}>
+        {hitBreak ? `${r.breakcut} ⏸` : r.breakcut}
+      </td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums text-emerald-700">{r.recognized}</td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
+      <td className="whitespace-nowrap px-2 py-1.5 text-center">
+        {!r.can_exclude ? (
+          <span className="text-slate-300" title="Exclude hanya untuk record machine hours">—</span>
+        ) : r.excluded ? (
+          <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700" title="Record ini di-exclude (tidak dikirim)">Excluded</span>
+        ) : (
+          <button
+            type="button"
+            disabled={excludeBusy}
+            onClick={(e) => { e.stopPropagation(); onExclude(r); }}
+            title="Tandai record ini TIDAK dipakai (bundle akan di-recalculate)"
+            className="rounded-lg border border-red-200 bg-white px-1.5 py-0.5 text-[9px] font-bold text-red-600 transition-all hover:bg-red-50 active:scale-95 disabled:opacity-40"
+          >
+            Exclude
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+});
+
 function StatusBadge({ status, size = 'sm' }) {
   const s = stat(status);
   const I = s.Icon;
@@ -219,7 +287,7 @@ function ReconciliationPanel() {
   const [recs, setRecs] = useState(null);                  // { records, total, page, pageSize }
   const [recsLoading, setRecsLoading] = useState(false);
   const [recsError, setRecsError] = useState(null);
-  const [recsPageSize, setRecsPageSize] = useState(50);
+  const [recsPageSize, setRecsPageSize] = useState(25);
   const [recsQ, setRecsQ] = useState('');
   const [recsSource, setRecsSource] = useState('all'); // all | mch | timesheet
   const [exclusions, setExclusions] = useState([]);
@@ -459,6 +527,12 @@ function ReconciliationPanel() {
     });
   }, []);
 
+  // Stable: dipakai RecordRow (memo) supaya re-render panel tidak mengganti prop.
+  const onExclude = useCallback((r) => {
+    setConfirmExclude(r);
+    setExcludeNote('');
+  }, []);
+
   // When returning from detail (rec→null) to the day list, restore the last scroll position.
   useLayoutEffect(() => {
     if (!rec && day) {
@@ -477,16 +551,6 @@ function ReconciliationPanel() {
   const act = data?.action_items || {};
   const failed = Number(act.failed_bundles) || 0;
   const stuckPending = Number(act.stuck_pending_bundles) || 0;
-
-  // ── Breadcrumb ──
-  const statusTone = (s) => {
-    if (s === 'POSTED') return 'bg-emerald-100 text-emerald-700';
-    if (s === 'PENDING') return 'bg-amber-100 text-amber-700';
-    if (s === 'FAILED') return 'bg-red-100 text-red-700';
-    if (s === 'SKIPPED') return 'bg-slate-100 text-slate-500';
-    return 'bg-slate-100 text-slate-600';
-  };
-  const hm = (dt) => (dt ? dt.slice(11, 19) : '');
 
   const renderRecords = () => (
     <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -538,58 +602,9 @@ function ReconciliationPanel() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {recs.records.map((r) => {
-                  const hitBreak = Number(r.breakcut) > 0;
-                  const hitCap = Number(r.capcut) > 0;
-                  return (
-                  <tr key={`${r.source}-${r.staging_id}-${r.start}`} className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-600">{r.date}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5">
-                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${r.source === 'TIMESHEET' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}>{r.source === 'TIMESHEET' ? 'TS' : 'MCH'}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-[11px] text-slate-500">{r.staging_id}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5">
-                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${statusTone(r.bundle_status)}`}>{r.bundle_status}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.pernr}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">{r.name || '—'}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
-                    <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-700">{r.machine}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 font-mono text-slate-600">{r.activity}</td>
-                    <td className="max-w-[160px] truncate px-2.5 py-1.5 text-slate-500" title={r.status_desc}>{r.status_desc}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-700">{hm(r.start)}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-500">{hm(r.end_orig)}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono font-semibold text-[#0077b6]">{hm(r.end_capped)}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.raw}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.clamped}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitCap ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
-                    <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitBreak ? 'text-orange-600' : 'text-slate-300'}`}>
-                      {hitBreak ? `${r.breakcut} ⏸` : r.breakcut}
-                    </td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums text-emerald-700">{r.recognized}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-center">
-                      {!r.can_exclude ? (
-                        <span className="text-slate-300" title="Exclude hanya untuk record machine hours">—</span>
-                      ) : r.excluded ? (
-                        <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[9px] font-bold text-red-700" title="Record ini di-exclude (tidak dikirim)">Excluded</span>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={excludeBusy}
-                          onClick={(e) => { e.stopPropagation(); setConfirmExclude(r); setExcludeNote(''); }}
-                          title="Tandai record ini TIDAK dipakai (bundle akan di-recalculate)"
-                          className="rounded-lg border border-red-200 bg-white px-1.5 py-0.5 text-[9px] font-bold text-red-600 transition-all hover:bg-red-50 active:scale-95 disabled:opacity-40"
-                        >
-                          Exclude
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                  );
-                })}
+                {recs.records.map((r) => (
+                  <RecordRow key={`${r.source}-${r.staging_id}-${r.start}`} r={r} excludeBusy={excludeBusy} onExclude={onExclude} />
+                ))}
                 {recs.records.length === 0 && (
                   <tr><td colSpan={22} className="px-3 py-8 text-center text-sm text-slate-400">No records in this range.</td></tr>
                 )}
