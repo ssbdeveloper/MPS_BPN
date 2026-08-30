@@ -136,6 +136,45 @@ const inferActivityType = ({ id_unprod, activitytype, operation_text, order_no, 
   return match ? (match[1] || match[2]) : null;
 };
 
+// ── Meal Break (local-only, TIDAK dikirim ke SAP) ────────────────────────────
+// Activity type '0000' = istirahat makan PRIBADI. Berbeda dari jadwal istirahat
+// umum (break windows di SAP staging), meal break waktunya bisa beda per orang,
+// tidak pernah di-stage ke SAP, dan otomatis di-checkout setelah 90 menit.
+const MEAL_BREAK_ACTIVITY = '0000';
+const MEAL_BREAK_MAX_MINUTES = 90;
+
+// Tutup meal break yang sudah lewat 90 menit (lazy: dipanggil saat interaksi
+// berikutnya dari user tsb, atau global oleh interval berkala di bawah).
+async function closeStaleMealBreaks(serialnumber) {
+  try {
+    const result = await db.query(
+      `UPDATE timesheet_transaction
+       SET longdate_checkout = longdate_checkin + interval '90 minutes',
+           date_checkout    = to_char(longdate_checkin + interval '90 minutes', 'DD/MM/YYYY'),
+           hour_checkout    = to_char(longdate_checkin + interval '90 minutes', 'HH24:MI'),
+           duration         = 1.5
+       WHERE activitytype = '0000'
+         AND date_checkout IS NULL
+         AND longdate_checkin + interval '90 minutes' <= NOW()
+         ${serialnumber ? 'AND serialnumber = $1' : ''}
+       RETURNING tsnumber`,
+      serialnumber ? [serialnumber] : []
+    );
+    if (result.rows.length > 0) {
+      console.log(`[meal-break] auto checkout ${result.rows.length} record${serialnumber ? ` (${serialnumber})` : ''}`);
+    }
+    return result.rows;
+  } catch (err) {
+    console.error('closeStaleMealBreaks error:', err);
+    return [];
+  }
+}
+
+// Penutup otomatis berkala: meal break yang terlupakan (>90 menit) tetap ditutup
+// walau operator tidak pernah scan lagi. Interval 5 menit; unref supaya tidak
+// menahan proses server saat shutdown.
+setInterval(() => { closeStaleMealBreaks(null).catch(() => {}); }, 5 * 60 * 1000).unref?.();
+
 const isUnproductiveRow = (row) => Boolean(inferActivityType(row));
 
 /**
@@ -297,6 +336,10 @@ exports.getbysn = async (req, res) => {
     const limitClause = limit == null ? "" : ` LIMIT $${params.length + 1}`;
     if (limit != null) params.push(limit);
 
+    // Lazy auto checkout: meal break yang sudah lewat 90 menit ditutup saat
+    // record dibaca, jadi daftar tidak menampilkan istirahat menggantung.
+    await closeStaleMealBreaks(snkaryawan);
+
     const result = await db.query(
       `SELECT t.*,
               COALESCE(NULLIF(t.part_name, ''), s.part_name) AS part_name
@@ -405,6 +448,23 @@ exports.create = async (req, res) => {
       operation_no
     });
 
+    // Meal break berakhir saat pekerjaan produktif dimulai: tutup activitytype
+    // '0000' yang masih terbuka untuk orang ini (mode multiple, di mana checkout
+    // umum tidak berjalan). Mode single sudah menutup semuanya lewat checkout.
+    if (!normalizedActivityType && serialnumber) {
+      await db.query(
+        `UPDATE timesheet_transaction
+         SET longdate_checkout = NOW(),
+             date_checkout    = to_char(NOW(), 'DD/MM/YYYY'),
+             hour_checkout    = to_char(NOW(), 'HH24:MI'),
+             duration         = ROUND(EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2)
+         WHERE serialnumber = $1
+           AND activitytype = '0000'
+           AND date_checkout IS NULL`,
+        [serialnumber]
+      );
+    }
+
     const result = await db.query(
       `INSERT INTO timesheet_transaction
         (order_no, ssbr_id, part_name, serialnumber, full_name, operation_no, operation_text,
@@ -477,6 +537,10 @@ exports.checkout = async (req, res) => {
 
     const serialnumber = datakaryawan.sn;
 
+    // Meal break >90 menit ditutup dulu (auto checkout), agar hasil checkout
+    // umum tidak menyisakan record istirahat yang menggantung.
+    const closedMeal = await closeStaleMealBreaks(serialnumber);
+
     const result = await db.query(
       `UPDATE timesheet_transaction
        SET longdate_checkout = NOW(),
@@ -492,6 +556,9 @@ exports.checkout = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      if (closedMeal.length > 0) {
+        return res.json({ auto_closed_meal_break: closedMeal.length });
+      }
       return res.status(404).json({ error: "Data tidak ditemukan atau sudah checkout" });
     }
 
@@ -517,6 +584,9 @@ exports.checkoutUnprod = async (req, res) => {
     const serialnumber = datakaryawan.sn;
     const workcentercode = normalizeText(datakaryawan.workcentercode || datakaryawan.workcenter);
     const params = [serialnumber];
+
+    // Auto checkout meal break yang sudah lewat 90 menit sebelum menutup unprod.
+    await closeStaleMealBreaks(serialnumber);
     let workcenterFilter = '';
 
     if (workcentercode) {

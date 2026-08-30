@@ -148,6 +148,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         AND t.longdate_checkout >= (%s::timestamp AT TIME ZONE %s)
         AND t.longdate_checkout <  (%s::timestamp AT TIME ZONE %s)
         AND COALESCE(t.state_flag, 0) <> 5
+        AND COALESCE(t.activitytype, '') <> '0000'
     ),
     effective AS (
       SELECT
@@ -279,6 +280,7 @@ def fetch_blocked_today_rows() -> list[dict]:
         AND t.longdate_checkin >= (date_trunc('day', now() AT TIME ZONE %s) AT TIME ZONE %s)
         AND t.longdate_checkin <  (date_trunc('day', now() AT TIME ZONE %s) AT TIME ZONE %s) + interval '1 day'
         AND COALESCE(t.state_flag, 0) <> 5
+        AND COALESCE(t.activitytype, '') <> '0000'
     ),
     flags AS (
       SELECT

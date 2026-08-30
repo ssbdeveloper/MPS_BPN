@@ -7,9 +7,14 @@ import { normalizeNfcId } from '../../utils/nfcId';
 // ─── Constants ────────────────────────────────────────────────────────────────
 const UNPROD_QUICK_MODES = {
   briefing:     { code: '1510', label: 'BRIEFING' },
-  break:        { code: '1520', label: 'COFFEE BREAKS' },
+  break:        { code: '1520', label: 'COFFEE BREAK' },
+  mealbreak:    { code: '0000', label: 'MEAL BREAK' },
   housekeeping: { code: '1530', label: 'HOUSEKEEPING' },
 };
+
+// Meal break: istirahat makan PRIBADI (activity 0000) — tidak dikirim ke SAP,
+// tidak masuk bundel SAP, otomatis di-checkout setelah 90 menit.
+const MEAL_BREAK_AUTO_CLOSE_MIN = 90;
 
 const NFC_ERROR_MESSAGES = {
   NotAllowedError:   ['Izin NFC ditolak',       'Akses NFC ditolak. Silakan izinkan akses NFC di browser settings.'],
@@ -57,7 +62,7 @@ const UnprodPanel = ({ panelRef, onSelect }) => {
         <div className="p-4 grid grid-cols-4 gap-2 flex-shrink-0">
           <button
             onClick={() => onSelect('single')}
-            className={`${btnBase} hover:bg-slate-50 hover:border-[#0096c7]`}
+            className={`${btnBase} col-span-4 hover:bg-slate-50 hover:border-[#0096c7]`}
           >
             <svg className="w-6 h-6 text-[#0096c7]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
@@ -80,9 +85,19 @@ const UnprodPanel = ({ panelRef, onSelect }) => {
             className={`${btnBase} hover:bg-amber-50 hover:border-amber-400`}
           >
             <svg className="w-6 h-6 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10 2v2M14 2v2M16 8a1 1 0 011 1v8a4 4 0 01-4 4H7a4 4 0 01-4-4V9a1 1 0 011-1h14a4 4 0 110 8h-1M6 2v2" />
             </svg>
-            <span className="text-[10px] font-bold leading-tight">Break</span>
+            <span className="text-[10px] font-bold leading-tight">Coffee Break</span>
+          </button>
+
+          <button
+            onClick={() => onSelect('mealbreak')}
+            className={`${btnBase} hover:bg-orange-50 hover:border-orange-400`}
+          >
+            <svg className="w-6 h-6 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2M7 2v20M21 15V2a5 5 0 00-5 5v6c0 1.1.9 2 2 2h3m0 0v7" />
+            </svg>
+            <span className="text-[10px] font-bold leading-tight">Meal Break</span>
           </button>
 
           <button
@@ -107,7 +122,12 @@ const UnprodPanel = ({ panelRef, onSelect }) => {
           <div className="space-y-1.5 ml-6 text-[10px] text-slate-700 leading-relaxed">
             <p><span className="font-bold text-[#0096c7]">Single</span> – Scan NFC / input ID seperti biasa untuk pindah ke halaman Unproductive.</p>
             <p><span className="font-bold text-[#0096c7]">Briefing</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">Briefing</span>.</p>
-            <p><span className="font-bold text-amber-600">Break</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">Break</span>.</p>
+            <p><span className="font-bold text-amber-600">Coffee Break</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">Coffee Break</span> (1520).</p>
+            <p>
+              <span className="font-bold text-orange-600">Meal Break</span> – Istirahat makan <span className="italic">pribadi</span> (activity <b>0000</b>).
+              Waktunya bisa berbeda tiap orang, <b>tidak dikirim ke SAP</b> dan tidak masuk bundel SAP.
+              Otomatis di-checkout setelah <b>{MEAL_BREAK_AUTO_CLOSE_MIN} menit</b>.
+            </p>
             <p><span className="font-bold text-emerald-700">HouseKeeping</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">HouseKeeping</span>.</p>
           </div>
           <div className="mt-2.5 ml-6 space-y-1 text-[10px] text-slate-500 leading-relaxed">
@@ -308,14 +328,15 @@ const LoginTimesheetPage = () => {
 
     sessionStorage.setItem('datakaryawan', JSON.stringify(user));
 
-    // Quick-mode: Briefing / Break / HouseKeeping
+    // Quick-mode: Briefing / Coffee Break / Meal Break / HouseKeeping
     if (quickMode && UNPROD_QUICK_MODES[quickMode]) {
       const { code, label } = UNPROD_QUICK_MODES[quickMode];
       setStatus(`Membuat ${label}...`);
       const success = await createUnprodActivity(user, code, label);
       if (success) {
-        setStatus(`${label} berhasil dibuat`);
-        showSuccessToast(`${user.full_name || 'User'} - ${label} berhasil!`);
+        const autoNote = quickMode === 'mealbreak' ? ` — auto checkout ${MEAL_BREAK_AUTO_CLOSE_MIN} menit` : '';
+        setStatus(`${label} berhasil dibuat${autoNote}`);
+        showSuccessToast(`${user.full_name || 'User'} - ${label} berhasil!${quickMode === 'mealbreak' ? ` (auto checkout ${MEAL_BREAK_AUTO_CLOSE_MIN} menit)` : ''}`);
       } else {
         setStatus(`Gagal membuat ${label}`);
       }
