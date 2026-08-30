@@ -6,6 +6,7 @@ import {
   Clock,
   Eye,
   EyeOff,
+  Infinity as InfinityIcon,
   Loader2,
   Plus,
   RefreshCw,
@@ -139,21 +140,27 @@ function MaxRecordTypeRow({ name, code, category, value, hasValue, defaultValue,
           <Toggle checked={noLimit} onChange={(v) => onChange(v ? null : (defaultValue || MAX_RECORD_DEFAULT))} label={`No limit for ${name}`} />
           No Limit
         </label>
-        <input
-          type="number"
-          min={1}
-          disabled={noLimit}
-          value={noLimit ? '' : value}
-          placeholder={String(defaultValue || '')}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            if (Number.isFinite(n) && n >= 1) onChange(n);
-          }}
-          className={`h-8 w-20 rounded-lg border px-2 text-xs font-extrabold focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20 ${
-            noLimit ? 'border-slate-200 bg-slate-100 text-slate-400' : 'border-slate-400 bg-white text-slate-800'
-          }`}
-        />
-        <span className="w-6 text-[11px] font-bold text-slate-400">min</span>
+        {noLimit ? (
+          <div
+            className="flex h-8 w-20 items-center justify-center rounded-lg border border-dashed border-[#00b4d8]/50 bg-cyan-50/70 text-base font-black text-[#0077b6]"
+            style={{ animation: 'hm-fade 0.2s ease-out' }}
+            title="No limit — record is never cut"
+          >
+            <InfinityIcon size={18} strokeWidth={2.5} aria-hidden="true" />
+          </div>
+        ) : (
+          <input
+            type="number"
+            min={1}
+            value={value}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (Number.isFinite(n) && n >= 1) onChange(n);
+            }}
+            className="h-8 w-20 rounded-lg border border-slate-400 bg-white px-2 text-xs font-extrabold text-slate-800 focus:border-[#00b4d8] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/20"
+          />
+        )}
+        <span className="w-6 text-[11px] font-bold text-slate-400">{noLimit ? '' : 'min'}</span>
       </div>
     </div>
   );
