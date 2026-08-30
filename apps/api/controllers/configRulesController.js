@@ -30,6 +30,7 @@ const LEGACY_DEFAULT = 90;
 
 
 const NOT_STAGED_STATUSIDS = [0, 3, 4];
+const STATUS_CATEGORY_OVERRIDES = { 2: "nnva", 10: "nva" };
 
 const DEFAULT_RULES = {
   break_windows: [
@@ -144,7 +145,7 @@ async function loadActivityCatalog(db = pool) {
     statusid: Number(r.statusid),
     description: r.description || "",
     activitytype: r.activitytype || "",
-    category: categoryOfActivityType(r.activitytype),
+    category: STATUS_CATEGORY_OVERRIDES[Number(r.statusid)] || categoryOfActivityType(r.activitytype),
     staged: !NOT_STAGED_STATUSIDS.includes(Number(r.statusid)),
   }));
 

@@ -75,6 +75,7 @@ def plant_code() -> str:
 MAX_RECORD_CATEGORIES = ("va", "nnva", "nva")
 MAX_RECORD_DEFAULT_MINUTES = 90
 NOT_STAGED_STATUSIDS = (0, 3, 4)
+STATUS_CATEGORY_OVERRIDES = {2: "nnva", 10: "nva"}
 
 
 def _parse_minutes(value):
@@ -171,7 +172,9 @@ def load_activity_catalog(conn) -> dict:
             mch.append(
                 {
                     "statusid": int(statusid),
-                    "category": category_of_activitytype(activitytype),
+                    "category": STATUS_CATEGORY_OVERRIDES.get(
+                        int(statusid), category_of_activitytype(activitytype)
+                    ),
                 }
             )
     timesheet = [{"activitytype": "", "category": "va"}]
