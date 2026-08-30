@@ -1689,6 +1689,132 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
   return `${mchSql}\n    UNION ALL\n${tsSql}`;
 }
 
+// Versi PAGINATED (endpoint records): kolom berat (break/cap cut, correlated subquery)
+// dihitung HANYA untuk baris halaman yang tampil. Alur: base (pemilihan staging ringan)
+// -> count -> page (LIMIT/OFFSET) -> recs (join ulang + kolom berat, terbatas halaman).
+// $1/$2 = range, $3 = search (kalau search), LIMIT/OFFSET di CTE page.
+function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
+  const cutSec = CAP_CUT_SECONDS(cfg);
+  const endCapped = END_CAPPED_EXPR(cfg);
+  const tsCut = TS_CAP_CUT_SECONDS(cfg);
+  const mchSearch = search
+    ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
+    : "";
+  const tsSearch = search
+    ? "AND (t.serialnumber ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
+    : "";
+
+  const mchBase = `
+    SELECT 'MCH_HOURS'::text AS source,
+           st.bucket_start::date AS sort_day,
+           st.id AS staging_id,
+           m.startdatetime AS start
+    FROM public.sap_staging_source src
+    JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
+    JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+    LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
+    WHERE src.source_system = 'MCH_HOURS'
+      AND st.bucket_start::date BETWEEN $1::date AND $2::date ${mchSearch}`;
+
+  const tsBase = `
+    SELECT 'TIMESHEET'::text AS source,
+           st.source_min_start::date AS sort_day,
+           st.id AS staging_id,
+           t.longdate_checkin AT TIME ZONE '${TZ}' AS start
+    FROM public.sap_timesheet_staging st
+    JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
+    LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
+    WHERE st.source_system = 'TIMESHEET'
+      AND st.source_min_start::date BETWEEN $1::date AND $2::date ${tsSearch}`;
+
+  let baseSql = source === "mch" ? mchBase : source === "timesheet" ? tsBase : `${mchBase}\n    UNION ALL\n${tsBase}`;
+
+  const mchHeavy = `
+    SELECT
+      p.source, p.sort_day,
+      to_char(p.sort_day, 'YYYY-MM-DD') AS date,
+      p.staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+      m.proddataid::text AS source_row_id,
+      m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+      COALESCE(m.machinename, '') AS machine,
+      COALESCE(m.status_activitytype, '') AS activity,
+      COALESCE(m.status_description, '') AS status_desc,
+      to_char(m.startdatetime, 'YYYY-MM-DD HH24:MI:SS') AS start,
+      to_char(m.enddatetime, 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
+      to_char(${endCapped}, 'YYYY-MM-DD HH24:MI:SS') AS end_capped,
+      COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
+      (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
+      (${cutSec})::bigint AS capcut,
+      (${BREAK_CUT_SECONDS}) AS breakcut,
+      (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
+      COALESCE(m.order_no, '') AS order_no, COALESCE(m.operation_no, '') AS operation_no,
+      COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
+      COALESCE(m.confirmation_number, '') AS confirmation,
+      COALESCE(m.is_stuck, false) AS stuck,
+      (ex2.source_row_id IS NOT NULL) AS excluded,
+      true AS can_exclude
+    FROM page p
+    JOIN public.sap_staging_source src ON src.staging_id = p.staging_id AND p.source = 'MCH_HOURS'
+    JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
+    JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+    LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
+    LEFT JOIN public.sap_staging_exclusion ex2
+      ON ex2.source_system = 'MCH_HOURS' AND ex2.source_row_id = m.proddataid::text`;
+
+  const tsHeavy = `
+    SELECT
+      p.source, p.sort_day,
+      to_char(p.sort_day, 'YYYY-MM-DD') AS date,
+      p.staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+      t.tsnumber::text AS source_row_id,
+      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr, COALESCE(u.full_name, '') AS name,
+      COALESCE(t.workcentercode, '') AS machine,
+      BTRIM(COALESCE(t.activitytype, '')) AS activity,
+      COALESCE(NULLIF(r.description, ''),
+               CASE WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN 'Productive (order work)' ELSE '' END) AS status_desc,
+      to_char(t.longdate_checkin AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS start,
+      to_char(t.longdate_checkout AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
+      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (st.total_seconds || ' seconds')::interval,
+              'YYYY-MM-DD HH24:MI:SS') AS end_capped,
+      ${TS_RAW_SECONDS} AS raw,
+      ${TS_RAW_SECONDS} AS clamped,
+      (${tsCut})::bigint AS capcut,
+      (${TS_BREAK_CUT_SECONDS}) AS breakcut,
+      st.total_seconds::bigint AS recognized,
+      COALESCE(t.order_no, '') AS order_no, COALESCE(t.operation_no::text, '') AS operation_no,
+      NULL::text AS operation_text,
+      COALESCE(st.rueck, '') AS confirmation,
+      false AS stuck,
+      false AS excluded,
+      false AS can_exclude
+    FROM page p
+    JOIN public.sap_timesheet_staging st ON st.id = p.staging_id AND p.source = 'TIMESHEET'
+    JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
+    LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
+    LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))`;
+
+  let heavySql = source === "mch" ? mchHeavy : source === "timesheet" ? tsHeavy : `${mchHeavy}\n    UNION ALL\n${tsHeavy}`;
+
+  return `
+    WITH base AS (
+      ${baseSql}
+    ),
+    cnt AS (
+      SELECT count(*)::int AS total FROM base
+    ),
+    page AS (
+      SELECT source, staging_id, sort_day, start FROM base
+      ORDER BY sort_day DESC, staging_id DESC, start
+      LIMIT $${search ? 4 : 3} OFFSET $${search ? 5 : 4}
+    ),
+    recs AS (
+      ${heavySql}
+    )
+    SELECT r.*, (SELECT total FROM cnt) AS total_count
+    FROM recs r
+    ORDER BY r.sort_day DESC, r.staging_id DESC, r.start`;
+}
+
 // Detik yang DIBUANG karena overlap break hours (rules break_windows) — hanya untuk
 // segmen NON-PRODUKTIF (M1/M2 dikecualikan, identik dengan stage_sap_timesheet.py).
 const BREAK_CUT_SECONDS = `
@@ -2150,17 +2276,10 @@ async function getSapReconciliationRecords(req, res) {
 
     const params = [fromDate, toDate];
     if (q) params.push(`%${q}%`);
-    const inner = buildRecordsSql(capCfg, { source, search: Boolean(q) });
-    const limitIdx = params.length + 1;
-
-    // count(*) OVER () = total tanpa query kedua (CTE-nya berat kalau diulang).
-    const { rows } = await pool.query(
-      `SELECT x.*, count(*) OVER ()::int AS total_count
-       FROM (${inner}) x
-       ORDER BY x.sort_day DESC, x.staging_id DESC, x.start
-       LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
-      [...params, pageSize, (page - 1) * pageSize],
-    );
+    // Kolom berat (break/cap cut) dihitung HANYA untuk baris halaman — base pemilihan
+    // staging tetap ringan sehingga range besar tidak memperlambat halaman.
+    const sql = buildRecordsPageSql(capCfg, { source, search: Boolean(q) });
+    const { rows } = await pool.query(sql, [...params, pageSize, (page - 1) * pageSize]);
     const total = rows[0]?.total_count || 0;
     for (const r of rows) delete r.total_count;
     res.json({ data: { records: rows, total, page, pageSize, source }, meta: meta() });
@@ -2319,6 +2438,7 @@ async function getSapReconciliationRecord(req, res) {
 module.exports = {
   loadMaxRecordConfig,
   buildRecordsSql,
+  buildRecordsPageSql,
   getKpi,
   getSapReconciliation,
   exportSapReconciliation,

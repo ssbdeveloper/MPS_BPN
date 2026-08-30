@@ -71,6 +71,9 @@ const RECORD_COLS = [
   { en: 'Bundle' },
   { en: 'Employee ID' },
   { en: 'Employee Name' },
+  { en: 'Order' },
+  { en: 'Operation' },
+  { en: 'Operation Name' },
   { en: 'Machine' },
   { en: 'Act Type' },
   { en: 'Activity' },
@@ -78,13 +81,10 @@ const RECORD_COLS = [
   { en: 'End Time', right: true },
   { en: 'Adjusted End Time', right: true, tone: 'text-[#0077b6]' },
   { en: 'Original Time', right: true },
-  { en: 'Limited Time', right: true },
+  { en: 'Overlap Reduction', right: true },
   { en: 'Time Reduction', right: true, tone: 'text-amber-700' },
   { en: 'Break Time', right: true, tone: 'text-amber-700' },
   { en: 'Recognized Time', right: true, tone: 'text-emerald-700' },
-  { en: 'Order' },
-  { en: 'Operation' },
-  { en: 'Operation Name' },
   { en: 'Stuck Time' },
   { en: 'Action' },
 ];
@@ -530,7 +530,7 @@ function ReconciliationPanel() {
                   {RECORD_COLS.map((c) => (
                     <th
                       key={c.en}
-                      className={`px-2 py-2 font-semibold ${c.right ? 'text-right' : 'text-left'} ${c.tone || ''}`}
+                      className={`px-2 py-2.5 text-center align-middle font-semibold leading-tight ${c.tone || ''}`}
                     >
                       {c.en}
                     </th>
@@ -553,6 +553,9 @@ function ReconciliationPanel() {
                     </td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.pernr}</td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">{r.name || '—'}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
+                    <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-700">{r.machine}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 font-mono text-slate-600">{r.activity}</td>
                     <td className="max-w-[160px] truncate px-2.5 py-1.5 text-slate-500" title={r.status_desc}>{r.status_desc}</td>
@@ -566,9 +569,6 @@ function ReconciliationPanel() {
                       {hitBreak ? `${r.breakcut} ⏸` : r.breakcut}
                     </td>
                     <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums text-emerald-700">{r.recognized}</td>
-                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
-                    <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-center">
                       {!r.can_exclude ? (
