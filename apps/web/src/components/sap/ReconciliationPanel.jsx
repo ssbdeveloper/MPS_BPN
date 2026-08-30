@@ -63,6 +63,32 @@ function targetText(b) {
   return `Activity ${b.lstar || '—'}`;
 }
 
+// Kolom tabel Records: label jelas tanpa singkatan.
+const RECORD_COLS = [
+  { en: 'Date' },
+  { en: 'Source' },
+  { en: 'Staging ID' },
+  { en: 'Bundle' },
+  { en: 'Employee ID' },
+  { en: 'Employee Name' },
+  { en: 'Machine' },
+  { en: 'Act Type' },
+  { en: 'Activity' },
+  { en: 'Start Time', right: true },
+  { en: 'End Time', right: true },
+  { en: 'Adjusted End Time', right: true, tone: 'text-[#0077b6]' },
+  { en: 'Original Time', right: true },
+  { en: 'Limited Time', right: true },
+  { en: 'Time Reduction', right: true, tone: 'text-amber-700' },
+  { en: 'Break Time', right: true, tone: 'text-amber-700' },
+  { en: 'Recognized Time', right: true, tone: 'text-emerald-700' },
+  { en: 'Order' },
+  { en: 'Operation' },
+  { en: 'Operation Name' },
+  { en: 'Stuck Time' },
+  { en: 'Action' },
+];
+
 function StatusBadge({ status, size = 'sm' }) {
   const s = stat(status);
   const I = s.Icon;
@@ -501,28 +527,14 @@ function ReconciliationPanel() {
             <table className="w-full text-xs" style={{ minWidth: 1480 }}>
               <thead>
                 <tr style={{ background: '#caf0f8' }} className="text-left text-[10px] uppercase tracking-wide text-slate-600">
-                  <th className="px-2.5 py-2 font-semibold">Date</th>
-                  <th className="px-2 py-2 font-semibold">Source</th>
-                  <th className="px-2.5 py-2 font-semibold">Staging</th>
-                  <th className="px-2 py-2 font-semibold">Bundle</th>
-                  <th className="px-2.5 py-2 font-semibold">PERNR</th>
-                  <th className="px-2.5 py-2 font-semibold">Name</th>
-                  <th className="px-2.5 py-2 font-semibold">Machine</th>
-                  <th className="px-2 py-2 font-semibold">Act</th>
-                  <th className="px-2.5 py-2 font-semibold">Status</th>
-                  <th className="px-2.5 py-2 text-right font-semibold">Start</th>
-                  <th className="px-2.5 py-2 text-right font-semibold">End (orig)</th>
-                  <th className="px-2.5 py-2 text-right font-semibold">End (capped)</th>
-                  <th className="px-2.5 py-2 text-right font-semibold">Raw s</th>
-                  <th className="px-2.5 py-2 text-right font-semibold">Clamp s</th>
-                  <th className="px-2.5 py-2 text-right font-semibold text-amber-700">Cap cut s</th>
-                  <th className="px-2.5 py-2 text-right font-semibold text-amber-700">Break s</th>
-                  <th className="px-2.5 py-2 text-right font-semibold text-emerald-700">Recog s</th>
-                  <th className="px-2.5 py-2 font-semibold">Order</th>
-                  <th className="px-2 py-2 font-semibold">Op</th>
-                  <th className="px-2.5 py-2 font-semibold">Op text</th>
-                  <th className="px-2 py-2 font-semibold">Stuck</th>
-                  <th className="px-2 py-2 font-semibold">Exclude</th>
+                  {RECORD_COLS.map((c) => (
+                    <th
+                      key={c.en}
+                      className={`px-2 py-2 font-semibold ${c.right ? 'text-right' : 'text-left'} ${c.tone || ''}`}
+                    >
+                      {c.en}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
