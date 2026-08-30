@@ -1708,6 +1708,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     SELECT 'MCH_HOURS'::text AS source,
            st.bucket_start::date AS sort_day,
            st.id AS staging_id,
+           src.source_row_id AS row_id,
            m.startdatetime AS start
     FROM public.sap_staging_source src
     JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
@@ -1720,6 +1721,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     SELECT 'TIMESHEET'::text AS source,
            st.source_min_start::date AS sort_day,
            st.id AS staging_id,
+           t.tsnumber::text AS row_id,
            t.longdate_checkin AT TIME ZONE '${TZ}' AS start
     FROM public.sap_timesheet_staging st
     JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
@@ -1754,7 +1756,8 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       (ex2.source_row_id IS NOT NULL) AS excluded,
       true AS can_exclude
     FROM page p
-    JOIN public.sap_staging_source src ON src.staging_id = p.staging_id AND p.source = 'MCH_HOURS'
+    JOIN public.sap_staging_source src
+      ON src.staging_id = p.staging_id AND src.source_row_id = p.row_id AND p.source = 'MCH_HOURS'
     JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
     JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
@@ -1802,8 +1805,8 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     cnt AS (
       SELECT count(*)::int AS total FROM base
     ),
-    page AS (
-      SELECT source, staging_id, sort_day, start FROM base
+    page AS MATERIALIZED (
+      SELECT source, staging_id, row_id, sort_day, start FROM base
       ORDER BY sort_day DESC, staging_id DESC, start
       LIMIT $${search ? 4 : 3} OFFSET $${search ? 5 : 4}
     ),

@@ -612,7 +612,9 @@ function ReconciliationPanel() {
             </table>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-2">
-            <span className="text-[11px] font-semibold text-slate-500">{recs.total.toLocaleString('id-ID')} records</span>
+            <span className="text-[11px] font-semibold text-slate-500">
+              Showing {recs.records.length.toLocaleString('id-ID')} of {recs.total.toLocaleString('id-ID')} records
+            </span>
             <div className="flex items-center gap-1.5">
               <button type="button" disabled={recs.page <= 1 || recsLoading} onClick={() => loadRecords(recs.page - 1)}
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 active:scale-95 disabled:opacity-40">‹ Prev</button>
