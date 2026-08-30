@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { toast } from 'sonner';
 import {
   AlertCircle, AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, ChevronRight,
-  Clock, Cpu, Download, Factory, Info, Loader2, RefreshCw, Send, Trash2, X, XCircle,
+  Clock, Cpu, Download, Factory, House, Info, Layers, Loader2, RefreshCw, Send, Trash2, X, XCircle,
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -68,7 +68,7 @@ const RECORD_COLS = [
   { en: 'Date' },
   { en: 'Source' },
   { en: 'Staging ID' },
-  { en: 'Bundle' },
+  { icon: Layers, title: 'Bundle' },
   { en: 'Employee ID' },
   { en: 'Employee Name' },
   { en: 'Order' },
@@ -89,14 +89,15 @@ const RECORD_COLS = [
   { en: 'Action' },
 ];
 
-const statusTone = (s) => {
-  if (s === 'POSTED') return 'bg-emerald-100 text-emerald-700';
-  if (s === 'PENDING') return 'bg-amber-100 text-amber-700';
-  if (s === 'FAILED') return 'bg-red-100 text-red-700';
-  if (s === 'SKIPPED') return 'bg-slate-100 text-slate-500';
-  return 'bg-slate-100 text-slate-600';
-};
 const hm = (dt) => (dt ? dt.slice(11, 19) : '');
+const DOT = { POSTED: 'bg-emerald-500', PENDING: 'bg-amber-400', FAILED: 'bg-red-500', SKIPPED: 'bg-slate-400', POSTING: 'bg-sky-500' };
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const shortDate = (iso) => {
+  if (!iso) return '';
+  const [y, m, d] = String(iso).split('-');
+  if (!y || !m || !d) return String(iso);
+  return `${Number(d)} ${MON[Number(m) - 1]} ${y.slice(2)}`;
+};
 
 // Satu baris tabel Records — di-memo supaya re-render panel (polling ops, loading, dll)
 // tidak menggambar ulang semua baris. content-visibility membuat baris di luar layar
@@ -109,13 +110,13 @@ const RecordRow = React.memo(function RecordRow({ r, excludeBusy, onExclude }) {
       className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}
       style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 42px' }}
     >
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-600">{r.date}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-[10px] font-medium text-slate-500">{shortDate(r.date)}</td>
       <td className="whitespace-nowrap px-2 py-1.5">
         <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${r.source === 'TIMESHEET' ? 'bg-violet-100 text-violet-700' : 'bg-sky-100 text-sky-700'}`}>{r.source === 'TIMESHEET' ? 'TS' : 'MCH'}</span>
       </td>
       <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-[11px] text-slate-500">{r.staging_id}</td>
-      <td className="whitespace-nowrap px-2 py-1.5">
-        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${statusTone(r.bundle_status)}`}>{r.bundle_status}</span>
+      <td className="whitespace-nowrap px-2 py-1.5 text-center">
+        <span className={`inline-block h-2.5 w-2.5 rounded-full ${DOT[r.bundle_status] || 'bg-slate-300'}`} title={r.bundle_status} />
       </td>
       <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.pernr}</td>
       <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">{r.name || '—'}</td>
@@ -125,16 +126,16 @@ const RecordRow = React.memo(function RecordRow({ r, excludeBusy, onExclude }) {
       <td className="whitespace-nowrap px-2.5 py-1.5 text-slate-700">{r.machine}</td>
       <td className="whitespace-nowrap px-2 py-1.5 font-mono text-slate-600">{r.activity}</td>
       <td className="max-w-[160px] truncate px-2.5 py-1.5 text-slate-500" title={r.status_desc}>{r.status_desc}</td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-700">{hm(r.start)}</td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono text-slate-500">{hm(r.end_orig)}</td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-mono font-semibold text-[#0077b6]">{hm(r.end_capped)}</td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.raw}</td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-right tabular-nums text-slate-600">{r.clamped}</td>
-      <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitCap ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
-      <td className={`whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums ${hitBreak ? 'text-orange-600' : 'text-slate-300'}`}>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-center font-mono text-slate-700">{hm(r.start)}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-center font-mono text-slate-500">{hm(r.end_orig)}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-center font-mono font-semibold text-[#0077b6]">{hm(r.end_capped)}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-center tabular-nums text-slate-600">{r.raw}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-center tabular-nums text-slate-600">{r.clamped}</td>
+      <td className={`whitespace-nowrap px-2.5 py-1.5 text-center font-bold tabular-nums ${hitCap ? 'text-amber-600' : 'text-slate-300'}`}>{r.capcut}</td>
+      <td className={`whitespace-nowrap px-2.5 py-1.5 text-center font-bold tabular-nums ${hitBreak ? 'text-orange-600' : 'text-slate-300'}`}>
         {hitBreak ? `${r.breakcut} ⏸` : r.breakcut}
       </td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 text-right font-bold tabular-nums text-emerald-700">{r.recognized}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 text-center font-bold tabular-nums text-emerald-700">{r.recognized}</td>
       <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
       <td className="whitespace-nowrap px-2 py-1.5 text-center">
         {!r.can_exclude ? (
@@ -591,14 +592,17 @@ function ReconciliationPanel() {
             <table className="w-full text-xs" style={{ minWidth: 1480 }}>
               <thead>
                 <tr style={{ background: '#caf0f8' }} className="text-left text-[10px] uppercase tracking-wide text-slate-600">
-                  {RECORD_COLS.map((c) => (
-                    <th
-                      key={c.en}
-                      className={`px-2 py-2.5 text-center align-middle font-semibold leading-tight ${c.tone || ''}`}
-                    >
-                      {c.en}
-                    </th>
-                  ))}
+                  {RECORD_COLS.map((c) => {
+                    const I = c.icon;
+                    return (
+                      <th
+                        key={c.en || c.title}
+                        className={`px-2 py-2.5 text-center align-middle font-semibold leading-tight ${c.tone || ''}`}
+                      >
+                        {I ? <I size={13} className="mx-auto" aria-label={c.title} /> : c.en}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -623,37 +627,44 @@ function ReconciliationPanel() {
                 className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 active:scale-95 disabled:opacity-40">Next ›</button>
             </div>
           </div>
-          {exclusions.length > 0 && (
-            <div className="border-t border-slate-100 px-4 py-3">
-              <div className="mb-2 text-[11px] font-black uppercase tracking-wide text-red-600">
-                Excluded records ({exclusions.length}) — tidak ikut dibundle/dikirim
-              </div>
-              <ul className="max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-red-100 bg-red-50/40">
-                {exclusions.map((ex) => (
-                  <li key={ex.source_row_id} className="flex flex-wrap items-center gap-2 px-3 py-1.5">
-                    <span className="min-w-0 flex-1 text-[11px]">
-                      <span className="font-mono font-bold text-slate-700">{ex.pernr}</span>{' '}
-                      <span className="font-semibold text-slate-600">{ex.name}</span>
-                      <span className="text-slate-400"> · {ex.machinename} · {ex.activity} · {ex.source_row_id}</span>
-                      {ex.note && <span className="italic text-slate-500"> — {ex.note}</span>}
-                    </span>
-                    <span className="text-[10px] text-slate-400">{ex.excluded_at ? String(ex.excluded_at).slice(0, 16) : ''}</span>
-                    <button
-                      type="button"
-                      disabled={excludeBusy}
-                      onClick={() => doUnexclude(ex.source_row_id)}
-                      title="Kembalikan record ini (bundle di-recalculate)"
-                      className="inline-flex h-6 items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 text-[10px] font-bold text-emerald-700 transition-all hover:bg-emerald-50 active:scale-95 disabled:opacity-40"
-                    >
-                      <Trash2 size={10} /> Un-exclude
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </>
       ) : null}
+    </section>
+  );
+
+  // Tab terpisah: daftar record yang di-exclude (tidak ikut dibundle/dikirim).
+  const renderExcluded = () => (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+        <h3 className="text-xs font-bold uppercase tracking-wide text-slate-600">Excluded records</h3>
+        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">{exclusions.length}</span>
+      </div>
+      {exclusions.length === 0 ? (
+        <p className="px-4 py-10 text-center text-sm text-slate-400">No excluded records.</p>
+      ) : (
+        <ul className="max-h-[62vh] divide-y divide-slate-100 overflow-y-auto">
+          {exclusions.map((ex) => (
+            <li key={ex.source_row_id} className="flex flex-wrap items-center gap-2 px-4 py-2">
+              <span className="min-w-0 flex-1 text-[11px]">
+                <span className="font-mono font-bold text-slate-700">{ex.pernr}</span>{' '}
+                <span className="font-semibold text-slate-600">{ex.name}</span>
+                <span className="text-slate-400"> · {ex.machinename} · {ex.activity} · {ex.source_row_id}</span>
+                {ex.note && <span className="italic text-slate-500"> — {ex.note}</span>}
+              </span>
+              <span className="text-[10px] text-slate-400">{ex.excluded_at ? String(ex.excluded_at).slice(0, 16) : ''}</span>
+              <button
+                type="button"
+                disabled={excludeBusy}
+                onClick={() => doUnexclude(ex.source_row_id)}
+                title="Kembalikan record ini (bundle di-recalculate)"
+                className="inline-flex h-6 items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 text-[10px] font-bold text-emerald-700 transition-all hover:bg-emerald-50 active:scale-95 disabled:opacity-40"
+              >
+                <Trash2 size={10} /> Un-exclude
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 
@@ -662,8 +673,11 @@ function ReconciliationPanel() {
       <button
         type="button"
         onClick={() => { setDay(null); setRec(null); }}
-        className={`rounded px-1.5 py-0.5 font-semibold ${day ? 'text-[#0077b6] hover:bg-slate-100' : 'text-slate-800'}`}
-      >Summary</button>
+        title="Back to summary"
+        className={`flex h-7 w-7 items-center justify-center rounded-lg transition ${day ? 'text-[#0077b6] hover:bg-slate-100' : 'text-slate-500'}`}
+      >
+        <House size={14} />
+      </button>
       {day && (
         <>
           <ChevronRight size={13} className="text-slate-300" />
@@ -684,10 +698,9 @@ function ReconciliationPanel() {
   );
 
   return (
-    <div ref={panelRef} className="mx-auto flex w-full max-w-full flex-col gap-4">
+    <div ref={panelRef} className="mx-auto flex w-full max-w-full flex-col gap-3">
       {/* Header + date range */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <h2 className="text-sm font-extrabold text-slate-800">Machine hours → SAP</h2>
+      <div className="flex flex-wrap items-end justify-end gap-3">
         <form onSubmit={(e) => { e.preventDefault(); setDay(null); setRec(null); load(); }} className="flex items-end gap-2">
           <button
             type="button"
@@ -729,11 +742,12 @@ function ReconciliationPanel() {
           {/* ══ LEVEL 1: Summary + date list ══ */}
           {!day && (
             <>
-              {/* Tab: Records (default) | Overview */}
+              {/* Tab: Records (default) | Overview | Excluded */}
               <div className="inline-flex rounded-xl border border-slate-300 bg-slate-100 p-1">
                 {[
                   { code: 'records', label: 'Records' },
                   { code: 'overview', label: 'Overview' },
+                  { code: 'excluded', label: 'Excluded' },
                 ].map((t) => (
                   <button
                     key={t.code}
@@ -747,6 +761,7 @@ function ReconciliationPanel() {
               </div>
 
               {view === 'records' && renderRecords()}
+              {view === 'excluded' && renderExcluded()}
             </>
           )}
 
