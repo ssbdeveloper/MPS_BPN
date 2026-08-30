@@ -12,8 +12,8 @@ const UNPROD_QUICK_MODES = {
   housekeeping: { code: '1530', label: 'HOUSEKEEPING' },
 };
 
-// Meal break: istirahat makan PRIBADI (activity 0000) — tidak dikirim ke SAP,
-// tidak masuk bundel SAP, otomatis di-checkout setelah 90 menit.
+// Meal break: istirahat 
+// Otomatis di-checkout setelah 90 menit.
 const MEAL_BREAK_AUTO_CLOSE_MIN = 90;
 
 const NFC_ERROR_MESSAGES = {
@@ -117,22 +117,21 @@ const UnprodPanel = ({ panelRef, onSelect }) => {
             <svg className="w-4 h-4 text-[#0096c7] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className="text-[11px] font-bold text-slate-800">Cara kerja pilihan Mode Unprod:</span>
+            <span className="text-[11px] font-bold text-slate-800">Cara pakai:</span>
           </div>
           <div className="space-y-1.5 ml-6 text-[10px] text-slate-700 leading-relaxed">
-            <p><span className="font-bold text-[#0096c7]">Single</span> – Scan NFC / input ID seperti biasa untuk pindah ke halaman Unproductive.</p>
-            <p><span className="font-bold text-[#0096c7]">Briefing</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">Briefing</span>.</p>
-            <p><span className="font-bold text-amber-600">Coffee Break</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">Coffee Break</span> (1520).</p>
+            <p><span className="font-bold text-[#0096c7]">Single</span> – Pilih sendiri jenis kegiatannya dari daftar.</p>
+            <p><span className="font-bold text-[#0096c7]">Briefing</span> – Scan kartu, langsung tercatat sebagai Briefing.</p>
+            <p><span className="font-bold text-amber-600">Coffee Break</span> – Scan kartu, langsung tercatat istirahat kopi.</p>
             <p>
-              <span className="font-bold text-orange-600">Meal Break</span> – Istirahat makan <span className="italic">pribadi</span> (activity <b>0000</b>).
-              Waktunya bisa berbeda tiap orang, <b>tidak dikirim ke SAP</b> dan tidak masuk bundel SAP.
-              Otomatis di-checkout setelah <b>{MEAL_BREAK_AUTO_CLOSE_MIN} menit</b>.
+              <span className="font-bold text-orange-600">Meal Break</span> – Scan kartu, langsung tercatat istirahat makan.
+              Istirahat ini tidak dihitung untuk dikirim ke SAP dan otomatis selesai setelah <b>{MEAL_BREAK_AUTO_CLOSE_MIN} menit</b>.
             </p>
-            <p><span className="font-bold text-emerald-700">HouseKeeping</span> – Setiap scan NFC / input ID akan otomatis membuat activity <span className="italic">HouseKeeping</span>.</p>
+            <p><span className="font-bold text-emerald-700">HouseKeeping</span> – Scan kartu, langsung tercatat kerja bersih-bersih.</p>
           </div>
           <div className="mt-2.5 ml-6 space-y-1 text-[10px] text-slate-500 leading-relaxed">
-            <p>Mode yang dipilih akan tetap aktif sampai kamu keluar dari menu. Ketika mode sudah aktif, Anda hanya perlu scan ID tanpa harus memilih kembali activity unprod tersebut.</p>
-            <p className="italic text-slate-400">Untuk menutup pilihan, tekan area di luar menu.</p>
+            <p>Mode tetap aktif sampai kamu keluar dari menu — cukup scan kartu/ID, tidak perlu pilih lagi.</p>
+            <p className="italic text-slate-400">Tutup: tekan area di luar menu.</p>
           </div>
         </div>
       </div>
@@ -334,9 +333,9 @@ const LoginTimesheetPage = () => {
       setStatus(`Membuat ${label}...`);
       const success = await createUnprodActivity(user, code, label);
       if (success) {
-        const autoNote = quickMode === 'mealbreak' ? ` — auto checkout ${MEAL_BREAK_AUTO_CLOSE_MIN} menit` : '';
+        const autoNote = quickMode === 'mealbreak' ? ` — otomatis selesai ${MEAL_BREAK_AUTO_CLOSE_MIN} menit` : '';
         setStatus(`${label} berhasil dibuat${autoNote}`);
-        showSuccessToast(`${user.full_name || 'User'} - ${label} berhasil!${quickMode === 'mealbreak' ? ` (auto checkout ${MEAL_BREAK_AUTO_CLOSE_MIN} menit)` : ''}`);
+        showSuccessToast(`${user.full_name || 'User'} - ${label} berhasil!${quickMode === 'mealbreak' ? ` (otomatis selesai ${MEAL_BREAK_AUTO_CLOSE_MIN} menit)` : ''}`);
       } else {
         setStatus(`Gagal membuat ${label}`);
       }
