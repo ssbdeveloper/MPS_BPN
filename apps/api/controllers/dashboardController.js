@@ -1060,10 +1060,10 @@ async function enqueueSapOps(req, res) {
     let result;
     try {
       result = await sapPool.query(
-        `INSERT INTO public.sap_ops_request (action, params, requested_by)
-         VALUES ($1, $2, $3)
+        `INSERT INTO public.sap_ops_request (action, params, requested_by, plant)
+         VALUES ($1, $2, $3, $4)
          RETURNING id, action, status, requested_at`,
-        [action, params, requestedBy]
+        [action, params, requestedBy, process.env.PLANT_SSB || null]
       );
     } catch (err) {
       if (err.code === "23505") {
@@ -1127,10 +1127,10 @@ async function postCorrections(req, res) {
     let result;
     try {
       result = await sapPool.query(
-        `INSERT INTO public.sap_ops_request (action, params, requested_by)
-         VALUES ('post_corrections', $1::jsonb, $2)
+        `INSERT INTO public.sap_ops_request (action, params, requested_by, plant)
+         VALUES ('post_corrections', $1::jsonb, $2, $3)
          RETURNING id, action, status, requested_at`,
-        [JSON.stringify({ ids }), requestedBy]
+        [JSON.stringify({ ids }), requestedBy, process.env.PLANT_SSB || null]
       );
     } catch (err) {
       if (err.code === "23505") return res.status(409).json({ error: "A correction-post request is still running (or the ops-worker is not consuming the queue). Wait, or check the sap-ops-worker service." });
@@ -2322,9 +2322,9 @@ async function excludeSapRecord(req, res) {
     if (date) {
       try {
         const r = await sapPool.query(
-          `INSERT INTO public.sap_ops_request (action, params, requested_by)
-           VALUES ('recalc_date', $1::jsonb, $2) RETURNING id, status`,
-          [JSON.stringify({ date }), excludedBy],
+          `INSERT INTO public.sap_ops_request (action, params, requested_by, plant)
+           VALUES ('recalc_date', $1::jsonb, $2, $3) RETURNING id, status`,
+          [JSON.stringify({ date }), excludedBy, process.env.PLANT_SSB || null],
         );
         recalc = r.rows[0];
       } catch (err) {
@@ -2359,9 +2359,9 @@ async function unexcludeSapRecord(req, res) {
     if (date) {
       try {
         const r = await sapPool.query(
-          `INSERT INTO public.sap_ops_request (action, params, requested_by)
-           VALUES ('recalc_date', $1::jsonb, $2) RETURNING id, status`,
-          [JSON.stringify({ date }), req.header("x-user-id") || null],
+          `INSERT INTO public.sap_ops_request (action, params, requested_by, plant)
+           VALUES ('recalc_date', $1::jsonb, $2, $3) RETURNING id, status`,
+          [JSON.stringify({ date }), req.header("x-user-id") || null, process.env.PLANT_SSB || null],
         );
         recalc = r.rows[0];
       } catch (err) {
