@@ -11,6 +11,14 @@ const TZ = resolveTimezone();
 
 
 const meta = () => ({ generated_at: new Date().toISOString() });
+
+// ── Plant scope ────────────────────────────────────────────────────────────
+// Setiap server hanya menampilkan staging plant-nya sendiri (PLANT_SSB dari env;
+// kosong di dev = tanpa filter). Dipakai di SEMUA query sap_* supaya operator
+// Cikupa tidak melihat baris Balikpapan dan sebaliknya.
+const PLANT_SSB = /^\d{4}$/.test(process.env.PLANT_SSB || "") ? process.env.PLANT_SSB : null;
+const PW_SQL = PLANT_SSB ? ` AND werks = '${PLANT_SSB}'` : ""; // query tanpa alias
+const plantScope = (alias = "st") => (PLANT_SSB ? ` AND ${alias}.werks = '${PLANT_SSB}'` : "");
 let operationsHubCache = null;
 const OPERATIONS_HUB_TTL_MS = 30 * 1000;
 
@@ -343,10 +351,10 @@ async function getOperationsHub(req, res) {
       `),
       q(`
         SELECT
-          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'PENDING')::int AS pending,
-          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'FAILED')::int AS failed,
-          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'POSTED' AND created_at >= now() - interval '7 days')::int AS posted_7d,
-          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE created_at >= now() - interval '7 days')::int AS staged_7d
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'PENDING'${PW_SQL})::int AS pending,
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'FAILED'${PW_SQL})::int AS failed,
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE UPPER(COALESCE(status,'')) = 'POSTED' AND created_at >= now() - interval '7 days'${PW_SQL})::int AS posted_7d,
+          (SELECT COUNT(*) FROM public.sap_timesheet_staging WHERE created_at >= now() - interval '7 days'${PW_SQL})::int AS staged_7d
       `),
       q(`
         WITH base AS (
@@ -460,6 +468,8 @@ async function getSapTimesheetStagingLog(req, res) {
       where.push(`status = $${params.length}`);
     }
 
+    if (PLANT_SSB) where.push(`werks = '${PLANT_SSB}'`);
+
     if (search) {
       params.push(`%${search}%`);
       const idx = params.length;
@@ -558,6 +568,7 @@ async function getSapTimesheetStagingSummary(req, res) {
       sapPool.query(`
         SELECT status, COUNT(*)::int AS n
         FROM public.sap_timesheet_staging
+        WHERE TRUE${PW_SQL}
         GROUP BY status
       `),
       sapPool.query(`
@@ -567,12 +578,13 @@ async function getSapTimesheetStagingSummary(req, res) {
           COUNT(*) FILTER (WHERE status = 'PENDING' AND bucket_start::date = (now() AT TIME ZONE '${TZ}')::date)::int AS pending_today,
           COUNT(*) FILTER (WHERE status = 'POSTED'  AND posted_at::date   = (now() AT TIME ZONE '${TZ}')::date)::int AS posted_today
         FROM public.sap_timesheet_staging
+        WHERE TRUE${PW_SQL}
       `),
       // Hanya FAILED + SKIPPED perlu triase. Ambil pesan mentah, klasifikasi di JS.
       sapPool.query(`
         SELECT id, status, sap_error, sap_response_text
         FROM public.sap_timesheet_staging
-        WHERE status IN ('FAILED', 'SKIPPED')
+        WHERE status IN ('FAILED', 'SKIPPED')${PW_SQL}
         ORDER BY id DESC
       `),
     ]);
@@ -1088,6 +1100,7 @@ async function getSapCorrections(req, res) {
     const where = ["is_correction = true"];
     const params = [];
     if (status !== "ALL") { params.push(status); where.push(`status = $${params.length}`); }
+    if (PLANT_SSB) where.push(`werks = '${PLANT_SSB}'`);
     if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "")) { params.push(req.query.from); where.push(`bucket_start::date >= $${params.length}`); }
     if (/^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "")) { params.push(req.query.to); where.push(`bucket_start::date <= $${params.length}`); }
     if (search) {
@@ -1646,7 +1659,7 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
     LEFT JOIN public.sap_staging_exclusion ex2
       ON ex2.source_system = 'MCH_HOURS' AND ex2.source_row_id = m.proddataid::text
     WHERE src.source_system = 'MCH_HOURS'
-      AND st.bucket_start::date BETWEEN $1::date AND $2::date ${mchSearch}`;
+      AND st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${mchSearch}`;
 
   // TIMESHEET: bucket_start NULL by design -> tanggal dari source_min_start (= checkin
   // yang sudah dikonversi ke TZ aplikasi saat staging). end_capped = jam sintetis yang
@@ -1679,11 +1692,11 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       false AS excluded,
       false AS can_exclude
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
+    JOIN public.timesheet_transaction t ON t.tsnumber::text = split_part(st.source_key, ':', 2)
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
     WHERE st.source_system = 'TIMESHEET'
-      AND st.source_min_start::date BETWEEN $1::date AND $2::date ${tsSearch}`;
+      AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
 
   if (source === "mch") return mchSql;
   if (source === "timesheet") return tsSql;
@@ -1716,7 +1729,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
     WHERE src.source_system = 'MCH_HOURS'
-      AND st.bucket_start::date BETWEEN $1::date AND $2::date ${mchSearch}`;
+      AND st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${mchSearch}`;
 
   const tsBase = `
     SELECT 'TIMESHEET'::text AS source,
@@ -1725,10 +1738,10 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
            t.tsnumber::text AS row_id,
            t.longdate_checkin AT TIME ZONE '${TZ}' AS start
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
+    JOIN public.timesheet_transaction t ON t.tsnumber::text = split_part(st.source_key, ':', 2)
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     WHERE st.source_system = 'TIMESHEET'
-      AND st.source_min_start::date BETWEEN $1::date AND $2::date ${tsSearch}`;
+      AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
 
   let baseSql = source === "mch" ? mchBase : source === "timesheet" ? tsBase : `${mchBase}\n    UNION ALL\n${tsBase}`;
 
@@ -1886,7 +1899,7 @@ async function loadSapReconciliationData(fromDate, toDate) {
          JOIN public.sap_timesheet_staging st
            ON st.id = src.staging_id AND st.status = 'PENDING' AND st.source_system = 'MCH_HOURS'
          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-         WHERE st.bucket_start::date BETWEEN $1 AND $2
+         WHERE st.bucket_start::date BETWEEN $1 AND $2${plantScope("st")}
          GROUP BY src.staging_id
          HAVING sum(src.seconds) > sum(${CLAMPED_SEG_SECONDS})
        )
@@ -2103,7 +2116,7 @@ async function exportSapReconciliation(req, res) {
        FROM public.sap_timesheet_staging st
        LEFT JOIN public.usernfc u
          ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
-       WHERE st.bucket_start::date BETWEEN $1::date AND $2::date
+       WHERE st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")}
        ORDER BY st.bucket_start, st.id`,
       [data.range.from, data.range.to],
     );
@@ -2252,7 +2265,7 @@ async function getSapReconciliationDay(req, res) {
        FROM public.sap_timesheet_staging st
        LEFT JOIN public.usernfc u
          ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
-       WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date = $1::date
+       WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date = $1::date${plantScope("st")}
        ORDER BY (st.status='POSTED') DESC, st.is_productive DESC, st.total_seconds DESC`,
       [day],
     );
@@ -2305,7 +2318,7 @@ async function excludeSapRecord(req, res) {
     const { rows } = await sapPool.query(
       `SELECT to_char(st.bucket_start, 'YYYY-MM-DD') AS d FROM public.sap_staging_source ss
        JOIN public.sap_timesheet_staging st ON st.id = ss.staging_id
-       WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = $1
+       WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = $1${plantScope("st")}
        ORDER BY st.bucket_start DESC LIMIT 1`,
       [sourceRowId],
     );
@@ -2431,7 +2444,7 @@ async function getSapReconciliationRecord(req, res) {
            round(total_seconds/3600.0,2)::float AS sent_hrs,
            to_char(bucket_start,'YYYY-MM-DD') AS day,
            COALESCE(sap_response_text, sap_error, '') AS sap_response
-         FROM public.sap_timesheet_staging WHERE id = $1`,
+         FROM public.sap_timesheet_staging WHERE id = $1${PW_SQL}`,
         [stagingId],
       ),
       pool.query(
