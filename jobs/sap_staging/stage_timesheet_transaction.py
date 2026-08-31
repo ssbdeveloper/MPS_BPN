@@ -163,7 +163,9 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     )
     SELECT
       'TIMESHEET' AS source_system,
-      tsnumber::text AS source_key,
+      -- source_key global: prefix plant (werks) supaya tsnumber tidak tabrakan
+      -- antar plant di staging AWS terpusat (UNIQUE(source_system, source_key)).
+      COALESCE(plant, '') || ':' || tsnumber::text AS source_key,
       tsnumber::text AS source_ref_id,
       COALESCE(plant, '') AS werks,
       CASE
@@ -318,7 +320,7 @@ def fetch_blocked_today_rows() -> list[dict]:
 
         audit_rows.append({
             "source_system": "TIMESHEET",
-            "source_key": str(row["tsnumber"]),
+            "source_key": f"{row.get('plant') or ''}:{row['tsnumber']}",
             "source_ref_id": str(row["tsnumber"]),
             "source_date": row.get("source_date"),
             "plant": row.get("plant") or plant_code(),
