@@ -1806,7 +1806,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       false AS can_exclude
     FROM page p
     JOIN public.sap_timesheet_staging st ON st.id = p.staging_id AND p.source = 'TIMESHEET'
-    JOIN public.timesheet_transaction t ON t.tsnumber::text = st.source_key
+    JOIN public.timesheet_transaction t ON t.tsnumber::text = split_part(st.source_key, ':', 2)
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))`;
 
@@ -1884,7 +1884,7 @@ async function loadSapReconciliationData(fromDate, toDate) {
       `SELECT st.bucket_start::date AS d, st.status, st.is_productive,
          round(sum(st.total_seconds)/3600.0, 2) AS hrs, count(*)::int AS n
        FROM public.sap_timesheet_staging st
-       WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date BETWEEN $1 AND $2
+       WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date BETWEEN $1 AND $2${plantScope("st")}
        GROUP BY 1, 2, 3`,
       [fromD, toD],
     ),
@@ -1907,9 +1907,9 @@ async function loadSapReconciliationData(fromDate, toDate) {
          (SELECT count(*) FROM pend)::int AS stuck_pending_bundles,
          round(COALESCE((SELECT sum(raw_sec - clamp_sec) FROM pend), 0)/3600.0, 2) AS stuck_pending_reduction_hrs,
          (SELECT count(*) FROM public.sap_timesheet_staging
-            WHERE source_system='MCH_HOURS' AND status='FAILED' AND bucket_start::date BETWEEN $1 AND $2)::int AS failed_bundles,
+            WHERE source_system='MCH_HOURS' AND status='FAILED' AND bucket_start::date BETWEEN $1 AND $2${PW_SQL})::int AS failed_bundles,
          (SELECT count(*) FROM public.sap_timesheet_staging
-            WHERE source_system='MCH_HOURS' AND status='SKIPPED' AND bucket_start::date BETWEEN $1 AND $2)::int AS skipped_bundles`,
+            WHERE source_system='MCH_HOURS' AND status='SKIPPED' AND bucket_start::date BETWEEN $1 AND $2${PW_SQL})::int AS skipped_bundles`,
       [fromD, toD],
     ),
   ]);
