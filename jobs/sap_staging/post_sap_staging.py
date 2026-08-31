@@ -147,9 +147,12 @@ def claim_rows(
         params.append(productive)
 
     # Posting manual via UI (2026-08-27): filter per tanggal bucket atau per operator.
+    # TIMESHEET tidak punya bucket_start (NULL — satu baris per tsnumber, bukan per jam
+    # kerja) sehingga filter tanggal harus lewat payload ISDD (tanggal kerja dari checkin);
+    # kalau tidak, baris TS tidak pernah match dan tidak pernah terkirim dari tombol ini.
     if date_filter:
-        filters.append("bucket_start::date = %s")
-        params.append(date_filter)
+        filters.append("(bucket_start::date = %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' = %s))")
+        params.extend([date_filter, date_filter.replace("-", "")])
     if pernr_filter:
         filters.append("(pernr = %s OR pernr_origin = %s)")
         params.extend([pernr_filter, pernr_filter])
