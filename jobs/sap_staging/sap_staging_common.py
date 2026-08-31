@@ -51,12 +51,14 @@ def source_db_config() -> dict:
 
 
 def staging_db_config() -> dict:
+    # Prioritas: SAP_STAGING_DB_* (eksplisit) -> AWS_PG* (kredensial AWS yang
+    # sudah ada di .env) -> DB_* (lokal, untuk staging lokal).
     return {
-        "host": env_value("SAP_STAGING_DB_HOST", env_value("DB_HOST")),
-        "port": env_int("SAP_STAGING_DB_PORT", env_int("DB_PORT", 5432)),
-        "dbname": env_value("SAP_STAGING_DB_NAME", env_value("DB_NAME")),
-        "user": env_value("SAP_STAGING_DB_USER", env_value("DB_USER")),
-        "password": env_value("SAP_STAGING_DB_PASSWORD", env_value("DB_PASSWORD")),
+        "host": env_value("SAP_STAGING_DB_HOST", env_value("AWS_PGhost", env_value("DB_HOST"))),
+        "port": env_int("SAP_STAGING_DB_PORT", env_int("AWS_PGport", env_int("DB_PORT", 5432))),
+        "dbname": env_value("SAP_STAGING_DB_NAME", env_value("AWS_PGDb", env_value("DB_NAME"))),
+        "user": env_value("SAP_STAGING_DB_USER", env_value("AWS_PGuser", env_value("DB_USER"))),
+        "password": env_value("SAP_STAGING_DB_PASSWORD", env_value("AWS_PGpass", env_value("DB_PASSWORD"))),
     }
 
 
