@@ -1,4 +1,5 @@
 const pool = global.pool || require("../db");
+const sapPool = require("../dbStaging");
 const { resolveTimezone } = require("../config/timezone");
 const { classifySapError } = require("../utils/sapErrorClassifier");
 const ExcelJS = require("exceljs");
@@ -481,7 +482,7 @@ async function getSapTimesheetStagingLog(req, res) {
     const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
     params.push(limit + 1);
 
-    const result = await pool.query(
+    const result = await sapPool.query(
       `
       SELECT
         id,
@@ -554,12 +555,12 @@ async function getSapTimesheetStagingLog(req, res) {
 async function getSapTimesheetStagingSummary(req, res) {
   try {
     const [byStatus, dateRange, failing] = await Promise.all([
-      pool.query(`
+      sapPool.query(`
         SELECT status, COUNT(*)::int AS n
         FROM public.sap_timesheet_staging
         GROUP BY status
       `),
-      pool.query(`
+      sapPool.query(`
         SELECT
           MIN(bucket_start)::date AS oldest,
           MAX(bucket_start)::date AS newest,
@@ -568,7 +569,7 @@ async function getSapTimesheetStagingSummary(req, res) {
         FROM public.sap_timesheet_staging
       `),
       // Hanya FAILED + SKIPPED perlu triase. Ambil pesan mentah, klasifikasi di JS.
-      pool.query(`
+      sapPool.query(`
         SELECT id, status, sap_error, sap_response_text
         FROM public.sap_timesheet_staging
         WHERE status IN ('FAILED', 'SKIPPED')
@@ -1049,7 +1050,7 @@ async function enqueueSapOps(req, res) {
     // Self-heal: buang QUEUED basi (>15 mnt tak diproses = worker tak konsumsi antrian)
     // supaya tombol tak 409 selamanya kalau ops_worker mati/salah DB. RUNNING tidak
     // disentuh di sini (hindari double-run); ops_worker sendiri mereset RUNNING yatim.
-    await pool.query(
+    await sapPool.query(
       `DELETE FROM public.sap_ops_request
        WHERE action = $1 AND status = 'QUEUED' AND requested_at < now() - interval '15 minutes'`,
       [action]
@@ -1058,7 +1059,7 @@ async function enqueueSapOps(req, res) {
     // Unique index parsial menolak kalau sudah ada QUEUED/RUNNING untuk aksi yang sama.
     let result;
     try {
-      result = await pool.query(
+      result = await sapPool.query(
         `INSERT INTO public.sap_ops_request (action, params, requested_by)
          VALUES ($1, $2, $3)
          RETURNING id, action, status, requested_at`,
@@ -1093,7 +1094,7 @@ async function getSapCorrections(req, res) {
       params.push(`%${search}%`);
       where.push(`(aufnr ILIKE $${params.length} OR pernr ILIKE $${params.length} OR arbpl ILIKE $${params.length})`);
     }
-    const result = await pool.query(
+    const result = await sapPool.query(
       `SELECT id, ztimesheetid, status, bucket_start::date AS work_date, is_productive,
         aufnr, vornr, pernr, arbpl, lstar, zconf_type, total_seconds, source_row_count,
         sap_error, created_at, updated_at
@@ -1119,13 +1120,13 @@ async function postCorrections(req, res) {
     if (!ids.length) return res.status(400).json({ error: "No correction bundles selected" });
     const requestedBy = req.header("x-user-id") || null;
     // Self-heal QUEUED basi (lihat enqueueSapOps).
-    await pool.query(
+    await sapPool.query(
       `DELETE FROM public.sap_ops_request
        WHERE action = 'post_corrections' AND status = 'QUEUED' AND requested_at < now() - interval '15 minutes'`
     );
     let result;
     try {
-      result = await pool.query(
+      result = await sapPool.query(
         `INSERT INTO public.sap_ops_request (action, params, requested_by)
          VALUES ('post_corrections', $1::jsonb, $2)
          RETURNING id, action, status, requested_at`,
@@ -1145,7 +1146,7 @@ async function postCorrections(req, res) {
 // GET /dashboard/sap-ops/requests — status permintaan terbaru (untuk UI polling)
 async function getSapOpsRequests(req, res) {
   try {
-    const result = await pool.query(
+    const result = await sapPool.query(
       `SELECT id, action, status, requested_by, requested_at, started_at, finished_at, result, error
        FROM public.sap_ops_request
        ORDER BY id DESC
@@ -1866,7 +1867,7 @@ async function loadSapReconciliationData(fromDate, toDate) {
     // staging bundel per hari-bundel + status + jenis (produktif=ke order, unproduktif=cost-center).
     // Pemisahan is_productive PENTING: CSV konfirmasi-order SAP hanya memuat yang PRODUKTIF,
     // jadi tanpa split, "POSTED" total (prod+unprod) tak akan pernah cocok dengan CSV.
-    pool.query(
+    sapPool.query(
       `SELECT st.bucket_start::date AS d, st.status, st.is_productive,
          round(sum(st.total_seconds)/3600.0, 2) AS hrs, count(*)::int AS n
        FROM public.sap_timesheet_staging st
@@ -2301,7 +2302,7 @@ async function excludeSapRecord(req, res) {
     const note = String(req.body?.note || "").trim() || null;
     const excludedBy = req.header("x-user-id") || null;
 
-    const { rows } = await pool.query(
+    const { rows } = await sapPool.query(
       `SELECT to_char(st.bucket_start, 'YYYY-MM-DD') AS d FROM public.sap_staging_source ss
        JOIN public.sap_timesheet_staging st ON st.id = ss.staging_id
        WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = $1
@@ -2320,7 +2321,7 @@ async function excludeSapRecord(req, res) {
     let recalc = null;
     if (date) {
       try {
-        const r = await pool.query(
+        const r = await sapPool.query(
           `INSERT INTO public.sap_ops_request (action, params, requested_by)
            VALUES ('recalc_date', $1::jsonb, $2) RETURNING id, status`,
           [JSON.stringify({ date }), excludedBy],
@@ -2357,7 +2358,7 @@ async function unexcludeSapRecord(req, res) {
     let recalc = null;
     if (date) {
       try {
-        const r = await pool.query(
+        const r = await sapPool.query(
           `INSERT INTO public.sap_ops_request (action, params, requested_by)
            VALUES ('recalc_date', $1::jsonb, $2) RETURNING id, status`,
           [JSON.stringify({ date }), req.header("x-user-id") || null],
@@ -2425,7 +2426,7 @@ async function getSapReconciliationRecord(req, res) {
     const capCfg = await loadMaxRecordConfig();
     const cutSec = CAP_CUT_SECONDS(capCfg);
     const [head, rows] = await Promise.all([
-      pool.query(
+      sapPool.query(
         `SELECT id, status, aufnr, vornr, lstar, pernr, zbarcodeid, is_productive,
            round(total_seconds/3600.0,2)::float AS sent_hrs,
            to_char(bucket_start,'YYYY-MM-DD') AS day,
