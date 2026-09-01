@@ -41,6 +41,22 @@ const TIMESHEET_EXPORT_FIELDS = [
   'modified_at'
 ];
 
+// Rentang export maksimal (hari). Query SELECT * utk rentang lebar bisa >45 s
+// (query_timeout node-pg) — batasi supaya export tidak timeout.
+const MAX_EXPORT_DAYS = 62;
+// Auto-size kolom mahal per sel (String() tiap cell). Di atas ambang ini pakai
+// lebar tetap supaya ExcelJS tidak jadi bottleneck.
+const EXPORT_AUTOSIZE_MAX_ROWS = 10000;
+const TIMESHEET_EXPORT_WIDTHS = {
+  tsnumber: 12, activitytype: 12, operation_text: 30, confirmationnumber: 14,
+  ssbr_ident: 14, date_checkin: 12, date_checkout: 12, full_name: 24,
+  hour_checkin: 12, hour_checkout: 12, longdate_checkin: 20, longdate_checkout: 20,
+  note: 26, operation_no: 14, order_no: 16, part_name: 24, planhours: 10,
+  plant: 8, serialnumber: 14, state_flag: 10, std_foreman_hours: 12,
+  validation_date: 20, workcentercode: 16, workcenterdescription: 26,
+  duration: 10, modified_at: 20,
+};
+
 const toTimesheetExportRow = (row) => (
   TIMESHEET_EXPORT_FIELDS.reduce((acc, field) => {
     acc[field] = field === 'ssbr_ident'
@@ -855,6 +871,18 @@ const generateExport = async (req, res, format = 'csv') => {
       });
     }
 
+    // Batas rentang: query SELECT * tidak boleh melewati query_timeout (45 s).
+    const dayMs = 24 * 60 * 60 * 1000;
+    const days = Math.round((Date.parse(end) - Date.parse(start)) / dayMs);
+    if (!Number.isFinite(days) || days < 0) {
+      return res.status(400).json({ error: 'Rentang tanggal tidak valid (pakai YYYY-MM-DD).' });
+    }
+    if (days > MAX_EXPORT_DAYS) {
+      return res.status(400).json({
+        error: `Rentang export maksimal ${MAX_EXPORT_DAYS} hari (dipilih ${days} hari). Perkecil rentang atau export per periode.`
+      });
+    }
+
     const params = [];
     let where = '';
 
@@ -902,20 +930,27 @@ const generateExport = async (req, res, format = 'csv') => {
         ws.addRow(fields.map(f => row[f]));
       });
 
-      // Auto-size columns
-      fields.forEach((field, index) => {
-        const col = ws.getColumn(index + 1);
-        let maxLength = field.length;
-        
-        col.eachCell({ includeEmpty: true }, cell => {
-          const cellValue = cell.value ? String(cell.value) : '';
-          if (cellValue.length > maxLength) {
-            maxLength = cellValue.length;
-          }
+      // Auto-size kolom — mahal per sel (String() tiap cell). Untuk baris banyak
+      // (mis. rentang lebar) pakai lebar tetap supaya ExcelJS tidak jadi bottleneck.
+      if (exportRows.length > EXPORT_AUTOSIZE_MAX_ROWS) {
+        fields.forEach((field, index) => {
+          ws.getColumn(index + 1).width = TIMESHEET_EXPORT_WIDTHS[field] || 16;
         });
-        
-        col.width = Math.min(Math.max(maxLength + 2, 10), 60);
-      });
+      } else {
+        fields.forEach((field, index) => {
+          const col = ws.getColumn(index + 1);
+          let maxLength = field.length;
+
+          col.eachCell({ includeEmpty: true }, cell => {
+            const cellValue = cell.value ? String(cell.value) : '';
+            if (cellValue.length > maxLength) {
+              maxLength = cellValue.length;
+            }
+          });
+
+          col.width = Math.min(Math.max(maxLength + 2, 10), 60);
+        });
+      }
 
       res.setHeader(
         'Content-Type',

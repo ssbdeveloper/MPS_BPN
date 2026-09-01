@@ -19,6 +19,9 @@ const meta = () => ({ generated_at: new Date().toISOString() });
 const PLANT_SSB = /^\d{4}$/.test(process.env.PLANT_SSB || "") ? process.env.PLANT_SSB : null;
 const PW_SQL = PLANT_SSB ? ` AND werks = '${PLANT_SSB}'` : ""; // query tanpa alias
 const plantScope = (alias = "st") => (PLANT_SSB ? ` AND ${alias}.werks = '${PLANT_SSB}'` : "");
+// Rentang export rekonsiliasi maksimal (hari) — sheet Records berat (subquery break/cap
+// per baris), di atas ini berisiko melewati query_timeout 45 s.
+const SAP_RECON_EXPORT_MAX_DAYS = 62;
 let operationsHubCache = null;
 const OPERATIONS_HUB_TTL_MS = 30 * 1000;
 
@@ -2007,6 +2010,15 @@ async function exportSapReconciliation(req, res) {
   try {
     const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || "") ? req.query.from : null;
     const toDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || "") ? req.query.to : null;
+    // Batas rentang: sheet Records berat, rentang super lebar berisiko timeout 45 s.
+    if (fromDate && toDate) {
+      const days = Math.round((Date.parse(toDate) - Date.parse(fromDate)) / 86400000);
+      if (Number.isFinite(days) && days > SAP_RECON_EXPORT_MAX_DAYS) {
+        return res.status(400).json({
+          error: `Rentang export rekonsiliasi maksimal ${SAP_RECON_EXPORT_MAX_DAYS} hari (dipilih ${days} hari). Perkecil rentang atau export per periode.`
+        });
+      }
+    }
     const data = await loadSapReconciliationData(fromDate, toDate);
     const { funnel: f, by_date } = data;
     const capCfg = await loadMaxRecordConfig();
@@ -2084,36 +2096,38 @@ async function exportSapReconciliation(req, res) {
       { header: "Machine", key: "machine", width: 14 },
       { header: "Posted at", key: "posted", width: 17 },
     ];
+    // Satu pass aggregate per bundel. Dulu 7 correlated subquery per baris atas tabel
+    // FDW (sap_staging_source/sap_timesheet_staging → AWS) yang tidak bisa di-push-down →
+    // >300 s utk 2 hari vs query_timeout 45 s ("Query read timeout", export gagal).
+    // LEFT JOIN mch (dengan guard numerik): bundel TIMESHEET tetap dapat n_rows,
+    // kolom turunan mch NULL — semantik identik dengan subquery lama.
     const { rows: bundleRows } = await pool.query(
-      `SELECT
+      `WITH bundle_sources AS MATERIALIZED (
+         SELECT
+           src.staging_id,
+           count(*)::int AS nrows,
+           round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float AS source_hrs,
+           round(sum(${cutSec})/3600.0, 2)::float AS cut,
+           bool_or(m.is_stuck) AS stuck,
+           COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), '')) AS operation,
+           max(m.machinename) AS machine
+         FROM public.sap_staging_source src
+         JOIN public.sap_timesheet_staging sts ON sts.id = src.staging_id
+         LEFT JOIN public.mch_transaction m
+           ON m.proddataid = src.source_row_id::int AND src.source_row_id ~ '^[0-9]+$'
+         WHERE sts.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("sts")}
+         GROUP BY src.staging_id
+       )
+       SELECT
          to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
          st.id AS staging_id, st.source_system AS source, st.pernr,
          COALESCE(u.full_name, '') AS name, st.status, st.is_productive AS prod,
          round(st.total_seconds/3600.0, 2)::float AS sent,
-         (SELECT round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS source_hrs,
-         (SELECT round(sum(${cutSec})/3600.0, 2)::float
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS cut,
-         (SELECT count(*) FROM public.sap_staging_source src WHERE src.staging_id = st.id)::int AS nrows,
-         (SELECT bool_or(m.is_stuck)
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS stuck,
-         st.aufnr, st.lstar,
-         (SELECT COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), ''))
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS operation,
-         (SELECT max(m.machinename)
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS machine,
+         bs.source_hrs, bs.cut, bs.nrows, bs.stuck,
+         st.aufnr, st.lstar, bs.operation, bs.machine,
          to_char(st.posted_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS posted
        FROM public.sap_timesheet_staging st
+       LEFT JOIN bundle_sources bs ON bs.staging_id = st.id
        LEFT JOIN public.usernfc u
          ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
        WHERE st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")}
@@ -2230,39 +2244,36 @@ async function getSapReconciliationDay(req, res) {
     const day = req.query.date;
     const capCfg = await loadMaxRecordConfig();
     const cutSec = CAP_CUT_SECONDS(capCfg);
+    // Satu pass aggregate per bundel (dulu 7 correlated subquery per baris atas FDW AWS —
+    // sama dengan export Bundles; lihat catatan di exportSapReconciliation).
     const { rows } = await pool.query(
-      `SELECT
+      `WITH bundle_sources AS MATERIALIZED (
+         SELECT
+           src.staging_id,
+           count(*)::int AS n_rows,
+           round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float AS source_hrs,
+           round(sum(${cutSec})/3600.0, 2)::float AS cap_cut_hrs,
+           bool_or(m.is_stuck) AS has_stuck,
+           COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), '')) AS operation_text,
+           max(m.machineid) AS machineid,
+           max(m.machinename) AS machinename
+         FROM public.sap_staging_source src
+         JOIN public.sap_timesheet_staging sts ON sts.id = src.staging_id
+         LEFT JOIN public.mch_transaction m
+           ON m.proddataid = src.source_row_id::int AND src.source_row_id ~ '^[0-9]+$'
+         WHERE sts.source_system = 'MCH_HOURS' AND sts.bucket_start::date = $1::date${plantScope("sts")}
+         GROUP BY src.staging_id
+       )
+       SELECT
          st.id, st.pernr, st.aufnr, st.vornr, st.lstar, st.zbarcodeid, st.is_productive,
          st.is_correction, st.status,
          round(st.total_seconds/3600.0, 2)::float AS sent_hrs,
          to_char(st.posted_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS posted_at,
          u.full_name,
-         (SELECT count(*) FROM public.sap_staging_source s WHERE s.staging_id = st.id)::int AS n_rows,
-         (SELECT round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS source_hrs,
-         (SELECT round(sum(${cutSec})/3600.0, 2)::float
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS cap_cut_hrs,
-         (SELECT bool_or(m.is_stuck)
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS has_stuck,
-         (SELECT COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), ''))
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS operation_text,
-         (SELECT max(m.machineid)
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS machineid,
-         (SELECT max(m.machinename)
-          FROM public.sap_staging_source src
-          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-          WHERE src.staging_id = st.id) AS machinename
+         bs.n_rows, bs.source_hrs, bs.cap_cut_hrs, bs.has_stuck, bs.operation_text,
+         bs.machineid, bs.machinename
        FROM public.sap_timesheet_staging st
+       LEFT JOIN bundle_sources bs ON bs.staging_id = st.id
        LEFT JOIN public.usernfc u
          ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
        WHERE st.source_system = 'MCH_HOURS' AND st.bucket_start::date = $1::date${plantScope("st")}

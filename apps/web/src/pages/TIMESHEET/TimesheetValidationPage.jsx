@@ -554,7 +554,10 @@ const TimesheetValidationPage = () => {
     try {
       const params = new URLSearchParams({ start: startDate, end: endDate, field: 'longdate_checkout' });
       const res = await fetch(`${API_BASE}/timesheet/getexcel?${params.toString()}`);
-      if (!res.ok) throw new Error('Gagal download Excel');
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Gagal download Excel');
+      }
       const blob = await res.blob();
       const a = document.createElement('a');
       const url = URL.createObjectURL(blob);
