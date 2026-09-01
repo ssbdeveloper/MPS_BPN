@@ -33,4 +33,24 @@ if (env.NODE_ENV !== "production" || env.SAP_STAGING_DB_HOST || env.AWS_PGhost) 
 
 const sapPool = new Pool(config);
 
+// DNS ke AWS RDS kadang gagal transient (getaddrinfo EAI_AGAIN dari Docker embedded DNS,
+// diamati di BPN 2x/24 jam) — retry otomatis supaya query sapPool tidak 500 sesaat.
+const origQuery = sapPool.query.bind(sapPool);
+const SAP_DNS_RETRIES = 3;
+const SAP_DNS_RETRY_DELAY_MS = 300;
+sapPool.query = async (text, params) => {
+  let lastErr;
+  for (let attempt = 0; attempt <= SAP_DNS_RETRIES; attempt++) {
+    try {
+      return await origQuery(text, params);
+    } catch (err) {
+      const dnsFail = err && (err.code === "EAI_AGAIN" || /getaddrinfo/i.test(err.message || ""));
+      if (!dnsFail || attempt === SAP_DNS_RETRIES) throw err;
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, SAP_DNS_RETRY_DELAY_MS * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+};
+
 module.exports = sapPool;
