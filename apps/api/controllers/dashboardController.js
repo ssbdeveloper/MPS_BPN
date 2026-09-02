@@ -594,7 +594,9 @@ async function getSapTimesheetStagingDetail(req, res) {
 async function getSapTimesheetStagingSummary(req, res) {
   try {
     // Ringkasan tidak perlu realtime — cache 60 s (pola operationsHubCache).
-    if (stagingSummaryCache && Date.now() - stagingSummaryCache.at < STAGING_SUMMARY_TTL_MS) {
+    // ?fresh=1 (tombol Refresh) mem-bypass cache.
+    const fresh = req.query.fresh === "1";
+    if (!fresh && stagingSummaryCache && Date.now() - stagingSummaryCache.at < STAGING_SUMMARY_TTL_MS) {
       return res.json({ data: stagingSummaryCache.data, meta: meta() });
     }
 
@@ -1119,6 +1121,10 @@ async function enqueueSapOps(req, res) {
       }
       throw err;
     }
+
+    // Aksi baru bisa mengubah status staging — jangan biarkan summary cache 60 s
+    // menampilkan angka lama ("Refresh to see changes" harus benar-benar berubah).
+    stagingSummaryCache = null;
 
     res.status(202).json({ data: result.rows[0], meta: meta() });
   } catch (err) {
@@ -1728,7 +1734,7 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       false AS excluded,
       false AS can_exclude
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int AND split_part(st.source_key, ':', 2) ~ '^[0-9]+$'
+    JOIN public.timesheet_transaction t ON t.tsnumber = (CASE WHEN split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$' THEN split_part(st.source_key, ':', 2)::int END)
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
     WHERE st.source_system = 'TIMESHEET'
@@ -1774,7 +1780,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
            t.tsnumber::text AS row_id,
            t.longdate_checkin AT TIME ZONE '${TZ}' AS start
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int AND split_part(st.source_key, ':', 2) ~ '^[0-9]+$'
+    JOIN public.timesheet_transaction t ON t.tsnumber = (CASE WHEN split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$' THEN split_part(st.source_key, ':', 2)::int END)
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     WHERE st.source_system = 'TIMESHEET'
       AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
@@ -1842,7 +1848,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       false AS can_exclude
     FROM page p
     JOIN public.sap_timesheet_staging st ON st.id = p.staging_id AND p.source = 'TIMESHEET'
-    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int AND split_part(st.source_key, ':', 2) ~ '^[0-9]+$'
+    JOIN public.timesheet_transaction t ON t.tsnumber = (CASE WHEN split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$' THEN split_part(st.source_key, ':', 2)::int END)
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))`;
 
@@ -2147,7 +2153,7 @@ async function exportSapReconciliation(req, res) {
          FROM public.sap_staging_source src
          JOIN public.sap_timesheet_staging sts ON sts.id = src.staging_id
          LEFT JOIN public.mch_transaction m
-           ON m.proddataid = src.source_row_id::int AND src.source_row_id ~ '^[0-9]+$'
+           ON m.proddataid = (CASE WHEN src.source_row_id ~ '^[0-9]{1,9}$' THEN src.source_row_id::int END)
          WHERE sts.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("sts")}
          GROUP BY src.staging_id
        )
@@ -2293,7 +2299,7 @@ async function getSapReconciliationDay(req, res) {
          FROM public.sap_staging_source src
          JOIN public.sap_timesheet_staging sts ON sts.id = src.staging_id
          LEFT JOIN public.mch_transaction m
-           ON m.proddataid = src.source_row_id::int AND src.source_row_id ~ '^[0-9]+$'
+           ON m.proddataid = (CASE WHEN src.source_row_id ~ '^[0-9]{1,9}$' THEN src.source_row_id::int END)
          WHERE sts.source_system = 'MCH_HOURS' AND sts.bucket_start::date = $1::date${plantScope("sts")}
          GROUP BY src.staging_id
        )

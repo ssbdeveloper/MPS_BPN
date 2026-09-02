@@ -129,9 +129,13 @@ function FailureTriage({ failures, onFilterStatus }) {
 
 // ── detail drawer ────────────────────────────────────────────────────────────
 // List tidak membawa payload/sap_response (jsonb besar) — detail di-fetch per id.
+// Dipanggil dengan key={row.id} supaya state di-reset antar bundel (tidak menampilkan
+// data bundel sebelumnya), dan error fetch ditampilkan inline + bisa di-retry.
 function DetailDrawer({ row, onClose }) {
   const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(true);
+  const [detailError, setDetailError] = useState(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     if (!row) return undefined;
@@ -146,11 +150,17 @@ function DetailDrawer({ row, onClose }) {
     let cancelled = false;
     fetch(`${API_BASE}/dashboard/sap-timesheet-staging/${encodeURIComponent(row.id)}`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Gagal ambil detail'))))
-      .then((p) => { if (!cancelled) setDetail(p.data || null); })
-      .catch(() => { if (!cancelled) setDetail(null); })
+      .then((p) => { if (!cancelled) { setDetail(p.data || null); setDetailError(null); } })
+      .catch((e) => { if (!cancelled) { setDetail(null); setDetailError(e.message || 'Gagal ambil detail'); } })
       .finally(() => { if (!cancelled) setLoadingDetail(false); });
     return () => { cancelled = true; };
-  }, [row]);
+  }, [row, retryNonce]);
+
+  const retryDetail = () => {
+    setLoadingDetail(true);
+    setDetailError(null);
+    setRetryNonce((n) => n + 1);
+  };
 
   if (!row) return null;
   const full = detail || row;
@@ -209,7 +219,19 @@ function DetailDrawer({ row, onClose }) {
             ))}
           </dl>
 
-          {loadingDetail ? (
+          {detailError ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <p className="text-xs font-bold text-red-700">Gagal memuat detail</p>
+              <p className="mt-1 text-xs leading-relaxed text-red-600">{detailError}</p>
+              <button
+                type="button" onClick={retryDetail}
+                className="mt-2 inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-100
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+              >
+                <RefreshCw size={14} /> Coba lagi
+              </button>
+            </div>
+          ) : loadingDetail ? (
             <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
               <Loader2 size={14} className="animate-spin" /> Memuat payload & respons…
             </div>
@@ -271,9 +293,10 @@ function SapLogPage() {
   const [postDate, setPostDate] = useState('');
   const [postPernr, setPostPernr] = useState('');
 
-  const fetchSummary = useCallback(async (signal) => {
+  const fetchSummary = useCallback(async (signal, fresh = false) => {
     try {
-      const res = await fetch(`${API_BASE}/dashboard/sap-timesheet-staging-summary`, { signal });
+      const qs = fresh ? '?fresh=1' : '';
+      const res = await fetch(`${API_BASE}/dashboard/sap-timesheet-staging-summary${qs}`, { signal });
       const payload = await res.json().catch(() => ({}));
       if (res.ok) setSummary(payload.data || null);
     } catch (err) {
@@ -317,7 +340,7 @@ function SapLogPage() {
 
   const refreshAll = useCallback(() => {
     fetchRows({ append: false });
-    fetchSummary();
+    fetchSummary(undefined, true); // fresh=1: bypass cache 60 s supaya angka langsung berubah
   }, [fetchRows, fetchSummary]);
 
   const handleSearchSubmit = (e) => { e.preventDefault(); setSearch(searchInput.trim()); };
@@ -628,7 +651,7 @@ function SapLogPage() {
         )}
       </main>
 
-      <DetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
+      <DetailDrawer key={detailRow?.id} row={detailRow} onClose={() => setDetailRow(null)} />
 
       <ConfirmationModal
         isOpen={confirmRetry}
