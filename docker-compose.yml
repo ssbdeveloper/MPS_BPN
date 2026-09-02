@@ -23,6 +23,12 @@ x-sap-env: &sap-env
   SAP_STAGING_DB_NAME: ${SAP_STAGING_DB_NAME:-}
   SAP_STAGING_DB_USER: ${SAP_STAGING_DB_USER:-}
   SAP_STAGING_DB_PASSWORD: ${SAP_STAGING_DB_PASSWORD:-}
+  # Cursor staging TIMESHEET (stage_timesheet_transaction.py). Initial-from dipakai
+  # HANYA kalau baris cursor hilang — default kode 2026-01-01 berbahaya (sapu dari Januari
+  # tanpa peringatan), jadi anchor ini memaksakan jangkar yang lebih baru.
+  SAP_STAGE_INITIAL_FROM_TS: ${SAP_STAGE_INITIAL_FROM_TS:-2026-08-26T00:00:00}
+  SAP_STAGE_CURSOR_OVERLAP_MINUTES: ${SAP_STAGE_CURSOR_OVERLAP_MINUTES:-30}
+  SAP_STAGE_SAFETY_DELAY_MINUTES: ${SAP_STAGE_SAFETY_DELAY_MINUTES:-1}
 
 services:
   db:
@@ -235,6 +241,30 @@ services:
     command: >
       sh -c "while true; do python stage_machinehours.py --catchup || true;
              sleep $${SAP_STAGE_INTERVAL}; done"
+    depends_on:
+      db:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+
+  # sap-stage-ts-worker = AUTO staging TIMESHEET (cursor mode).
+  # Pasangan sap-stage-worker yang hanya menangani MCH_HOURS.
+  # --loop 10 = hingga 10 langkah cursor per siklus (catch-up backlog), berhenti lebih
+  # awal kalau cursor tidak maju. Pengiriman ke SAP TETAP manual via UI (bukan di sini).
+  sap-stage-ts-worker:
+    build:
+      context: ./jobs/sap_staging
+      dockerfile: Dockerfile.sap
+    container_name: sap-stage-ts-worker
+    environment: *sap-env
+    volumes:
+      - ./jobs/sap_staging:/app
+    command: >
+      sh -c "while true; do python stage_timesheet_transaction.py --loop 10 || true;
+             sleep $${SAP_STAGE_TS_INTERVAL:-900}; done"
     depends_on:
       db:
         condition: service_healthy
