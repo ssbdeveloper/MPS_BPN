@@ -4,6 +4,11 @@
 // Baris tunggal public.plant_config (id=1). Dimuat sekali saat startup ke cache,
 // dengan fallback env selama transisi (sebelum baris di-seed).
 // Design: docs/deployment/PLANT_CONFIG_VARIANT_DESIGN.md
+//
+// CATATAN REVISI 2026-09-02 (timezone): di RUNTIME, resolveTimezone() (config/timezone.js)
+// kini env-first — .env TIMEZONE menang atas baris ini. Baris plant_config.timezone tetap
+// di-seed benar (fallback + kebenaran untuk konsumen DB / unifikasi stager ke depan),
+// tapi TIDAK boleh lagi meng-override .env secara diam-diam. Lihat catatan di timezone.js.
 
 const IANA_ZONE = /^[A-Za-z][A-Za-z_+-]*(?:\/[A-Za-z][A-Za-z0-9_+-]*)+$/;
 const DEFAULT_TIMEZONE = "Asia/Makassar";
