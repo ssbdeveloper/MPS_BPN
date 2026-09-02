@@ -28,6 +28,9 @@ const OPERATIONS_HUB_TTL_MS = 30 * 1000;
 // dalam TZ aplikasi (dihitung di JS supaya predikat tanggal bisa di-push-down ke AWS).
 let stagingSummaryCache = null;
 const STAGING_SUMMARY_TTL_MS = 60 * 1000;
+// Jalur tulis yang mengubah status staging wajib memanggil ini supaya Refresh
+// tidak menampilkan angka basi (dipakai enqueueSapOps, postCorrections, excludeSapRecord).
+const invalidateStagingSummary = () => { stagingSummaryCache = null; };
 const todayInTz = () =>
   new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
@@ -1124,7 +1127,7 @@ async function enqueueSapOps(req, res) {
 
     // Aksi baru bisa mengubah status staging — jangan biarkan summary cache 60 s
     // menampilkan angka lama ("Refresh to see changes" harus benar-benar berubah).
-    stagingSummaryCache = null;
+    invalidateStagingSummary();
 
     res.status(202).json({ data: result.rows[0], meta: meta() });
   } catch (err) {
@@ -1191,6 +1194,7 @@ async function postCorrections(req, res) {
       if (err.code === "23505") return res.status(409).json({ error: "A correction-post request is still running (or the ops-worker is not consuming the queue). Wait, or check the sap-ops-worker service." });
       throw err;
     }
+    invalidateStagingSummary();
     res.status(202).json({ data: result.rows[0], meta: meta() });
   } catch (err) {
     console.error("postCorrections error:", err);
@@ -1734,10 +1738,11 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       false AS excluded,
       false AS can_exclude
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber = (CASE WHEN split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$' THEN split_part(st.source_key, ':', 2)::int END)
+    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
     WHERE st.source_system = 'TIMESHEET'
+      AND split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$'
       AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
 
   if (source === "mch") return mchSql;
@@ -1780,9 +1785,10 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
            t.tsnumber::text AS row_id,
            t.longdate_checkin AT TIME ZONE '${TZ}' AS start
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber = (CASE WHEN split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$' THEN split_part(st.source_key, ':', 2)::int END)
+    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     WHERE st.source_system = 'TIMESHEET'
+      AND split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$'
       AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
 
   let baseSql = source === "mch" ? mchBase : source === "timesheet" ? tsBase : `${mchBase}\n    UNION ALL\n${tsBase}`;
@@ -1848,9 +1854,10 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       false AS can_exclude
     FROM page p
     JOIN public.sap_timesheet_staging st ON st.id = p.staging_id AND p.source = 'TIMESHEET'
-    JOIN public.timesheet_transaction t ON t.tsnumber = (CASE WHEN split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$' THEN split_part(st.source_key, ':', 2)::int END)
+    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
-    LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))`;
+    LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
+    WHERE split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$'`;
 
   let heavySql = source === "mch" ? mchHeavy : source === "timesheet" ? tsHeavy : `${mchHeavy}\n    UNION ALL\n${tsHeavy}`;
 
@@ -2394,6 +2401,7 @@ async function excludeSapRecord(req, res) {
         if (err.code !== "23505") throw err;
       }
     }
+    invalidateStagingSummary();
     res.json({ data: { excluded: true, source_row_id: sourceRowId, date, recalc }, meta: meta() });
   } catch (err) {
     console.error("excludeSapRecord error:", err);
