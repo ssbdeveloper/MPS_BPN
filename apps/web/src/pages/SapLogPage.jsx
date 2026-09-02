@@ -128,7 +128,11 @@ function FailureTriage({ failures, onFilterStatus }) {
 }
 
 // ── detail drawer ────────────────────────────────────────────────────────────
+// List tidak membawa payload/sap_response (jsonb besar) — detail di-fetch per id.
 function DetailDrawer({ row, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [loadingDetail, setLoadingDetail] = useState(true);
+
   useEffect(() => {
     if (!row) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -137,10 +141,22 @@ function DetailDrawer({ row, onClose }) {
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = 'unset'; };
   }, [row, onClose]);
 
+  useEffect(() => {
+    if (!row) return undefined;
+    let cancelled = false;
+    fetch(`${API_BASE}/dashboard/sap-timesheet-staging/${encodeURIComponent(row.id)}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Gagal ambil detail'))))
+      .then((p) => { if (!cancelled) setDetail(p.data || null); })
+      .catch(() => { if (!cancelled) setDetail(null); })
+      .finally(() => { if (!cancelled) setLoadingDetail(false); });
+    return () => { cancelled = true; };
+  }, [row]);
+
   if (!row) return null;
-  const meta = statusMeta(row.status);
-  const payload = toJsonText(row.payload);
-  const response = toJsonText(row.sap_response || row.sap_response_text);
+  const full = detail || row;
+  const meta = statusMeta(full.status);
+  const response = toJsonText(detail?.sap_response || detail?.sap_response_text || row.sap_response_text);
+  const payload = toJsonText(detail?.payload);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-[2px]" onClick={onClose}>
@@ -177,14 +193,14 @@ function DetailDrawer({ row, onClose }) {
 
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
             {[
-              ['Source', row.source_system],
-              ['Order', row.aufnr],
-              ['Operation', row.vornr],
-              ['Employee', row.pernr],
-              ['Work center', row.arbpl],
-              ['Duration (s)', row.total_seconds],
-              ['Created', formatDateTime(row.created_at)],
-              ['Posted', formatDateTime(row.posted_at)],
+              ['Source', full.source_system],
+              ['Order', full.aufnr],
+              ['Operation', full.vornr],
+              ['Employee', full.pernr],
+              ['Work center', full.arbpl],
+              ['Duration (s)', full.total_seconds],
+              ['Created', formatDateTime(full.created_at)],
+              ['Posted', formatDateTime(full.posted_at)],
             ].map(([k, v]) => (
               <div key={k} className="min-w-0">
                 <dt className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{k}</dt>
@@ -193,17 +209,25 @@ function DetailDrawer({ row, onClose }) {
             ))}
           </dl>
 
-          {response && (
-            <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">SAP Response</p>
-              <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{response}</pre>
+          {loadingDetail ? (
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+              <Loader2 size={14} className="animate-spin" /> Memuat payload & respons…
             </div>
-          )}
-          {payload && (
-            <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Payload</p>
-              <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{payload}</pre>
-            </div>
+          ) : (
+            <>
+              {response && (
+                <div>
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">SAP Response</p>
+                  <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{response}</pre>
+                </div>
+              )}
+              {payload && (
+                <div>
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Payload</p>
+                  <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">{payload}</pre>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>

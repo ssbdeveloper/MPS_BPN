@@ -24,6 +24,14 @@ const plantScope = (alias = "st") => (PLANT_SSB ? ` AND ${alias}.werks = '${PLAN
 const SAP_RECON_EXPORT_MAX_DAYS = 62;
 let operationsHubCache = null;
 const OPERATIONS_HUB_TTL_MS = 30 * 1000;
+// Cache ringkasan staging (di-poll halaman, tidak perlu realtime) + tanggal "hari ini"
+// dalam TZ aplikasi (dihitung di JS supaya predikat tanggal bisa di-push-down ke AWS).
+let stagingSummaryCache = null;
+const STAGING_SUMMARY_TTL_MS = 60 * 1000;
+const todayInTz = () =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date());
 
 function num(value, fallback = 0) {
   const parsed = Number(value);
@@ -486,8 +494,6 @@ async function getSapTimesheetStagingLog(req, res) {
         OR arbpl ILIKE $${idx}
         OR sap_response_text ILIKE $${idx}
         OR sap_error ILIKE $${idx}
-        OR payload::text ILIKE $${idx}
-        OR sap_response::text ILIKE $${idx}
         OR id IN (SELECT staging_id FROM public.sap_staging_source WHERE source_row_id ILIKE $${idx})
       )`);
     }
@@ -517,8 +523,6 @@ async function getSapTimesheetStagingLog(req, res) {
         total_seconds,
         source_row_count,
         status,
-        payload,
-        sap_response,
         sap_response_text,
         sap_error,
         posted_at,
@@ -562,11 +566,39 @@ async function getSapTimesheetStagingLog(req, res) {
   }
 }
 
+// GET /dashboard/sap-timesheet-staging/:id — baris LENGKAP (termasuk payload & sap_response)
+// utk Detail Drawer. List tidak membawa jsonb besar supaya respons ringan (Fase 1.2).
+async function getSapTimesheetStagingDetail(req, res) {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: "id wajib angka" });
+    }
+    const { rows } = await sapPool.query(
+      `SELECT *
+       FROM public.sap_timesheet_staging
+       WHERE id = $1${PW_SQL}`,
+      [id],
+    );
+    if (!rows.length) return res.status(404).json({ error: "Staging record tidak ditemukan" });
+    res.json({ data: rows[0], meta: meta() });
+  } catch (err) {
+    console.error("sap-timesheet-staging-detail error:", err);
+    res.status(500).json({ error: err.message });
+  }
+}
+
 // GET /dashboard/sap-timesheet-staging-summary
 // Ringkasan antrian: hitungan per status + kegagalan dikelompokkan per SEBAB (bukan per
 // baris) supaya "56 baris gagal karena work center yang sama" terbaca sekali pandang.
 async function getSapTimesheetStagingSummary(req, res) {
   try {
+    // Ringkasan tidak perlu realtime — cache 60 s (pola operationsHubCache).
+    if (stagingSummaryCache && Date.now() - stagingSummaryCache.at < STAGING_SUMMARY_TTL_MS) {
+      return res.json({ data: stagingSummaryCache.data, meta: meta() });
+    }
+
+    const today = todayInTz();
     const [byStatus, dateRange, failing] = await Promise.all([
       sapPool.query(`
         SELECT status, COUNT(*)::int AS n
@@ -574,15 +606,17 @@ async function getSapTimesheetStagingSummary(req, res) {
         WHERE TRUE${PW_SQL}
         GROUP BY status
       `),
+      // Tanggal "hari ini" dihitung di JS dan dikirim sebagai rentang (>= $1 AND < $1+1)
+      // supaya predikatnya bisa di-push-down ke AWS (::date = now()::date tidak bisa).
       sapPool.query(`
         SELECT
           MIN(bucket_start)::date AS oldest,
           MAX(bucket_start)::date AS newest,
-          COUNT(*) FILTER (WHERE status = 'PENDING' AND bucket_start::date = (now() AT TIME ZONE '${TZ}')::date)::int AS pending_today,
-          COUNT(*) FILTER (WHERE status = 'POSTED'  AND posted_at::date   = (now() AT TIME ZONE '${TZ}')::date)::int AS posted_today
+          COUNT(*) FILTER (WHERE status = 'PENDING' AND bucket_start >= $1::date AND bucket_start < ($1::date + interval '1 day'))::int AS pending_today,
+          COUNT(*) FILTER (WHERE status = 'POSTED'  AND posted_at   >= $1::date AND posted_at   < ($1::date + interval '1 day'))::int AS posted_today
         FROM public.sap_timesheet_staging
         WHERE TRUE${PW_SQL}
-      `),
+      `, [today]),
       // Hanya FAILED + SKIPPED perlu triase. Ambil pesan mentah, klasifikasi di JS.
       sapPool.query(`
         SELECT id, status, sap_error, sap_response_text
@@ -621,19 +655,18 @@ async function getSapTimesheetStagingSummary(req, res) {
       .map((g) => ({ ...g, statuses: [...g.statuses] }))
       .sort((a, b) => b.count - a.count);
 
-    res.json({
-      data: {
-        by_status: statusCounts,
-        total,
-        failing_total: failing.rows.length,
-        oldest: dateRange.rows[0]?.oldest || null,
-        newest: dateRange.rows[0]?.newest || null,
-        pending_today: dateRange.rows[0]?.pending_today || 0,
-        posted_today: dateRange.rows[0]?.posted_today || 0,
-        failures,
-      },
-      meta: meta(),
-    });
+    const data = {
+      by_status: statusCounts,
+      total,
+      failing_total: failing.rows.length,
+      oldest: dateRange.rows[0]?.oldest || null,
+      newest: dateRange.rows[0]?.newest || null,
+      pending_today: dateRange.rows[0]?.pending_today || 0,
+      posted_today: dateRange.rows[0]?.posted_today || 0,
+      failures,
+    };
+    stagingSummaryCache = { at: Date.now(), data };
+    res.json({ data, meta: meta() });
   } catch (err) {
     console.error("sap-timesheet-staging-summary error:", err);
     res.status(500).json({ error: err.message });
@@ -1695,7 +1728,7 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       false AS excluded,
       false AS can_exclude
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber::text = split_part(st.source_key, ':', 2)
+    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int AND split_part(st.source_key, ':', 2) ~ '^[0-9]+$'
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
     WHERE st.source_system = 'TIMESHEET'
@@ -1741,7 +1774,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
            t.tsnumber::text AS row_id,
            t.longdate_checkin AT TIME ZONE '${TZ}' AS start
     FROM public.sap_timesheet_staging st
-    JOIN public.timesheet_transaction t ON t.tsnumber::text = split_part(st.source_key, ':', 2)
+    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int AND split_part(st.source_key, ':', 2) ~ '^[0-9]+$'
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     WHERE st.source_system = 'TIMESHEET'
       AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
@@ -1809,7 +1842,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       false AS can_exclude
     FROM page p
     JOIN public.sap_timesheet_staging st ON st.id = p.staging_id AND p.source = 'TIMESHEET'
-    JOIN public.timesheet_transaction t ON t.tsnumber::text = split_part(st.source_key, ':', 2)
+    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int AND split_part(st.source_key, ':', 2) ~ '^[0-9]+$'
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))`;
 
@@ -2505,6 +2538,7 @@ module.exports = {
   getWorkcenterList,
   getOperationsHub,
   getSapTimesheetStagingLog,
+  getSapTimesheetStagingDetail,
   getSapTimesheetStagingSummary,
   enqueueSapOps,
   getSapOpsRequests,

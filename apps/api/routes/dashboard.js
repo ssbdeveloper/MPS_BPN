@@ -16,6 +16,7 @@ router.get("/workcenter-list", controller.getWorkcenterList);
 router.get("/operations-hub", controller.getOperationsHub);
 router.get("/sap-timesheet-staging-log", controller.getSapTimesheetStagingLog);
 router.get("/sap-timesheet-staging-summary", controller.getSapTimesheetStagingSummary);
+router.get("/sap-timesheet-staging/:id", controller.getSapTimesheetStagingDetail);
 router.get("/sap-reconciliation", controller.getSapReconciliation);
 router.get("/sap-reconciliation-export", controller.exportSapReconciliation);
 router.get("/sap-reconciliation-day", controller.getSapReconciliationDay);
