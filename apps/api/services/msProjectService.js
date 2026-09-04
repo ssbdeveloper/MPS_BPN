@@ -1184,6 +1184,17 @@ const SOW_COMPLETION_VALUES = new Set(["all", "unfinished", "finished"]);
 // pernah berbeda pendapat soal satu order.
 const SOW_MAPPED_VALUES = new Set(["all", "mapped", "unmapped"]);
 
+// Task yang BISA dijadwalkan = task yang punya operation_no. Predikat ini HARUS sama persis
+// dengan yang dipakai listOrderTasks (picker reservasi /sow-scheduling/area), karena kolom
+// has_msp_task-lah yang menentukan kartu order boleh ditarik ke bay atau tidak
+// (OrderPanel.jsx + SchedulingAreaPage.handleDropOrder). Kalau keduanya berbeda, order bisa
+// lolos ke panel reservasi lalu menampilkan daftar task KOSONG — jalan buntu tanpa penjelasan.
+// Terukur saat aturan ini dipasang (CKP 2026-09-04): 1 dari 100 order ber-task kena, yaitu
+// 1000131901 (11 task aktif non-summary, nol punya operation_no).
+// Alasan operation_no wajib: headcount hanya bisa ditulis balik ke SOW lewat operation_no,
+// jadi task tanpa itu tak bisa dijadwalkan secara utuh (lihat catatan di listOrderTasks).
+const MSP_TASK_SCHEDULABLE_SQL = "nullif(btrim(coalesce(t.operation_no, '')), '') is not null";
+
 // PREDIKAT EKSKLUSI SUBCONT — kontrak Fase 6 §C. Bentuknya HARUS sama di setiap agregasi yang
 // membaca sow.planhours (sowScheduleController, dashboardController, mpsDashboard*, dst.),
 // jadi jangan "dirapikan" jadi join atau IN (...) di sini saja.
@@ -1378,8 +1389,10 @@ async function listSowOrders(query = {}) {
 
   const result = await pool().query(
     `with ${SOW_ORDER_META_CTE_SQL},
-     -- Hanya task aktif non-summary: itu definisi "punya jadwal MS Project" yang dipakai
-     -- listOrderTasks dan form reservasi (D2 mewajibkan reservasi task-level).
+     -- Hanya task aktif non-summary YANG PUNYA operation_no: itu definisi "punya jadwal
+     -- MS Project" yang dipakai listOrderTasks dan form reservasi (D2 mewajibkan reservasi
+     -- task-level). Syarat operation_no ada di listOrderTasks sejak 2026-09-03 tapi TIDAK di
+     -- sini, sehingga dua sisi halaman area berbeda pendapat — lihat MSP_TASK_SCHEDULABLE_SQL.
      msp as materialized (
        select ltrim(t.order_no, '0') as order_key,
               min(t.plan_start)::date as earliest_plan_start,
@@ -1396,6 +1409,7 @@ async function listSowOrders(query = {}) {
         where t.is_active = true
           and coalesce(t.is_summary, false) = false
           and t.order_no is not null
+          and ${MSP_TASK_SCHEDULABLE_SQL}
         group by 1
      ),
      -- Jumlah RESERVASI, bukan jumlah baris: satu reservasi task-level menghasilkan satu
@@ -1516,6 +1530,7 @@ async function listSowOrders(query = {}) {
           where t.is_active = true
             and coalesce(t.is_summary, false) = false
             and t.order_no is not null
+            and ${MSP_TASK_SCHEDULABLE_SQL}
           group by 1
        ),
        resv as materialized (
@@ -2311,6 +2326,14 @@ async function listBayScheduleTasks(query = {}) {
     s.task_id is null
     or (coalesce(t.actual_progress, 0) < 100 and not coalesce(ph.is_teco, false))
   )`);
+  // Task tanpa operation_no TIDAK bisa dipakai operator: konfirmasi jam hanya bisa dikirim ke
+  // SAP lewat pasangan order_no + operation_no, jadi entri semacam itu adalah jalan buntu yang
+  // menyamar sebagai pekerjaan. Terukur saat aturan ini dipasang (CKP 2026-09-04): 691 dari
+  // 2.485 baris jadwal aktif (28%) menunjuk task tanpa operation_no.
+  // Baris ORDER-LEVEL (s.task_id NULL) SENGAJA tetap lolos: ia memang tidak punya task, dan
+  // adalah penanda "bay terpakai, operasi belum dipilih" yang dibangun Fase 1/A-02 —
+  // menyembunyikannya akan membuat bay yang terpakai tampak kosong.
+  where.push(`(s.task_id is null or ${MSP_TASK_SCHEDULABLE_SQL})`);
   if (q) {
     values.push(`%${q.toLowerCase()}%`);
     where.push(`(
