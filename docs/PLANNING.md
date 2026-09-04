@@ -17,6 +17,21 @@ updated: 2026-07-28
 
 ## 👀 Menunggu review / keputusan
 
+- 🔴 **Proyek A sow-scheduling — 3 keputusan owner sebelum rilis** ([[SOW_SCHEDULING_UI_FOUNDATION_DESIGN]] §12, review akhir branch 2026-09-05):
+  1. **Cek browser BELUM PERNAH dilakukan, satu pun task.** Font stack (perubahan global 4 halaman), dua segmented control yang diganti, transisi route, reduced-motion, dan permukaan berlapis hanya terverifikasi lewat pembacaan kode + test jsdom. ~30 menit menutup sebagian besar: (a) font di `/sow-scheduling` `/timesheet` `/dashboard` `/operations-hub` — cari kolom tabel membungkus / label tombol tak muat, revert `58b6e5a` kalau pecah; (b) menu→projects→back→map, amati arah transisi keluar + desync header 250ms + scroll terbawa; (c) devtools `prefers-reduced-motion` — gerak harus HILANG bukan cepat; (d) `/area` mode timeline, baca baris legenda.
+  2. **`text-slate-500` di atas `bg-canvas` = 4,23:1, GAGAL AA.** Spec §3.3 hanya memeriksa tiga warna aksen, tidak netral — padahal `text-slate-500` adalah warna teks sekunder resmi CLAUDE.md. Instance nyata: `BayReservationTimeline.jsx:348-368` (caption + legenda) di `/area`, halaman yang justru wajib tablet-ready. **Cacat spec.** Pilihan: beri permukaan putih, naikkan ke `slate-600`, atau terima tertulis.
+  3. **Scroll reset/restore (spec §5) tidak pernah diimplementasikan** dan tidak tercatat sebagai dibatalkan. Kontainer scroll ada DI LUAR `RouteTransition` sehingga `scrollTop` terbawa antar halaman. Putuskan: kerjakan atau catat sebagai dibatalkan.
+
+- 🟠 **Proyek A — utang teknis untuk pembukaan Proyek B** (review akhir 2026-09-05, semuanya boleh merge apa adanya):
+  - **Exit offset `RouteTransition` masih basi** — kelas bug yang SAMA dengan `initial` yang sudah diperbaiki, tapi hidup di `exit`. Anak yang keluar tak pernah di-render ulang, jadi `exit.x` selalu milik transisi yang MEMBUAT elemen itu. Exit pertama tak bergerak; sesudahnya selalu terbalik. Test tak bisa melihatnya (mock mengganti `AnimatePresence` dengan pass-through).
+  - **Dua `StatusPill` berbeda hidup berdampingan** dengan API tak kompatibel: `components/ui/StatusPill.jsx` (baru) vs `features/progress/primitives.jsx:6` (lama). Melanggar CLAUDE.md §1.
+  - **Duplikasi yang jadi alasan `StatusPill` dibuat masih ada** — `ReservationDetailModal.jsx:98,102`, `ReservationPanel.jsx:212,216`, `MapSapOperationPage.jsx:118`.
+  - **API header/footer `Panel` mati** — tak ada pemanggil memakainya, sementara `MapSapOperationPage.jsx:795-803` menulis ulang markup header itu kelas-per-kelas.
+  - **Elevation terbalik** — 4 dari 5 permukaan melanggar aturan `shadow-sm`/`shadow-card` yang ditulis branch ini sendiri.
+  - **`tokens.test.jsx` menguji salinan, bukan artefaknya** — hex di-hardcode di file test, tak membaca `tailwind.config.js`.
+  - **API primitif tidak konsisten** — hanya `Panel`/`Toolbar` menerima `className`, hanya `Toolbar` menerima `...rest`.
+  - **Test tak pernah menyentuh** `OrderPanel`, `MapSapOperationPage`, `ProjectBrowserPage`, atau shell. Semua defect serius branch ini hidup di tempat yang tak terjangkau test. **Tutup celah ini dulu di Proyek B sebelum menambah primitif.**
+
 - [[security/AUTH_RBAC_DESIGN]] — token auth + RBAC enforce. **Blocker: jawaban §7 (expiry, library, cutoff, CORS) + §5b (3 write shopfloor)**
 - [[salvaging/SALVAGE_FLOW_DESIGN]] — alur salvaging end-to-end. **Blocker: jawaban §10 (rate labour, harga parts, checklist QC, approval quote, breakdown, RBAC)**
 - [[prd/manufacturing-variant]] — PRD varian manufacturing (beda vs salvaging). **Blocker: jawaban §7 (D1–D11: plant/WERKS, ZCONF_TYPE, sumber jam standar insentif, dll.)**
