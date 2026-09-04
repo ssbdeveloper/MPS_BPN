@@ -281,8 +281,16 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   // Task yang SUDAH direservasi (mode EDIT). Dipakai sebagai seed pilihan task
   // dan sebagai FALLBACK daftar task ketika order tidak lagi bisa di-fetch
   // (reservasi order yatim) — tanggal/bay/catatan tetap bisa diubah.
+  // Task tanpa operation_no DIBUANG dari fallback ini. Sumbernya adalah isi reservasi yang
+  // tersimpan, bukan listOrderTasks — jadi ia melewati satu-satunya tempat yang menyaring
+  // syarat operation_no, dan task yang tak bisa dipakai operator muncul lagi di panel edit.
+  // Lebih buruk: selectedTaskIds di-seed dari daftar ini, sehingga task itu ikut TERPILIH
+  // dan tersimpan ulang setiap kali reservasi disunting — "nyangkut" permanen.
+  // Konfirmasi jam hanya bisa dikirim ke SAP lewat order_no + operation_no.
   const editTasks = useMemo(
-    () => (isEdit && Array.isArray(edit?.tasks) ? edit.tasks : []),
+    () => (isEdit && Array.isArray(edit?.tasks)
+      ? edit.tasks.filter((task) => String(task?.operation_no ?? '').trim() !== '')
+      : []),
     [isEdit, edit],
   );
 

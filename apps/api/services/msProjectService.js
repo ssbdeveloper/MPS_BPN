@@ -1385,17 +1385,22 @@ async function listSowOrders(query = {}) {
         and sap.sap_status not in ('REL','LKD')
     )`);
   }
-  // due_by — filter jadwal SUNGGUHAN (beda keputusan dari in_window, D6).
-  // Order dipertahankan hanya kalau punya task yang MULAI <= due_by; task yang
-  // sudah lewat jadwalnya (overdue) dari kapan pun ikut terhitung (tidak ada
-  // batas bawah). Tanpa param ini perilaku identik dengan lama.
-  if (dueBy) {
-    having.push(`exists (
-      select 1 from msp
-      where msp.order_key = ltrim(s.order_no, '0')
-        and msp.due_by_tasks
-    )`);
-  }
+  // due_by TIDAK LAGI MEMFILTER — hanya mengurutkan (keputusan owner 2026-09-04).
+  //
+  // Selama due_by jadi filter keras, selalu ada order yang tidak punya rumah di UI: keempat
+  // tab area saling eksklusif ('perlu' butuh due_by, 'belum_jadwal' butuh TIDAK punya task
+  // MSP, 'terjadwal' butuh reservasi, 'selesai' butuh order tutup), jadi order yang sudah
+  // dipetakan + masih terbuka + belum direservasi + jadwalnya di luar ambang jatuh ke celah
+  // dan hilang sama sekali. Memindahkan ambangnya (varian A: finish -> start) hanya menggeser
+  // celahnya: 25 -> 15 order, sisanya semua yang MULAI setelah akhir minggu
+  // (mis. 1000131376-1000131383).
+  //
+  // Sekarang kolom due_by tetap DIHITUNG dan dikirim (dipakai FE untuk menandai/mengurutkan
+  // yang mendesak), tetapi tidak pernah membuang baris. Konsekuensi yang diterima: tab
+  // 'perlu' jadi lebih panjang. Itu ditukar dengan jaminan tidak ada order yang tersembunyi.
+  //
+  // Urutan: yang due_by-nya true (sudah mulai / overdue) naik ke atas, lalu yang paling awal
+  // jadwalnya. Lihat klausa order by di bawah.
   // mapped — filter POOL, bukan anotasi. 'unmapped' harus memakai predikat yang persis
   // sama dengan has_msp_task (CTE msp), kalau tidak sebuah order bisa hilang dari tab
   // "belum" sekaligus tampil tanpa penanda mapping di tab "semua".
@@ -1482,7 +1487,13 @@ async function listSowOrders(query = {}) {
      where ${where.join(" and ")}
      group by s.order_no
      ${havingSql}
-     order by max(s.idsow) desc, s.order_no desc
+     -- due_by naik ke atas menggantikan perannya sebagai filter: order yang sudah mulai /
+     -- overdue tetap yang pertama dilihat planner, tanpa menyembunyikan sisanya. Urutan
+     -- lama (idsow desc) dipertahankan sebagai pemecah seri supaya paginasi tetap stabil.
+     order by
+       ${dueBy ? "coalesce((select msp.due_by_tasks from msp where msp.order_key = ltrim(s.order_no, '0')), false) desc," : ""}
+       (select msp.earliest_plan_start from msp where msp.order_key = ltrim(s.order_no, '0')) asc nulls last,
+       max(s.idsow) desc, s.order_no desc
      limit $${values.length - 1} offset $${values.length}`,
     values
   );
@@ -1545,7 +1556,6 @@ async function listSowOrders(query = {}) {
     const sapRelLkd = "exists (select 1 from sap where sap.order_key = ltrim(s.order_no, '0') and sap.sap_status in ('REL','LKD'))";
     const sapNotRelLkd = "exists (select 1 from sap where sap.order_key = ltrim(s.order_no, '0') and sap.sap_status not in ('REL','LKD'))";
     const hasMsp = "exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0'))";
-    const hasDueByTask = "exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0') and msp.due_by_tasks)";
     const hasResv = "exists (select 1 from resv where resv.order_key = ltrim(s.order_no, '0'))";
 
     const countsResult = await pool().query(
@@ -1576,7 +1586,12 @@ async function listSowOrders(query = {}) {
        from (
          select
            s.order_no,
-           (${sapRelLkd} and ${hasDueByTask}) as flag_perlu,
+           -- due_by DIBUANG dari flag_perlu supaya badge == isi daftar. Daftar sudah tidak
+           -- memfilter due_by (lihat komentar di listSowOrders), jadi badge yang masih
+           -- memakainya akan selalu lebih kecil dari jumlah baris yang benar-benar tampil.
+           -- Sekarang identik dengan TAB_PREDICATE.perlu di useSowOrders.js:
+           -- is_unfinished && has_msp_task.
+           (${sapRelLkd} and ${hasMsp}) as flag_perlu,
            (${sapRelLkd} and not ${hasMsp}) as flag_belum_jadwal,
            (${hasResv}) as flag_terjadwal,
            (${sapNotRelLkd}) as flag_selesai
