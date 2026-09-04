@@ -13,6 +13,7 @@ export { default as FilterChip } from './ui/FilterChip';
 export { default as SplitPane } from './ui/SplitPane';
 export { default as DensityProvider } from './density/DensityProvider';
 export { useDensity } from './density/DensityContext';
+export { default as RouteTransition } from './motion/RouteTransition';
 
 // Layout Components
 export {
