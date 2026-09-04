@@ -100,3 +100,6 @@ jobs/.venv/
 # Obsidian vault config (docs/ dibuka sebagai vault)
 docs/.obsidian/
 **/tailscale_reference.md
+
+# Scratch skill superpowers (mockup brainstorming, ledger SDD)
+.superpowers/
