@@ -1157,7 +1157,7 @@ Co-Authored-By: Javanian <teesanfajar@gmail.com>"
 - [ ] **Step 1: Tulis test yang gagal — `apps/web/src/components/ui/SplitPane.test.jsx`**
 
 ```jsx
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import SplitPane from './SplitPane';
 
@@ -1194,6 +1194,39 @@ describe('SplitPane', () => {
   it('separatornya punya peran dan label yang benar', () => {
     render(<SplitPane {...props} />);
     expect(screen.getByRole('separator')).toHaveAttribute('aria-orientation', 'vertical');
+  });
+
+  // Ketiga test di bawah menguji PERILAKU INTERAKTIF — alasan komponen ini ada. Versi
+  // pertama rencana ini hanya menguji turunan state awal, sehingga drag dan keyboard
+  // sama sekali tak terverifikasi. jsdom mendukung keduanya lewat fireEvent; tidak ada
+  // alasan lingkungan untuk melewatkannya.
+
+  it('menggeser lebar saat divider ditarik', () => {
+    render(<SplitPane {...props} defaultLeft={380} minLeft={280} maxLeft={520} />);
+    fireEvent.pointerDown(screen.getByRole('separator'));
+    // getBoundingClientRect di jsdom selalu nol, jadi clientX = lebar kiri yang diminta.
+    fireEvent.pointerMove(window, { clientX: 420 });
+    fireEvent.pointerUp(window);
+    expect(screen.getByTestId('splitpane-left')).toHaveStyle({ width: '420px' });
+  });
+
+  it('panah kanan/kiri menggeser lebar dan menjepit di batas', () => {
+    render(<SplitPane {...props} defaultLeft={512} minLeft={280} maxLeft={520} />);
+    const sep = screen.getByRole('separator');
+    fireEvent.keyDown(sep, { key: 'ArrowRight' });   // 512+16=528 -> dijepit ke 520
+    expect(screen.getByTestId('splitpane-left')).toHaveStyle({ width: '520px' });
+    fireEvent.keyDown(sep, { key: 'ArrowLeft' });    // 520-16=504
+    expect(screen.getByTestId('splitpane-left')).toHaveStyle({ width: '504px' });
+  });
+
+  it('memulihkan gaya global saat unmount di TENGAH drag', () => {
+    const { unmount } = render(<SplitPane {...props} />);
+    fireEvent.pointerDown(screen.getByRole('separator'));
+    expect(document.body.style.cursor).toBe('col-resize');
+    unmount();
+    // Tanpa stopDrag() di cleanup, kedua nilai ini tertinggal di SELURUH aplikasi.
+    expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
   });
 });
 ```
@@ -1260,6 +1293,12 @@ export default function SplitPane({
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', stopDrag);
+      // stopDrag() WAJIB dipanggil di cleanup, bukan hanya melepas listener. Kalau komponen
+      // unmount di tengah drag (pindah route saat divider sedang ditarik), body tertinggal
+      // dengan cursor:'col-resize' dan userSelect:'none' SELAMANYA — di SELURUH aplikasi,
+      // bukan hanya halaman ini, karena gayanya dipasang di document.body. Kerusakannya
+      // muncul jauh dari komponen ini dan hampir mustahil dilacak balik.
+      stopDrag();
     };
   }, [onPointerMove, stopDrag]);
 
