@@ -2,6 +2,7 @@ const dbModule = require("../db");
 const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
+const { resolveTimezone } = require("../config/timezone");
 
 const MAX_LIMIT = 100;
 // Batas khusus daftar bay schedule: satu reservasi task-level = satu baris per task, jadi
@@ -2250,32 +2251,63 @@ async function listBaySchedules(query = {}) {
   return { rows: result.rows, limit, offset };
 }
 
-// Sync forward-only (keputusan user 3a): reservasi masa depan yang terhubung task
-// mengikuti tanggal schedule ms_project_task (plan_start/plan_finish). Riwayat
-// (start_date < hari ini) tidak disentuh. Idempotent — hanya baris yang beda.
-// TZ eksplisit Asia/Jakarta: FE menampilkan tanggal via slice(0,10) string ISO
-// (literal +07); cast timestamptz→date tanpa TZ tergantung session (kena:
-// session Asia/Makassar menggeser plan 23:xx+07 ke tanggal berikutnya).
-// THROTTLE: GET /bay-schedules dipanggil tiap buka peta — sync cukup sekali
-// per 10 menit per proses (baris sudah selaras, run berikutnya 0 row).
+// Reservasi bay yang terhubung task SELALU mengikuti tanggal ms_project_task
+// (plan_start/plan_finish). Idempotent — hanya baris yang berbeda yang ditulis.
+//
+// REVISI 2026-09-04 (keputusan owner), mengganti dua perilaku lama:
+//
+//  a) TIDAK lagi forward-only. Dulu `s.start_date >= current_date` membekukan reservasi yang
+//     sudah mulai berjalan, sehingga peta area dan MS Project berbeda permanen: terukur 1.529
+//     dari 2.504 reservasi aktif (61%) tanggalnya sudah bergeser di MSP tapi tak pernah
+//     ikut. Konsekuensi yang DITERIMA: reservasi lampau ikut ditulis ulang, jadi peta
+//     menampilkan "menurut MS Project sekarang", bukan "apa yang dulu terjadi". Riwayat jam
+//     kerja TIDAK terpengaruh — timesheet_transaction menyimpan tanggalnya sendiri.
+//
+//  b) TIDAK lagi hardcode Asia/Jakarta. Zona diambil dari resolveTimezone() (env TIMEZONE
+//     dulu, lalu plant_config). Hardcode +07 menggeser tanggal satu hari untuk task yang
+//     plan-nya dekat tengah malam: terukur 157 plan_start dan 183 plan_finish dari 5.102
+//     task aktif jatuh di tanggal berbeda antara Asia/Jakarta dan Asia/Makassar.
+//     resolveTimezone() sudah divalidasi IANA, jadi aman diinterpolasi ke SQL.
+//
+// Tumpang tindih bay SENGAJA tidak dicegah di sini (keputusan owner + D3: tidak ada bay yang
+// eksklusif). Sync bisa menggeser reservasi ke periode yang bay-nya sudah terisi, dan itu
+// diterima — bukan alasan untuk membatalkan sync.
+//
+// THROTTLE hanya untuk pemanggilan oportunistik dari GET /bay-schedules (dipanggil tiap buka
+// peta). Pemanggilan setelah sync MS Project memakai force:true supaya perubahan planner
+// langsung terlihat, tidak menunggu jendela 10 menit.
 let lastSyncAt = 0;
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
-async function syncBayScheduleDates() {
-  const now = Date.now();
-  if (now - lastSyncAt < SYNC_INTERVAL_MS) return 0;
-  lastSyncAt = now;
-  const result = await pool().query(
+async function syncBayScheduleDates(options = {}) {
+  const { client = null, projectId = null, force = false } = options;
+  if (!force) {
+    const now = Date.now();
+    if (now - lastSyncAt < SYNC_INTERVAL_MS) return 0;
+    lastSyncAt = now;
+  }
+  const tz = resolveTimezone();
+  const values = [];
+  let scopeSql = "";
+  if (projectId) {
+    values.push(projectId);
+    scopeSql = `and t.project_id = $${values.length}`;
+  }
+  // client dipakai supaya sync bisa ikut TRANSAKSI syncProject: kalau sync project gagal dan
+  // di-rollback, tanggal reservasi tidak boleh terlanjur bergeser ke jadwal yang dibatalkan.
+  const exec = client || pool();
+  const result = await exec.query(
     `update ms_project_bay_schedule s
-     set start_date = (t.plan_start at time zone 'Asia/Jakarta')::date,
-         end_date = (t.plan_finish at time zone 'Asia/Jakarta')::date,
+     set start_date = (t.plan_start at time zone '${tz}')::date,
+         end_date = (t.plan_finish at time zone '${tz}')::date,
          updated_at = now(), updated_by = 'bay-schedule-sync'
      from ms_project_task t
      where s.task_id = t.task_id
        and s.status <> 'CANCELLED'
-       and s.start_date::date >= current_date
        and t.plan_start is not null and t.plan_finish is not null
-       and ((t.plan_start at time zone 'Asia/Jakarta')::date <> s.start_date::date
-         or (t.plan_finish at time zone 'Asia/Jakarta')::date <> s.end_date::date)`
+       ${scopeSql}
+       and ((t.plan_start at time zone '${tz}')::date <> s.start_date::date
+         or (t.plan_finish at time zone '${tz}')::date <> s.end_date::date)`,
+    values
   );
   return result.rowCount;
 }
@@ -4696,6 +4728,14 @@ async function syncProject(projectIdParam, payload) {
     );
     const revisionNo = revisionResult.rows[0].revision_no;
     const actor = normalized.project.updated_by || "ms-project-vba";
+
+    // Reservasi bay ikut jadwal task yang BARU SAJA ditulis di atas — di dalam transaksi yang
+    // sama, jadi rollback sync project juga membatalkan pergeseran tanggal reservasi.
+    // force:true melewati throttle 10 menit: planner harus melihat hasilnya sekarang, bukan
+    // menunggu seseorang membuka peta area. Dibatasi ke project ini saja supaya satu sync
+    // tidak menyentuh reservasi project lain.
+    const baySynced = await syncBayScheduleDates({ client, projectId, force: true });
+
     const snapshot = await snapshotProject(client, projectId);
     await writeRevisionSnapshot(client, { projectId, revisionNo, revisionType: "SYNC", actor, snapshot });
     await writeAuditLog(client, {
@@ -4715,6 +4755,7 @@ async function syncProject(projectIdParam, payload) {
           assignments_updated: assignmentResult.updated,
           dependencies_created: dependencyResult.created,
           dependencies_updated: dependencyResult.updated,
+          bay_schedules_resynced: baySynced,
           ...deactivateSummary,
         },
       },
@@ -4735,6 +4776,7 @@ async function syncProject(projectIdParam, payload) {
         assignments_updated: assignmentResult.updated,
         dependencies_created: dependencyResult.created,
         dependencies_updated: dependencyResult.updated,
+        bay_schedules_resynced: baySynced,
         ...deactivateSummary,
       },
       task_mappings: taskResult.mappings,
