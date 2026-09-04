@@ -1692,7 +1692,29 @@ Co-Authored-By: Javanian <teesanfajar@gmail.com>"
 
 ---
 
-### Task 12: Tile menu memuai jadi halaman
+### Task 12: ~~Tile menu memuai jadi halaman~~ — DIBATALKAN
+
+> **Dikerjakan (35c1cce) lalu di-revert (d40a393) atas keputusan owner 2026-09-05.**
+> **JANGAN dibangun ulang tanpa mengubah arsitektur transisinya lebih dulu.**
+>
+> Alasannya arsitektural: `RouteTransition` memakai `AnimatePresence mode="wait"`, yang
+> meng-unmount halaman menu SEPENUHNYA sebelum halaman tujuan mount. Shared-layout morph
+> framer-motion mensyaratkan kedua elemen ber-`layoutId` hidup BERSAMAAN — dengan
+> `mode="wait"` itu tak pernah terjadi. Tak ada halaman tujuan yang mendefinisikan
+> `layoutId` pasangannya pun.
+>
+> Ini cacat rencana. Saat menawarkan pilihan transisi, tile-expand disebut "tambahan,
+> bukan pengganti" yang butuh slide berarah sebagai dasar — tanpa menyadari bahwa dasar
+> itulah yang meniadakannya.
+>
+> Kalau suatu saat benar-benar diinginkan, yang harus diputuskan lebih dulu adalah mengganti
+> `mode="wait"` (mis. `popLayout`) — dan itu mengubah dasar transisi yang sudah berjalan,
+> jadi butuh verifikasi browser, bukan sekadar test.
+>
+> Slide berarah (Task 10/11) tetap utuh dan itulah yang mengerjakan pekerjaan sesungguhnya.
+
+<details>
+<summary>Isi asli Task 12 (arsip, jangan dieksekusi)</summary>
 
 **Files:**
 - Modify: `apps/web/src/pages/PPC/manufacturing/SchedulingMenuPage.jsx`
@@ -1761,6 +1783,10 @@ melewati animasi layout sepenuhnya.
 
 Co-Authored-By: Javanian <teesanfajar@gmail.com>"
 ```
+
+---
+
+</details>
 
 ---
 
