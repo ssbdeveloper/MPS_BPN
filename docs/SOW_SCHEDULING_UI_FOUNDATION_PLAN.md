@@ -28,6 +28,7 @@ updated: 2026-09-04
 - **Tidak ada dependensi runtime baru.** Vitest & Testing Library masuk `devDependencies` saja.
 - Warna aksi utama `#0077b6`; **dilarang** memakai `#0096c7` untuk teks kecil atau background tombol.
 - Semua perintah `npm` dijalankan dari `apps/web/`.
+- **JANGAN PERNAH menulis klaim verifikasi yang tidak kamu lakukan** — di pesan commit, laporan, maupun komentar kode. Kalau sebuah langkah verifikasi tak bisa dijalankan (mis. tidak ada tool browser untuk cek visual), tulis apa adanya bahwa langkah itu BELUM dilakukan beserta alasannya. Pesan commit contoh di rencana ini adalah titik awal, bukan naskah yang harus disalin apa pun kenyataannya — kalau isinya jadi tidak benar setelah pekerjaanmu, perbaiki kalimatnya. Riwayat git yang mengklaim verifikasi palsu menyesatkan orang berbulan-bulan kemudian, dan lebih merugikan daripada langkah yang jujur diakui belum dikerjakan.
 - **`npm run lint` TIDAK bersih di repo ini dan tidak akan pernah bersih.** Baseline terukur 2026-09-04: **126 problem (105 error, 21 warning) di 37 file**, semuanya sudah ada sebelum pekerjaan ini — artefak PWA `dev-dist/`, `router/index.jsx`, `utils/nfcId.js`, `vite.config.js`, dan lain-lain. Jangan memperbaikinya; itu di luar cakupan dan akan mengaburkan diff.
   Karena itu **jangan pernah merantai `npm run lint && ...`** — lint keluar dengan kode non-nol dan perintah berikutnya tak akan jalan. Verifikasi tiap task memakai tiga perintah **terpisah**:
   1. `npx eslint <daftar file yang kamu buat/ubah>` — ini WAJIB exit 0
@@ -372,8 +373,14 @@ git commit -m "style(web): system font stack menggantikan Arial
 
 Diperintahkan CLAUDE.md UI Engineering Standards §3. Dipisah jadi commit sendiri karena
 ini SATU-SATUNYA perubahan Proyek A yang sengaja global — mengubah rendering setiap
-halaman, bukan hanya /sow-scheduling. Diverifikasi di /sow-scheduling, /timesheet,
-/dashboard, /operations-hub.
+halaman, bukan hanya /sow-scheduling.
+
+<TULIS SALAH SATU — JANGAN MENGARANG:>
+Kalau cek visual BENAR-BENAR dilakukan: sebutkan halaman mana yang dilihat dan apa yang
+diperiksa (kolom tabel sempit, tombol berteks panjang).
+Kalau TIDAK: tulis "BELUM DIVERIFIKASI SECARA VISUAL" beserta alasannya, risiko yang
+belum tertutup (metrik glyph berbeda -> tabel membungkus, label tombol tak muat), dan
+halaman yang wajib dicek manual sebelum rilis.
 
 Co-Authored-By: Javanian <teesanfajar@gmail.com>"
 ```
