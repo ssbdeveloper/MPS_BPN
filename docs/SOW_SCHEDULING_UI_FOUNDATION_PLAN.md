@@ -1376,9 +1376,22 @@ Co-Authored-By: Javanian <teesanfajar@gmail.com>"
 ### Task 10: RouteTransition
 
 **Files:**
-- Create: `apps/web/src/components/motion/RouteTransition.jsx`
+- Create: `apps/web/src/components/motion/routeDirection.js` — helper murni, TANPA JSX
+- Create: `apps/web/src/components/motion/RouteTransition.jsx` — komponen saja
 - Create: `apps/web/src/components/motion/RouteTransition.test.jsx`
 - Modify: `apps/web/src/components/index.js`
+
+> **Kenapa dipecah dua file.** Versi pertama rencana ini mengekspor `directionOffset` dan
+> `motionOffset` dari modul yang sama dengan komponen. Itu melanggar
+> `react-refresh/only-export-components`, dan pesan ESLint-nya sendiri menyuruh:
+> *"Use a new file to share constants or functions between components"*. Ini rule yang SAMA
+> yang muncul di Task 4, dan diselesaikan dengan cara yang sama — memecah file, bukan
+> menambah `eslint-disable`. Konsisten dengan preseden `DensityContext.js` / `DensityProvider.jsx`.
+>
+> **Catatan `motion`:** `eslint.config.js` repo ini tidak memuat plugin React, sehingga tidak
+> ada `jsx-uses-vars` — `<motion.div>` tidak dihitung sebagai pemakaian dan `motion` ditandai
+> `no-unused-vars`. Pola yang sudah dipakai repo ini (`KanbanLevelOnePage.jsx:33-36`) adalah
+> mengikatnya ke konstanta lebih dulu: `const MotionDiv = motion.div;`. Ikuti pola itu.
 
 **Interfaces:**
 - Consumes: —
@@ -1458,13 +1471,21 @@ export function motionOffset(offset, reduced) {
 
 export default function RouteTransition({ routeKey, depth = 0, children }) {
   const reduced = useReducedMotion();
-  const prevDepthRef = useRef(depth);
-  const [offset, setOffset] = useState(0);
 
-  useEffect(() => {
-    setOffset(directionOffset(prevDepthRef.current, depth));
-    prevDepthRef.current = depth;
-  }, [depth]);
+  // Arah dihitung SAAT RENDER, bukan di useEffect. Ini bukan gaya penulisan — versi useEffect
+  // SALAH. Effect berjalan setelah commit, sedangkan AnimatePresence menangkap `initial` pada
+  // render yang me-mount key baru. Jadi offset yang terpakai selalu milik transisi SEBELUMNYA:
+  // navigasi pertama tidak bergerak sama sekali (offset masih 0), dan Back pertama setelah
+  // serangkaian maju beranimasi seolah masih maju.
+  // Pola di bawah adalah "adjusting state when props change" yang didokumentasikan React:
+  // set state selama render, React langsung render ulang TANPA commit, sehingga nilainya
+  // segar di render yang sama.
+  const [prevDepth, setPrevDepth] = useState(depth);
+  const [offset, setOffset] = useState(0);
+  if (depth !== prevDepth) {
+    setOffset(directionOffset(prevDepth, depth));
+    setPrevDepth(depth);
+  }
 
   const enter = motionOffset(offset, reduced);
 
