@@ -3,9 +3,6 @@ import {
   CalendarClock, ChevronRight, DatabaseZap, ExternalLink, FolderKanban, ShieldCheck,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { motion, useReducedMotion } from 'framer-motion';
-
-const MotionButton = motion.button;
 
 /**
  * SchedulingMenuPage — rute index dari /sow-scheduling (varian manufaktur).
@@ -48,7 +45,6 @@ const ADMIN_TILE = {
 
 export default function SchedulingMenuPage() {
   const navigate = useNavigate();
-  const reduced = useReducedMotion();
 
   return (
     <main className="flex-1 px-4 py-6 md:px-6">
@@ -57,12 +53,10 @@ export default function SchedulingMenuPage() {
           {FEATURE_TILES.map((tile) => {
             const Icon = tile.icon;
             return (
-              <MotionButton
+              <button
                 key={tile.key}
                 type="button"
                 onClick={() => navigate(tile.to)}
-                layoutId={reduced ? undefined : `scheduling-tile-${tile.key}`}
-                transition={reduced ? { duration: 0 } : { duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                 className="group flex h-full flex-col gap-3 rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition-all duration-150 hover:border-[#90e0ef] hover:bg-slate-50 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none motion-reduce:transform-none"
               >
                 <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-[#caf0f8] text-[#0077b6] transition-colors group-hover:bg-[#ade8f4]">
@@ -73,7 +67,7 @@ export default function SchedulingMenuPage() {
                   <ChevronRight className="h-4 w-4 text-slate-300 transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
                 </span>
                 <span className="text-xs text-slate-500">{tile.description}</span>
-              </MotionButton>
+              </button>
             );
           })}
         </div>
