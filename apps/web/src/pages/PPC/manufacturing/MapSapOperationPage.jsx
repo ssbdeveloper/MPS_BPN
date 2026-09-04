@@ -4,7 +4,9 @@ import {
   PackageOpen, Replace, RotateCw, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { EmptyState, SearchInput, SegmentedControl, Skeleton } from '../../../components';
+import {
+  EmptyState, Panel, SearchInput, SegmentedControl, Skeleton, Toolbar,
+} from '../../../components';
 import {
   fetchMsProjects,
   fetchMsProjectTasks,
@@ -781,10 +783,10 @@ export default function MapSapOperationPage() {
   }, [mappedByOperation, orderTasksAllProjects, selectedProject]);
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
+    <main className="flex min-h-0 flex-1 flex-col gap-3 bg-canvas px-4 py-4 md:px-6">
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)]">
         {/* ── SUMBER: SOW Orders ─────────────────────────────── */}
-        <section className="flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
+        <Panel elevated className="min-h-[540px] lg:min-h-0">
           {/* Panel kiri DUA TINGKAT. Tingkat 1 memilih order; begitu terpilih, daftar order
               disembunyikan dan digantikan daftar operasinya, karena yang ditarik ke pohon
               adalah operasi SATU PER SATU — bukan seluruh order sekaligus. */}
@@ -800,17 +802,15 @@ export default function MapSapOperationPage() {
                 </span>
               </div>
 
-              <div className="border-b border-slate-200 p-3">
+              <Toolbar className="flex-col items-stretch gap-3">
                 <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Search order or part" />
-                <div className="mt-3">
-                  <SegmentedControl
-                    items={MAPPED_FILTERS.map((item) => ({ key: item.key, label: item.label }))}
-                    value={sowMappedFilter}
-                    onChange={setSowMappedFilter}
-                    ariaLabel="MS Project mapping filter"
-                  />
-                </div>
-              </div>
+                <SegmentedControl
+                  items={MAPPED_FILTERS.map((item) => ({ key: item.key, label: item.label }))}
+                  value={sowMappedFilter}
+                  onChange={setSowMappedFilter}
+                  ariaLabel="MS Project mapping filter"
+                />
+              </Toolbar>
 
               <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
                 {sowLoading ? (
@@ -916,10 +916,10 @@ export default function MapSapOperationPage() {
               </p>
             </>
           )}
-        </section>
+        </Panel>
 
         {/* ── TARGET: Project + Task Tree ────────────────────── */}
-        <section className="relative flex min-h-[540px] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
+        <Panel elevated className="relative min-h-[540px] lg:min-h-0">
           <div className="border-b border-slate-200 p-3">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
@@ -1001,7 +1001,7 @@ export default function MapSapOperationPage() {
               )}
             </div>
           )}
-        </section>
+        </Panel>
       </div>
 
       <ReplaceDialog

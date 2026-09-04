@@ -167,7 +167,7 @@ export default function ProjectBrowserPage() {
   }, [projects, search]);
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
+    <main className="flex min-h-0 flex-1 flex-col gap-3 bg-canvas px-4 py-4 md:px-6">
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput
           value={search}

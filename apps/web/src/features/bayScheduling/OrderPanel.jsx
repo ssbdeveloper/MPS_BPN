@@ -4,7 +4,7 @@ import {
   AlertTriangle, CalendarRange, ChevronDown, GripVertical, Inbox, Loader2, MapPinOff,
   Package, RefreshCw,
 } from 'lucide-react';
-import { EmptyState, SearchInput, SegmentedControl, Skeleton } from '../../components';
+import { EmptyState, SearchInput, SegmentedControl, Skeleton, StatusPill } from '../../components';
 import { formatDate, formatHours, plural } from './constants';
 
 // ── Pool order (Fase 4 sisi UI + keputusan D6) ────────────────────────────────
@@ -76,18 +76,22 @@ const OrderCard = React.memo(function OrderCard({ order, selected, onSelect, onD
   const sap = sapStatusStyle(order.sap_status);
   const hasTask = Boolean(order.has_msp_task);
 
+  // Tepi kiri membawa status tanpa menambah teks. 'late' memakai latest_plan_finish
+  // karena itu satu-satunya tanggal yang tersedia per-order di baris ini.
+  const finish = order.latest_plan_finish;
+  const today = new Date().toISOString().slice(0, 10);
+  const isLate = Boolean(order.is_unfinished && finish && finish < today);
+  const edgeClass = isLate ? 'before:bg-status-late' : 'before:bg-status-running';
+
   const meta = (
     <>
       <span className="flex items-center justify-between gap-2">
         <span className="truncate font-mono text-sm font-extrabold tabular-nums text-slate-800">
           {order.order_no}
         </span>
-        <span
-          title={sap.hint}
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${sap.cls}`}
-        >
+        <StatusPill tone={isLate ? 'late' : 'running'} title={sap.hint}>
           {order.sap_status || 'N/A'}
-        </span>
+        </StatusPill>
       </span>
 
       <span className="mt-0.5 block truncate text-xs font-semibold text-slate-500">
@@ -169,7 +173,7 @@ const OrderCard = React.memo(function OrderCard({ order, selected, onSelect, onD
       aria-pressed={selected}
       onClick={() => onSelect?.(order)}
       onDragStart={draggable ? (event) => onDragStart(event, order) : undefined}
-      className={`w-full rounded-xl border bg-white p-3 text-left shadow-sm transition-all duration-150 hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
+      className={`relative w-full overflow-hidden rounded-xl border bg-white py-3 pr-3 pl-4 text-left shadow-card transition-all duration-150 before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:content-[''] hover:border-[#90e0ef] hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${edgeClass} ${
         draggable ? 'cursor-grab active:cursor-grabbing' : ''
       } ${selected ? 'border-[#0077b6] ring-2 ring-[#90e0ef]' : 'border-slate-200'}`}
     >
