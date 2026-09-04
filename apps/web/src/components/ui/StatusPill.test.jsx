@@ -22,4 +22,17 @@ describe('StatusPill', () => {
     render(<StatusPill title="Order masih terbuka di SAP">REL</StatusPill>);
     expect(screen.getByText('REL')).toHaveAttribute('title', 'Order masih terbuka di SAP');
   });
+
+  // Penjaga regresi untuk bug nyata: `TONES[tone] || TONES.neutral` membaca rantai
+  // prototype, sehingga nama-nama ini mengembalikan fungsi Object.prototype yang truthy
+  // dan bocor ke atribut class sebagai "function ... { [native code] }".
+  it.each(['constructor', 'toString', 'valueOf', 'hasOwnProperty'])(
+    'jatuh ke neutral untuk tone "%s" (nama milik Object.prototype)',
+    (tone) => {
+      render(<StatusPill tone={tone}>X</StatusPill>);
+      const cls = screen.getByText('X').className;
+      expect(cls).toContain('text-slate-600');
+      expect(cls).not.toContain('native code');
+    },
+  );
 });

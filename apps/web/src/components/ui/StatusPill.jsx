@@ -7,11 +7,15 @@ const TONES = {
   running: 'border-[#90e0ef] bg-[#caf0f8] text-status-running',
   late:    'border-amber-200 bg-amber-50 text-status-late',
   ok:      'border-emerald-200 bg-emerald-50 text-status-ok',
-  warn:    'border-amber-200 bg-amber-50 text-status-late',
 };
 
 export default function StatusPill({ tone = 'neutral', title, children }) {
-  const cls = TONES[tone] || TONES.neutral;
+  // Object.hasOwn, BUKAN `TONES[tone] || TONES.neutral`. Bentuk `||` membaca rantai
+  // prototype: tone="constructor" / "toString" / "valueOf" / "hasOwnProperty" mengembalikan
+  // fungsi Object.prototype yang TRUTHY, sehingga lolos fallback dan ter-stringify jadi
+  // "function Object() { [native code] }" di dalam atribut class. Terbukti saat review
+  // Task 5 — 4 dari 9 masukan uji bocor.
+  const cls = Object.hasOwn(TONES, tone) ? TONES[tone] : TONES.neutral;
   return (
     <span
       title={title}
