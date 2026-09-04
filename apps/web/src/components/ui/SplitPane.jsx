@@ -52,6 +52,12 @@ export default function SplitPane({
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', stopDrag);
+      // stopDrag() WAJIB dipanggil di cleanup, bukan hanya melepas listener. Kalau komponen
+      // unmount di tengah drag (pindah route saat divider sedang ditarik), body tertinggal
+      // dengan cursor:'col-resize' dan userSelect:'none' SELAMANYA — di SELURUH aplikasi,
+      // bukan hanya halaman ini, karena gayanya dipasang di document.body. Kerusakannya
+      // muncul jauh dari komponen ini dan hampir mustahil dilacak balik.
+      stopDrag();
     };
   }, [onPointerMove, stopDrag]);
 
