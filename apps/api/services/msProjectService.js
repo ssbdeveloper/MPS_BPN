@@ -1290,10 +1290,33 @@ async function listSowOrders(query = {}) {
   }
 
   // due_by — FILTER sungguhan, beda dari in_window yang hanya anotasi (D6).
-  // Mempertahankan order yang punya >= 1 task aktif dengan coalesce(plan_finish,
-  // plan_start) <= due_by. TANPA batas bawah: task yang jadwalnya sudah lewat
+  // Mempertahankan order yang punya >= 1 task aktif dengan coalesce(plan_start,
+  // plan_finish) <= due_by. TANPA batas bawah: task yang jadwalnya sudah lewat
   // (overdue) dari kapan pun tetap masuk. Dipakai tab 'perlu' (To schedule)
   // dengan due_by = akhir minggu ini (lihat weekEndText di FE).
+  //
+  // REVISI 2026-09-04 (keputusan owner, varian A): semula memakai plan_FINISH, yang berarti
+  // "apakah order ini SELESAI paling lambat <due_by>" — bukan "apakah relevan minggu ini".
+  // Akibatnya order yang SEDANG DIKERJAKAN hari ini tapi selesainya lebih lambat terbuang
+  // dari tab 'perlu', lalu ditolak juga oleh tiga tab lain ('belum_jadwal' butuh TIDAK punya
+  // task MSP, 'terjadwal' butuh reservasi, 'selesai' butuh order tutup) — jadi hilang sama
+  // sekali dari UI. Terukur: 25 order jatuh di celah itu, 10 di antaranya sedang berjalan,
+  // termasuk 1000129937 (4 task op 10/20/30/40, 27 Agu -> 15 Sep, SAP REL).
+  //
+  // Sekarang memakai plan_START: "pekerjaan yang sudah mulai atau mulai sebelum <due_by>".
+  // Menangkap overdue, sedang berjalan, dan yang mulai minggu ini sekaligus. Tab 'perlu'
+  // 37 -> 50 order.
+  //
+  // Varian yang DITOLAK: menambah syarat plan_finish >= current_date ("jadwalnya belum
+  // berakhir"). Dua sebabnya: (a) membuang order yang justru paling mendesak — sudah mulai,
+  // lewat jadwal, masih REL (mis. 1000128544, terlambat 74 hari); (b) karena bool_or bekerja
+  // PER TASK, syarat gabungan itu menuntut satu task tunggal memenuhi start<=due_by DAN
+  // finish>=hari ini, sehingga order yang pekerjaannya berpindah antar task ikut terbuang
+  // walau jelas sedang berjalan (1000128543 s/d 21 Sep, 1000130697 s/d 5 Okt, 1000130698
+  // s/d 8 Okt).
+  //
+  // Nama parameter `due_by` DIPERTAHANKAN karena itu kontrak dengan FE (useSowOrders.js
+  // mengirimnya). Maknanya kini "starts by", bukan "due by" — jangan simpulkan dari namanya.
   const dueBy = query.due_by ? normalizeDateOnly(query.due_by, "due_by") : null;
   // Hitungan per-tab memakai batas jadwal SENDIRI (counts_due_by): badge 'perlu'
   // harus tetap benar walau tab aktif berbeda. Param ini HANYA untuk hitungan,
@@ -1315,14 +1338,15 @@ async function listSowOrders(query = {}) {
           )::integer as in_window_tasks`;
   }
 
-  // Kolom per-order di CTE msp: apakah ada task yang harus selesai <= due_by.
+  // Kolom per-order di CTE msp: apakah ada task yang MULAI <= due_by (lihat revisi varian A
+  // di atas — dulu "selesai <=", dan itulah yang menyembunyikan pekerjaan yang sedang jalan).
   // bool_or (bukan min()) supaya order yang task-nya tersebar (sebagian overdue,
   // sebagian masih jauh) tetap ketangkap selama SATU task saja sudah jatuh tempo.
   let dueByTasksSql = "false::boolean as due_by_tasks";
   if (dueBy) {
     values.push(dueBy);
     const dueByParam = values.length;
-    dueByTasksSql = `bool_or(coalesce(t.plan_finish, t.plan_start)::date <= $${dueByParam}::date) as due_by_tasks`;
+    dueByTasksSql = `bool_or(coalesce(t.plan_start, t.plan_finish)::date <= $${dueByParam}::date) as due_by_tasks`;
   }
 
   if (q) {
@@ -1361,10 +1385,10 @@ async function listSowOrders(query = {}) {
         and sap.sap_status not in ('REL','LKD')
     )`);
   }
-  // due_by — filter jadwal SUNGGAUHAN (beda keputusan dari in_window, D6).
-  // Order dipertahankan hanya kalau punya task yang harus selesai <= due_by;
-  // task yang sudah lewat jadwalnya (overdue) dari kapan pun ikut terhitung
-  // (tidak ada batas bawah). Tanpa param ini perilaku identik dengan lama.
+  // due_by — filter jadwal SUNGGUHAN (beda keputusan dari in_window, D6).
+  // Order dipertahankan hanya kalau punya task yang MULAI <= due_by; task yang
+  // sudah lewat jadwalnya (overdue) dari kapan pun ikut terhitung (tidak ada
+  // batas bawah). Tanpa param ini perilaku identik dengan lama.
   if (dueBy) {
     having.push(`exists (
       select 1 from msp
@@ -1495,7 +1519,9 @@ async function listSowOrders(query = {}) {
     if (countsDueByValue) {
       countsValues.push(countsDueByValue);
       const dueByParam = countsValues.length;
-      countsDueByTasksSql = `bool_or(coalesce(t.plan_finish, t.plan_start)::date <= $${dueByParam}::date) as due_by_tasks`;
+      // Harus IDENTIK dengan dueByTasksSql (varian A: plan_START). Kalau berbeda, badge
+      // jumlah tab 'perlu' tidak akan cocok dengan isi daftarnya.
+      countsDueByTasksSql = `bool_or(coalesce(t.plan_start, t.plan_finish)::date <= $${dueByParam}::date) as due_by_tasks`;
     }
 
     const countsWhere = [
