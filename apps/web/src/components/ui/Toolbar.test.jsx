@@ -12,4 +12,9 @@ describe('Toolbar', () => {
     const { container } = render(<Toolbar className="mt-4"><span>x</span></Toolbar>);
     expect(container.firstChild.className).toContain('mt-4');
   });
+
+  it('meneruskan atribut lain (a11y, data-*) ke elemen', () => {
+    render(<Toolbar role="toolbar" aria-label="Order filters"><span>x</span></Toolbar>);
+    expect(screen.getByRole('toolbar')).toHaveAttribute('aria-label', 'Order filters');
+  });
 });
