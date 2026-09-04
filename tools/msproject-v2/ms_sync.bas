@@ -425,12 +425,31 @@ Public Sub Ms_SaveToServer()
 
     Dim payload As String
     Dim root As Object
+    Dim deactivateJson As String
+    Dim deactivateSummary As String
+
+    ' Propagasi DELETE. Payload sync hanya memuat baris yang MASIH ada di plan, dan
+    ' "hilang dari payload" tidak berarti apa-apa bagi server (upsert-only, by design).
+    ' Jadi apa yang dihapus harus dihitung dulu dengan membandingkan plan ini terhadap
+    ' daftar aktif di server, lalu dikirim eksplisit sebagai blok "deactivate".
+    ' Dijalankan SEBELUM ScreenUpdating/Calculation diubah supaya jalur batal bersih.
+    phase = "hitung penghapusan (deactivate diff)"
+    deactivateJson = MsBuildDeactivateJson(deactivateSummary)
+    If Len(deactivateSummary) > 0 Then
+        If MsgBox("Item berikut tidak ada lagi di plan ini dan akan DINONAKTIFKAN di server:" & vbCrLf & vbCrLf & _
+                  deactivateSummary & vbCrLf & _
+                  "Lanjutkan save?", vbYesNo + vbExclamation, "Konfirmasi penghapusan") <> vbYes Then
+            MsgBox "Save dibatalkan. Tidak ada perubahan yang dikirim ke server.", vbInformation
+            Exit Sub
+        End If
+    End If
+
     oldCalculation = Application.Calculation
     Application.ScreenUpdating = False
     Application.Calculation = pjManual
 
     phase = "build payload"
-    payload = MsBuildProjectPayload(False)
+    payload = MsBuildProjectPayload(False, deactivateJson)
     phase = "send API sync"
     Set root = MsParseSuccess(MsHttpPut("/projects/" & projectId & "/sync", payload))
     phase = "apply response"

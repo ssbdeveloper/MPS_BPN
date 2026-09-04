@@ -246,13 +246,15 @@ Public Sub MsImportProjectPackage(ByVal projectId As String)
         t.Text1 = MsItemText(item, "order_no")
         t.Text2 = MsItemText(item, "operation_no")
         t.Text3 = MsItemText(item, "ssbr_id")
-        ' Workcenter dari server disimpan ke Resource Names (bukan Notes) supaya
-        ' kolom Resource Names di MS Project terisi & terkirim balik sebagai
-        ' workcenter (keputusan 2026-08-07). Notes tetap diisi sebagai cadangan
-        ' untuk task yang Resource Names-nya kosong (data lama).
+        ' Workcenter dari server disimpan ke Resource Names supaya kolom itu terisi dan
+        ' terkirim balik sebagai workcenter (keputusan 2026-08-07, masih berlaku).
+        ' Penulisan ke t.Notes DIHAPUS 2026-09-03: Notes juga dipakai planner untuk catatan
+        ' sungguhan, dan selama serializer punya fallback "Notes = workcenter", catatan itu
+        ' ikut tersimpan sebagai workcenter di DB. Notes sekarang murni milik planner —
+        ' serializer tidak lagi membacanya (lihat MsSafeTaskWorkcenter).
+        ' Nilai Notes lama TIDAK dihapus di sini: isinya bisa catatan asli planner.
         Dim workcenterValue As String
         workcenterValue = MsItemText(item, "workcenter")
-        t.Notes = workcenterValue
         If Len(workcenterValue) > 0 Then
             On Error Resume Next
             t.ResourceNames = workcenterValue

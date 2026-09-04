@@ -1581,6 +1581,14 @@ async function listOrderTasks(orderNoParam) {
        t.duration_minutes,
        s.people_required,
        s.planhours,
+       -- Jumlah orang menurut PLAN MS Project. Tidak disimpan sebagai kolom sendiri karena
+       -- MS Project sendiri menurunkannya: Units = Work / Duration. Kedua bahannya sudah
+       -- tersinkron di sini, jadi menyimpan angkanya lagi = menyimpan salinan yang bisa basi
+       -- (terbukti: 4 dari 290 baris cadangan punya suffix [200%] padahal work sudah = durasi).
+       -- Dibiarkan null saat durasi 0/kosong supaya UI bisa membedakan "tidak tahu" dari "1 orang".
+       -- Pasangannya s.people_required = RENCANA milik web; keduanya sengaja tidak saling
+       -- menimpa, selisihnya ditampilkan sebagai badge (docs/prd/MSPROJECT_RESOURCE_MANAGEMENT_PLAN.md).
+       round(t.planned_work_minutes::numeric / nullif(t.duration_minutes, 0), 2) as people_msp,
        -- Satu order boleh dipetakan ke lebih dari satu project (index unik hanya per-project),
        -- dan fungsi ini TIDAK menyaring per project. Tanpa nama project + penanda ini, scheduler
        -- melihat operasi yang sama berkali-kali di picker reservasi tanpa cara membedakannya —
@@ -1593,8 +1601,17 @@ async function listOrderTasks(orderNoParam) {
      where ltrim(t.order_no, '0') = ltrim($1, '0')
        and t.is_active = true
        and coalesce(t.is_summary, false) = false
+       -- Keputusan owner 2026-09-03: task TANPA operation_no disembunyikan dari picker
+       -- reservasi (/sow-scheduling/area). Alasannya bukan kosmetik — headcount hanya
+       -- bisa ditulis balik ke SOW lewat operation_no (lihat ReservationPanel), jadi
+       -- task yang belum dipetakan tak bisa dijadwalkan secara utuh. Petakan dulu di
+       -- /sow-scheduling/map, task-nya muncul sendiri di sini.
+       -- Dampak terukur saat diterapkan (CKP 2026-09-03): 939 task hilang dari picker, dari
+       -- 2.472 yang selama ini bisa muncul (1.533 punya operation_no). Sisanya (726 task
+       -- tanpa operation_no DAN tanpa order_no) memang tak pernah sampai ke sini.
+       -- Mengembalikan = hapus satu baris di bawah ini.
+       and nullif(btrim(coalesce(t.operation_no, '')), '') is not null
      order by
-       case when nullif(t.operation_no, '') is null then 1 else 0 end,
        case when t.operation_no ~ '^\\d+$' then t.operation_no::integer end nulls last,
        t.operation_no nulls last,
        t.outline_number nulls last,

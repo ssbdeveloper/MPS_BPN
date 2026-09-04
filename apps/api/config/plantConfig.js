@@ -94,7 +94,22 @@ async function loadPlantConfig(db) {
     `[plantConfig] loaded: plant=${cached.plant_code} variant=${cached.variant} ` +
       `tz=${cached.timezone} source=${cached._source}`
   );
+  warnTimezoneMismatch(cached);
   return cached;
+}
+
+// Sejak revisi env-first (2026-09-02) runtime memakai env TIMEZONE, sedangkan baris
+// plant_config tetap dibaca konsumen DB / seeder. Kalau keduanya beda, salah satu SALAH —
+// dan gejalanya (batas hari & jam payload bergeser) tak terlihat di layar. Jadikan berisik.
+function warnTimezoneMismatch(config) {
+  const envTz = String(process.env.TIMEZONE || "").trim();
+  if (config._source !== "db" || !IANA_ZONE.test(envTz)) return;
+  if (envTz === config.timezone) return;
+  console.warn(
+    `[plantConfig] TIMEZONE MISMATCH: env=${envTz} vs plant_config.timezone=${config.timezone}. ` +
+      "Runtime memakai env (env-first, lihat config/timezone.js). Samakan barisnya: " +
+      `UPDATE public.plant_config SET timezone = '${envTz}' WHERE id = 1;`
+  );
 }
 
 function getPlantConfig() {
@@ -102,8 +117,13 @@ function getPlantConfig() {
   return cached;
 }
 
+// Timezone yang DITERBITKAN ke frontend = resolveTimezone() (env-first), bukan nilai baris.
+// Tanpa ini frontend membaca baris sementara query API memakai env — dua zona berbeda tanpa
+// peringatan begitu keduanya divergen. require di dalam fungsi: timezone.js juga me-require
+// modul ini secara lazy, jadi siklus tidak terbentuk saat load.
 function getPublicConfig() {
-  return toPublicSubset(getPlantConfig());
+  const { resolveTimezone } = require("./timezone");
+  return { ...toPublicSubset(getPlantConfig()), timezone: resolveTimezone() };
 }
 
 async function reloadPlantConfig(db) {

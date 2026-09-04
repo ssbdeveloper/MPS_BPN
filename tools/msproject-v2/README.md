@@ -55,7 +55,7 @@ lewat Hub web (`/ms-project-hub` → Force Check-In).
 | `Ms_CheckConnection` | Tes koneksi API + tampilkan base URL aktif |
 | `Ms_OpenFromServer` | Daftar 30 project terbaru → pilih nomor → import ke file aktif |
 | `Ms_CheckOut` | Ambil lock edit; deteksi lock lama yang masih valid |
-| `Ms_SaveToServer` | Sync metadata (409 bila revisi stale, 423 bila lock hilang) + upload `.mpp` |
+| `Ms_SaveToServer` | Sync metadata (409 bila revisi stale, 423 bila lock hilang) + propagasi hapus (lihat bawah) + upload `.mpp` |
 | `Ms_CheckIn` | Konfirmasi "sudah save?", lalu lepas lock |
 | `Ms_PublishNewProject` | Simpan file aktif sebagai project baru + upload `.mpp` |
 | `Ms_PublishCurrentRevision` | Tandai revisi DB sekarang sebagai published |
@@ -113,6 +113,36 @@ melihat Area/Bay tiap task langsung di MS Project.
 Sama dengan v1 (`/health`, `/projects`, `/projects/:id/package|checkout|heartbeat|sync|publish|checkin|file`,
 `/resources*`, `/calendars*`) — ditambah dukungan server baru untuk Hub:
 `GET /projects/:id/file` (download), `GET /projects/:id/revisions`, `PUT /projects/:id/status`.
+
+## Propagasi hapus (blok `deactivate`) — sejak 2026-09-03
+
+Payload sync hanya memuat baris yang **masih ada** di plan, dan "hilang dari payload" tidak
+berarti apa-apa bagi server (`upsertTasks` dkk. murni insert/update — by design, supaya
+payload parsial tidak pernah menghapus data). Sebelum perbaikan ini, task/assignment/link/
+resource yang dihapus di MS Project tetap hidup di Postgres.
+
+`Ms_SaveToServer` sekarang menghitung selisihnya sendiri:
+
+1. `GET /projects/:id/package` → daftar yang **aktif** di server.
+2. Bandingkan dengan isi plan (`Task.Text10`, assignment `Text10`, `Resource.Text9`, dan
+   kunci dependency `pred|succ|type|lag`).
+3. Yang ada di server tapi tidak ada di plan dikirim sebagai blok
+   `deactivate: { task_ids, assignment_ids, dependency_ids, resource_ids }`.
+4. Kalau ada isinya, muncul konfirmasi berisi jumlah per jenis sebelum save berjalan.
+
+Penting:
+
+- Server menghapus **soft** (`is_active = false`), bukan `DELETE` — riwayat & snapshot revisi utuh.
+- Keempat daftar wajib dikirim bersama. Server memproses assignment → dependency → task →
+  resource dalam satu transaksi; mengirim `task_ids` saja ditolak `409 TASK_DEACTIVATE_BLOCKED`.
+- Mengubah lag/type sebuah link muncul sebagai "dependency dihapus" + link baru. Itu benar:
+  server mencocokkan dependency lewat `(pred, succ, type, lag)`, jadi versi lama harus
+  dinonaktifkan agar tidak menumpuk jadi baris aktif kedua.
+- Ada rem pengaman: kalau plan tidak punya SATU PUN task (atau resource) ber-ID server
+  sementara server penuh isi, save **dibatalkan** dengan pesan jelas — biasanya tanda file
+  salah atau `Text10`/`Text9` terhapus, bukan penghapusan yang disengaja.
+- Kalau `GET package` gagal, save ikut gagal. Disengaja: save yang "sukses" tapi menyisakan
+  baris terhapus di DB persis bug yang diperbaiki di sini.
 
 ## Catatan
 

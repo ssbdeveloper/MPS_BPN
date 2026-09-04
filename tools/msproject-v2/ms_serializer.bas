@@ -119,13 +119,51 @@ Private Function MsSafeTaskUniqueId(ByVal t As Task) As String
 End Function
 
 Private Function MsSafeTaskWorkcenter(ByVal t As Task) As String
-    ' Workcenter = kolom Resource Names di MS Project (keputusan 2026-08-07:
-    ' resource name itulah workcenter — resource M5051 Balikpapan TIDAK dipakai).
-    ' Fallback ke Notes hanya untuk data lama yang belum diisi Resource Names.
-    MsSafeTaskWorkcenter = Trim$(MsObjText(t, "ResourceNames"))
-    If Len(MsSafeTaskWorkcenter) = 0 Then
-        MsSafeTaskWorkcenter = Trim$(MsObjText(t, "Notes"))
-    End If
+    ' Workcenter TETAP diketik planner di kolom Resource Names (keputusan 2026-08-07 tidak
+    ' dicabut) — yang berubah cara membacanya.
+    '
+    ' JANGAN baca string t.ResourceNames. Itu teks HASIL RENDER: MS Project menyusunnya dari
+    ' daftar assignment dengan format "Nama[units%]", digabung koma untuk multi-resource.
+    ' Units = Work / Duration, dan import men-set Work setelah resource menempel, jadi task
+    ' dengan Work 2x Duration otomatis jadi 200% — itulah asal "C5100FAB[200%]" yang tersimpan
+    ' ke ms_project_task.workcenter (290 baris tercemar di CKP per 2026-09-03).
+    ' a.Resource.Name selalu bersih dari suffix. Pola iterasi ini sama dengan
+    ' MsAssignmentsJsonArray di bawah.
+    '
+    ' Fallback ke Notes DIHAPUS 2026-09-03: import dulu menulis workcenter ke Notes sementara
+    ' planner juga memakai Notes untuk catatan sungguhan, sehingga catatan itu naik pangkat
+    ' jadi "workcenter" (ditemukan catatan pengadaan satu paragraf di kolom workcenter prod).
+    ' Task tanpa assignment sekarang mengembalikan string kosong — itu memang jawaban jujurnya.
+    '
+    ' Detail & keputusan: docs/prd/MSPROJECT_RESOURCE_MANAGEMENT_PLAN.md
+    Dim taskAssignments As Object
+    Dim a As Object
+    Dim resourceObj As Object
+    Dim resourceName As String
+
+    Set taskAssignments = MsObjObject(t, "Assignments")
+    If taskAssignments Is Nothing Then Exit Function
+
+    On Error Resume Next
+    For Each a In taskAssignments
+        If Not a Is Nothing Then
+            Set resourceObj = MsObjObject(a, "Resource")
+            If Not resourceObj Is Nothing Then
+                resourceName = Trim$(MsObjText(resourceObj, "Name"))
+                If Len(resourceName) > 0 Then
+                    ' Assignment pertama yang punya nama resource. Selama cakupan resource =
+                    ' workcenter saja, task tidak pernah punya assignment lain. Kalau nanti
+                    ' orang/mesin ikut di-assign, di sinilah aturan pemilihan harus ditambah.
+                    MsSafeTaskWorkcenter = resourceName
+                    Err.Clear
+                    On Error GoTo 0
+                    Exit Function
+                End If
+            End If
+        End If
+    Next a
+    Err.Clear
+    On Error GoTo 0
 End Function
 
 Private Function MsSafeAssignmentLocalUid(ByVal a As Object, ByVal taskObj As Object, ByVal resourceObj As Object) As String
@@ -344,7 +382,270 @@ NextDependency:
     MsDependenciesJsonArray = json
 End Function
 
-Public Function MsBuildProjectPayload(ByVal isNewProject As Boolean) As String
+' --- Propagasi DELETE (blok "deactivate") ------------------------------------
+' MS Project tidak menyimpan jejak baris yang dihapus: begitu sebuah task dihapus,
+' Text10 (task_id server) ikut lenyap bersama barisnya. Jadi satu-satunya cara
+' mengetahui APA yang dihapus adalah membandingkan isi plan sekarang dengan daftar
+' AKTIF di server (GET /projects/<id>/package hanya mengembalikan is_active = true).
+'
+' Server memproses blok ini di applyExplicitDeactivate dengan urutan assignment ->
+' dependency -> task dalam SATU transaksi. Karena itu ketiganya WAJIB dikirim
+' bersama: mengirim task_ids saja ditolak 409 TASK_DEACTIVATE_BLOCKED kalau task
+' tersebut masih punya assignment/dependency aktif di server.
+Private Function MsPkgText(ByVal item As Object, ByVal key As String) As String
+    On Error Resume Next
+    If item.Exists(key) Then MsPkgText = Trim$(CStr(item(key)))
+    On Error GoTo 0
+End Function
+
+Private Function MsPkgBool(ByVal item As Object, ByVal key As String, Optional ByVal fallback As Boolean = False) As Boolean
+    On Error Resume Next
+    MsPkgBool = fallback
+    If item.Exists(key) Then MsPkgBool = CBool(item(key))
+    On Error GoTo 0
+End Function
+
+Private Function MsPkgLong(ByVal item As Object, ByVal key As String) As Long
+    On Error Resume Next
+    If item.Exists(key) Then
+        If IsNumeric(item(key)) Then MsPkgLong = CLng(item(key))
+    End If
+    On Error GoTo 0
+End Function
+
+' Kunci pencocokan dependency = kunci yang dipakai server saat dependency_id tidak
+' dikirim (upsertDependencies): predecessor + successor + type + lag. Dependency yang
+' salah satu ujungnya task BARU (belum punya task_id) mustahil ada di server —
+' kembalikan kosong supaya tidak ikut dibandingkan.
+Private Function MsDependencyMatchKey(ByVal predTaskId As String, ByVal succTaskId As String, _
+                                      ByVal depType As String, ByVal lagMinutes As Long) As String
+    If Len(predTaskId) = 0 Or Len(succTaskId) = 0 Then Exit Function
+    If Len(depType) = 0 Then depType = "FS"
+    MsDependencyMatchKey = predTaskId & "|" & succTaskId & "|" & depType & "|" & CStr(lagMinutes)
+End Function
+
+Private Sub MsCollectPlanIds(ByVal planTasks As Object, ByVal planAssignments As Object, _
+                             ByVal planAssignmentPairs As Object, ByVal planDeps As Object)
+    Dim t As Task
+    Dim a As Object
+    Dim taskAssignments As Object
+    Dim dependencies As Object
+    Dim dependency As Object
+    Dim pred As Object
+    Dim succ As Object
+    Dim resourceObj As Object
+    Dim taskId As String
+    Dim assignmentId As String
+    Dim resourceId As String
+    Dim depKey As String
+
+    For Each t In ActiveProject.Tasks
+        If Not t Is Nothing Then
+            taskId = MsTaskId(t)
+            If Len(taskId) > 0 Then planTasks(taskId) = True
+
+            Set taskAssignments = MsObjObject(t, "Assignments")
+            If Not taskAssignments Is Nothing Then
+                For Each a In taskAssignments
+                    If Not a Is Nothing Then
+                        assignmentId = MsAssignmentId(a)
+                        If Len(assignmentId) > 0 Then planAssignments(assignmentId) = True
+
+                        ' Jaring kedua: pasangan (task, resource). Jalur fallback di
+                        ' import (ResourceNames, saat Assignments.Add gagal) memasang
+                        ' resource TANPA menulis assignment_id — tanpa jaring ini
+                        ' assignment yang masih hidup akan terbaca sebagai dihapus.
+                        Set resourceObj = MsObjObject(a, "Resource")
+                        If Not resourceObj Is Nothing Then
+                            resourceId = MsResourceId(resourceObj)
+                            If Len(taskId) > 0 And Len(resourceId) > 0 Then
+                                planAssignmentPairs(taskId & "|" & resourceId) = True
+                            End If
+                        End If
+                    End If
+                Next a
+            End If
+        End If
+    Next t
+
+    On Error Resume Next
+    For Each t In ActiveProject.Tasks
+        If Not t Is Nothing Then
+            Set dependencies = MsObjObject(t, "TaskDependencies")
+            If Not dependencies Is Nothing Then
+                For Each dependency In dependencies
+                    Set pred = MsObjObject(dependency, "From")
+                    Set succ = MsObjObject(dependency, "To")
+                    If Not (pred Is Nothing Or succ Is Nothing) Then
+                        If MsObjText(succ, "UniqueID") = MsObjText(t, "UniqueID") Then
+                            depKey = MsDependencyMatchKey(MsTaskId(pred), MsTaskId(succ), _
+                                                          MsDependencyTypeCode(MsObjNumber(dependency, "Type", 1)), _
+                                                          MsDependencyLagMinutes(dependency))
+                            If Len(depKey) > 0 Then planDeps(depKey) = True
+                        End If
+                    End If
+                Next dependency
+            End If
+        End If
+    Next t
+    On Error GoTo 0
+End Sub
+
+' Menghasilkan blok deactivate untuk payload sync. summary diisi ringkasan yang bisa
+' ditampilkan ke user (kosong = tidak ada yang dihapus).
+' Sengaja TIDAK menelan error: kalau daftar server gagal diambil, save harus gagal —
+' save yang "sukses" tapi menyisakan task terhapus di DB persis bug yang diperbaiki.
+Public Function MsBuildDeactivateJson(ByRef summary As String) As String
+    Dim projectId As String
+    Dim root As Object
+    Dim data As Object
+    Dim serverTasks As Object
+    Dim serverAssignments As Object
+    Dim serverDependencies As Object
+    Dim serverResources As Object
+    Dim planTasks As Object
+    Dim planAssignments As Object
+    Dim planAssignmentPairs As Object
+    Dim planDeps As Object
+    Dim planResources As Object
+    Dim item As Object
+    Dim res As Resource
+    Dim pairKey As String
+    Dim taskIds As String
+    Dim assignmentIds As String
+    Dim dependencyIds As String
+    Dim resourceIds As String
+    Dim taskCount As Long
+    Dim assignmentCount As Long
+    Dim dependencyCount As Long
+    Dim resourceCount As Long
+    Dim serverTaskCount As Long
+    Dim serverResourceCount As Long
+    Dim idValue As String
+    Dim depKey As String
+
+    summary = ""
+    MsBuildDeactivateJson = ""
+
+    projectId = MsGetProjectId()
+    If Len(projectId) = 0 Then Exit Function
+
+    Set root = MsParseSuccess(MsHttpGet("/projects/" & projectId & "/package"))
+    Set data = root("data")
+    Set serverTasks = data("tasks")
+    Set serverAssignments = data("assignments")
+    Set serverDependencies = data("dependencies")
+    Set serverResources = data("project_resources")
+
+    Set planTasks = CreateObject("Scripting.Dictionary")
+    Set planAssignments = CreateObject("Scripting.Dictionary")
+    Set planAssignmentPairs = CreateObject("Scripting.Dictionary")
+    Set planDeps = CreateObject("Scripting.Dictionary")
+    MsCollectPlanIds planTasks, planAssignments, planAssignmentPairs, planDeps
+
+    For Each item In serverTasks
+        serverTaskCount = serverTaskCount + 1
+        idValue = MsPkgText(item, "task_id")
+        If Len(idValue) > 0 Then
+            If Not planTasks.Exists(idValue) Then
+                If taskCount > 0 Then taskIds = taskIds & ","
+                taskIds = taskIds & MsJsonString(idValue)
+                taskCount = taskCount + 1
+            End If
+        End If
+    Next item
+
+    ' Rem pengaman: plan tanpa SATU PUN task ber-ID server sementara server penuh isi
+    ' hampir pasti file yang salah / Text10 terhapus — bukan penghapusan yang disengaja.
+    If serverTaskCount > 0 And planTasks.Count = 0 Then
+        Err.Raise vbObjectError + 9101, "MsBuildDeactivateJson", _
+            "Plan ini tidak punya satu pun task ber-ID server, sedangkan server punya " & _
+            CStr(serverTaskCount) & " task aktif. Save dibatalkan supaya tidak menonaktifkan " & _
+            "seluruh task. Jalankan Ms_OpenFromServer untuk memuat ulang plan."
+    End If
+
+    ' Dianggap dihapus hanya bila DUA-DUANYA tak ketemu: assignment_id-nya maupun
+    ' pasangan (task, resource)-nya. Satu resource hanya bisa di-assign sekali ke
+    ' sebuah task di MS Project, jadi pasangan itu identitas yang sah.
+    For Each item In serverAssignments
+        idValue = MsPkgText(item, "assignment_id")
+        pairKey = MsPkgText(item, "task_id") & "|" & MsPkgText(item, "resource_id")
+        If Len(idValue) > 0 Then
+            If Not planAssignments.Exists(idValue) And Not planAssignmentPairs.Exists(pairKey) Then
+                If assignmentCount > 0 Then assignmentIds = assignmentIds & ","
+                assignmentIds = assignmentIds & MsJsonString(idValue)
+                assignmentCount = assignmentCount + 1
+            End If
+        End If
+    Next item
+
+    ' Catatan: mengUBAH lag/type sebuah link juga muncul di sini sebagai "dependency
+    ' dihapus" + link baru dibuat. Itu memang benar — server mencocokkan dependency
+    ' lewat (pred, succ, type, lag), jadi tanpa menonaktifkan yang lama, link versi
+    ' lama akan menumpuk sebagai baris aktif kedua.
+    For Each item In serverDependencies
+        idValue = MsPkgText(item, "dependency_id")
+        depKey = MsDependencyMatchKey(MsPkgText(item, "predecessor_task_id"), _
+                                      MsPkgText(item, "successor_task_id"), _
+                                      MsPkgText(item, "dependency_type"), _
+                                      MsPkgLong(item, "lag_minutes"))
+        If Len(idValue) > 0 And Len(depKey) > 0 Then
+            If Not planDeps.Exists(depKey) Then
+                If dependencyCount > 0 Then dependencyIds = dependencyIds & ","
+                dependencyIds = dependencyIds & MsJsonString(idValue)
+                dependencyCount = dependencyCount + 1
+            End If
+        End If
+    Next item
+
+    ' Resource yang dibuang dari Resource Sheet: hilang dari project_resources payload,
+    ' dan seperti yang lain itu tidak berarti apa-apa bagi server tanpa blok ini.
+    Set planResources = CreateObject("Scripting.Dictionary")
+    For Each res In ActiveProject.Resources
+        If Not res Is Nothing Then
+            idValue = MsResourceId(res)
+            If Len(idValue) > 0 Then planResources(idValue) = True
+        End If
+    Next res
+
+    ' BEDA dengan tasks/assignments/dependencies: package mengembalikan project_resources
+    ' TANPA filter is_active (statusnya ada di field project_resource_is_active). Tanpa
+    ' saringan ini, resource yang sudah non-aktif akan dihitung "dihapus" di SETIAP save.
+    For Each item In serverResources
+        idValue = MsPkgText(item, "resource_id")
+        If Len(idValue) > 0 And MsPkgBool(item, "project_resource_is_active", True) Then
+            serverResourceCount = serverResourceCount + 1
+            If Not planResources.Exists(idValue) Then
+                If resourceCount > 0 Then resourceIds = resourceIds & ","
+                resourceIds = resourceIds & MsJsonString(idValue)
+                resourceCount = resourceCount + 1
+            End If
+        End If
+    Next item
+
+    ' Rem pengaman yang sama seperti task: sheet kosong / Text9 hilang bukan alasan
+    ' membubarkan seluruh tim proyek di server.
+    If serverResourceCount > 0 And planResources.Count = 0 Then
+        Err.Raise vbObjectError + 9102, "MsBuildDeactivateJson", _
+            "Resource Sheet plan ini tidak punya satu pun resource ber-ID server, sedangkan " & _
+            "server punya " & CStr(serverResourceCount) & " resource aktif. Save dibatalkan. " & _
+            "Jalankan Ms_OpenFromServer untuk memuat ulang plan."
+    End If
+
+    If taskCount = 0 And assignmentCount = 0 And dependencyCount = 0 And resourceCount = 0 Then Exit Function
+
+    If taskCount > 0 Then summary = summary & "- Task: " & CStr(taskCount) & vbCrLf
+    If assignmentCount > 0 Then summary = summary & "- Assignment (resource di task): " & CStr(assignmentCount) & vbCrLf
+    If dependencyCount > 0 Then summary = summary & "- Dependency (link antar task): " & CStr(dependencyCount) & vbCrLf
+    If resourceCount > 0 Then summary = summary & "- Resource (anggota tim proyek): " & CStr(resourceCount) & vbCrLf
+
+    MsBuildDeactivateJson = "{""task_ids"":[" & taskIds & "]," & _
+                            """assignment_ids"":[" & assignmentIds & "]," & _
+                            """dependency_ids"":[" & dependencyIds & "]," & _
+                            """resource_ids"":[" & resourceIds & "]}"
+End Function
+
+Public Function MsBuildProjectPayload(ByVal isNewProject As Boolean, Optional ByVal deactivateJson As String = "") As String
     On Error GoTo ErrHandler
 
     Dim projectId As String
@@ -379,6 +680,11 @@ Public Function MsBuildProjectPayload(ByVal isNewProject As Boolean) As String
     json = json & """assignments"":" & MsAssignmentsJsonArray(isNewProject) & ","
     payloadPhase = "dependencies"
     json = json & """dependencies"":" & MsDependenciesJsonArray(isNewProject)
+    ' Propagasi delete hanya untuk sync (project baru tidak punya baris server untuk dihapus).
+    If Not isNewProject And Len(deactivateJson) > 0 Then
+        payloadPhase = "deactivate"
+        json = json & "," & """deactivate"":" & deactivateJson
+    End If
     json = json & "}"
 
     MsBuildProjectPayload = json

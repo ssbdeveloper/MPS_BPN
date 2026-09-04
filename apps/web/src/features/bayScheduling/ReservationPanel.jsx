@@ -84,6 +84,20 @@ const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, pe
   const hasSchedule = Boolean(planStart || planFinish);
   const hasReservation = reservations.length > 0;
 
+  // Jumlah orang menurut PLAN MS Project (people_msp = Work / Duration, dihitung di
+  // listOrderTasks). Dua angka ini sengaja TIDAK saling menimpa — headcount di sebelah
+  // adalah rencana milik web (sow.people_required), people_msp adalah yang benar-benar
+  // dijadwalkan planner. Tugas UI cuma memunculkan selisihnya supaya manusia yang
+  // memutuskan sisi mana yang salah. Lihat docs/prd/MSPROJECT_RESOURCE_MANAGEMENT_PLAN.md.
+  const peopleMismatch = useMemo(() => {
+    const msp = Number(task.people_msp);
+    const sow = Number(peopleValue);
+    if (!Number.isFinite(msp) || msp <= 0) return null;      // durasi 0 / task tanpa plan
+    if (peopleValue === '' || peopleValue == null) return null; // SOW belum diisi = bukan selisih
+    if (!Number.isFinite(sow)) return null;
+    return Math.abs(msp - sow) >= 0.05 ? msp : null;
+  }, [task.people_msp, peopleValue]);
+
   return (
     <div className="flex items-start gap-2.5 border-b border-slate-100 px-3 py-2 last:border-b-0 hover:bg-slate-50">
       {/* Label membungkus HANYA checkbox + info -> aman dari nested-interactive
@@ -163,6 +177,14 @@ const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, pe
             peopleInvalid ? 'border-red-400 ring-2 ring-red-200' : 'border-slate-200 focus:border-[#0096c7]'
           }`}
         />
+        {peopleMismatch != null && (
+          <span
+            title={`Rencana SOW ${peopleValue} orang, tapi plan MS Project menjadwalkan ${peopleMismatch} orang (Work ÷ Duration). Tidak ada yang otomatis menang — perbaiki di sisi yang salah.`}
+            className="inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-amber-700"
+          >
+            <AlertTriangle className="h-3 w-3" /> MSP {peopleMismatch}
+          </span>
+        )}
       </div>
     </div>
   );

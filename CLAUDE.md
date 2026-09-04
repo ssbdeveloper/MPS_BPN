@@ -1157,7 +1157,18 @@ MPS2/
 > Env `APP_VARIANT`/`VITE_APP_VARIANT` kini hanya: (a) fallback backend `buildConfigFromEnv` saat
 > baris DB hilang/DB error, dan (b) input seeder `apps/api/scripts/seed_plant_config.js`.
 > Ganti varian sebuah plant = **UPDATE baris `plant_config`** (lalu `reloadPlantConfig`), bukan
-> rebuild image. Timezone ikut mekanisme sama (`config/timezone.js resolveTimezone`).
+> rebuild image.
+>
+> **Timezone TIDAK ikut mekanisme itu (revisi 2026-09-02).** `resolveTimezone()`
+> (`apps/api/config/timezone.js`) kini **env-first**: `.env TIMEZONE` menang, baris
+> `plant_config.timezone` hanya fallback, lalu default `Asia/Makassar`. Sebabnya baris CKP
+> ter-seed `Asia/Makassar` padahal Cikupa WIB, sementara stager Python sudah membaca env —
+> dua sumber kebenaran berbeda. Jadi: **identitas + varian = baris DB; timezone = env, baris DB
+> fallback.** Ganti timezone plant = ubah `TIMEZONE` di `.env` lalu restart container (baris DB
+> tetap di-seed benar untuk konsumen DB). `GET /config` menerbitkan `resolveTimezone()` supaya
+> frontend dan query API tak pernah beda zona; `loadPlantConfig` menulis WARNING ke log boot
+> kalau env dan baris DB berbeda. Seeder `seed_plant_config.js` menyalin `TIMEZONE` dari env
+> pemanggil — untuk plant non-Makassar WAJIB `TIMEZONE=<zona plant>` saat seed.
 > Desain & rollout: `docs/deployment/PLANT_CONFIG_VARIANT_DESIGN.md`.
 
 ---

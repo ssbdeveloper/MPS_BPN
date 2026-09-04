@@ -28,6 +28,30 @@ test("timezone invalid jatuh ke default", () => {
   assert.equal(pc.safeTimezone("Asia/Jakarta"), "Asia/Jakarta");
 });
 
+test("getPublicConfig menerbitkan timezone env-first, bukan nilai baris", async () => {
+  const stubDb = {
+    query: async () => ({
+      rows: [{
+        plant_code: "5100", plant_name: "Cikupa", variant: "manufacturing",
+        timezone: "Asia/Makassar", order_master_table: "ph3_order",
+        plant_filter: "5100", feature_flags: {}, sap_rules: {},
+      }],
+    }),
+  };
+  const prev = process.env.TIMEZONE;
+  process.env.TIMEZONE = "Asia/Jakarta";
+  try {
+    await pc.loadPlantConfig(stubDb);
+    // Baris DB tetap apa adanya (kebenaran konsumen DB)...
+    assert.equal(pc.getPlantConfig().timezone, "Asia/Makassar");
+    // ...tapi yang diterbitkan ke frontend ikut env, sama dengan yang dipakai query API.
+    assert.equal(pc.getPublicConfig().timezone, "Asia/Jakarta");
+  } finally {
+    if (prev === undefined) delete process.env.TIMEZONE;
+    else process.env.TIMEZONE = prev;
+  }
+});
+
 test("toPublicSubset tak membocorkan sap_rules/plant_filter/order_master_table", () => {
   const full = pc.parseRow({
     plant_code: "5051", plant_name: "Cikupa", variant: "manufacturing",
