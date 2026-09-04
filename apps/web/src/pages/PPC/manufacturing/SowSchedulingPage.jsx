@@ -1,23 +1,18 @@
 import React, { useState } from 'react';
 import { useLocation, useMatches, useNavigate, useOutlet } from 'react-router-dom';
-import { DensityProvider, PageHeader, RouteTransition, SegmentedControl, useDensity } from '../../../components';
+import { DensityProvider, PageHeader, RouteTransition } from '../../../components';
 
-const DENSITY_ITEMS = [
-  { key: 'normal', label: 'Normal' },
-  { key: 'compact', label: 'Compact' },
-];
-
-function DensityToggle() {
-  const { density, setDensity } = useDensity();
-  return (
-    <SegmentedControl
-      items={DENSITY_ITEMS}
-      value={density}
-      onChange={setDensity}
-      ariaLabel="Row density"
-    />
-  );
-}
+// DensityProvider TETAP membungkus shell, tapi toggle-nya SENGAJA tidak dipasang di header.
+//
+// Keputusan owner 2026-09-05. Sampai Proyek A selesai, TIDAK ADA halaman yang membaca
+// useDensity — nilainya tersimpan ke localStorage tapi tak mengubah satu piksel pun.
+// Kontrol yang terlihat tapi tak melakukan apa-apa lebih buruk daripada tak ada kontrol:
+// ia berbohong kepada penggunanya, dan di sini ia juga menambah ~20px ke SETIAP header
+// SOW Scheduling (SegmentedControl membawa min-h-[44px] untuk target sentuh tablet).
+//
+// Provider dipertahankan karena sudah teruji dan Proyek B/C akan memakainya. Yang perlu
+// dilakukan di sana: baris OrderPanel, kartu operasi, dan baris pohon task membaca
+// useDensity untuk padding/tinggi — LALU pasang kembali toggle-nya.
 
 /**
  * FrozenRoute — WAJIB, bukan gaya-gayaan.
@@ -67,12 +62,7 @@ function SchedulingShell() {
         title={title}
         backLabel={isIndex ? 'Operations Hub' : 'Menu'}
         onBack={isIndex ? () => navigate('/operations-hub') : () => navigate('/sow-scheduling')}
-        right={(
-          <div className="flex items-center gap-2">
-            <DensityToggle />
-            {headerRight}
-          </div>
-        )}
+        right={headerRight}
       />
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
