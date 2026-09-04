@@ -35,17 +35,28 @@ const EMPTY_BY_TAB = {
 
 // Status SAP ditampilkan sebagai KODE + warna (jangan mengandalkan warna saja),
 // dengan penjelasan di title karena kode SAP tidak terbaca orang non-PPC.
+// Warna pill = STATUS SAP, BUKAN keterlambatan.
+//
+// Keterlambatan sudah dibawa tepi kiri kartu (edgeClass). Memakai warna pill untuk hal yang
+// sama berarti menghapus satu sinyal demi menduplikasi sinyal lain — dan lebih buruk lagi,
+// REL yang telat akan tampil dengan amber yang selama ini berarti LKD, sementara TECO
+// (selesai) tampil biru "running". Ditemukan di review akhir branch; sempat terjadi di
+// commit 893805e.
 const SAP_STATUS_STYLE = {
-  REL: { cls: 'bg-emerald-100 text-emerald-700 border-emerald-200', hint: 'Released — unfinished' },
-  LKD: { cls: 'bg-amber-100 text-amber-700 border-amber-200', hint: 'Locked — counted as unfinished' },
-  PCNF: { cls: 'bg-sky-100 text-sky-700 border-sky-200', hint: 'Partially confirmed — in progress' },
-  MCNF: { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Fully confirmed — finished' },
-  TECO: { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Technically complete — finished' },
+  REL:  { tone: 'ok',      hint: 'Released — unfinished' },
+  LKD:  { tone: 'late',    hint: 'Locked — counted as unfinished' },
+  PCNF: { tone: 'info',    hint: 'Partially confirmed — in progress' },
+  MCNF: { tone: 'neutral', hint: 'Fully confirmed — finished' },
+  TECO: { tone: 'neutral', hint: 'Technically complete — finished' },
 };
 
+// Object.hasOwn, bukan `||` — bentuk `||` membaca rantai prototype, sehingga status
+// bernama "constructor"/"toString" akan mengembalikan fungsi Object.prototype.
 function sapStatusStyle(status) {
-  return SAP_STATUS_STYLE[String(status || '').toUpperCase()]
-    || { cls: 'bg-slate-100 text-slate-600 border-slate-200', hint: 'Unknown SAP status' };
+  const key = String(status || '').toUpperCase();
+  return Object.hasOwn(SAP_STATUS_STYLE, key)
+    ? SAP_STATUS_STYLE[key]
+    : { tone: 'neutral', hint: 'Unknown SAP status' };
 }
 
 // ── Chip metadata kartu (angka selalu tabular-nums) ───────────────────────────
@@ -89,7 +100,7 @@ const OrderCard = React.memo(function OrderCard({ order, selected, onSelect, onD
         <span className="truncate font-mono text-sm font-extrabold tabular-nums text-slate-800">
           {order.order_no}
         </span>
-        <StatusPill tone={isLate ? 'late' : 'running'} title={sap.hint}>
+        <StatusPill tone={sap.tone} title={sap.hint}>
           {order.sap_status || 'N/A'}
         </StatusPill>
       </span>

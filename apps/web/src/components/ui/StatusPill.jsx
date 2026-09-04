@@ -7,6 +7,10 @@ const TONES = {
   running: 'border-[#90e0ef] bg-[#caf0f8] text-status-running',
   late:    'border-amber-200 bg-amber-50 text-status-late',
   ok:      'border-emerald-200 bg-emerald-50 text-status-ok',
+  // 'info' dipakai untuk status yang sedang berjalan tapi belum tuntas (mis. SAP PCNF).
+  // Dibedakan dari 'running' supaya warna pill bisa memetakan status SAP secara utuh —
+  // lihat SAP_STATUS_STYLE di OrderPanel.
+  info:    'border-sky-200 bg-sky-50 text-sky-700',
 };
 
 export default function StatusPill({ tone = 'neutral', title, children }) {
