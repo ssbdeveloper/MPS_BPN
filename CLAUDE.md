@@ -101,7 +101,21 @@ Setiap komponen baru atau halaman baru HARUS mengikuti aturan ini.
 | `frosted-blue`     | `--frosted-blue`         | `#90e0ef`   | Border ringan, divider            |
 | `frosted-blue-2`   | `--frosted-blue-2`       | `#ade8f4`   | Background surface sekunder       |
 | `light-cyan`       | `--light-cyan`           | `#caf0f8`   | Background tabel header, stat card |
- 
+
+**Penambahan 2026-09-04 (berlaku di `/sow-scheduling`):**
+
+| Token | HEX | Keterangan |
+|---|---|---|
+| `--canvas` | `#eef2f6` | Latar berlapis. **Hanya untuk latar** — `#0077b6` di atasnya hanya 4,33:1, gagal AA; `#b45309` di atasnya hanya 4,46:1, juga gagal AA. Kanvas vs putih hanya 1,12:1 — pemisahan kartu datang dari border + shadow, bukan dari tint kanvas; border tetap wajib walau kartu diberi elevasi |
+| `--status-late` | `#b45309` | 5,02:1 di atas putih (4,46:1 di atas kanvas — gagal) |
+| `--status-running` | `#0077b6` | 4,87:1 di atas putih (4,33:1 di atas kanvas — gagal) |
+| `--status-ok` | `#047857` | 5,48:1 di atas putih |
+
+**Aturan mengikat (yang terpenting di bagian ini):** teks/label beraksen **wajib** di atas
+permukaan putih, **tidak pernah** langsung di atas `--canvas`. Kedua warna aksen yang paling
+sering dipakai (`--status-running` 4,33:1, `--status-late` 4,46:1) gagal AA (4.5:1) persis di
+atas kanvas — hanya lolos di atas putih (4,87:1 / 5,02:1). `--canvas` cuma untuk background.
+
 **Neutral (Tailwind built-in — gunakan langsung):**
  
 | Peran             | Tailwind Class       | Keterangan                          |
@@ -378,8 +392,8 @@ Setelah ditambahkan, bisa digunakan sebagai:
  
 > Tambahkan ke `src/index.css` atau file CSS global sebelum Tailwind directives.
 > Wajib ada agar `var(--...)` bisa digunakan di inline style.
-> **Status: BELUM ada di `index.css`** (diverifikasi 2026-07-11) — tambahkan blok ini
-> saat pertama kali menyentuh `index.css` atau saat butuh `var(--...)`.
+> **Status: ✅ ada sejak 2026-09-04 (Proyek A Task 2)** — blok di bawah ini disalin persis
+> dari `apps/web/src/index.css`, bukan lagi versi aspiratif yang belum ter-ship.
  
 ```css
 /* src/index.css */
@@ -398,11 +412,30 @@ Setelah ditambahkan, bisa digunakan sebagai:
   --frosted-blue:     #90e0ef;
   --frosted-blue-2:   #ade8f4;
   --light-cyan:       #caf0f8;
- 
-  /* Shadow scale (gunakan konsisten, lihat aturan di bawah) */
-  --shadow-card:    0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-panel:   0 4px 12px rgba(0,0,0,0.08);
-  --shadow-modal:   0 8px 32px rgba(0,0,0,0.12);
+
+  /* Kanvas bernada — dasar kartu mengambang. HANYA untuk latar:
+     #0077b6 di atas #eef2f6 = 4,33:1, gagal AA. */
+  --canvas:           #eef2f6;
+
+  /* Aksen semantik. Angka = kontras terhadap PUTIH. */
+  --status-late:      #b45309;   /* 5,02:1 */
+  --status-running:   #0077b6;   /* 4,87:1 */
+  --status-ok:        #047857;   /* 5,48:1 */
+
+  /* Shadow scale (gunakan konsisten, lihat aturan di bawah). Nilai ini LEBIH TEBAL
+     dari draft lama dokumen ini — konsekuensi arah visual "layered" yang dipilih owner
+     2026-09-04 untuk kartu di atas --canvas. */
+  --shadow-card:      0 1px 2px rgba(15,23,42,.05), 0 4px 12px rgba(15,23,42,.06);
+  --shadow-panel:     0 4px 12px rgba(0,0,0,.08);
+  --shadow-modal:     0 8px 32px rgba(0,0,0,.12);
+
+  /* Motion */
+  --dur-press:  150ms;
+  --dur-panel:  200ms;
+  --dur-route:  250ms;
+  --dur-modal:  300ms;
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit:  cubic-bezier(0.7, 0, 0.84, 0);
 }
 ```
  
@@ -415,7 +448,8 @@ Setelah ditambahkan, bisa digunakan sebagai:
  
 | Konteks | Tailwind / Variable | Kapan Dipakai |
 |---|---|---|
-| Card / list item | `shadow-sm` | Container konten di atas bg-slate-50 |
+| Card di atas `bg-slate-50` | `shadow-sm` | Permukaan datar, latar netral |
+| Card di atas `bg-canvas` (`#eef2f6`) | `shadow-card` | Kartu mengambang. Border WAJIB tetap ada — kanvas vs putih hanya 1,12:1, jadi pemisahan tidak boleh bergantung pada shadow saja |
 | Panel / drawer | `shadow-md` | Sidebar, filter panel yang "mengambang" |
 | Modal / popover | `shadow-xl` | Overlay di atas halaman |
 | Header | `shadow-sm` + `border-b border-slate-200` | App header — **selalu kombinasikan** |
@@ -966,10 +1000,10 @@ Palet kategorikal standar — **urutan TETAP, sudah tervalidasi colorblind-safe
 
 | Item | Standar (dokumen ini) | Kondisi kode nyata |
 |---|---|---|
-| CSS vars `:root` | blok di atas | ❌ Belum ada di `index.css` — tambahkan saat menyentuh file itu |
-| Palet brand di `tailwind.config.js` | §5 Corporate Color | ❌ Belum — config masih token legacy `primary #007bff` + `shadow-3d` (jangan dipakai UI baru) |
+| CSS vars `:root` | blok di atas | ✅ selesai 2026-09-04 (Proyek A) — diverifikasi langsung di `apps/web/src/index.css`, termasuk `--canvas`, tiga `--status-*`, empat `--dur-*`, dua `--ease-*` |
+| Palet brand di `tailwind.config.js` | §5 Corporate Color | ✅ selesai 2026-09-04 (Proyek A) — diverifikasi di `apps/web/tailwind.config.js`: blok `colors.brand.*` (9 token) + `colors.canvas` + `colors.status.*` ada. Token legacy `primary #007bff` + `shadow-3d-*` MASIH ada di file yang sama (belum dihapus, dipakai komponen lama) — jangan salah baca ini sebagai migrasi tuntas |
 | `ui/Button`, `forms/Input`, `ui/Switch`, `tables/Table` | Component-First §1 | ⚠️ Ada tapi gaya lama — migrasikan saat disentuh |
-| Font | system stack (§3) | ❌ `index.css` masih `Arial` |
+| Font | system stack (§3) | ✅ selesai 2026-09-04 (Proyek A) — diverifikasi di `apps/web/src/index.css`: `font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;` pada `html, body, #root`, bukan `Arial` lagi |
 | Warna primary button | `#0077b6` (AA 4.9:1) | ⚠️ ±364 pemakaian `#0096c7` di 62 file (standar lama). Migrasi bertahap: saat mengedit sebuah halaman, samakan SELURUH tombol primary halaman itu ke `#0077b6` — jangan campur dua warna primary dalam satu halaman |
 
 ---
