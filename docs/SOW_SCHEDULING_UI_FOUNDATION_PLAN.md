@@ -893,9 +893,14 @@ describe('Panel', () => {
     expect(container.querySelector('header')).toBeNull();
   });
 
-  it('memakai shadow-card saat elevated', () => {
+  it('memakai shadow-card saat elevated, TAPI border tetap ada', () => {
     const { container } = render(<Panel elevated><p>body</p></Panel>);
     expect(container.firstChild.className).toContain('shadow-card');
+    // Ini invarian utama komponen ini, bukan detail. Kanvas vs putih hanya 1,12:1, jadi
+    // kalau OS mematikan shadow (mode kontras tinggi), border satu-satunya yang memisahkan
+    // kartu dari latar. Tanpa assertion ini, seseorang bisa memindahkan border ke dalam
+    // ternary `elevated` dan seluruh test tetap hijau.
+    expect(container.firstChild.className).toContain('border-slate-200');
   });
 
   it('memakai border tanpa shadow saat tidak elevated', () => {
@@ -922,6 +927,11 @@ describe('Toolbar', () => {
   it('menerima className tambahan untuk layout', () => {
     const { container } = render(<Toolbar className="mt-4"><span>x</span></Toolbar>);
     expect(container.firstChild.className).toContain('mt-4');
+  });
+
+  it('meneruskan atribut lain (a11y, data-*) ke elemen', () => {
+    render(<Toolbar role="toolbar" aria-label="Order filters"><span>x</span></Toolbar>);
+    expect(screen.getByRole('toolbar')).toHaveAttribute('aria-label', 'Order filters');
   });
 });
 ```
@@ -972,9 +982,16 @@ export default function Panel({ eyebrow, title, right, footer, elevated = false,
 ```jsx
 import React from 'react';
 
-export default function Toolbar({ className = '', children }) {
+// `...rest` BUKAN kelengkapan berlebihan. Tanpa itu pemanggil tidak bisa memasang
+// role="toolbar", aria-label, onScroll, atau data-testid — hanya className yang tembus —
+// dan primitif setipis ini akan dipaksa di-fork ("Toolbar2") begitu satu pemanggil butuh
+// atribut a11y. Ditemukan saat review Task 7.
+export default function Toolbar({ className = '', children, ...rest }) {
   return (
-    <div className={`flex flex-wrap items-center gap-2 border-b border-slate-200 p-3 ${className}`}>
+    <div
+      className={`flex flex-wrap items-center gap-2 border-b border-slate-200 p-3 ${className}`}
+      {...rest}
+    >
       {children}
     </div>
   );
