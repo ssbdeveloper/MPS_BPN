@@ -69,7 +69,7 @@ Filter & pencarian **bukan** proyek terpisah — komponennya lahir di A, dipakai
 | Perangkat | Desktop untuk semua, **kecuali Area** yang adaptif desktop+tablet | membalik sebagian §6 dokumen lama |
 | Fleksibilitas yang diinginkan | Keempatnya: panel resizable, mode tampilan, filter kuat, alur non-linear | mayoritas dieksekusi di B dan C |
 | Palet | **Boleh ditambah** netral & aksen semantik baru; biru brand tetap identitas | menyimpang dari CLAUDE.md yang menyebut palet "APPROVED" — lihat §8 |
-| Transisi page | **Slide berarah sebagai dasar + tile-expand dari menu** | |
+| Transisi page | ~~Slide berarah + tile-expand dari menu~~ → **slide berarah SAJA** | tile-expand di-revert 2026-09-05, lihat §12 |
 | Arah visual | **Layered + tepi status** | |
 | Copy UI | **Bahasa Inggris** | konsisten dengan halaman yang ada |
 | Blast radius | **Hanya `/sow-scheduling`** | halaman lain tak tersentuh sampai digarap |
@@ -143,6 +143,13 @@ yang sama dengan 2 kartu** mode normal. Pool order saat ini 251 baris.
 **Batasan:** di `/sow-scheduling/area`, mode `compact` **tidak boleh** menurunkan target sentuh
 di bawah 44px, karena Area kini wajib tablet-ready (§0).
 
+> **REVISI 2026-09-05 — kepadatan TIDAK rilis di Proyek A.** `DensityProvider` + `useDensity`
+> dibangun dan diuji (5 test), tapi **toggle-nya sengaja tidak dipasang** dan tidak ada halaman
+> yang membaca nilainya. Alasannya: sampai ada yang mengonsumsinya, toggle itu kontrol yang
+> terlihat, memakan ~20px di setiap header, dan tidak mengubah satu piksel pun — ia berbohong
+> kepada penggunanya. Proyek B/C harus lebih dulu membuat baris `OrderPanel`, kartu operasi,
+> dan baris pohon task membaca `useDensity`, baru memasang kembali toggle-nya.
+
 ---
 
 ## 4. Sistem motion
@@ -152,8 +159,8 @@ di bawah 44px, karena Area kini wajib tablet-ready (§0).
 - **`prefers-reduced-motion` wajib** — seluruh transisi jadi potong langsung, bukan sekadar
   dipercepat. Ini syarat rilis, bukan penyempurnaan.
 - `framer-motion` **sudah terpasang** (dipakai `ComponentTrackingPage`, `KanbanLevelOnePage`).
-  Tidak ada dependensi baru. Dipakai **hanya** untuk transisi route dan tile-expand;
-  hover/press tetap `transition-*` Tailwind.
+  Tidak ada dependensi baru. Dipakai **hanya** untuk transisi route; hover/press tetap
+  `transition-*` Tailwind. (Tile-expand direncanakan tapi di-revert — lihat §12.)
 
 ---
 
@@ -261,3 +268,44 @@ Backend, model data, kontrak VBA, dan varian salvaging tidak tersentuh.
 | `--canvas` dan aksen baru menyebar tak sengaja ke halaman lain | Token global tapi penerapan lokal; verifikasi regresi (§9) menangkapnya |
 | Motion terasa lambat bagi planner yang bekerja cepat | Durasi 250ms mengikuti standar yang sudah ada; kalau mengganggu, turunkan token `--dur-route`, bukan hapus transisinya |
 | Mode compact merusak Area di tablet | Batas 44px di §3.2, diverifikasi di §9 |
+
+---
+
+## 12. Yang berubah selama eksekusi (2026-09-05)
+
+Dua fitur yang disetujui di §2 **tidak jadi rilis**. Dicatat di sini, bukan dihapus diam-diam,
+supaya keputusannya bisa ditinjau ulang kalau prasyaratnya berubah.
+
+### 12.1 Tile-expand — DIBATALKAN (arsitektural)
+
+Dikerjakan (`35c1cce`) lalu di-revert (`d40a393`).
+
+`RouteTransition` memakai `AnimatePresence mode="wait"`, yang meng-unmount halaman menu
+SEPENUHNYA sebelum halaman tujuan mount. Shared-layout morph framer-motion mensyaratkan kedua
+elemen ber-`layoutId` hidup BERSAMAAN — dengan `mode="wait"` itu tak pernah terjadi. Tak ada
+halaman tujuan yang mendefinisikan `layoutId` pasangannya pun.
+
+Ini cacat desain di dokumen ini: tile-expand ditawarkan sebagai "tambahan, bukan pengganti"
+yang butuh slide berarah sebagai dasar — tanpa menyadari bahwa dasar itulah yang meniadakannya.
+
+Prasyarat kalau ingin dihidupkan: ganti `mode="wait"` (mis. `popLayout`) lebih dulu. Itu
+mengubah dasar transisi yang sudah berjalan, jadi butuh verifikasi browser, bukan test.
+
+### 12.2 Toggle kepadatan — TIDAK DIPASANG
+
+`DensityProvider` + `useDensity` rilis dan teruji; toggle-nya tidak (`b69ebf4`).
+Alasan lengkap di §3.2.
+
+### 12.3 Utang verifikasi yang BELUM ditutup
+
+**Tidak ada satu pun cek browser yang dilakukan sepanjang 14 task.** Tak ada agent yang punya
+tool browser. Yang berikut hanya terverifikasi lewat pembacaan kode dan test jsdom:
+
+| Hal | Risiko kalau salah |
+|---|---|
+| Font stack (4 halaman, perubahan global) | Metrik glyph berbeda → kolom tabel membungkus, label tombol tak muat |
+| Dua segmented control yang diganti | Perilaku tab/filter di halaman produksi |
+| Transisi route: arah, FrozenRoute, reduced-motion | Animasi salah arah atau konten "menggeser dirinya sendiri" |
+| Permukaan berlapis + tepi status | Kontras dan keterbacaan nyata |
+
+Test membuktikan **logika**-nya benar. Tidak ada yang membuktikan **tampilannya** benar.
