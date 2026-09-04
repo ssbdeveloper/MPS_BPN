@@ -576,6 +576,19 @@ describe('StatusPill', () => {
     expect(screen.getByText('X').className).toContain('text-slate-600');
   });
 
+  // Penjaga regresi untuk bug nyata: `TONES[tone] || TONES.neutral` membaca rantai
+  // prototype, sehingga nama-nama ini mengembalikan fungsi Object.prototype yang truthy
+  // dan bocor ke atribut class sebagai "function ... { [native code] }".
+  it.each(['constructor', 'toString', 'valueOf', 'hasOwnProperty'])(
+    'jatuh ke neutral untuk tone "%s" (nama milik Object.prototype)',
+    (tone) => {
+      render(<StatusPill tone={tone}>X</StatusPill>);
+      const cls = screen.getByText('X').className;
+      expect(cls).toContain('text-slate-600');
+      expect(cls).not.toContain('native code');
+    },
+  );
+
   it('meneruskan title untuk tooltip', () => {
     render(<StatusPill title="Order masih terbuka di SAP">REL</StatusPill>);
     expect(screen.getByText('REL')).toHaveAttribute('title', 'Order masih terbuka di SAP');
@@ -600,11 +613,15 @@ const TONES = {
   running: 'border-[#90e0ef] bg-[#caf0f8] text-status-running',
   late:    'border-amber-200 bg-amber-50 text-status-late',
   ok:      'border-emerald-200 bg-emerald-50 text-status-ok',
-  warn:    'border-amber-200 bg-amber-50 text-status-late',
 };
 
 export default function StatusPill({ tone = 'neutral', title, children }) {
-  const cls = TONES[tone] || TONES.neutral;
+  // Object.hasOwn, BUKAN `TONES[tone] || TONES.neutral`. Bentuk `||` membaca rantai
+  // prototype: tone="constructor" / "toString" / "valueOf" / "hasOwnProperty" mengembalikan
+  // fungsi Object.prototype yang TRUTHY, sehingga lolos fallback dan ter-stringify jadi
+  // "function Object() { [native code] }" di dalam atribut class. Terbukti saat review
+  // Task 5 — 4 dari 9 masukan uji bocor.
+  const cls = Object.hasOwn(TONES, tone) ? TONES[tone] : TONES.neutral;
   return (
     <span
       title={title}
