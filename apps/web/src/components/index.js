@@ -10,6 +10,7 @@ export { default as SegmentedControl } from './ui/SegmentedControl';
 export { default as Panel } from './ui/Panel';
 export { default as Toolbar } from './ui/Toolbar';
 export { default as FilterChip } from './ui/FilterChip';
+export { default as SplitPane } from './ui/SplitPane';
 export { default as DensityProvider } from './density/DensityProvider';
 export { useDensity } from './density/DensityContext';
 
