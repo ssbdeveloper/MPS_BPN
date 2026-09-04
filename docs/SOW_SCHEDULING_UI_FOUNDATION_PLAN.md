@@ -1811,6 +1811,19 @@ Pada bagian "Color Palette", tambahkan setelah tabel token biru:
 Aturan mengikat: teks/label beraksen **wajib** di atas permukaan putih, tidak pernah langsung di atas `--canvas`.
 ```
 
+- [ ] **Step 2b: Rekonsiliasi blok `:root` di `CLAUDE.md` dengan yang benar-benar ter-ship**
+
+Ditemukan saat review Task 2. `CLAUDE.md` baris ~403 memuat blok `:root` **aspiratif** yang tidak pernah diimplementasikan, dan nilainya berbeda dari yang kini benar-benar ada di `index.css`:
+
+```
+CLAUDE.md (lama, tak pernah ter-ship): --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+index.css (ter-ship Task 2):           --shadow-card: 0 1px 2px rgba(15,23,42,.05), 0 4px 12px rgba(15,23,42,.06);
+```
+
+Nilai baru yang benar — shadow lebih tebal adalah konsekuensi arah visual "layered" yang dipilih owner. Ganti baris `--shadow-card` di blok `:root` CLAUDE.md agar sama persis dengan `index.css`, lalu hapus catatan "**Status: BELUM ada di `index.css`**" di atas blok itu dan ganti dengan "Status: ✅ ada sejak 2026-09-04 (Proyek A Task 2)".
+
+Selagi di sana, tambahkan `--canvas`, ketiga `--status-*`, keempat `--dur-*`, dan kedua `--ease-*` ke blok itu supaya CLAUDE.md mencerminkan isi `index.css` yang sebenarnya, bukan versi lama yang tertinggal.
+
 - [ ] **Step 3: Perbarui tabel status implementasi di `CLAUDE.md`**
 
 Pada tabel "Status Implementasi Design System", ubah baris CSS vars, palet Tailwind, dan Font dari ❌ menjadi ✅ dengan catatan "selesai 2026-09-04 (Proyek A)".
