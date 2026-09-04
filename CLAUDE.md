@@ -150,6 +150,10 @@ Rasio penggunaan warna:
  
 3. **Surface selalu putih atau slate-50** — Card, modal, panel, sidebar,
    dan container utama harus menggunakan `bg-white` atau `bg-slate-50`.
+   **Pengecualian tercatat (2026-09-05, Proyek A):** LATAR halaman `/sow-scheduling`
+   memakai `bg-canvas` (`#eef2f6`). Kartu di atasnya TETAP `bg-white`. Kanvas HANYA untuk
+   latar — `#0077b6` di atasnya cuma 4,33:1 (gagal AA), dan kanvas vs putih cuma 1,12:1
+   sehingga pemisahan kartu WAJIB datang dari border + shadow, bukan beda warna.
  
 4. **Teks harus kontras** — Teks di atas background putih menggunakan `text-slate-800`
    minimum. Teks hint/secondary menggunakan `text-slate-500`. Jangan gunakan warna
@@ -163,7 +167,7 @@ Rasio penggunaan warna:
  
 | Konteks                   | Warna yang benar                  | Yang harus dihindari               |
 |---------------------------|-----------------------------------|------------------------------------|
-| Halaman / layout root     | `bg-slate-50`                     | Gradient biru gelap                |
+| Halaman / layout root     | `bg-slate-50` — **kecuali `/sow-scheduling`: `bg-canvas` (`#eef2f6`)** | Gradient biru gelap |
 | Header aplikasi           | `bg-white border-b border-slate-200` | `bg-blue-900`, rgba gelap        |
 | Panel filter / sidebar    | `bg-white border-b border-slate-200` | Background semi-transparan gelap |
 | Card / container          | `bg-white shadow-sm border border-slate-200 rounded-xl` | Background biru |
@@ -522,7 +526,7 @@ Setelah ditambahkan, bisa digunakan sebagai:
 // ❌ Background halaman dengan gradient gelap
 <div style={{ background: 'linear-gradient(160deg, #03045e 0%, #0077b6 100%)' }}>
  
-// ✅ Background halaman selalu slate-50
+// ✅ Background halaman: slate-50 (default) ATAU bg-canvas khusus /sow-scheduling
 <div className="min-h-screen bg-slate-50">
 ```
  
