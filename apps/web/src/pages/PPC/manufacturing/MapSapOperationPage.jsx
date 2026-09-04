@@ -8,6 +8,7 @@ import { EmptyState, SearchInput, Skeleton } from '../../../components';
 import {
   fetchMsProjects,
   fetchMsProjectTasks,
+  fetchOrderTasks,
   fetchSowOrderOperations,
   fetchSowOrders,
   mapSowOperationToTask,
@@ -24,6 +25,18 @@ function formatHours(value) {
   const hours = Number(value);
   if (!Number.isFinite(hours)) return '-';
   return `${hours.toLocaleString('en-GB', { maximumFractionDigits: 2 })}h`;
+}
+
+// Dua sisi halaman ini menyimpan nomor operasi dengan bentuk BERBEDA, dan itu bukan dugaan:
+//   sow.operation_no            -> integer  -> JSON 10, 20, 620
+//   ms_project_task.operation_no-> text     -> JSON "0010", "0020", "0620"
+// Selama kuncinya String(...) mentah, tidak ada satu pun operasi yang pernah cocok, jadi penanda
+// "sudah dipetakan" tak pernah muncul dan counter di header selalu 0/N. Semua pencocokan operasi
+// di halaman ini WAJIB lewat fungsi ini — di kedua sisi.
+function operationKey(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return text.replace(/^0+(?=.)/, '');
 }
 
 function operationSortValue(value) {
@@ -68,7 +81,7 @@ function buildTaskTree(tasks = []) {
 
 // Satu sumber lebar kolom untuk header DAN baris. Dipisah = pasti melenceng.
 // text-xs, tanggal 'dd Mon yyyy' butuh ~70px -> kolom 88px cukup dengan padding.
-const TREE_COLS = 'grid-cols-[minmax(0,1fr)_52px_104px_88px_88px]';
+const TREE_COLS = 'grid-cols-[minmax(0,1fr)_104px_52px_104px_88px_88px]';
 
 // Sel kosong ditulis eksplisit '—', bukan dibiarkan kosong: justru lubang datanya yang
 // perlu terlihat (di prod, 307 task level-2 hanya 13 yang punya plan date).
@@ -188,6 +201,14 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOpe
           </span>
         </div>
 
+        {/* Order + Op ditampilkan berdampingan: satu project bisa memuat beberapa order,
+            jadi nomor operasi saja ambigu saat menyisir pohon. */}
+        <span
+          className="truncate font-mono text-xs font-semibold tabular-nums text-slate-600"
+          title={task.order_no || undefined}
+        >
+          {task.order_no || DASH}
+        </span>
         <span className="truncate font-mono text-xs font-bold tabular-nums text-[#0077b6]">
           {task.operation_no || DASH}
         </span>
@@ -218,9 +239,40 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOpe
   );
 }
 
+const MAPPED_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'mapped', label: 'Mapped' },
+  { key: 'unmapped', label: 'Unmapped' },
+];
+
+// Filter di level OPERASI (keputusan 2026-09-04). Sengaja 4 status, bukan 2: kartu operasi
+// SUDAH membedakan "di project ini" (hijau) vs "di project lain" (amber), dan dua hal itu
+// menuntut keputusan planner yang berbeda — menggabungkannya membuang informasi yang ada.
+const OPERATION_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'current', label: 'This project' },
+  { key: 'elsewhere', label: 'Elsewhere' },
+  { key: 'unmapped', label: 'Unmapped' },
+];
+
+// 'current' | 'elsewhere' | 'unmapped' — satu operasi hanya punya satu status.
+function operationMappingState(mappedProjects = []) {
+  if (mappedProjects.length === 0) return 'unmapped';
+  return mappedProjects.some((row) => row.current) ? 'current' : 'elsewhere';
+}
+
+// Nama project MS Project panjang ("MPS - 21 Units ISO TANK - ORICA - (PO 02.04.26)"), dan satu
+// order boleh dipetakan ke lebih dari satu project. Ditampilkan: nama pertama + "+n", lengkapnya
+// di title.
+function projectNamesLabel(names = []) {
+  if (names.length === 0) return null;
+  return names.length > 1 ? `${names[0]} +${names.length - 1}` : names[0];
+}
+
 // Kartu order TIDAK lagi bisa ditarik: yang ditarik ke pohon adalah OPERASI, satu per satu.
 // Order di sini hanya dipilih untuk membuka daftar operasinya.
 function SowOrderCard({ order, selected, onClick }) {
+  const mappedProjects = Array.isArray(order.mapped_projects) ? order.mapped_projects : [];
   return (
     <button
       type="button"
@@ -243,6 +295,17 @@ function SowOrderCard({ order, selected, onClick }) {
           <span className="text-slate-300">·</span>
           <span className="truncate">{order.workcenter || 'No workcenter'}</span>
         </span>
+        {mappedProjects.length > 0 ? (
+          <span
+            title={mappedProjects.join(' · ')}
+            className="mt-1 flex items-center gap-1 text-[11px] font-semibold text-emerald-700"
+          >
+            <FolderSearch className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">{projectNamesLabel(mappedProjects)}</span>
+          </span>
+        ) : (
+          <span className="mt-1 block text-[11px] font-semibold text-slate-400">Not mapped</span>
+        )}
       </span>
     </button>
   );
@@ -251,32 +314,54 @@ function SowOrderCard({ order, selected, onClick }) {
 // Satu operasi = satu kartu yang bisa ditarik. Sebelumnya mapping borongan memaksa SELURUH
 // operasi satu order masuk ke satu outline level; planner sering menyusun WBS dengan parent
 // berbeda per kelompok operasi, jadi sekarang tiap operasi ditaruh sendiri-sendiri.
-function OperationCard({ operation, mappedTask, onDragStart, disabled }) {
-  const mapped = Boolean(mappedTask);
+// `mappedProjects` = [{ project_id, project_name, current }] — SETIAP project yang sudah memegang
+// operasi ini, bukan hanya project target. Nomor outline sengaja tidak ditampilkan: angka "2.1.3"
+// tidak memberi tahu planner apa pun tentang di mana operasi itu sudah punya rumah, sedangkan
+// nama project persis itulah keputusan yang perlu diambil sebelum menariknya lagi.
+function OperationCard({ operation, mappedProjects = [], onDragStart, disabled }) {
+  const inCurrentProject = mappedProjects.some((row) => row.current);
+  const names = mappedProjects.map((row) => row.project_name || row.project_id).filter(Boolean);
+  // Outline number HANYA untuk project yang sedang dibuka. Di project lain angka itu menunjuk
+  // pohon yang tidak terlihat planner, jadi tak bermakna (revisi sebagian keputusan 2026-08-07:
+  // owner mengizinkan info outline, tapi hanya di tempat yang punya konteks).
+  const currentOutline = mappedProjects.find((row) => row.current)?.outline_number || null;
   return (
     <div
       draggable={!disabled}
       onDragStart={disabled ? undefined : (event) => onDragStart(event, operation)}
       className={`cursor-grab rounded-lg border bg-white px-3 py-2 shadow-sm transition-colors active:cursor-grabbing ${
-        mapped ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200 hover:border-[#90e0ef] hover:bg-slate-50'
+        inCurrentProject ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200 hover:border-[#90e0ef] hover:bg-slate-50'
       }`}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="inline-flex items-center gap-1.5">
           <GripVertical className="h-3.5 w-3.5 shrink-0 text-slate-300" aria-hidden="true" />
           <span className="font-mono text-xs font-extrabold tabular-nums text-[#0077b6]">Op {operation.operation_no}</span>
+          {currentOutline && (
+            <span
+              title={`Outline ${currentOutline} di project ini`}
+              className="rounded border border-emerald-200 bg-emerald-50 px-1 font-mono text-[11px] font-bold tabular-nums text-emerald-700"
+            >
+              {currentOutline}
+            </span>
+          )}
         </span>
         <span className="text-xs font-semibold tabular-nums text-slate-500">{formatHours(operation.planhours)}</span>
       </div>
       <p className="mt-1 line-clamp-2 text-xs font-bold text-slate-700">{operation.operation_text || '-'}</p>
       <div className="mt-0.5 flex items-center justify-between gap-2">
-        <p className="truncate text-xs text-slate-500">{operation.workcenter || operation.wct_group || '-'}</p>
-        {mapped && (
+        <p className="min-w-0 truncate text-xs text-slate-500">{operation.workcenter || operation.wct_group || '-'}</p>
+        {names.length > 0 && (
           <span
-            title={mappedTask.task_name || undefined}
-            className="shrink-0 rounded-full border border-emerald-200 bg-emerald-100 px-1.5 text-[11px] font-bold uppercase tracking-wide text-emerald-700"
+            title={names.join(' · ')}
+            className={`inline-flex min-w-0 max-w-[60%] items-center gap-1 rounded-full border px-1.5 text-[11px] font-bold ${
+              inCurrentProject
+                ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
+                : 'border-amber-200 bg-amber-100 text-amber-700'
+            }`}
           >
-            {mappedTask.outline_number || 'Mapped'}
+            {!inCurrentProject && <FolderSearch className="h-3 w-3 shrink-0" aria-hidden="true" />}
+            <span className="truncate">{projectNamesLabel(names)}</span>
           </span>
         )}
       </div>
@@ -284,14 +369,28 @@ function OperationCard({ operation, mappedTask, onDragStart, disabled }) {
   );
 }
 
-function OperationList({ operations, mappedByOperation, onDragStart, disabled }) {
+function OperationList({ operations, mappedProjectsByOperation, onDragStart, disabled, filter = 'all' }) {
+  const visible = filter === 'all'
+    ? operations
+    : operations.filter((operation) => (
+      operationMappingState(mappedProjectsByOperation.get(operationKey(operation.operation_no)) || []) === filter
+    ));
+
+  if (visible.length === 0) {
+    return (
+      <p className="px-1 py-6 text-center text-xs font-semibold text-slate-400">
+        No operations match this filter.
+      </p>
+    );
+  }
+
   return (
     <div className="space-y-1.5">
-      {sortByOperationNo(operations).map((operation) => (
+      {sortByOperationNo(visible).map((operation) => (
         <OperationCard
           key={operation.idsow}
           operation={operation}
-          mappedTask={mappedByOperation.get(String(operation.operation_no))}
+          mappedProjects={mappedProjectsByOperation.get(operationKey(operation.operation_no)) || []}
           onDragStart={onDragStart}
           disabled={disabled}
         />
@@ -433,9 +532,18 @@ export default function MapSapOperationPage() {
   const [expandedTaskIds, setExpandedTaskIds] = useState(() => new Set());
   const [sowOrders, setSowOrders] = useState([]);
   const [sowSearch, setSowSearch] = useState('');
+  // 'all' | 'mapped' | 'unmapped' — DIKIRIM KE SERVER, tidak disaring di klien: daftar order
+  // dipaginasi (limit 80), jadi menyaring halaman yang kebetulan termuat akan menampilkan
+  // jumlah yang salah dan menyembunyikan order yang belum sempat diambil.
+  const [sowMappedFilter, setSowMappedFilter] = useState('all');
   const [sowError, setSowError] = useState(null);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [operationFilter, setOperationFilter] = useState('all');
   const [operations, setOperations] = useState([]);
+  // Task order terpilih di SELURUH project (bukan hanya project aktif) — dasar penanda
+  // "operasi ini sudah ada di project mana". Gagal ambil = penanda tidak muncul, panel
+  // operasi tetap jalan; ini informasi tambahan, bukan syarat kerja.
+  const [orderTasksAllProjects, setOrderTasksAllProjects] = useState([]);
   const [sowLoading, setSowLoading] = useState(false);
   const [operationLoading, setOperationLoading] = useState(false);
   const [operationError, setOperationError] = useState(null);
@@ -469,13 +577,13 @@ export default function MapSapOperationPage() {
     setSowLoading(true);
     setSowError(null);
     try {
-      setSowOrders(await fetchSowOrders({ q: sowSearch, limit: 80 }));
+      setSowOrders(await fetchSowOrders({ q: sowSearch, mapped: sowMappedFilter, limit: 80 }));
     } catch (error) {
       setSowError(error.message);
     } finally {
       setSowLoading(false);
     }
-  }, [sowSearch]);
+  }, [sowSearch, sowMappedFilter]);
 
   useEffect(() => {
     const timer = setTimeout(loadSowOrders, 250);
@@ -503,11 +611,26 @@ export default function MapSapOperationPage() {
     setExpandedTaskIds(new Set());
   }, []);
 
+  // Dipisah dari loadOperations supaya bisa dipanggil ulang setelah mapping berhasil,
+  // dan supaya kegagalannya tidak pernah menjatuhkan panel operasi.
+  const loadOrderTasksAllProjects = useCallback(async (orderNo) => {
+    if (!orderNo) {
+      setOrderTasksAllProjects([]);
+      return;
+    }
+    try {
+      setOrderTasksAllProjects(await fetchOrderTasks(orderNo));
+    } catch {
+      setOrderTasksAllProjects([]);
+    }
+  }, []);
+
   const loadOperations = useCallback(async (order) => {
     setSelectedOrder(order);
     setSourceView('operations');
     setOperationLoading(true);
     setOperationError(null);
+    loadOrderTasksAllProjects(order?.order_no);
     try {
       setOperations(await fetchSowOrderOperations(order.order_no));
     } catch (error) {
@@ -515,7 +638,13 @@ export default function MapSapOperationPage() {
     } finally {
       setOperationLoading(false);
     }
-  }, []);
+  }, [loadOrderTasksAllProjects]);
+
+  // Filter operasi kembali ke "All" tiap ganti order — filter order sebelumnya bisa
+  // menyembunyikan seluruh isi order berikutnya dan terlihat seperti data kosong.
+  useEffect(() => {
+    setOperationFilter('all');
+  }, [selectedOrder?.order_no]);
 
   // Satu operasi dibawa sebagai JSON; node tujuan yang menentukan assign vs buat-anak.
   const handleOperationDragStart = useCallback((event, operation) => {
@@ -541,6 +670,11 @@ export default function MapSapOperationPage() {
         description: [result.task?.outline_number, result.task?.task_name].filter(Boolean).join(' · ') || undefined,
       });
       setProjectTasks(await fetchMsProjectTasks(selectedProject.project_id));
+      loadOrderTasksAllProjects(dragged.order_no);
+      // Keanggotaan mapped/unmapped sebuah order BERUBAH tepat di sini. Tanpa muat ulang,
+      // order yang baru saja dipetakan tetap tampil di tab "Unmapped" begitu user menekan
+      // Back — daftar order hanya dimuat ulang saat search/filter berubah.
+      loadSowOrders();
       if (asChild) setExpandedTaskIds((prev) => new Set([...prev, task.task_id]));
     } catch (error) {
       const { title, description } = mappingErrorText(error);
@@ -558,7 +692,7 @@ export default function MapSapOperationPage() {
     } finally {
       setMapping(false);
     }
-  }, [selectedProject]);
+  }, [selectedProject, loadOrderTasksAllProjects, loadSowOrders]);
 
   const handleDropOperation = useCallback((task, hasChildren, event) => {
     const raw = event.dataTransfer?.getData('application/json');
@@ -600,10 +734,51 @@ export default function MapSapOperationPage() {
     projectTasks.forEach((task) => {
       if (!task.operation_no || !task.order_no) return;
       if (String(task.order_no).replace(/^0+/, '') !== key) return;
-      map.set(String(task.operation_no), task);
+      map.set(operationKey(task.operation_no), task);
     });
     return map;
   }, [projectTasks, selectedOrder]);
+
+  // SEMUA project yang memegang tiap operasi order terpilih — project aktif maupun bukan.
+  // Project aktif diambil dari projectTasks, bukan dari orderTasksAllProjects: hanya sumber itu
+  // yang dijamin segar tepat setelah mapping berhasil (loadOrderTasksAllProjects sengaja tidak
+  // di-await) dan penandanya tetap muncul kalau fetchOrderTasks gagal.
+  const mappedProjectsByOperation = useMemo(() => {
+    const map = new Map();
+    const currentProjectId = selectedProject?.project_id;
+    const add = (operationNo, projectId, projectName, current, outlineNumber) => {
+      const key = operationKey(operationNo);
+      if (!key) return;
+      const rows = map.get(key) || [];
+      if (rows.some((row) => row.project_id === projectId)) return; // satu project sekali
+      rows.push({
+        project_id: projectId,
+        project_name: projectName,
+        current,
+        outline_number: outlineNumber || null,
+      });
+      map.set(key, rows);
+    };
+
+    mappedByOperation.forEach((task, operationNo) => {
+      add(operationNo, currentProjectId, selectedProject?.project_name, true, task?.outline_number);
+    });
+    orderTasksAllProjects.forEach((task) => {
+      if (!task.operation_no) return;
+      add(
+        task.operation_no,
+        task.project_id,
+        task.project_name,
+        task.project_id === currentProjectId,
+        task.outline_number,
+      );
+    });
+
+    // Project aktif selalu di depan: itu yang menentukan warna badge dan nama yang terlihat
+    // saat satu operasi dipetakan di beberapa project.
+    map.forEach((rows) => rows.sort((a, b) => Number(b.current) - Number(a.current)));
+    return map;
+  }, [mappedByOperation, orderTasksAllProjects, selectedProject]);
 
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4 md:px-6">
@@ -627,6 +802,28 @@ export default function MapSapOperationPage() {
 
               <div className="border-b border-slate-200 p-3">
                 <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Search order or part" />
+                <div
+                  role="group"
+                  aria-label="MS Project mapping filter"
+                  className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1"
+                >
+                  {MAPPED_FILTERS.map((item) => {
+                    const active = item.key === sowMappedFilter;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSowMappedFilter(item.key)}
+                        className={`inline-flex min-h-[34px] items-center justify-center rounded-md px-2 py-1 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
+                          active ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-600 hover:bg-white/60 hover:text-slate-900'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="min-h-0 flex-1 space-y-2 overflow-auto bg-slate-50 p-3">
@@ -638,7 +835,11 @@ export default function MapSapOperationPage() {
                   <EmptyState
                     icon={PackageOpen}
                     title="No orders"
-                    description="No SOW order matches this search."
+                    description={
+                      sowMappedFilter === 'all'
+                        ? 'No SOW order matches this search.'
+                        : `No ${sowMappedFilter} SOW order matches this search.`
+                    }
                   />
                 ) : (
                   sowOrders.map((order) => (
@@ -683,6 +884,29 @@ export default function MapSapOperationPage() {
                 )}
               </div>
 
+              <div
+                role="group"
+                aria-label="Operation mapping filter"
+                className="grid shrink-0 grid-cols-4 gap-1 border-b border-slate-200 bg-white px-3 pb-3 pt-0"
+              >
+                {OPERATION_FILTERS.map((item) => {
+                  const active = item.key === operationFilter;
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setOperationFilter(item.key)}
+                      className={`inline-flex min-h-[34px] items-center justify-center rounded-md px-1.5 py-1 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
+                        active ? 'bg-[#caf0f8] text-[#0077b6] shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="min-h-0 flex-1 space-y-1.5 overflow-auto bg-slate-50 p-3">
                 {operationLoading ? (
                   Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[76px] w-full rounded-lg" />)
@@ -693,9 +917,10 @@ export default function MapSapOperationPage() {
                 ) : (
                   <OperationList
                     operations={operations}
-                    mappedByOperation={mappedByOperation}
+                    mappedProjectsByOperation={mappedProjectsByOperation}
                     onDragStart={handleOperationDragStart}
                     disabled={mapping}
+                    filter={operationFilter}
                   />
                 )}
               </div>
@@ -739,6 +964,7 @@ export default function MapSapOperationPage() {
                   {!taskLoading && !taskError && taskTree.roots.length > 0 && (
                     <div className={`sticky top-0 z-10 grid ${TREE_COLS} items-center gap-2 border-b border-slate-200 bg-white px-2 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-500`}>
                       <span>Task</span>
+                      <span>Order</span>
                       <span>Op</span>
                       <span>Workcenter</span>
                       <span>Start</span>

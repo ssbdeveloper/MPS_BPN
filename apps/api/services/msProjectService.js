@@ -1179,6 +1179,11 @@ async function listProjectTasks(projectIdParam, query = {}) {
 // Nilai sah parameter `completion`. 'all' = perilaku lama: tidak memfilter apa pun.
 const SOW_COMPLETION_VALUES = new Set(["all", "unfinished", "finished"]);
 
+// Nilai sah parameter `mapped` (sudah/belum punya task MS Project). 'all' = perilaku lama.
+// Definisinya SAMA dengan kolom has_msp_task supaya chip filter dan penanda di kartu tidak
+// pernah berbeda pendapat soal satu order.
+const SOW_MAPPED_VALUES = new Set(["all", "mapped", "unmapped"]);
+
 // PREDIKAT EKSKLUSI SUBCONT — kontrak Fase 6 §C. Bentuknya HARUS sama di setiap agregasi yang
 // membaca sow.planhours (sowScheduleController, dashboardController, mpsDashboard*, dst.),
 // jadi jangan "dirapikan" jadi join atau IN (...) di sini saja.
@@ -1265,6 +1270,13 @@ async function listSowOrders(query = {}) {
   }
   const excludeUnknown = toBool(query.exclude_unknown, false) === true;
 
+  const mapped = normalizeText(query.mapped).toLowerCase() || "all";
+  if (!SOW_MAPPED_VALUES.has(mapped)) {
+    throw new ApiError(400, "INVALID_MAPPED", "mapped must be one of all, mapped, unmapped", [
+      { field: "mapped", value: query.mapped },
+    ]);
+  }
+
   // due_by — FILTER sungguhan, beda dari in_window yang hanya anotasi (D6).
   // Mempertahankan order yang punya >= 1 task aktif dengan coalesce(plan_finish,
   // plan_start) <= due_by. TANPA batas bawah: task yang jadwalnya sudah lewat
@@ -1348,6 +1360,14 @@ async function listSowOrders(query = {}) {
         and msp.due_by_tasks
     )`);
   }
+  // mapped — filter POOL, bukan anotasi. 'unmapped' harus memakai predikat yang persis
+  // sama dengan has_msp_task (CTE msp), kalau tidak sebuah order bisa hilang dari tab
+  // "belum" sekaligus tampil tanpa penanda mapping di tab "semua".
+  if (mapped === "mapped") {
+    having.push("exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0'))");
+  } else if (mapped === "unmapped") {
+    having.push("not exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0'))");
+  }
 
   const limit = clampLimit(query.limit, 50);
   const offset = clampOffset(query.offset);
@@ -1365,8 +1385,14 @@ async function listSowOrders(query = {}) {
               min(t.plan_start)::date as earliest_plan_start,
               max(t.plan_finish)::date as latest_plan_finish,
               ${inWindowTasksSql},
-              ${dueByTasksSql}
+              ${dueByTasksSql},
+              -- Satu order boleh dipetakan ke lebih dari satu project (index unik hanya
+              -- per-project), jadi ini array, bukan skalar. Nama dipakai apa adanya di kartu
+              -- order; project_id jadi cadangan kalau baris ms_project-nya hilang.
+              array_remove(array_agg(distinct coalesce(p.project_name, t.project_id::text)), null)
+                as mapped_projects
          from public.ms_project_task t
+         left join public.ms_project p on p.project_id = t.project_id
         where t.is_active = true
           and coalesce(t.is_summary, false) = false
           and t.order_no is not null
@@ -1403,6 +1429,10 @@ async function listSowOrders(query = {}) {
          false
        ) as is_unfinished,
        exists (select 1 from msp where msp.order_key = ltrim(s.order_no, '0')) as has_msp_task,
+       coalesce(
+         (select msp.mapped_projects from msp where msp.order_key = ltrim(s.order_no, '0')),
+         '{}'::text[]
+       ) as mapped_projects,
        (select msp.earliest_plan_start from msp where msp.order_key = ltrim(s.order_no, '0')) as earliest_plan_start,
        (select msp.latest_plan_finish from msp where msp.order_key = ltrim(s.order_no, '0')) as latest_plan_finish,
        coalesce((select msp.in_window_tasks from msp where msp.order_key = ltrim(s.order_no, '0')), 0) > 0 as in_window,
