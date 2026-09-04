@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect } from 'vitest';
-import { DensityProvider, useDensity } from './DensityProvider';
+import { describe, it, expect, vi } from 'vitest';
+import { DensityProvider } from './DensityProvider';
+import { useDensity } from './DensityContext';
 
 function Probe() {
   const { density, toggle } = useDensity();
@@ -32,5 +33,11 @@ describe('DensityProvider', () => {
     window.localStorage.setItem('mps.density', 'gigantic');
     render(<DensityProvider><Probe /></DensityProvider>);
     expect(screen.getByRole('button')).toHaveTextContent('normal');
+  });
+
+  it('melempar error saat useDensity dipakai di luar DensityProvider', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => render(<Probe />)).toThrow('useDensity harus dipakai di dalam <DensityProvider>');
+    consoleErrorSpy.mockRestore();
   });
 });
