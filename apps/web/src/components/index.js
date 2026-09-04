@@ -5,6 +5,7 @@ export { MachineCard, InfoBox } from './ui/Card';
 export { Modal, PreviewBox } from './ui/Modal';
 export { default as EmptyState } from './ui/EmptyState';
 export { default as Skeleton, SkeletonText, SkeletonRow } from './ui/Skeleton';
+export { default as DensityProvider, useDensity } from './density/DensityProvider';
 
 // Layout Components
 export {
