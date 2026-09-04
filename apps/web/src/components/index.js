@@ -6,6 +6,7 @@ export { Modal, PreviewBox } from './ui/Modal';
 export { default as EmptyState } from './ui/EmptyState';
 export { default as StatusPill } from './ui/StatusPill';
 export { default as Skeleton, SkeletonText, SkeletonRow } from './ui/Skeleton';
+export { default as SegmentedControl } from './ui/SegmentedControl';
 export { default as DensityProvider } from './density/DensityProvider';
 export { useDensity } from './density/DensityContext';
 

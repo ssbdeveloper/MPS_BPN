@@ -4,7 +4,7 @@ import {
   PackageOpen, Replace, RotateCw, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { EmptyState, SearchInput, Skeleton } from '../../../components';
+import { EmptyState, SearchInput, SegmentedControl, Skeleton } from '../../../components';
 import {
   fetchMsProjects,
   fetchMsProjectTasks,
@@ -802,27 +802,13 @@ export default function MapSapOperationPage() {
 
               <div className="border-b border-slate-200 p-3">
                 <SearchInput value={sowSearch} onChange={setSowSearch} placeholder="Search order or part" />
-                <div
-                  role="group"
-                  aria-label="MS Project mapping filter"
-                  className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-slate-100 p-1"
-                >
-                  {MAPPED_FILTERS.map((item) => {
-                    const active = item.key === sowMappedFilter;
-                    return (
-                      <button
-                        key={item.key}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => setSowMappedFilter(item.key)}
-                        className={`inline-flex min-h-[34px] items-center justify-center rounded-md px-2 py-1 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none ${
-                          active ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-600 hover:bg-white/60 hover:text-slate-900'
-                        }`}
-                      >
-                        {item.label}
-                      </button>
-                    );
-                  })}
+                <div className="mt-3">
+                  <SegmentedControl
+                    items={MAPPED_FILTERS.map((item) => ({ key: item.key, label: item.label }))}
+                    value={sowMappedFilter}
+                    onChange={setSowMappedFilter}
+                    ariaLabel="MS Project mapping filter"
+                  />
                 </div>
               </div>
 

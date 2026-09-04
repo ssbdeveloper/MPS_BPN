@@ -4,7 +4,7 @@ import {
   AlertTriangle, CalendarRange, ChevronDown, GripVertical, Inbox, Loader2, MapPinOff,
   Package, RefreshCw,
 } from 'lucide-react';
-import { EmptyState, SearchInput, Skeleton } from '../../components';
+import { EmptyState, SearchInput, SegmentedControl, Skeleton } from '../../components';
 import { formatDate, formatHours, plural } from './constants';
 
 // ── Pool order (Fase 4 sisi UI + keputusan D6) ────────────────────────────────
@@ -300,37 +300,14 @@ export default function OrderPanel({
           placeholder="Search order / part..."
         />
 
-        {/* Segmented control GRID STATIS — kolom tetap (2x2), jadi badge yang
-            muncul/hilang tidak pernah menggeser tombol lain. Badge 0 disembunyikan. */}
-        <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-slate-100 p-1" role="group" aria-label="Order status filter">
-          {tabItems.map((item) => {
-            const active = item.key === tab;
-            const count = item.count;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                aria-pressed={active}
-                onClick={() => onTabChange?.(item.key)}
-                className={`inline-flex min-h-[34px] items-center justify-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
-                  active
-                    ? 'bg-white text-[#0077b6] shadow-sm'
-                    : 'text-slate-600 hover:bg-white/60 hover:text-slate-900'
-                }`}
-              >
-                {item.label}
-                {Number.isFinite(count) && count > 0 && (
-                  <span
-                    className={`rounded-full px-1.5 text-[11px] font-bold tabular-nums ${
-                      active ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-200/70 text-slate-600'
-                    }`}
-                  >
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        <div className="mt-3">
+          <SegmentedControl
+            items={tabItems}
+            value={tab}
+            onChange={onTabChange}
+            ariaLabel="Order status filter"
+            columns={2}
+          />
         </div>
       </div>
 
