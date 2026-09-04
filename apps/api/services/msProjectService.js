@@ -33,6 +33,31 @@ function normalizeText(value) {
   return String(value ?? "").trim();
 }
 
+// Buang suffix unit MS Project dari nama workcenter: "C5100FAB[200%]" -> "C5100FAB".
+//
+// Kenapa di SERVER, bukan cukup di VBA: nilai ini datang dari payload klien (upsertTasks
+// menulis workcenter apa adanya), jadi satu planner yang masih memakai macro lama sudah cukup
+// untuk mencemari ulang seluruh project. Terbukti 2026-09-04 — 405 baris dibersihkan di DB,
+// lalu tertulis ulang oleh sync berikutnya; snapshot revisi merekam payload yang memang sudah
+// membawa "[N%]" (ORICA rev 9/10/11: 195 -> 198 -> 203 task tercemar). Perbaikan sisi VBA
+// (MsSafeTaskWorkcenter, commit 794b7c3) tetap benar, ini lapis kedua yang tidak bergantung
+// pada versi macro yang dipakai tiap orang.
+//
+// Dampaknya nyata, bukan kosmetik: filter workcenter di listBayScheduleTasks memakai
+// pencocokan PERSIS, jadi "C5100FAB[200%]" tidak pernah cocok dengan "C5100FAB" dan job-nya
+// hilang dari /select-job.
+//
+// Hanya memotong di '[' pertama. Multi-resource ("A[100%],B[50%]") sengaja TIDAK dipecah —
+// belum pernah muncul di data (0 baris berkoma saat aturan ini dibuat) dan menebak resource
+// mana yang jadi workcenter bukan keputusan yang boleh diambil diam-diam.
+function sanitizeWorkcenter(value) {
+  const text = nullableText(value);
+  if (!text) return text;
+  const cut = text.indexOf("[");
+  if (cut === -1) return text;
+  return nullableText(text.slice(0, cut));
+}
+
 function nullableText(value) {
   const text = normalizeText(value);
   return text || null;
@@ -404,7 +429,7 @@ function normalizeTaskPayload(task, index, isPublish) {
     operation_no: nullableText(task.operation_no),
     ssbr_id: nullableText(task.ssbr_id),
     sow_id: toNullableInt(task.sow_id),
-    workcenter: nullableText(task.workcenter),
+    workcenter: sanitizeWorkcenter(task.workcenter),
     plan_start: nullableText(task.plan_start),
     plan_finish: nullableText(task.plan_finish),
     duration_minutes: toNullableInt(task.duration_minutes),
