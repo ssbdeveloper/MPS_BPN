@@ -220,6 +220,11 @@ exports.listUsers = async (req, res) => {
           username,
           name,
           COALESCE(NULLIF(roles, ''), role) AS roles,
+          COALESCE((
+            SELECT array_agg(ur.role_key ORDER BY ur.role_key)
+            FROM rbac.user_roles ur
+            WHERE ur.user_id = public.users.id
+          ), '{}') AS role_keys,
           created_at,
           updated_at
         FROM public.users

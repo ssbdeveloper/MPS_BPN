@@ -246,6 +246,11 @@ const MANIFEST = [
   { m: 'PUT',    p: '/auth/users/:id',                        f: 'manage_users', a: W },
   { m: 'DELETE', p: '/auth/users/:id',                        f: 'manage_users', a: W },
   { m: 'PUT',    p: '/auth/users/:id/permissions',            f: 'manage_users', a: W },
+  // Role packages (rbacController) — 2026-09-07
+  { m: 'POST',   p: '/auth/roles',                            f: 'manage_users', a: W },
+  { m: 'PUT',    p: '/auth/roles/:role_key',                  f: 'manage_users', a: W },
+  { m: 'DELETE', p: '/auth/roles/:role_key',                  f: 'manage_users', a: W },
+  { m: 'PUT',    p: '/auth/users/:id/roles',                  f: 'manage_users', a: W },
 ];
 
 // Writes that are NOT admin-RBAC and must stay open (operator/NFC shopfloor + self/login).

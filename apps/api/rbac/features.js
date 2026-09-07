@@ -20,6 +20,7 @@ const FEATURES = [
   { id: 'sow_subcont',          label: 'SOW Subcont' },
   { id: 'shift_rules',          label: 'Shift Capacity' },
   { id: 'roster_operator',      label: 'Roster Operator' },
+  { id: 'roster_foreman_team',  label: 'Foreman Team' },
   // MS Project — dipecah dari `ms_project_admin` (Fase 0 / D1). Tiga id di bawah
   // baru; `ms_project_admin` dipertahankan tapi DIPERSEMPIT ke force-checkin,
   // refresh kalender, dan resource. Lihat manifest.js untuk pemetaan route-nya.
@@ -38,6 +39,7 @@ const FEATURES = [
   { id: 'machine_hours',        label: 'Machine Hours' },
   { id: 'nfc_users',            label: 'NFC Users' },
   { id: 'sap_log',              label: 'SAP Log' },
+  { id: 'config_rules',         label: 'Configuration Rules' },
   { id: 'manage_users',         label: 'Manage Users' },
 ];
 
