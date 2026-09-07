@@ -1089,6 +1089,9 @@ async function applyExplicitDeactivate(client, projectId, deactivate = {}) {
     assignments_deactivated: assignmentIds.length,
     dependencies_deactivated: dependencyIds.length,
     resources_deactivated: resourceIds.length,
+    // Dipakai syncProject untuk melaporkan mapping yatim (spec mapping-operasi-sap-tahan-sync):
+    // task yang mati oleh sync bisa menyeret mapping operasi jadi TASK_LOST.
+    deactivated_task_ids: taskIds,
   };
 }
 
@@ -1667,10 +1670,22 @@ async function getSowOrderOperations(orderNoParam) {
   return { rows: result.rows };
 }
 
-// TASK source for the task-level bay reservation picker. Unlike getSowOrderOperations
-// (raw `sow` rows, NO task_id/project_id), these rows carry task_id + project_id and can
-// therefore drive a task-level ms_project_bay_schedule insert. Only orders already
-// imported/mapped into an MS Project yield tasks here (correct task-level semantics).
+// Picker reservasi bay task-level: sumber operasi = `sow` (cermin SAP), LEFT JOIN
+// sow_operation_task_map (mapping milik PPC) dan task aktif. Spec:
+// docs/planning/mapping-operasi-sap-tahan-sync.md (revisi 2026-09-05).
+//
+// SETIAP baris = satu operasi SOW dengan mapping_status:
+//   READY         mapping ada, task aktif & non-summary -> bisa dicentang, tanggal dari task
+//   TASK_LOST     mapping ada, task-nya tidak aktif (mati oleh sync restrukturisasi) ->
+//                 tampil dengan peringatan + tautan petakan ulang, TIDAK bisa dicentang
+//   NEEDS_MAPPING belum ada mapping -> di balik filter, tidak bisa dicentang
+// Baris unmapped ber-project_id NULL supaya pemanggil (MapSapOperationPage) tidak
+// menghitungnya sebagai "mapped di project lain".
+//
+// Keputusan 2026-09-03 (task tanpa operation_no disembunyikan) menjadi usang dengan sendirinya:
+// sumbernya sekarang sow, jadi task yang op-nya tidak ada di sow tidak muncul (op itu sudah
+// tidak bisa write-back headcount ke SAP). 32 task aktif ber-op tanpa sow-row terdampak dan
+// itu memang diinginkan (tercatat di spec revisi).
 async function listOrderTasks(orderNoParam) {
   const orderNo = nullableText(orderNoParam);
   if (!orderNo) {
@@ -1679,56 +1694,40 @@ async function listOrderTasks(orderNoParam) {
 
   const result = await pool().query(
     `select
-       t.task_id,
-       t.project_id,
+       s.operation_no::text as operation_no,
+       s.operation_text,
+       s.workcenter,
+       s.planhours,
+       s.people_required,
+       s.part_name,
+       s.ssbr_id,
+       m.project_id,
+       m.task_id,
        t.task_name,
-       t.order_no,
-       t.operation_no,
-       t.ssbr_id,
-       t.workcenter,
        t.outline_number,
        t.plan_start,
        t.plan_finish,
        t.planned_work_minutes,
        t.duration_minutes,
-       s.people_required,
-       s.planhours,
-       -- Jumlah orang menurut PLAN MS Project. Tidak disimpan sebagai kolom sendiri karena
-       -- MS Project sendiri menurunkannya: Units = Work / Duration. Kedua bahannya sudah
-       -- tersinkron di sini, jadi menyimpan angkanya lagi = menyimpan salinan yang bisa basi
-       -- (terbukti: 4 dari 290 baris cadangan punya suffix [200%] padahal work sudah = durasi).
-       -- Dibiarkan null saat durasi 0/kosong supaya UI bisa membedakan "tidak tahu" dari "1 orang".
-       -- Pasangannya s.people_required = RENCANA milik web; keduanya sengaja tidak saling
-       -- menimpa, selisihnya ditampilkan sebagai badge (docs/prd/MSPROJECT_RESOURCE_MANAGEMENT_PLAN.md).
+       -- Jumlah orang menurut PLAN MS Project (Work / Duration), dihitung di sini seperti
+       -- dulu. NULL untuk TASK_LOST / NEEDS_MAPPING (tidak ada task hidup).
        round(t.planned_work_minutes::numeric / nullif(t.duration_minutes, 0), 2) as people_msp,
-       -- Satu order boleh dipetakan ke lebih dari satu project (index unik hanya per-project),
-       -- dan fungsi ini TIDAK menyaring per project. Tanpa nama project + penanda ini, scheduler
-       -- melihat operasi yang sama berkali-kali di picker reservasi tanpa cara membedakannya —
-       -- persis gejala yang dilaporkan untuk order 1000127752 (3 project x 294 operasi).
        p.project_name,
-       (count(*) over (partition by t.operation_no) > 1) as duplicate_across_projects
-     from ms_project_task t
-     left join ms_project p on p.project_id = t.project_id
-     left join sow s on s.idsow = t.sow_id
-     where ltrim(t.order_no, '0') = ltrim($1, '0')
-       and t.is_active = true
-       and coalesce(t.is_summary, false) = false
-       -- Keputusan owner 2026-09-03: task TANPA operation_no disembunyikan dari picker
-       -- reservasi (/sow-scheduling/area). Alasannya bukan kosmetik — headcount hanya
-       -- bisa ditulis balik ke SOW lewat operation_no (lihat ReservationPanel), jadi
-       -- task yang belum dipetakan tak bisa dijadwalkan secara utuh. Petakan dulu di
-       -- /sow-scheduling/map, task-nya muncul sendiri di sini.
-       -- Dampak terukur saat diterapkan (CKP 2026-09-03): 939 task hilang dari picker, dari
-       -- 2.472 yang selama ini bisa muncul (1.533 punya operation_no). Sisanya (726 task
-       -- tanpa operation_no DAN tanpa order_no) memang tak pernah sampai ke sini.
-       -- Mengembalikan = hapus satu baris di bawah ini.
-       and nullif(btrim(coalesce(t.operation_no, '')), '') is not null
-     order by
-       case when t.operation_no ~ '^\\d+$' then t.operation_no::integer end nulls last,
-       t.operation_no nulls last,
-       t.outline_number nulls last,
-       t.created_at,
-       t.task_name`,
+       m.mapped_at,
+       m.mapped_by,
+       case
+         when m.task_id is null then 'NEEDS_MAPPING'
+         when t.task_id is null or not t.is_active or coalesce(t.is_summary, false) then 'TASK_LOST'
+         else 'READY'
+       end as mapping_status
+     from sow s
+     left join sow_operation_task_map m
+       on m.order_key = ltrim(s.order_no, '0')
+      and m.operation_key = s.operation_no
+     left join ms_project_task t on t.task_id = m.task_id
+     left join ms_project p on p.project_id = m.project_id
+     where ltrim(s.order_no, '0') = ltrim($1, '0')
+     order by s.operation_no asc, s.idsow asc`,
     [orderNo]
   );
 
@@ -2012,17 +2011,34 @@ function buildNextOutlineNumberFactory(tasks, parentTask = null) {
 //
 // Menghormati uq_ms_project_task_order_op (unik GLOBAL): satu (order, operasi) = satu task
 // aktif. Memetakan ulang operasi yang sudah ada = MEMINDAHKAN, bukan menggandakan.
+// Helper tunggal normalisasi operation_no sisi MS Project (text -> integer), spec §4.4.
+// Menolak nilai non-integer dengan pesan eksplisit, bukan menyimpannya apa adanya.
+function parseOperationKey(value) {
+  const text = String(value ?? "").trim();
+  if (!text) throw new ApiError(400, "INVALID_PAYLOAD", "operation_no is required", [{ field: "operation_no" }]);
+  if (!/^[0-9]+$/.test(text)) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "operation_no must be a positive integer", [{ field: "operation_no", value: text }]);
+  }
+  const parsed = Number.parseInt(text, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "operation_no is out of range", [{ field: "operation_no", value: text }]);
+  }
+  return parsed;
+}
+
 async function mapSowOperationToTask(projectIdParam, body = {}) {
   const projectId = assertUuid(projectIdParam, "project_id");
   const orderNo = nullableText(body.order_no);
-  const operationNo = nullableText(body.operation_no);
+  const operationNoText = nullableText(body.operation_no);
   const targetTaskId = optionalUuid(body.target_task_id, "target_task_id");
   const targetParentTaskId = optionalUuid(body.target_parent_task_id, "target_parent_task_id");
   const takeover = body.takeover === true || body.takeover === "true";
   const actor = actorFromBody(body, "web-manufacturing");
 
   if (!orderNo) throw new ApiError(400, "INVALID_PAYLOAD", "order_no is required", [{ field: "order_no" }]);
-  if (!operationNo) throw new ApiError(400, "INVALID_PAYLOAD", "operation_no is required", [{ field: "operation_no" }]);
+  // Kunci mapping dinormalisasi ke integer (mengikuti sow), bukan string mentah ('0070' vs '70').
+  const operationKey = parseOperationKey(operationNoText);
+  const orderKey = orderNo.replace(/^0+/, "");
   if (!targetTaskId && !targetParentTaskId) {
     throw new ApiError(400, "INVALID_PAYLOAD", "target_task_id or target_parent_task_id is required", [
       { field: "target_task_id" }, { field: "target_parent_task_id" },
@@ -2042,35 +2058,54 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
     const opResult = await client.query(
       `select idsow, order_no, operation_no, operation_text, ssbr_id, workcenter, planhours
          from sow
-        where ltrim(order_no, '0') = ltrim($1, '0') and operation_no::text = $2
+        where ltrim(order_no, '0') = ltrim($1, '0') and operation_no = $2
         limit 1`,
-      [orderNo, operationNo]
+      [orderNo, operationKey]
     );
     const operation = opResult.rows[0];
     if (!operation) {
       throw new ApiError(404, "SOW_OPERATION_NOT_FOUND", "Operation not found for this order", [
-        { order_no: orderNo, operation_no: operationNo },
+        { order_no: orderNo, operation_no: operationNoText },
       ]);
     }
 
-    // Sudah dipetakan di mana pun? Index unik GLOBAL, jadi ini harus dibereskan lebih dulu.
+    // Sudah dipetakan di mana pun? Mapping kini tinggal di tabel milik PPC (bukan kolom task),
+    // jadi lookup lewat sow_operation_task_map. ORDER_MAPPED_ELSEWHERE hanya ketika mapping
+    // itu masih menunjuk task AKTIF di project lain — kalau task-nya sudah mati (TASK_LOST),
+    // operasi bebas dipetakan ulang tanpa takeover (tidak ada jadwal hidup yang ditimpa).
     const existingResult = await client.query(
-      `select t.task_id, t.project_id, p.project_name
-         from ms_project_task t
-         left join ms_project p on p.project_id = t.project_id
-        where t.is_active = true and coalesce(t.is_summary, false) = false
-          and ltrim(t.order_no, '0') = ltrim($1, '0') and t.operation_no = $2`,
-      [orderNo, String(operation.operation_no)]
+      `select m.task_id, m.project_id, p.project_name,
+              coalesce(t.is_active, false) as task_active,
+              coalesce(t.is_summary, false) as is_summary
+         from sow_operation_task_map m
+         left join ms_project_task t on t.task_id = m.task_id
+         left join ms_project p on p.project_id = m.project_id
+        where m.order_key = $1 and m.operation_key = $2`,
+      [orderKey, operationKey]
     );
     const existing = existingResult.rows[0] || null;
-    if (existing && existing.project_id !== projectId && !takeover) {
+    if (existing && existing.project_id !== projectId && existing.task_active && !takeover) {
       throw new ApiError(409, "ORDER_MAPPED_ELSEWHERE",
         `This operation is already mapped in ${existing.project_name || existing.project_id}.`,
         existingResult.rows);
     }
 
+    // Mapping disimpan/dipindahkan ke task hasil. Satu transaksi dengan stempel task.
+    const upsertMap = (taskId) => client.query(
+      `insert into sow_operation_task_map (order_key, operation_key, project_id, task_id, sow_id, mapped_by)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict (order_key, operation_key) do update
+         set project_id = excluded.project_id,
+             task_id = excluded.task_id,
+             sow_id = excluded.sow_id,
+             mapped_by = excluded.mapped_by,
+             mapped_at = now()`,
+      [orderKey, operationKey, projectId, taskId, operation.idsow || null, actor]
+    );
+
     const taskName = nullableText(operation.operation_text) || `Operation ${operation.operation_no}`;
     const workMinutes = minutesFromHours(operation.planhours);
+    const operationNoStamp = String(operation.operation_no);
     let resultTask = null;
     let replaced = null;
 
@@ -2089,18 +2124,37 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
       }
 
       // Target sudah memegang operasi LAIN -> jangan timpa diam-diam; menimpa berarti
-      // menghilangkan pemetaan yang sudah benar tanpa jejak.
-      const holdsOther = target.order_no && target.operation_no
-        && !(String(target.operation_no) === String(operation.operation_no)
-             && String(target.order_no).replace(/^0+/, "") === String(operation.order_no).replace(/^0+/, ""));
+      // menghilangkan pemetaan yang sudah benar tanpa jejak. Perbandingan lewat kunci
+      // integer (bukan string mentah: '0070' dan '70' adalah operasi yang sama).
+      const targetOpText = String(target.operation_no ?? "").trim();
+      const targetIsNumeric = /^[0-9]+$/.test(targetOpText);
+      const targetOrderKey = String(target.order_no || "").replace(/^0+/, "");
+      const targetHoldsSameOp = targetIsNumeric
+        && targetOrderKey === orderKey
+        && Number.parseInt(targetOpText, 10) === operationKey;
+      const holdsOther = Boolean(target.order_no && target.operation_no) && !targetHoldsSameOp;
       if (holdsOther && !takeover) {
         throw new ApiError(409, "TARGET_TASK_OCCUPIED",
           `That task already holds order ${target.order_no} operation ${target.operation_no}.`,
           [{ task_id: target.task_id, order_no: target.order_no, operation_no: target.operation_no }]);
       }
-      if (holdsOther) replaced = { order_no: target.order_no, operation_no: target.operation_no };
+      if (holdsOther) {
+        replaced = { order_no: target.order_no, operation_no: target.operation_no };
+        // Operasi lain itu kehilangan task-nya: mapping-nya dibebaskan (bukan dihapus
+        // diam-diam dari kolom task — kolom task ikut ditimpa stempel di bawah).
+        if (targetIsNumeric) {
+          const otherKey = Number.parseInt(targetOpText, 10);
+          if (!(targetOrderKey === orderKey && otherKey === operationKey)) {
+            await client.query(
+              "delete from sow_operation_task_map where order_key = $1 and operation_key = $2",
+              [targetOrderKey, otherKey]
+            );
+          }
+        }
+      }
 
-      // Pemetaan lama di task LAIN dilepas dulu, kalau tidak index unik global menolak update.
+      // Pemetaan lama di task LAIN dilepas (task mati oleh sync tetap boleh di-deactivate
+      // ulang — update tanpa syarat is_active = true tidak mengubah apa pun).
       if (existing && existing.task_id !== targetTaskId) {
         await client.query(
           "update ms_project_task set is_active = false, updated_at = now() where task_id = $1",
@@ -2117,10 +2171,11 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
                 updated_at = now()
           where project_id = $1 and task_id = $2
         returning task_id, task_name, outline_number, order_no, operation_no`,
-        [projectId, targetTaskId, taskName, operation.order_no, String(operation.operation_no),
+        [projectId, targetTaskId, taskName, operation.order_no, operationNoStamp,
          operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null, workMinutes]
       );
       resultTask = updated.rows[0];
+      await upsertMap(targetTaskId);
     } else {
       const parentResult = await client.query(
         `select task_id, outline_level, outline_number
@@ -2156,10 +2211,11 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
          returning task_id, task_name, outline_number, order_no, operation_no`,
         [projectId, parent.task_id, taskName,
          Number.isFinite(Number(parent.outline_level)) ? Number(parent.outline_level) + 1 : null,
-         nextOutline(), operation.order_no, String(operation.operation_no),
+         nextOutline(), operation.order_no, operationNoStamp,
          operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null, workMinutes]
       );
       resultTask = inserted.rows[0];
+      await upsertMap(resultTask.task_id);
     }
 
     await writeAuditLog(client, {
@@ -2168,7 +2224,7 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
       actor,
       details: {
         order_no: operation.order_no,
-        operation_no: String(operation.operation_no),
+        operation_no: operationNoStamp,
         task_id: resultTask?.task_id,
         moved_from_task_id: existing && existing.task_id !== resultTask?.task_id ? existing.task_id : null,
         replaced,
@@ -4783,6 +4839,24 @@ async function syncProject(projectIdParam, payload) {
     const assignmentResult = await upsertAssignments(client, projectId, normalized.assignments, taskResult.localTaskMap, false);
     const dependencyResult = await upsertDependencies(client, projectId, normalized.dependencies, taskResult.localTaskMap, false);
     const deactivateSummary = await applyExplicitDeactivate(client, projectId, normalized.deactivate);
+
+    // Mapping yatim: task yang barusan dinonaktifkan sync ternyata masih ditunjuk mapping
+    // operasi (sow_operation_task_map). Mapping-nya TIDAK dihapus — justru itu yang membuat
+    // operasi tampil TASK_LOST di picker — tapi sync wajib melaporkannya supaya tidak bisu.
+    let orphanedMappings = [];
+    if (deactivateSummary.deactivated_task_ids?.length) {
+      const orphanResult = await client.query(
+        `select m.order_key, m.operation_key, m.task_id, t.task_name, t.outline_number
+           from sow_operation_task_map m
+           left join ms_project_task t on t.task_id = m.task_id
+          where m.task_id = any($1::uuid[])
+          order by m.order_key, m.operation_key
+          limit 200`,
+        [deactivateSummary.deactivated_task_ids]
+      );
+      orphanedMappings = orphanResult.rows;
+    }
+    deactivateSummary.orphaned_mappings = orphanedMappings;
 
     const revisionResult = await client.query(
       `update ms_project
