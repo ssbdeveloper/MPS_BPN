@@ -1447,25 +1447,25 @@ async function listSowOrders(query = {}) {
 
   const result = await pool().query(
     `with ${SOW_ORDER_META_CTE_SQL},
-     -- Hanya task aktif non-summary YANG PUNYA operation_no: itu definisi "punya jadwal
-     -- MS Project" yang dipakai listOrderTasks dan form reservasi (D2 mewajibkan reservasi
-     -- task-level). Syarat operation_no ada di listOrderTasks sejak 2026-09-03 tapi TIDAK di
-     -- sini, sehingga dua sisi halaman area berbeda pendapat — lihat MSP_TASK_SCHEDULABLE_SQL.
+     -- Definisi "punya jadwal MS Project" (dipakai tab Ada jadwal/Belum & earliest/latest):
+     -- task AKTIF yang membawa order_no + operation_no — leaf ATAU summary (keputusan
+     -- owner 2026-09-07: jadwal boleh nempel di summary, mis. op yang labelnya di file
+     -- menempel di node rangkuman). Summary ikut karena plan_start/finish-nya rollup anak.
      msp as materialized (
        select ltrim(t.order_no, '0') as order_key,
               min(t.plan_start)::date as earliest_plan_start,
               max(t.plan_finish)::date as latest_plan_finish,
               ${inWindowTasksSql},
               ${dueByTasksSql},
-              -- Satu order boleh dipetakan ke lebih dari satu project (index unik hanya
-              -- per-project), jadi ini array, bukan skalar. Nama dipakai apa adanya di kartu
-              -- order; project_id jadi cadangan kalau baris ms_project-nya hilang.
+              -- Satu order bisa punya task di lebih dari satu project (mapping global 1:1
+              -- per operasi, tapi task tanpa mapping boleh ada di project lain), jadi ini
+              -- array, bukan skalar. Nama dipakai apa adanya di kartu order; project_id
+              -- jadi cadangan kalau baris ms_project-nya hilang.
               array_remove(array_agg(distinct coalesce(p.project_name, t.project_id::text)), null)
                 as mapped_projects
          from public.ms_project_task t
          left join public.ms_project p on p.project_id = t.project_id
         where t.is_active = true
-          and coalesce(t.is_summary, false) = false
           and t.order_no is not null
           and ${MSP_TASK_SCHEDULABLE_SQL}
         group by 1
@@ -1593,7 +1593,6 @@ async function listSowOrders(query = {}) {
                 ${countsDueByTasksSql}
            from public.ms_project_task t
           where t.is_active = true
-            and coalesce(t.is_summary, false) = false
             and t.order_no is not null
             and ${MSP_TASK_SCHEDULABLE_SQL}
           group by 1
@@ -1671,21 +1670,21 @@ async function getSowOrderOperations(orderNoParam) {
 }
 
 // Picker reservasi bay task-level: sumber operasi = `sow` (cermin SAP), LEFT JOIN
-// sow_operation_task_map (mapping milik PPC) dan task aktif. Spec:
-// docs/planning/mapping-operasi-sap-tahan-sync.md (revisi 2026-09-05).
+// sow_operation_task_map (mapping milik PPC) dan task-nya. Spec:
+// docs/planning/mapping-operasi-sap-tahan-sync.md (revisi 2026-09-05) + keputusan
+// 2026-09-07 (owner): reservasi & jadwal boleh nempel di task mana pun — leaf ATAU
+// summary — yang penting start/finish diambil dari task itu (summary = rollup anaknya).
 //
 // SETIAP baris = satu operasi SOW dengan mapping_status:
-//   READY         mapping ada, task aktif & non-summary -> bisa dicentang, tanggal dari task
+//   READY         mapping ada, task aktif -> bisa dicentang, tanggal dari task (leaf/summary)
 //   TASK_LOST     mapping ada, task-nya tidak aktif (mati oleh sync restrukturisasi) ->
 //                 tampil dengan peringatan + tautan petakan ulang, TIDAK bisa dicentang
 //   NEEDS_MAPPING belum ada mapping -> di balik filter, tidak bisa dicentang
 // Baris unmapped ber-project_id NULL supaya pemanggil (MapSapOperationPage) tidak
 // menghitungnya sebagai "mapped di project lain".
 //
-// Keputusan 2026-09-03 (task tanpa operation_no disembunyikan) menjadi usang dengan sendirinya:
-// sumbernya sekarang sow, jadi task yang op-nya tidak ada di sow tidak muncul (op itu sudah
-// tidak bisa write-back headcount ke SAP). 32 task aktif ber-op tanpa sow-row terdampak dan
-// itu memang diinginkan (tercatat di spec revisi).
+// Catatan: task yang op-nya tidak ada di sow tidak muncul (op itu sudah tidak bisa
+// write-back headcount ke SAP) — perilaku sejak revisi 2026-09-05.
 async function listOrderTasks(orderNoParam) {
   const orderNo = nullableText(orderNoParam);
   if (!orderNo) {
@@ -1710,14 +1709,15 @@ async function listOrderTasks(orderNoParam) {
        t.planned_work_minutes,
        t.duration_minutes,
        -- Jumlah orang menurut PLAN MS Project (Work / Duration), dihitung di sini seperti
-       -- dulu. NULL untuk TASK_LOST / NEEDS_MAPPING (tidak ada task hidup).
+       -- dulu. NULL untuk TASK_LOST / NEEDS_MAPPING (tidak ada task hidup); untuk task
+       -- summary nilainya rollup anak-anak dan tidak dipakai sebagai patokan headcount.
        round(t.planned_work_minutes::numeric / nullif(t.duration_minutes, 0), 2) as people_msp,
        p.project_name,
        m.mapped_at,
        m.mapped_by,
        case
          when m.task_id is null then 'NEEDS_MAPPING'
-         when t.task_id is null or not t.is_active or coalesce(t.is_summary, false) then 'TASK_LOST'
+         when t.task_id is null or not t.is_active then 'TASK_LOST'
          else 'READY'
        end as mapping_status
      from sow s
@@ -2118,10 +2118,9 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
       );
       const target = targetResult.rows[0];
       if (!target) throw new ApiError(404, "TASK_NOT_FOUND", "Target task not found in this project", [{ task_id: targetTaskId }]);
-      if (target.is_summary) {
-        throw new ApiError(400, "TARGET_IS_SUMMARY",
-          "That is a summary task. Drop onto it to create a child instead of assigning to it.", [{ task_id: targetTaskId }]);
-      }
+      // Keputusan owner 2026-09-07: assign ke SUMMARY DIIZINKAN (reservasi & jadwal boleh
+      // nempel di task mana pun; summary membawa tanggal rollup anak-anaknya). Jalur
+      // target_parent_task_id tetap ada untuk "buat anak" (dipilih eksplisit di UI).
 
       // Target sudah memegang operasi LAIN -> jangan timpa diam-diam; menimpa berarti
       // menghilangkan pemetaan yang sudah benar tanpa jejak. Perbandingan lewat kunci
@@ -2140,14 +2139,15 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
       }
       if (holdsOther) {
         replaced = { order_no: target.order_no, operation_no: target.operation_no };
-        // Operasi lain itu kehilangan task-nya: mapping-nya dibebaskan (bukan dihapus
-        // diam-diam dari kolom task — kolom task ikut ditimpa stempel di bawah).
+        // Operasi lain itu kehilangan task-nya: mapping-nya dibebaskan — TAPI hanya kalau
+        // mapping itu menunjuk task INI (label op di task bisa metadata impor yang tidak
+        // punya mapping; mapping operasi lain boleh saja menunjuk task lain).
         if (targetIsNumeric) {
           const otherKey = Number.parseInt(targetOpText, 10);
           if (!(targetOrderKey === orderKey && otherKey === operationKey)) {
             await client.query(
-              "delete from sow_operation_task_map where order_key = $1 and operation_key = $2",
-              [targetOrderKey, otherKey]
+              "delete from sow_operation_task_map where order_key = $1 and operation_key = $2 and task_id = $3",
+              [targetOrderKey, otherKey, target.task_id]
             );
           }
         }
@@ -2162,17 +2162,29 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
         );
       }
 
-      const updated = await client.query(
-        `update ms_project_task
-            set task_name = $3, order_no = $4, operation_no = $5, ssbr_id = $6, sow_id = $7,
+      // Stempel task. Leaf: nama + jam ikut operasi (perilaku lama — file menimpa lagi saat
+      // sync berikutnya). Summary: HANYA identitas (order/op/ssbr/sow/workcenter) — nama WBS
+      // dan planned_work/duration adalah rollup anak-anak milik file, menimpanya merusak
+      // struktur .mpp (keputusan 2026-09-07).
+      const stampSet = target.is_summary
+        ? `order_no = $3, operation_no = $4, ssbr_id = $5, sow_id = $6, workcenter = $7,
+                updated_at = now()`
+        : `task_name = $3, order_no = $4, operation_no = $5, ssbr_id = $6, sow_id = $7,
                 workcenter = $8,
                 planned_work_minutes = coalesce($9, planned_work_minutes),
                 duration_minutes = coalesce($9, duration_minutes),
-                updated_at = now()
+                updated_at = now()`;
+      const stampValues = target.is_summary
+        ? [projectId, targetTaskId, operation.order_no, operationNoStamp,
+           operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null]
+        : [projectId, targetTaskId, taskName, operation.order_no, operationNoStamp,
+           operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null, workMinutes];
+      const updated = await client.query(
+        `update ms_project_task
+            set ${stampSet}
           where project_id = $1 and task_id = $2
         returning task_id, task_name, outline_number, order_no, operation_no`,
-        [projectId, targetTaskId, taskName, operation.order_no, operationNoStamp,
-         operation.ssbr_id || null, operation.idsow || null, operation.workcenter || null, workMinutes]
+        stampValues
       );
       resultTask = updated.rows[0];
       await upsertMap(targetTaskId);
@@ -2589,8 +2601,13 @@ async function listBayScheduleTasks(query = {}) {
        ) u on true
      where ${where.join(" and ")}
        and (
-         -- reservasi task-level: tetap seperti dulu, satu baris per task nyata
-         (s.task_id is not null and t.task_id is not null and coalesce(t.is_summary, false) = false)
+         -- reservasi task-level: task nyata PEMILIK pasangan order+op — leaf ATAU summary
+         -- (keputusan owner 2026-09-07: reservasi boleh nempel di summary; jadwal ikut
+         -- task itu). order_no & operation_no wajib: layar operator hanya menampilkan job
+         -- yang bisa dikonfirmasi ke SAP lewat pasangan itu.
+         (s.task_id is not null and t.task_id is not null
+            and t.order_no is not null
+            and nullif(btrim(t.operation_no), '') is not null)
          -- reservasi order-level: satu entri saja, tanpa task hasil tebakan
          or s.task_id is null
        )
