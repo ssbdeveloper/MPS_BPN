@@ -327,12 +327,19 @@ function OperationCard({ operation, mappedProjects = [], onDragStart, disabled }
   // pohon yang tidak terlihat planner, jadi tak bermakna (revisi sebagian keputusan 2026-08-07:
   // owner mengizinkan info outline, tapi hanya di tempat yang punya konteks).
   const currentOutline = mappedProjects.find((row) => row.current)?.outline_number || null;
+  // Mapping operasi ini ada di project yang sedang dibuka, tapi task sumbernya sudah
+  // dinonaktifkan sync (TASK_LOST) — kartu harus bilang, bukan diam seperti dulu.
+  const currentLost = mappedProjects.some((row) => row.current && row.source_lost);
   return (
     <div
       draggable={!disabled}
       onDragStart={disabled ? undefined : (event) => onDragStart(event, operation)}
       className={`cursor-grab rounded-lg border bg-white px-3 py-2 shadow-sm transition-colors active:cursor-grabbing ${
-        inCurrentProject ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200 hover:border-[#90e0ef] hover:bg-slate-50'
+        inCurrentProject && !currentLost
+          ? 'border-emerald-200 bg-emerald-50/50'
+          : currentLost
+            ? 'border-amber-300 bg-amber-50/60'
+            : 'border-slate-200 hover:border-[#90e0ef] hover:bg-slate-50'
       }`}
     >
       <div className="flex items-center justify-between gap-2">
@@ -345,6 +352,14 @@ function OperationCard({ operation, mappedProjects = [], onDragStart, disabled }
               className="rounded border border-emerald-200 bg-emerald-50 px-1 font-mono text-[11px] font-bold tabular-nums text-emerald-700"
             >
               {currentOutline}
+            </span>
+          )}
+          {currentLost && (
+            <span
+              title="Task sumber jadwal operasi ini hilang pada sync MS Project. Tarik kartu ini ke task daun baru untuk memetakan ulang."
+              className="rounded border border-amber-300 bg-amber-100 px-1 text-[11px] font-bold uppercase tracking-wide text-amber-700"
+            >
+              Task lost — remap
             </span>
           )}
         </span>
@@ -748,9 +763,9 @@ export default function MapSapOperationPage() {
   const mappedProjectsByOperation = useMemo(() => {
     const map = new Map();
     const currentProjectId = selectedProject?.project_id;
-    const add = (operationNo, projectId, projectName, current, outlineNumber) => {
+    const add = (operationNo, projectId, projectName, current, outlineNumber, mappingStatus) => {
       const key = operationKey(operationNo);
-      if (!key) return;
+      if (!key || !projectId) return;
       const rows = map.get(key) || [];
       if (rows.some((row) => row.project_id === projectId)) return; // satu project sekali
       rows.push({
@@ -758,21 +773,27 @@ export default function MapSapOperationPage() {
         project_name: projectName,
         current,
         outline_number: outlineNumber || null,
+        // Mapping yang task-nya sudah mati oleh sync (sumber: fetchOrderTasks
+        // ber-mapping_status). Task hidup dari projectTasks tak mungkin TASK_LOST.
+        source_lost: mappingStatus === 'TASK_LOST',
       });
       map.set(key, rows);
     };
 
     mappedByOperation.forEach((task, operationNo) => {
-      add(operationNo, currentProjectId, selectedProject?.project_name, true, task?.outline_number);
+      add(operationNo, currentProjectId, selectedProject?.project_name, true, task?.outline_number, 'READY');
     });
     orderTasksAllProjects.forEach((task) => {
-      if (!task.operation_no) return;
+      // Baris tanpa project_id = operasi belum dipetakan sama sekali (bentuk baru
+      // fetchOrderTasks menyertakan semua operasi sow, bukan hanya yang punya task).
+      if (!task.operation_no || !task.project_id) return;
       add(
         task.operation_no,
         task.project_id,
         task.project_name,
         task.project_id === currentProjectId,
         task.outline_number,
+        task.mapping_status,
       );
     });
 

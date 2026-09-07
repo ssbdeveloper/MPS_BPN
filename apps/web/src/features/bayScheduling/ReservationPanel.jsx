@@ -69,6 +69,23 @@ function normalizeOccupants(result) {
 const EMPTY_OCCUPANTS = { rows: [], truncated: false, total: 0 };
 const EMPTY_TASK_RESERVATIONS = [];
 
+// Status mapping operasi (kontrak baru GET /sow-orders/:order_no/tasks, spec
+// docs/planning/mapping-operasi-sap-tahan-sync.md):
+//   READY         mapping ada + task aktif -> satu-satunya yang bisa dicentang
+//   TASK_LOST     mapping ada, task mati oleh sync -> tampil, dilarang dicentang
+//   NEEDS_MAPPING belum di-map -> di balik toggle
+// Baris lama (tanpa mapping_status) = bentuk legacy (detail reservasi/editTasks) ->
+// tetap dianggap bisa dicentang bila punya task_id.
+function isSelectableTask(task) {
+  return Boolean(task && task.task_id && (!task.mapping_status || task.mapping_status === 'READY'));
+}
+function isTaskLost(task) {
+  return task?.mapping_status === 'TASK_LOST';
+}
+function isTaskUnmapped(task) {
+  return task?.mapping_status === 'NEEDS_MAPPING';
+}
+
 // =============================================================================
 // Sub-komponen
 // =============================================================================
@@ -186,6 +203,52 @@ const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, pe
           </span>
         )}
       </div>
+    </div>
+  );
+});
+
+// Baris operasi yang TIDAK bisa dijadwalkan (spec mapping-operasi-sap-tahan-sync §4.3):
+// TASK_LOST = mapping ada tapi task sumber mati oleh sync; NEEDS_MAPPING = belum di-map.
+// Keduanya tidak punya checkbox (D2: reservasi wajib task aktif) dan tidak punya input
+// headcount — hanya informasi + jalan keluar (halaman map).
+const BlockedTaskRow = memo(function BlockedTaskRow({ task }) {
+  const lost = isTaskLost(task);
+  return (
+    <div className="flex items-start gap-2.5 border-b border-slate-100 bg-amber-50/40 px-3 py-2 last:border-b-0">
+      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] font-bold uppercase tabular-nums text-slate-600">
+            Op {task.operation_no || '-'}
+          </span>
+          {task.workcenter && (
+            <span className="rounded bg-[#caf0f8] px-1.5 py-0.5 text-[11px] font-bold uppercase text-[#0077b6]">
+              {task.workcenter}
+            </span>
+          )}
+          <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
+            lost ? 'border-amber-300 bg-amber-100 text-amber-700' : 'border-slate-200 bg-slate-100 text-slate-500'
+          }`}>
+            {lost ? 'Task lost' : 'Unmapped'}
+          </span>
+        </span>
+        <span className="mt-1 block truncate text-sm font-semibold text-slate-800">
+          {task.task_name || task.operation_text || '-'}
+        </span>
+        <span className="mt-0.5 block text-xs text-amber-700">
+          {lost
+            ? 'The MS Project task holding this operation was removed by a sync. Map the operation to a new task before reserving.'
+            : 'This SAP operation has no MS Project task yet. Map it before reserving.'}
+        </span>
+      </span>
+      <Link
+        to="/sow-scheduling/map"
+        className="mt-1 inline-flex shrink-0 items-center gap-1 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-[11px] font-bold text-amber-700 transition hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+      >
+        Map <ExternalLink className="h-3 w-3" aria-hidden="true" />
+      </Link>
     </div>
   );
 });
@@ -337,6 +400,9 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
     isEdit ? editTasks.map((task) => task.task_id).filter(Boolean) : []
   ));
   const [taskSearch, setTaskSearch] = useState('');
+  // Operasi tanpa mapping (NEEDS_MAPPING) disembunyikan secara bawaan (spec §4.3):
+  // menampilkan 92 baris mati sekaligus menukar satu masalah dengan masalah lain.
+  const [showUnmapped, setShowUnmapped] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   // --- Headcount ------------------------------------------------------------
@@ -433,8 +499,10 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
         setOrderTasks(list);
         // Seed headcount dari people_required per operasi (task pertama yang membawa
         // operation_no). Nilai disimpan sebagai string untuk input; baseline sama.
+        // Hanya baris yang BISA dicentang yang di-seed — TASK_LOST/NEEDS_MAPPING tidak
+        // punya input headcount.
         const seed = {};
-        list.forEach((task) => {
+        list.filter(isSelectableTask).forEach((task) => {
           const key = peopleKey(task);
           if (key in seed) return;
           seed[key] = task.people_required == null || task.people_required === '' ? '' : String(task.people_required);
@@ -478,12 +546,23 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   // Daftar task yang DITAMPILKAN. Normal = hasil fetch order. Mode EDIT dengan
   // fetch gagal/order yatim = task dari detail reservasi (tetap bisa diubah
   // tanggal/bay; pilihan task sudah terkunci sesuai isi reservasi).
-  const displayTasks = useMemo(
-    () => (orderTasks.length > 0 ? orderTasks : editTasks),
-    [orderTasks, editTasks],
+  // Daftar task/operasi yang DITAMPILKAN. Normal = hasil fetch order. Bentuk baru
+  // (ber-mapping_status, sumber sow): bawaan = READY + TASK_LOST; NEEDS_MAPPING hanya
+  // saat toggle "Show N unmapped" dinyalakan (spec §4.3). Bentuk legacy (tanpa
+  // mapping_status — backend lama / task detail reservasi) = semua baris ditampilkan.
+  // Mode EDIT dengan fetch gagal/order yatim = task dari detail reservasi (tetap bisa
+  // diubah tanggal/bay; pilihan task sudah terkunci sesuai isi reservasi).
+  const hasStatusedRows = Array.isArray(orderTasks) && orderTasks.some((task) => task.mapping_status);
+  const displayTasks = useMemo(() => {
+    if (!hasStatusedRows) return orderTasks.length > 0 ? orderTasks : editTasks;
+    return showUnmapped ? orderTasks : orderTasks.filter((task) => !isTaskUnmapped(task));
+  }, [hasStatusedRows, orderTasks, editTasks, showUnmapped]);
+  const unmappedCount = useMemo(
+    () => (hasStatusedRows ? orderTasks.filter(isTaskUnmapped).length : 0),
+    [hasStatusedRows, orderTasks],
   );
   const selectedTasks = useMemo(
-    () => displayTasks.filter((task) => selectedTaskIdSet.has(task.task_id)),
+    () => displayTasks.filter((task) => isSelectableTask(task) && selectedTaskIdSet.has(task.task_id)),
     [displayTasks, selectedTaskIdSet],
   );
 
@@ -568,8 +647,11 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   }, [canQueryOccupants, bayCodesKey, startDate, endDate, occupantsToken, isEdit, edit?.schedule_group_id]);
 
   // --- Handler --------------------------------------------------------------
-  const allFilteredChecked = filteredTasks.length > 0
-    && filteredTasks.every((task) => selectedTaskIdSet.has(task.task_id));
+  // "Select all" bekerja pada HASIL PENCARIAN yang BISA dicentang (READY / legacy),
+  // bukan seluruh baris: TASK_LOST & NEEDS_MAPPING tidak pernah ikut terseret.
+  const selectableFilteredTasks = filteredTasks.filter(isSelectableTask);
+  const allFilteredChecked = selectableFilteredTasks.length > 0
+    && selectableFilteredTasks.every((task) => selectedTaskIdSet.has(task.task_id));
 
   const toggleTask = useCallback((taskId) => {
     setSelectedTaskIds((prev) => (
@@ -577,20 +659,18 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
     ));
   }, []);
 
-  // "Select all" bekerja pada HASIL PENCARIAN, bukan seluruh task order: kalau
-  // user memfilter lalu memilih semua, task di luar filter tidak ikut terseret.
   const toggleAll = useCallback(() => {
-    if (filteredTasks.length === 0) return;
+    if (selectableFilteredTasks.length === 0) return;
     setSelectedTaskIds((prev) => {
       const next = new Set(prev);
-      if (filteredTasks.every((task) => next.has(task.task_id))) {
-        filteredTasks.forEach((task) => next.delete(task.task_id));
+      if (selectableFilteredTasks.every((task) => next.has(task.task_id))) {
+        selectableFilteredTasks.forEach((task) => next.delete(task.task_id));
       } else {
-        filteredTasks.forEach((task) => next.add(task.task_id));
+        selectableFilteredTasks.forEach((task) => next.add(task.task_id));
       }
       return [...next];
     });
-  }, [filteredTasks]);
+  }, [selectableFilteredTasks]);
 
   const handlePeopleChange = useCallback((task, raw) => {
     const digits = String(raw).replace(/[^0-9]/g, '');
@@ -827,6 +907,18 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                   )}
                 </div>
 
+                {unmappedCount > 0 && !loadingTasks && !tasksError && !isEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setShowUnmapped((value) => !value)}
+                    aria-pressed={showUnmapped}
+                    className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500" aria-hidden="true" />
+                    {showUnmapped ? 'Hide' : 'Show'} {unmappedCount} unmapped SAP operation{unmappedCount === 1 ? '' : 's'}
+                  </button>
+                )}
+
                 <div className="rounded-lg border border-slate-200 bg-white">
                   {loadingTasks ? (
                     <div className="space-y-2 p-3">
@@ -889,6 +981,16 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                       ) : (
                         <div className="max-h-[42vh] overflow-y-auto">
                           {filteredTasks.map((task) => {
+                            if (!isSelectableTask(task)) {
+                              // TASK_LOST & NEEDS_MAPPING: info + jalan keluar, tanpa
+                              // checkbox (D2 — reservasi wajib task aktif).
+                              return (
+                                <BlockedTaskRow
+                                  key={`${task.mapping_status}:${String(task.operation_no ?? '')}`}
+                                  task={task}
+                                />
+                              );
+                            }
                             const value = peopleEdits[peopleKey(task)] ?? '';
                             return (
                               <TaskRow
