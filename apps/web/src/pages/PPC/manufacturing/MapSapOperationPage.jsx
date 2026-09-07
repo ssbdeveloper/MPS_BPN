@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle, ChevronRight, FolderSearch, GripVertical, ListTree, Loader2,
-  PackageOpen, Replace, RotateCw, X,
+  PackageOpen, Plus, Replace, RotateCw, Target, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -157,9 +157,8 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOpe
   const hasChildren = children.length > 0;
   const [dragOver, setDragOver] = useState(false);
 
-  // Node dengan anak = summary: operasi tidak di-assign KE node itu, tapi dibuat sebagai
-  // anaknya. Node daun langsung menerima operasinya. Backend menolak assign ke summary,
-  // jadi pilihan ini dibuat di sini supaya user tidak pernah melihat error itu.
+  // Node ber-anak = summary. Drop ke summary kini memunculkan pilihan assign/buat-anak
+  // (keputusan 2026-09-07 — backend menerima assign ke summary); drop ke daun langsung assign.
   const handleDrop = (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -537,6 +536,84 @@ function ReplaceDialog({ prompt, busy, onCancel, onConfirm }) {
   );
 }
 
+// Drop operasi ke node SUMMARY (ber-anak): keputusan 2026-09-07 — assign ke summary kini
+// sah (reservasi & jadwal boleh nempel di task mana pun; summary membawa tanggal rollup
+// anak-anaknya). "Buat anak baru" tetap tersedia tapi jadi pilihan eksplisit, bukan tebakan.
+function SummaryTargetDialog({ prompt, busy, onCancel, onAssign, onCreateChild }) {
+  useEffect(() => {
+    if (!prompt) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') onCancel(); };
+    document.addEventListener('keydown', onKey, true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      document.body.style.overflow = prev;
+    };
+  }, [prompt, onCancel]);
+
+  if (!prompt) return null;
+  const { dragged, task } = prompt;
+  const hasDates = Boolean(task.plan_start || task.plan_finish);
+  return (
+    <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" data-modal-overlay="true">{/* deslop-allow C5: dialog overlay — pola sama dengan ReplaceDialog di file ini (C5 membaca path file, bukan baris) */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Summary task target"
+        onClick={(event) => event.stopPropagation()}
+        className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"
+      >
+        <div className="flex items-start gap-3">
+          <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#caf0f8] text-[#0077b6]">
+            <FolderSearch className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-extrabold text-slate-800">
+              Op {dragged.operation_no} · {dragged.order_no} → “{task.task_name}”
+            </h3>
+            <p className="mt-1 text-xs text-slate-600">
+              {task.outline_number ? `${task.outline_number} · ` : ''}This node is a summary
+              {hasDates
+                ? ` — its schedule spans ${formatDate(task.plan_start)} to ${formatDate(task.plan_finish)} (roll-up of its children).`
+                : ' — it has no schedule dates yet.'}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 flex flex-col gap-2">
+          <button
+            type="button"
+            autoFocus
+            onClick={onAssign}
+            disabled={busy}
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-[#0077b6] px-4 text-sm font-bold text-white transition hover:bg-[#023e8a] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Target className="h-4 w-4" />}
+            Assign to this task
+          </button>
+          <button
+            type="button"
+            onClick={onCreateChild}
+            disabled={busy}
+            className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+          >
+            <Plus className="h-4 w-4" />
+            Create child task
+            <span className="text-[11px] font-semibold text-slate-400">no dates until added in MS Project</span>
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex min-h-[44px] items-center justify-center rounded-lg text-xs font-bold text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function MapSapOperationPage() {
   const [projects, setProjects] = useState([]);
   const [projectSearch, setProjectSearch] = useState('');
@@ -569,6 +646,10 @@ export default function MapSapOperationPage() {
   const [sourceView, setSourceView] = useState('orders');
   // { dragged, task, asChild, title, description } saat backend menolak 409 yang bisa ditimpa.
   const [replacePrompt, setReplacePrompt] = useState(null);
+  // Drop operasi ke node SUMMARY (ber-anak): keputusan 2026-09-07 — assign ke summary
+  // DIIZINKAN (jadwal ikut tanggal rollup-nya), jadi user memilih sendiri: tempel ke
+  // summary ini, atau buat anak baru di bawahnya.
+  const [summaryPrompt, setSummaryPrompt] = useState(null);
 
   const taskTree = useMemo(() => buildTaskTree(projectTasks), [projectTasks]);
 
@@ -721,8 +802,30 @@ export default function MapSapOperationPage() {
       toast.error('Choose a target project first');
       return;
     }
-    mapOneOperation(dragged, task, hasChildren, false);
+    // Node ber-anak = summary. Assign ke summary kini sah (keputusan 2026-09-07), tapi
+    // "buat anak" juga masih ada — tanya user, jangan menebak.
+    if (hasChildren) {
+      setSummaryPrompt({ dragged, task });
+      return;
+    }
+    mapOneOperation(dragged, task, false, false);
   }, [selectedProject, mapOneOperation]);
+
+  const handleSummaryCancel = useCallback(() => setSummaryPrompt(null), []);
+
+  const handleSummaryAssign = useCallback(() => {
+    if (!summaryPrompt) return;
+    const { dragged, task } = summaryPrompt;
+    setSummaryPrompt(null);
+    mapOneOperation(dragged, task, false, false);
+  }, [summaryPrompt, mapOneOperation]);
+
+  const handleSummaryCreateChild = useCallback(() => {
+    if (!summaryPrompt) return;
+    const { dragged, task } = summaryPrompt;
+    setSummaryPrompt(null);
+    mapOneOperation(dragged, task, true, false);
+  }, [summaryPrompt, mapOneOperation]);
 
   const handleReplaceCancel = useCallback(() => setReplacePrompt(null), []);
 
@@ -1030,6 +1133,13 @@ export default function MapSapOperationPage() {
         busy={mapping}
         onCancel={handleReplaceCancel}
         onConfirm={handleReplaceConfirm}
+      />
+      <SummaryTargetDialog
+        prompt={summaryPrompt}
+        busy={mapping}
+        onCancel={handleSummaryCancel}
+        onAssign={handleSummaryAssign}
+        onCreateChild={handleSummaryCreateChild}
       />
     </main>
   );
