@@ -2,7 +2,7 @@ const db = global.pool || require("../db");
 const { generateRoster } = require("../services/rosterGenerator");
 const { resolveTimezone } = require("../config/timezone");
 
-const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT"]);
+const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT", "SITE_VISIT"]);
 const TZ = resolveTimezone();
 
 function assertIsoDate(value) {

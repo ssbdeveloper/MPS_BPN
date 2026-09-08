@@ -742,7 +742,7 @@ async function calculateAdoptionLabourFromLogs(bounds) {
 // R2 — attendance-based adoption_labour from the roster. Population = SCHEDULED operators on
 // the target business_date (not "operators who logged"). A scheduled operator with zero logged
 // hours counts as ABSENT (0), dragging the number down — that is the point. Excused statuses
-// (LEAVE/SICK/PERMIT/OFF) are excluded from the denominator. Completed-only; whole shift by
+// (LEAVE/SICK/PERMIT/SITE_VISIT/OFF) are excluded from the denominator. Completed-only; whole shift by
 // business_date. Operators not in the rotation roster remain invisible (roster completeness).
 async function calculateAdoptionLabourFromRoster(bounds) {
   const timezone = resolveTimezone();
@@ -813,7 +813,7 @@ async function calculateAdoptionLabourFromRoster(bounds) {
       COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.recorded > 0)::int AS present,
       COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0 AND j.recorded = 0)::int AS absent,
       COUNT(*) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far <= 0)::int AS not_started,
-      COUNT(*) FILTER (WHERE j.status IN ('LEAVE','SICK','PERMIT','OFF'))::int AS excused,
+      COUNT(*) FILTER (WHERE j.status IN ('LEAVE','SICK','PERMIT','SITE_VISIT','OFF'))::int AS excused,
       ROUND(SUM(j.recorded) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0)::numeric, 2)::float AS total_recorded_hours,
       ROUND(SUM(j.expected_so_far) FILTER (WHERE j.status='SCHEDULED' AND j.expected_so_far > 0)::numeric, 2)::float AS total_expected_hours,
       ROUND(SUM(j.std) FILTER (WHERE j.status='SCHEDULED')::numeric, 2)::float AS total_standard_hours,

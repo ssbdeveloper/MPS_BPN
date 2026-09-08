@@ -44,7 +44,7 @@ const ADOPTION_LABOUR_MIN_GAP_H = Number(process.env.EWS_ADOPTION_LABOUR_MIN_GAP
 // critical when the operator logged <= this % of standard hours, else warning.
 const ADOPTION_LABOUR_CRITICAL_PCT = Number(process.env.EWS_ADOPTION_LABOUR_CRITICAL_PCT || 50);
 // Roster statuses that legitimately excuse an operator from logging hours.
-const EXCUSED_STATUSES = new Set(["LEAVE", "SICK", "PERMIT", "OFF"]);
+const EXCUSED_STATUSES = new Set(["LEAVE", "SICK", "PERMIT", "SITE_VISIT", "OFF"]);
 
 // oee & ole are CRITICAL-only: their warning band flags most of the fleet/workforce on a low day,
 // which floods the log and isn't actionable. We only raise an issue when the entity is in the
@@ -389,7 +389,7 @@ async function generateAdoptionLabour(exec, bounds) {
   for (const b of breakdown) {
     if (!b) continue;
     const status = String(b.status || "").toUpperCase();
-    if (EXCUSED_STATUSES.has(status)) continue; // leave/sick/permit/off are not adoption gaps
+    if (EXCUSED_STATUSES.has(status)) continue; // leave/sick/permit/site visit/off are not adoption gaps
 
     const recorded = Number(b.recorded_hours) || 0;
     const standard = Number(b.standard_hours) || 0;

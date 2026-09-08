@@ -7,14 +7,15 @@ import {
 import { toast } from 'sonner';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
-const STATUS_OPTIONS = ['SCHEDULED', 'LEAVE', 'SICK', 'PERMIT', 'OFF'];
+const STATUS_OPTIONS = ['SCHEDULED', 'LEAVE', 'SICK', 'PERMIT', 'SITE_VISIT', 'OFF'];
 const DOW_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const EXCUSED = ['LEAVE', 'SICK', 'PERMIT', 'OFF'];
+const EXCUSED = ['LEAVE', 'SICK', 'PERMIT', 'SITE_VISIT', 'OFF'];
 
 const EXCUSED_STYLE = {
   LEAVE: 'bg-sky-200',
   SICK: 'bg-purple-200',
   PERMIT: 'bg-indigo-200',
+  SITE_VISIT: 'bg-teal-200',
   OFF: 'bg-slate-300',
 };
 

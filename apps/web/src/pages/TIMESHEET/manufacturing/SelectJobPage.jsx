@@ -459,12 +459,38 @@ export default function ManufacturingSelectJobPage() {
 
   return (
     <div className="flex h-dvh w-screen flex-col overflow-hidden bg-slate-50">
-      <header className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 shadow-sm">
-        <button type="button" onClick={() => goBackOrFallback(navigate)} className={btnOutline}>
-          Back
-        </button>
-        <h1 className="text-sm font-extrabold text-slate-800">Manufacturing Job Selection</h1>
-        <div className="flex items-center gap-2">
+      <header className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2.5 shadow-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <button type="button" onClick={() => goBackOrFallback(navigate)} className={`${btnOutline} flex-shrink-0`}>
+            Back
+          </button>
+          {/* Device area — selalu tampil di kiri header (bukan hanya saat filter dibuka) */}
+          <span
+            className="inline-flex flex-col justify-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 leading-tight"
+            title={deviceAreaCode
+              ? `${selectedArea?.areaName || deviceAreaCode} — bay ${selectedArea?.bays?.join(', ') || '-'}`
+              : 'Set area device dulu (tombol gear) supaya job yang tampil sesuai bay/area.'}
+          >
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Area</span>
+            <span className={`max-w-[150px] truncate text-xs font-extrabold ${deviceAreaCode ? 'text-slate-800' : 'text-amber-600'}`}>
+              {deviceAreaCode ? `${deviceAreaCode} · ${areaRangeLabel(selectedArea)}` : 'Belum diset'}
+            </span>
+          </span>
+        </div>
+
+        <h1 className="min-w-0 truncate text-sm font-extrabold text-slate-800">Manufacturing Job Selection</h1>
+
+        <div className="flex min-w-0 items-center gap-2">
+          {/* Workcenter session — selalu tampil di kanan header */}
+          <span
+            className="inline-flex flex-col justify-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 leading-tight"
+            title="Workcenter operator yang sedang aktif di device ini"
+          >
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Workcenter</span>
+            <span className={`max-w-[140px] truncate font-mono text-xs font-bold ${sessionWorkcenter ? 'text-slate-800' : 'text-slate-400'}`}>
+              {sessionWorkcenter || '—'}
+            </span>
+          </span>
           <button type="button" onClick={openGear} className={btnOutline} title="Ubah device area (foreman)">
             <Settings2 size={14} />
           </button>
@@ -512,15 +538,6 @@ export default function ManufacturingSelectJobPage() {
                 <X size={14} />
                 Reset
               </button>
-            </div>
-
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1">
-                Area tersimpan: {selectedArea ? `${selectedArea.areaCode} - ${areaRangeLabel(selectedArea)}` : 'Belum diset'}
-              </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">
-                Workcenter session: {sessionWorkcenter || 'Tidak ada'}
-              </span>
             </div>
           </div>
         )}

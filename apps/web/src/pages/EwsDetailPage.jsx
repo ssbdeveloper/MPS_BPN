@@ -1664,11 +1664,11 @@ function ShiftProgressColumn({ icon: Icon, title, operators }) {
 
 // adoption_labour breakdown: two progress-bar columns (day left, night right), one bar per
 // operator (recorded vs shift standard), sorted by biggest shortfall first. Excused roster
-// statuses (leave/sick/permit/off) are dropped — they are not adoption gaps.
+// statuses (leave/sick/permit/site visit/off) are dropped — they are not adoption gaps.
 function AdoptionLabourBreakdown({ kpi }) {
   const sd = kpi?.source_detail || {};
   const all = Array.isArray(sd.by_operator) ? sd.by_operator : [];
-  const excused = new Set(['LEAVE', 'SICK', 'PERMIT', 'OFF']);
+  const excused = new Set(['LEAVE', 'SICK', 'PERMIT', 'SITE_VISIT', 'OFF']);
   const isDay = (o) => o.shift === 1 || String(o.shift).toUpperCase() === 'DAY' || String(o.shift) === '1';
   // Rank by shortfall against the PROGRESSIVE target, so mid-shift the list surfaces who is behind
   // right now rather than everyone who has simply not finished an 8-hour shift yet.

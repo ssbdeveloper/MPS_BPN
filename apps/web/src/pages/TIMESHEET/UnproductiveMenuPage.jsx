@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import {
   Users, Coffee, Brush, GraduationCap, Package, FileWarning,
   Cpu, ClipboardCheck, HandHelping, Ruler, Wrench, Settings,
-  UserCog, Zap, CalendarClock, Hourglass, MoreHorizontal,
+  UserCog, Zap, CalendarClock, Hourglass, FileText, MoreHorizontal,
 } from 'lucide-react';
 
 /**
@@ -43,6 +43,7 @@ const UNPROD_ICONS = {
   '1650': <Zap size={ICON_SIZE} strokeWidth={1.8} />,
   '1660': <CalendarClock size={ICON_SIZE} strokeWidth={1.8} />,
   '1670': <Hourglass size={ICON_SIZE} strokeWidth={1.8} />,
+  '1730': <FileText size={ICON_SIZE} strokeWidth={1.8} />,
   '1680': <MoreHorizontal size={ICON_SIZE} strokeWidth={1.8} />,
 };
 
@@ -67,6 +68,7 @@ const UnproductiveMenuPage = () => {
     { code: '1650', label: 'MACHINE / ELECTRICITY BREAKDOWN' },
     { code: '1660', label: 'DAILY PM' },
     { code: '1670', label: 'WAITING FOR JOB' },
+    { code: '1730', label: 'ADMINISTRATION REPORTING' },
     { code: '1680', label: 'OTHERS' },
   ];
 
