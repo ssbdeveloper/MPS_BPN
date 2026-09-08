@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { toast } from 'sonner';
-import { Loader2, Pencil, RefreshCw, Search, Trash2, UserPlus, Users } from 'lucide-react';
+import { ChevronRight, Layers, Loader2, Pencil, RefreshCw, Search, ShieldCheck, Trash2, UserPlus, Users } from 'lucide-react';
 import UserEditorSheet from './UserEditorSheet';
 import { roleDot } from './roleTone';
 
@@ -17,11 +17,14 @@ function formatDateTime(value) {
   return date.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function Stat({ label, value }) {
+function Stat({ icon, label, value }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">{value}</p>
+    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#caf0f8] text-[#0077b6]">{icon}</span>
+      <div className="min-w-0">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+        <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">{value}</p>
+      </div>
     </div>
   );
 }
@@ -144,7 +147,7 @@ export default function UsersTab({ authHeaders, canManage }) {
 
   const colHead = 'px-4 py-2.5 text-[11px] font-bold uppercase tracking-wide text-slate-400';
   const pkgChip = (key) => (
-    <span key={key} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+    <span key={key} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors group-hover:border-slate-300">
       <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${roleDot(key)}`} />
       {pkgName(key)}
     </span>
@@ -154,9 +157,9 @@ export default function UsersTab({ authHeaders, canManage }) {
     <div>
       {/* Stats */}
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <Stat label="Users" value={stats.users} />
-        <Stat label="Roles" value={stats.roles} />
-        <Stat label="Assignments" value={stats.assignments} />
+        <Stat icon={<Users size={18} />} label="Users" value={stats.users} />
+        <Stat icon={<ShieldCheck size={18} />} label="Roles" value={stats.roles} />
+        <Stat icon={<Layers size={18} />} label="Assignments" value={stats.assignments} />
       </div>
 
       {/* Toolbar */}
@@ -232,7 +235,7 @@ export default function UsersTab({ authHeaders, canManage }) {
                   >
                     {/* User + chips (mobile) */}
                     <div className="flex items-center gap-3 px-4 pt-3">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#caf0f8] text-sm font-extrabold text-[#0077b6]">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#caf0f8] text-sm font-extrabold text-[#0077b6] ring-1 ring-[#90e0ef]">
                         {String(u.username || '?').slice(0, 2).toUpperCase()}
                       </span>
                       <div className="min-w-0">
@@ -253,6 +256,7 @@ export default function UsersTab({ authHeaders, canManage }) {
                     </div>
                     {/* Actions */}
                     <div className="flex shrink-0 items-center justify-end gap-0.5 px-2 pb-3 md:py-3">
+                      <ChevronRight size={16} className="hidden text-slate-300 opacity-0 transition-opacity group-hover:opacity-100 motion-reduce:transition-none md:block" />
                       {canManage && (
                         <>
                           <IconBtn label="Edit" onClick={(e) => { e.stopPropagation(); setEditing(u); }}>

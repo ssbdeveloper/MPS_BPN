@@ -123,7 +123,7 @@ export default function RoleEditorSheet({ role, mode, authHeaders, onClose, onSa
   const countLevel = (level) => catalog.filter((f) => (perms[f.id] || defaultLevel) === level).length;
 
   return (
-    <Drawer onClose={onClose} widthClass="max-w-2xl">
+    <Drawer onClose={onClose} widthClass="w-full md:w-1/2 xl:max-w-[54rem]">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
         <div className="flex min-w-0 items-center gap-2.5">

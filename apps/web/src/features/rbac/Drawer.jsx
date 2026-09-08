@@ -3,7 +3,8 @@ import { motion, useReducedMotion } from 'framer-motion';
 
 const MotionDiv = motion.div;
 
-// Slide-over shell (drawer kanan) dengan animasi masuk/keluar.
+// Slide-over shell (drawer kanan) — default ~setengah layar di desktop.
+// widthClass default: w-full (mobile) + setengah viewport md, cap 54rem di xl.
 // - Overlay fade + panel slide dari kanan; gerakan hanya menjawab aksi buka/tutup.
 // - prefers-reduced-motion: tanpa translasi, cukup fade.
 // - Klik backdrop TIDAK menutup (cegah kehilangan isian yang belum disimpan);
@@ -25,7 +26,7 @@ export default function Drawer({ onClose, widthClass = 'max-w-xl', children }) {
         <MotionDiv
           role="dialog"
           aria-modal="true"
-          className={`flex h-full w-full ${widthClass} flex-col bg-white shadow-2xl`}
+          className={`flex h-full w-full flex-col bg-white shadow-2xl ${widthClass}`}
           initial={reduce ? { opacity: 0 } : { x: '100%' }}
           animate={reduce ? { opacity: 1 } : { x: 0 }}
           exit={reduce ? { opacity: 0 } : { x: '100%' }}

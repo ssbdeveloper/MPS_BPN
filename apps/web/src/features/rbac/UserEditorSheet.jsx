@@ -14,18 +14,32 @@ function moduleOf(id) {
   return FEATURES[id]?.module || 'Other';
 }
 
+// Nama dinormalisasi saat diketik: tiap kata kapital di awal saja ("TEE SAN" -> "Tee San").
+function titleize(v) {
+  return String(v || '').replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+}
+
+// Username OTOMATIS dari nama: lowercase, karakter aneh (spasi dll) -> titik.
+function slugUsername(name) {
+  const s = String(name || '').toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^\.+|\.+$/g, '');
+  return s;
+}
+
 const inputCls = 'h-11 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-[#0077b6] focus:ring-2 focus:ring-[#ade8f4] disabled:cursor-not-allowed disabled:bg-slate-50';
 const rowCls = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2';
 
-// Slide-over: profil + role paket + override per-fitur.
-// Role = murni paket (multi-pilih, tanpa konsep role utama). Akses efektif =
-// gabungan level tertinggi paket; override per-user tetap lapisan teratas (2a).
-// Baseline "clear override" = `base` dari server (level paket tanpa override).
+// Slide-over (lebar ~setengah layar): profil + role paket + override per-fitur.
+// Username dibuat otomatis dari Nama (field username nonaktif). Role = murni paket
+// multi-pilih; override per-user tetap lapisan teratas (2a).
 export default function UserEditorSheet({ user, apiBase, authHeaders, canManage, onClose, onSaved }) {
   const isNew = !user?.id;
   // Kolom users.role/roles tetap dipakai server utk header x-user-role (gate admin
   // & fallback) — TERSEMBUNYI di UI; baru = 'user', lama dipertahankan apa adanya.
   const [seedRole] = useState(user?.roles || 'user');
+  const [name, setName] = useState(user?.name || '');
   const [username, setUsername] = useState(user?.username || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -37,6 +51,12 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
   const [roleSearch, setRoleSearch] = useState('');
   const [loadingPerms, setLoadingPerms] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+
+  // Username (create) selalu ikut Nama — field username tidak bisa diketik.
+  useEffect(() => {
+    if (!isNew) return;
+    setUsername(slugUsername(name));
+  }, [name, isNew]);
 
   useEffect(() => {
     if (isNew) return undefined;
@@ -105,46 +125,41 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
     setPackages((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
   };
 
-  const canSubmit = canManage && username.trim() && (!isNew || password.length >= 5);
+  const canSubmit = canManage && name.trim() && (!isNew || password.length >= 5);
 
   const save = async () => {
     if (!canSubmit || saving) return;
     setSaving(true);
     try {
+      const userName = isNew ? slugUsername(name) || 'user' : username;
       const res = await fetch(`${apiBase}/auth/users${isNew ? '' : `/${user.id}`}`, {
         method: isNew ? 'POST' : 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ username: username.trim(), password, roles: seedRole }),
+        body: JSON.stringify({ username: userName, password, roles: seedRole, name: name.trim() || userName }),
       });
       const payload = await res.json().catch(() => ({}));
+      // Username bentrok: coba akhiran .2 .3 dst (hanya saat create).
+      if (isNew && res.status === 409) {
+        const base = slugUsername(name) || 'user';
+        let lastError = payload.error || 'Failed to create user';
+        for (let attempt = 1; attempt < 6; attempt += 1) {
+          const candidate = `${base}.${attempt + 1}`;
+          const retry = await fetch(`${apiBase}/auth/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...authHeaders },
+            body: JSON.stringify({ username: candidate, password, roles: seedRole, name: name.trim() || candidate }),
+          });
+          const retryPayload = await retry.json().catch(() => ({}));
+          if (retry.ok && retryPayload.success !== false) {
+            return finishSave(retryPayload, candidate);
+          }
+          lastError = retryPayload.error || lastError;
+          if (retry.status !== 409) break;
+        }
+        throw new Error(lastError);
+      }
       if (!res.ok || payload.success === false) throw new Error(payload.error || 'Failed to save user');
-      const savedId = isNew ? payload.user?.id : user.id;
-
-      // Simpan role paket (full-set persis pilihan admin).
-      if (savedId) {
-        const rRes = await fetch(`${apiBase}/auth/users/${savedId}/roles`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', ...authHeaders },
-          body: JSON.stringify({ role_keys: packages }),
-        });
-        const rData = await rRes.json().catch(() => ({}));
-        if (!rRes.ok || rData.success === false) throw new Error(rData.error || 'User saved, but roles failed');
-      }
-
-      // Simpan override per-user (kirim semua fitur: level atau null).
-      if (!isNew) {
-        const body = {};
-        featureIds.forEach((id) => { body[id] = overrides[id] ?? null; });
-        const pRes = await fetch(`${apiBase}/auth/users/${user.id}/permissions`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', ...authHeaders },
-          body: JSON.stringify({ overrides: body }),
-        });
-        const pData = await pRes.json().catch(() => ({}));
-        if (!pRes.ok || pData.success === false) throw new Error(pData.error || 'User saved, but permissions failed');
-      }
-      toast.success(isNew ? 'User created' : 'Changes saved');
-      onSaved();
+      return finishSave(payload, userName);
     } catch (err) {
       toast.error(err.message || 'Failed to save');
     } finally {
@@ -152,8 +167,36 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
     }
   };
 
+  // Lanjut simpan paket & override setelah user tersimpan (create ataupun edit).
+  const finishSave = async (payload, savedUsername) => {
+    const savedId = isNew ? payload.user?.id : user.id;
+    if (savedId) {
+      const rRes = await fetch(`${apiBase}/auth/users/${savedId}/roles`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ role_keys: packages }),
+      });
+      const rData = await rRes.json().catch(() => ({}));
+      if (!rRes.ok || rData.success === false) throw new Error(rData.error || 'User saved, but roles failed');
+    }
+    if (!isNew) {
+      const body = {};
+      featureIds.forEach((id) => { body[id] = overrides[id] ?? null; });
+      const pRes = await fetch(`${apiBase}/auth/users/${user.id}/permissions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ overrides: body }),
+      });
+      const pData = await pRes.json().catch(() => ({}));
+      if (!pRes.ok || pData.success === false) throw new Error(pData.error || 'User saved, but permissions failed');
+    }
+    toast.success(isNew ? `User created — ${savedUsername}` : 'Changes saved');
+    setSaving(false);
+    onSaved();
+  };
+
   return (
-    <Drawer onClose={onClose} widthClass="max-w-2xl">
+    <Drawer onClose={onClose} widthClass="w-full md:w-1/2 xl:max-w-[54rem]">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-3.5">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -162,7 +205,7 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
           </span>
           <div className="min-w-0">
             <h2 className="truncate text-base font-extrabold text-slate-900">{isNew ? 'Add User' : username || 'Edit User'}</h2>
-            {!isNew && <p className="truncate text-xs font-semibold text-slate-500">{user?.name || ''}</p>}
+            {!isNew && <p className="truncate text-xs font-semibold text-slate-500">{name || ''}</p>}
           </div>
         </div>
         <button onClick={onClose} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" aria-label="Close"><X size={18} /></button>
@@ -172,9 +215,27 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
       <div className="flex-1 overflow-y-auto px-5 py-4">
         {/* Profil */}
         <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block sm:col-span-2">
-            <FieldLabel>Username</FieldLabel>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} disabled={!canManage} className={inputCls} placeholder="username" autoComplete="username" />
+          <label className="block">
+            <FieldLabel>Name</FieldLabel>
+            <input
+              value={name}
+              onChange={(e) => setName(titleize(e.target.value))}
+              disabled={!canManage}
+              className={inputCls}
+              placeholder="Full name"
+              autoComplete="off"
+            />
+          </label>
+          <label className="block">
+            <FieldLabel>Username {isNew && <span className="font-normal text-slate-400">(auto)</span>}</FieldLabel>
+            <input
+              value={username}
+              readOnly
+              tabIndex={-1}
+              className={`${inputCls} cursor-not-allowed bg-slate-50 text-slate-500`}
+              placeholder={isNew ? 'auto from name' : 'username'}
+              autoComplete="off"
+            />
           </label>
           <label className="block sm:col-span-2">
             <FieldLabel>Password {!isNew && <span className="font-normal text-slate-400">(optional)</span>}</FieldLabel>

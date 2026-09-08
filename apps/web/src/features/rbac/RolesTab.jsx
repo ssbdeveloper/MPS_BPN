@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { toast } from 'sonner';
-import { Copy, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { Boxes, Copy, Layers, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users } from 'lucide-react';
 import RoleEditorSheet from './RoleEditorSheet';
 import { LEVELS } from '../../rbac/permissionMatrix';
 
@@ -21,11 +21,14 @@ function levelTone(level) {
       : 'bg-slate-100 text-slate-500';
 }
 
-function Stat({ label, value }) {
+function Stat({ icon, label, value }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">{value}</p>
+    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#caf0f8] text-[#0077b6]">{icon}</span>
+      <div className="min-w-0">
+        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+        <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">{value}</p>
+      </div>
     </div>
   );
 }
@@ -117,9 +120,9 @@ export default function RolesTab({ authHeaders, canManage }) {
     <div>
       {/* Stats */}
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <Stat label="Roles" value={stats.roles} />
-        <Stat label="System" value={stats.system} />
-        <Stat label="Assignments" value={stats.assignments} />
+        <Stat icon={<Layers size={18} />} label="Roles" value={stats.roles} />
+        <Stat icon={<ShieldCheck size={18} />} label="System" value={stats.system} />
+        <Stat icon={<Boxes size={18} />} label="Assignments" value={stats.assignments} />
       </div>
 
       {/* Toolbar */}
