@@ -14,16 +14,10 @@ const { FEATURE_ID_SET } = require("../rbac/features");
 const { LEVELS } = require("../rbac/permissionMatrix");
 
 const VALID_LEVELS = new Set([LEVELS.NO_ACCESS, LEVELS.READ_ONLY, LEVELS.FULL_ACCESS]);
-const ROLE_KEY_RE = /^[a-z][a-z0-9_]{0,31}$/;      // slug: huruf kecil + angka + _
-const NORMALIZE_LEGACY = { admin: "administrator" };
+const ROLE_KEY_RE = /^[a-z][a-z0-9_.]{0,31}$/;    // slug: huruf kecil + angka + _ dan . (dibuat otomatis dari nama)
 
 function actorId(req) {
   return parseInt(req.headers["x-user-id"], 10) || null;
-}
-
-function normalizeLegacyRole(role) {
-  const r = String(role || "").trim().toLowerCase();
-  return NORMALIZE_LEGACY[r] || r;
 }
 
 function validateLevel(level) {
@@ -102,7 +96,7 @@ exports.createRole = async (req, res) => {
   if (!ROLE_KEY_RE.test(roleKey)) {
     return res.status(400).json({
       success: false,
-      error: "role_key hanya huruf kecil, angka, underscore; diawali huruf; maks 32 karakter",
+      error: "role_key hanya huruf kecil, angka, titik, underscore; diawali huruf; maks 32 karakter",
     });
   }
   if (!name || name.length > 80) {
@@ -253,9 +247,10 @@ exports.deleteRole = async (req, res) => {
   }
 };
 
-// PUT /auth/users/:id/roles — ganti assignment role paket user.
-// Body: { role_keys: string[] }  — role legacy user (users.role/roles) SELALU
-// dipertahankan server-side (tidak bisa dicopot lewat sini).
+// PUT /auth/users/:id/roles — GANTI role paket user secara persis (full-set).
+// Body: { role_keys: string[] } — bisa kosong (user tanpa paket; akses jatuh ke
+// fallback matrix kode kolom legacy). Tidak ada role yang dipaksa-pertahankan:
+// admin memilih semua paket yang user pegang (termasuk role sistem bila mau).
 exports.updateUserRoles = async (req, res) => {
   const userId = parseInt(req.params.id, 10);
   if (!Number.isInteger(userId)) {
@@ -273,29 +268,29 @@ exports.updateUserRoles = async (req, res) => {
   try {
     await client.query("BEGIN");
     const user = await client.query(
-      `SELECT id, COALESCE(NULLIF(roles,''), role) AS role FROM public.users WHERE id = $1 LIMIT 1`,
+      "SELECT id FROM public.users WHERE id = $1 LIMIT 1",
       [userId],
     );
     if (user.rowCount === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ success: false, error: "User tidak ditemukan" });
     }
-    const legacy = normalizeLegacyRole(user.rows[0].role);
-    const merged = [...new Set([legacy, ...wanted])];
 
-    const existing = await client.query(
-      "SELECT role_key FROM rbac.roles WHERE role_key = ANY($1)",
-      [merged],
-    );
-    const known = new Set(existing.rows.map((r) => r.role_key));
-    const unknown = merged.filter((k) => !known.has(k));
-    if (unknown.length > 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ success: false, error: `role tidak dikenal: ${unknown.join(", ")}` });
+    if (wanted.length > 0) {
+      const existing = await client.query(
+        "SELECT role_key FROM rbac.roles WHERE role_key = ANY($1)",
+        [wanted],
+      );
+      const known = new Set(existing.rows.map((r) => r.role_key));
+      const unknown = wanted.filter((k) => !known.has(k));
+      if (unknown.length > 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ success: false, error: `role tidak dikenal: ${unknown.join(", ")}` });
+      }
     }
 
     await client.query("DELETE FROM rbac.user_roles WHERE user_id = $1", [userId]);
-    for (const k of merged) {
+    for (const k of wanted) {
       await client.query(
         `INSERT INTO rbac.user_roles (user_id, role_key, assigned_by)
          VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
@@ -303,7 +298,7 @@ exports.updateUserRoles = async (req, res) => {
       );
     }
     await client.query("COMMIT");
-    return res.json({ success: true, role_keys: merged });
+    return res.json({ success: true, role_keys: wanted });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     console.error("rbac updateUserRoles error:", err);
