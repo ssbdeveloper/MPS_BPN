@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Eye, EyeOff, Loader2, Pencil, Save, UserPlus, X } from 'lucide-react';
+import { Check, Eye, EyeOff, Loader2, Pencil, Save, Search, UserPlus, X } from 'lucide-react';
 import SegmentedLevel from './SegmentedLevel';
 import Drawer from './Drawer';
-import { ROLES, LEVELS, resolveLevel } from '../../rbac/permissionMatrix';
+import { roleDot } from './roleTone';
+import { resolveLevel } from '../../rbac/permissionMatrix';
 import { FEATURES } from '../../rbac/featureRegistry';
 
 function labelOf(id) {
@@ -14,26 +15,26 @@ function moduleOf(id) {
 }
 
 const inputCls = 'h-11 w-full rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-[#0077b6] focus:ring-2 focus:ring-[#ade8f4] disabled:cursor-not-allowed disabled:bg-slate-50';
+const rowCls = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2';
 
-// Slide-over: profile + role packages + per-feature override dalam satu tempat.
-// - Role utama (legacy, satu) = select di atas; dipakai badge & gate admin.
-// - Role paket (tambahan, banyak) = chips; akses efektif = gabungan level tertinggi.
-// - Override per-user tetap lapisan teratas (2a); baseline "clear" = `base` dari server
-//   (level role paket tanpa override) supaya grid akurat walau paket menaikkan level.
+// Slide-over: profil + role paket + override per-fitur.
+// Role = murni paket (multi-pilih, tanpa konsep role utama). Akses efektif =
+// gabungan level tertinggi paket; override per-user tetap lapisan teratas (2a).
+// Baseline "clear override" = `base` dari server (level paket tanpa override).
 export default function UserEditorSheet({ user, apiBase, authHeaders, canManage, onClose, onSaved }) {
   const isNew = !user?.id;
+  // Kolom users.role/roles tetap dipakai server utk header x-user-role (gate admin
+  // & fallback) — TERSEMBUNYI di UI; baru = 'user', lama dipertahankan apa adanya.
+  const [seedRole] = useState(user?.roles || 'user');
   const [username, setUsername] = useState(user?.username || '');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState(user?.roles || 'foreman');
   const [showPassword, setShowPassword] = useState(false);
   const [overrides, setOverrides] = useState({});   // feature -> level (hanya override nyata)
   const [baseMap, setBaseMap] = useState({});       // feature -> level tanpa override (dari server)
   const [featureIds, setFeatureIds] = useState(() => Object.values(FEATURES).map((f) => f.id));
-  const [rolesList, setRolesList] = useState([]);   // semua role (paket) utk chips
-  const [packages, setPackages] = useState(() => {
-    const owned = user?.role_keys || [];
-    return owned.filter((k) => k !== user?.roles);  // role utama ditampilkan terpisah
-  });
+  const [rolesList, setRolesList] = useState([]);   // semua role (paket) utk picker
+  const [packages, setPackages] = useState(() => (Array.isArray(user?.role_keys) ? [...user.role_keys] : []));
+  const [roleSearch, setRoleSearch] = useState('');
   const [loadingPerms, setLoadingPerms] = useState(!isNew);
   const [saving, setSaving] = useState(false);
 
@@ -59,7 +60,7 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
     return () => { alive = false; };
   }, [isNew, user?.id, apiBase, authHeaders]);
 
-  // Semua role utk chips paket (server menambahkan role utama otomatis saat simpan).
+  // Semua role utk picker paket.
   useEffect(() => {
     let alive = true;
     fetch(`${apiBase}/auth/roles`, { headers: authHeaders })
@@ -70,13 +71,22 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
     return () => { alive = false; };
   }, [apiBase, authHeaders]);
 
+  const filteredRoles = useMemo(() => {
+    const term = roleSearch.trim().toLowerCase();
+    if (!term) return rolesList;
+    return rolesList.filter((r) => (
+      String(r.name || '').toLowerCase().includes(term) ||
+      String(r.role_key || '').toLowerCase().includes(term)
+    ));
+  }, [roleSearch, rolesList]);
+
   const groups = useMemo(() => {
     const byModule = {};
     featureIds.forEach((id) => { (byModule[moduleOf(id)] = byModule[moduleOf(id)] || []).push(id); });
     return Object.entries(byModule).sort((a, b) => a[0].localeCompare(b[0]));
   }, [featureIds]);
 
-  const baselineOf = (id) => baseMap[id] ?? resolveLevel(role, id);
+  const baselineOf = (id) => baseMap[id] ?? resolveLevel(seedRole, id);
   const effectiveOf = (id) => overrides[id] ?? baselineOf(id);
   const isOverridden = (id) => overrides[id] != null;
   const overrideCount = Object.keys(overrides).length;
@@ -95,7 +105,7 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
     setPackages((cur) => (cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]));
   };
 
-  const canSubmit = canManage && username.trim() && role && (!isNew || password.length >= 5);
+  const canSubmit = canManage && username.trim() && (!isNew || password.length >= 5);
 
   const save = async () => {
     if (!canSubmit || saving) return;
@@ -104,13 +114,13 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
       const res = await fetch(`${apiBase}/auth/users${isNew ? '' : `/${user.id}`}`, {
         method: isNew ? 'POST' : 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ username: username.trim(), password, roles: role }),
+        body: JSON.stringify({ username: username.trim(), password, roles: seedRole }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || payload.success === false) throw new Error(payload.error || 'Failed to save user');
       const savedId = isNew ? payload.user?.id : user.id;
 
-      // Simpan role paket (role utama otomatis dipertahankan server-side).
+      // Simpan role paket (full-set persis pilihan admin).
       if (savedId) {
         const rRes = await fetch(`${apiBase}/auth/users/${savedId}/roles`, {
           method: 'PUT',
@@ -152,7 +162,7 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
           </span>
           <div className="min-w-0">
             <h2 className="truncate text-base font-extrabold text-slate-900">{isNew ? 'Add User' : username || 'Edit User'}</h2>
-            {!isNew && <p className="truncate text-xs font-semibold text-slate-500">{user?.name || 'Profile & access'}</p>}
+            {!isNew && <p className="truncate text-xs font-semibold text-slate-500">{user?.name || ''}</p>}
           </div>
         </div>
         <button onClick={onClose} className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" aria-label="Close"><X size={18} /></button>
@@ -160,70 +170,75 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {/* Profile */}
+        {/* Profil */}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block sm:col-span-2">
             <FieldLabel>Username</FieldLabel>
             <input value={username} onChange={(e) => setUsername(e.target.value)} disabled={!canManage} className={inputCls} placeholder="username" autoComplete="username" />
           </label>
-          <label className="block">
+          <label className="block sm:col-span-2">
             <FieldLabel>Password {!isNew && <span className="font-normal text-slate-400">(optional)</span>}</FieldLabel>
             <span className="relative block">
-              <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} disabled={!canManage} className={`${inputCls} pr-11`} placeholder={isNew ? 'min. 5 characters' : 'leave blank to keep'} autoComplete="new-password" />
-              <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-2 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" aria-label="toggle password">{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
+              <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} disabled={!canManage} className={`${inputCls} pr-12`} placeholder={isNew ? 'min. 5 characters' : 'leave blank to keep'} autoComplete="new-password" />
+              <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute right-1 top-1/2 flex min-h-[44px] min-w-[44px] -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" aria-label="toggle password">{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button>
             </span>
           </label>
-          <label className="block">
-            <FieldLabel>Main role</FieldLabel>
-            <select value={role} onChange={(e) => setRole(e.target.value)} disabled={!canManage} className={`${inputCls} bg-white`}>
-              {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-          </label>
         </div>
 
-        {/* Role packages */}
+        {/* Role packages — container sendiri: vertikal, bisa search, tinggi tetap */}
         <div className="mt-4">
-          <FieldLabel>Role packages <span className="font-normal text-slate-400">(extra, can stack)</span></FieldLabel>
-          {rolesList.length === 0 ? (
-            <p className="text-xs font-semibold text-slate-400">Loading roles…</p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {rolesList.map((r) => {
-                const isMain = r.role_key === role;
-                const active = isMain || packages.includes(r.role_key);
-                return (
-                  <button
-                    key={r.role_key}
-                    type="button"
-                    disabled={isMain || !canManage}
-                    onClick={() => togglePackage(r.role_key)}
-                    title={isMain ? 'Main role — always held' : r.description || r.role_key}
-                    className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition-all ${
-                      active
-                        ? 'border-[#90e0ef] bg-[#caf0f8] text-[#0077b6]'
-                        : 'border-slate-200 bg-white text-slate-500 hover:border-[#90e0ef] hover:bg-slate-50 hover:text-[#0077b6]'
-                    } ${isMain || !canManage ? 'cursor-not-allowed opacity-70' : ''}`}
-                  >
-                    {r.name || r.role_key} {isMain && <span className="text-[11px] font-black uppercase opacity-60">main</span>}
-                  </button>
-                );
-              })}
+          <div className="mb-1.5 flex items-center justify-between">
+            <FieldLabel>Role packages</FieldLabel>
+            <span className="text-xs font-bold tabular-nums text-slate-400">{packages.length} selected</span>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-slate-200">
+            <div className="flex items-center gap-2 border-b border-slate-100 px-3">
+              <Search size={14} className="shrink-0 text-slate-400" />
+              <input
+                value={roleSearch}
+                onChange={(e) => setRoleSearch(e.target.value)}
+                disabled={!canManage}
+                className="h-11 w-full bg-transparent text-sm font-semibold outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                placeholder="Search roles"
+              />
             </div>
-          )}
-          <p className="mt-1.5 text-[11px] font-semibold text-slate-400">
-            Effective access = highest level across all held roles (main role is always held).
-          </p>
+            <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto">
+              {filteredRoles.length === 0 ? (
+                <p className="px-3 py-6 text-center text-xs font-semibold text-slate-400">No roles found.</p>
+              ) : (
+                filteredRoles.map((r) => {
+                  const checked = packages.includes(r.role_key);
+                  return (
+                    <button
+                      key={r.role_key}
+                      type="button"
+                      disabled={!canManage}
+                      onClick={() => togglePackage(r.role_key)}
+                      className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none ${
+                        checked ? 'bg-[#caf0f8]/30 hover:bg-[#caf0f8]/50' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${roleDot(r.role_key)}`} />
+                        <span className="truncate text-sm font-semibold text-slate-700">{r.name || r.role_key}</span>
+                      </span>
+                      <span className={`flex h-5 w-5 items-center justify-center rounded-md border transition-colors ${
+                        checked ? 'border-[#0077b6] bg-[#0077b6] text-white' : 'border-slate-300 bg-white text-transparent'
+                      }`}>
+                        <Check size={13} strokeWidth={3} />
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
         </div>
 
-        {/* Access overrides */}
+        {/* Override per-fitur */}
         <div className="mt-5">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <div>
-              <h3 className="text-sm font-extrabold text-slate-900">Feature access</h3>
-              <p className="text-xs text-slate-500">
-                {isNew ? 'Derived from role packages. Save first to set per-user overrides.' : 'Override where this user must differ from their roles.'}
-              </p>
-            </div>
+            <h3 className="text-sm font-extrabold text-slate-900">Feature access</h3>
             {!isNew && overrideCount > 0 && (
               <button type="button" onClick={resetAll} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-500 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]">
                 Reset to roles
@@ -242,11 +257,11 @@ export default function UserEditorSheet({ user, apiBase, authHeaders, canManage,
                     {ids.map((id) => {
                       const overridden = isOverridden(id);
                       return (
-                        <div key={id} className="flex items-center justify-between gap-3 px-3 py-2">
-                          <div className="flex min-w-0 items-center gap-1.5">
+                        <div key={id} className={rowCls}>
+                          <span className="flex min-w-0 items-center gap-2">
                             <span className="truncate text-xs font-semibold text-slate-700">{labelOf(id)}</span>
                             {overridden && <span className="shrink-0 rounded-full bg-[#caf0f8] px-1.5 py-0.5 text-[11px] font-bold uppercase text-[#0077b6]">Override</span>}
-                          </div>
+                          </span>
                           <SegmentedLevel compact value={effectiveOf(id)} onChange={(lvl) => setLevel(id, lvl)} disabled={isNew || !canManage} />
                         </div>
                       );

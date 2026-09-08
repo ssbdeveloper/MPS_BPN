@@ -57,7 +57,7 @@ export default function ManageUsersPage() {
               </span>
               <div className="min-w-0">
                 <h1 className="truncate text-lg font-extrabold text-slate-950">Manage Users</h1>
-                <p className="truncate text-xs font-semibold text-slate-500">Users, access packages &amp; per-feature control</p>
+                <p className="truncate text-xs font-semibold text-slate-500">Users &amp; role packages</p>
               </div>
             </div>
           </div>

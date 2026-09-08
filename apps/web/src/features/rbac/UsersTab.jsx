@@ -2,13 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { toast } from 'sonner';
 import { Loader2, Pencil, RefreshCw, Search, Trash2, UserPlus, Users } from 'lucide-react';
-import RoleBadge from './RoleBadge';
+import UserEditorSheet from './UserEditorSheet';
+import { roleDot } from './roleTone';
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const MotionUl = motion.ul;
 const MotionLi = motion.li;
-import UserEditorSheet from './UserEditorSheet';
-
-const API_BASE = import.meta.env.VITE_API_URL || '';
 
 function formatDateTime(value) {
   if (!value) return '-';
@@ -20,7 +20,7 @@ function formatDateTime(value) {
 function Stat({ label, value }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
       <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">{value}</p>
     </div>
   );
@@ -48,21 +48,28 @@ function RowSkeleton() {
         <div className="h-3 w-40 max-w-full animate-pulse rounded bg-slate-100" />
         <div className="h-2.5 w-56 max-w-full animate-pulse rounded bg-slate-100" />
       </div>
-      <div className="hidden h-6 w-20 animate-pulse rounded-full bg-slate-100 sm:block" />
+      <div className="hidden h-6 w-24 animate-pulse rounded-full bg-slate-100 sm:block" />
     </div>
   );
 }
 
-// Daftar user (tab Users) — tabel full-width di desktop, kartu di mobile,
-// tanpa horizontal scroll. Loading skeleton, empty & error state eksplisit.
+// Daftar user (tab Users) — murni role packages (tanpa kolom role utama).
 export default function UsersTab({ authHeaders, canManage }) {
   const reduce = useReducedMotion();
   const [users, setUsers] = useState([]);
+  const [rolesList, setRolesList] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [editing, setEditing] = useState(null); // user object | {} utk baru | null tutup
+
+  const rolesByName = useMemo(() => {
+    const map = {};
+    rolesList.forEach((r) => { map[r.role_key] = r.name || r.role_key; });
+    return map;
+  }, [rolesList]);
+  const pkgName = (key) => rolesByName[key] || key;
 
   const filteredUsers = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -70,16 +77,15 @@ export default function UsersTab({ authHeaders, canManage }) {
     return users.filter((u) => (
       String(u.username || '').toLowerCase().includes(term) ||
       String(u.name || '').toLowerCase().includes(term) ||
-      String(u.roles || '').toLowerCase().includes(term) ||
-      (Array.isArray(u.role_keys) && u.role_keys.join(' ').toLowerCase().includes(term))
+      (Array.isArray(u.role_keys) && u.role_keys.some((k) => pkgName(k).toLowerCase().includes(term)))
     ));
-  }, [search, users]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, users, rolesByName]);
 
   const stats = useMemo(() => {
-    const withPkg = users.filter((u) => Array.isArray(u.role_keys) && u.role_keys.length > 1).length;
-    const mainRoles = new Set(users.map((u) => u.roles).filter(Boolean)).size;
-    return { total: users.length, mainRoles, withPkg };
-  }, [users]);
+    const assignments = users.reduce((n, u) => n + (Array.isArray(u.role_keys) ? u.role_keys.length : 0), 0);
+    return { users: users.length, roles: rolesList.length, assignments };
+  }, [users, rolesList]);
 
   const loadUsers = useCallback(() => {
     const controller = new AbortController();
@@ -97,6 +103,17 @@ export default function UsersTab({ authHeaders, canManage }) {
     const controller = loadUsers();
     return () => controller.abort();
   }, [loadUsers]);
+
+  // Daftar role utk menampilkan NAMA paket (role key tidak ditampilkan ke user).
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/auth/roles`, { headers: authHeaders })
+      .then((r) => r.json())
+      .then((data) => { if (alive && data?.roles) setRolesList(data.roles); })
+      .catch(() => {})
+      .finally(() => {});
+    return () => { alive = false; };
+  }, [authHeaders]);
 
   const handleDelete = async (u, e) => {
     e?.stopPropagation();
@@ -125,15 +142,21 @@ export default function UsersTab({ authHeaders, canManage }) {
     show: { opacity: 1, y: 0, transition: { duration: 0.22, ease: 'easeOut' } },
   };
 
-  const colHead = 'px-4 py-2.5 text-[11px] font-black uppercase tracking-wide text-slate-400';
+  const colHead = 'px-4 py-2.5 text-[11px] font-bold uppercase tracking-wide text-slate-400';
+  const pkgChip = (key) => (
+    <span key={key} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${roleDot(key)}`} />
+      {pkgName(key)}
+    </span>
+  );
 
   return (
     <div>
       {/* Stats */}
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <Stat label="Total users" value={stats.total} />
-        <Stat label="Main roles" value={stats.mainRoles} />
-        <Stat label="With extra packages" value={stats.withPkg} />
+        <Stat label="Users" value={stats.users} />
+        <Stat label="Roles" value={stats.roles} />
+        <Stat label="Assignments" value={stats.assignments} />
       </div>
 
       {/* Toolbar */}
@@ -144,13 +167,13 @@ export default function UsersTab({ authHeaders, canManage }) {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-sm font-semibold outline-none focus:border-[#0077b6] focus:ring-2 focus:ring-[#ade8f4]"
-            placeholder="Search users, roles, packages…"
+            placeholder="Search users, packages…"
           />
         </label>
         <div className="flex items-center gap-2">
           <span className="text-xs font-bold tabular-nums text-slate-500">{filteredUsers.length}{filteredUsers.length !== users.length ? ` / ${users.length}` : ''} users</span>
           <IconBtn label="Refresh" onClick={loadUsers} disabled={loading}>
-            <Loader2 size={17} className={loading ? 'animate-spin' : ''} hidden={!loading} />
+            <Loader2 size={17} className={loading ? 'animate-spin' : 'hidden'} />
             <RefreshCw size={17} className={loading ? 'hidden' : ''} />
           </IconBtn>
           {canManage && (
@@ -173,11 +196,9 @@ export default function UsersTab({ authHeaders, canManage }) {
 
       {/* List */}
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        {/* Header kolom — desktop only */}
         {!loading && !error && filteredUsers.length > 0 && (
-          <div className="hidden border-b border-slate-100 bg-slate-50/60 md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,0.9fr)_auto]">
+          <div className="hidden border-b border-slate-100 bg-slate-50/60 md:grid md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.8fr)_minmax(0,0.9fr)_auto]">
             <div className={colHead}>User</div>
-            <div className={`${colHead} text-center`}>Role</div>
             <div className={colHead}>Packages</div>
             <div className={`${colHead} text-right`}>Created</div>
             <div className={colHead} />
@@ -197,7 +218,7 @@ export default function UsersTab({ authHeaders, canManage }) {
           <MotionUl variants={listVariants} initial="hidden" animate="show" className="divide-y divide-slate-100">
             <AnimatePresence initial={false}>
               {filteredUsers.map((u) => {
-                const extraPkgs = Array.isArray(u.role_keys) ? u.role_keys.filter((k) => k !== u.roles) : [];
+                const keys = Array.isArray(u.role_keys) ? u.role_keys : [];
                 return (
                   <MotionLi
                     key={u.id}
@@ -205,45 +226,33 @@ export default function UsersTab({ authHeaders, canManage }) {
                     variants={rowVariants}
                     exit={{ opacity: 0, height: 0, transition: { duration: 0.18 } }}
                     onClick={() => canManage && setEditing(u)}
-                    className={`group md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.6fr)_minmax(0,0.9fr)_auto] md:items-center transition-colors ${
+                    className={`group transition-colors md:grid md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.8fr)_minmax(0,0.9fr)_auto] md:items-center ${
                       canManage ? 'cursor-pointer hover:bg-slate-50' : ''
                     }`}
                   >
-                    {/* User */}
-                    <div className="flex items-center gap-3 px-4 py-3">
+                    {/* User + chips (mobile) */}
+                    <div className="flex items-center gap-3 px-4 pt-3">
                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#caf0f8] text-sm font-extrabold text-[#0077b6]">
                         {String(u.username || '?').slice(0, 2).toUpperCase()}
                       </span>
                       <div className="min-w-0">
                         <p className="truncate font-extrabold text-slate-900">{u.username}</p>
-                        <p className="truncate text-xs font-semibold text-slate-500">
-                          {u.name || '—'}
-                          {extraPkgs.length > 0 && <span className="text-[#0077b6]"> · pkg: {extraPkgs.join(', ')}</span>}
-                        </p>
+                        <p className="truncate text-xs font-semibold text-slate-500">{u.name || '—'}</p>
                       </div>
                     </div>
-                    {/* Role utama */}
-                    <div className="px-4 pb-1 text-left md:pb-0 md:px-4 md:text-center">
-                      <RoleBadge role={u.roles} />
-                    </div>
-                    {/* Packages */}
-                    <div className="hidden px-4 md:block">
-                      {extraPkgs.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {extraPkgs.map((k) => (
-                            <span key={k} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{k}</span>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-xs font-semibold text-slate-300">—</span>
-                      )}
+                    {keys.length > 0 && (
+                      <div className="flex flex-wrap gap-1 px-4 pb-1 pt-2 md:hidden">{keys.map(pkgChip)}</div>
+                    )}
+                    {/* Packages (desktop) */}
+                    <div className="hidden px-4 py-3 md:flex md:flex-wrap md:items-center md:gap-1">
+                      {keys.length > 0 ? keys.map(pkgChip) : <span className="text-xs font-semibold text-slate-300">—</span>}
                     </div>
                     {/* Created */}
-                    <div className="px-4 pb-2 text-xs font-semibold tabular-nums text-slate-500 md:pb-0 md:text-right">
+                    <div className="px-4 pb-2 text-xs font-semibold tabular-nums text-slate-500 md:py-3 md:text-right">
                       {formatDateTime(u.created_at)}
                     </div>
                     {/* Actions */}
-                    <div className="flex shrink-0 items-center justify-end gap-0.5 px-2 pb-3 md:pb-0">
+                    <div className="flex shrink-0 items-center justify-end gap-0.5 px-2 pb-3 md:py-3">
                       {canManage && (
                         <>
                           <IconBtn label="Edit" onClick={(e) => { e.stopPropagation(); setEditing(u); }}>

@@ -2,14 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { toast } from 'sonner';
 import { Copy, Loader2, Pencil, Plus, RefreshCw, Search, ShieldCheck, Trash2, Users } from 'lucide-react';
-
-const MotionDiv = motion.div;
-const MotionArticle = motion.article;
-import RoleBadge from './RoleBadge';
 import RoleEditorSheet from './RoleEditorSheet';
 import { LEVELS } from '../../rbac/permissionMatrix';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+
+const MotionDiv = motion.div;
+const MotionArticle = motion.article;
 
 function levelLabel(level) {
   return level === LEVELS.FULL_ACCESS ? 'Full' : level === LEVELS.READ_ONLY ? 'Read' : 'None';
@@ -25,7 +24,7 @@ function levelTone(level) {
 function Stat({ label, value }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-[11px] font-black uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
       <p className="mt-0.5 text-xl font-extrabold tabular-nums text-slate-900">{value}</p>
     </div>
   );
@@ -38,7 +37,7 @@ function CardIconBtn({ label, onClick, disabled, danger, children }) {
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className={`flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-50 motion-reduce:transition-none ${
+      className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-50 motion-reduce:transition-none ${
         danger ? 'hover:bg-red-50 hover:text-red-600' : 'hover:text-[#0077b6]'
       }`}
     >
@@ -47,9 +46,8 @@ function CardIconBtn({ label, onClick, disabled, danger, children }) {
   );
 }
 
-// Daftar role paket (tab Roles) — kartu grid full-width di desktop.
-// Role sistem (is_system) tetap bisa diedit & di-clone (3b);
-// hapus diblokir selama masih dipakai user (4a).
+// Daftar role paket (tab Roles) — kartu grid; role key tidak ditampilkan.
+// Role sistem tetap bisa diedit & di-clone (3b); hapus diblokir saat dipakai (4a).
 export default function RolesTab({ authHeaders, canManage }) {
   const reduce = useReducedMotion();
   const [roles, setRoles] = useState([]);
@@ -64,14 +62,13 @@ export default function RolesTab({ authHeaders, canManage }) {
     if (!term) return roles;
     return roles.filter((r) => (
       String(r.name || '').toLowerCase().includes(term) ||
-      String(r.role_key || '').toLowerCase().includes(term) ||
       String(r.description || '').toLowerCase().includes(term)
     ));
   }, [search, roles]);
 
   const stats = useMemo(() => {
-    const users = roles.reduce((n, r) => n + (r.user_count || 0), 0);
-    return { roles: roles.length, system: roles.filter((r) => r.is_system).length, assignments: users };
+    const assignments = roles.reduce((n, r) => n + (r.user_count || 0), 0);
+    return { roles: roles.length, system: roles.filter((r) => r.is_system).length, assignments };
   }, [roles]);
 
   const load = useCallback(() => {
@@ -120,8 +117,8 @@ export default function RolesTab({ authHeaders, canManage }) {
     <div>
       {/* Stats */}
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <Stat label="Total roles" value={stats.roles} />
-        <Stat label="System roles" value={stats.system} />
+        <Stat label="Roles" value={stats.roles} />
+        <Stat label="System" value={stats.system} />
         <Stat label="Assignments" value={stats.assignments} />
       </div>
 
@@ -190,7 +187,6 @@ export default function RolesTab({ authHeaders, canManage }) {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
-                    <RoleBadge role={r.role_key} />
                     {r.is_system && (
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold uppercase text-slate-500">
                         <ShieldCheck size={11} /> System
@@ -202,7 +198,7 @@ export default function RolesTab({ authHeaders, canManage }) {
                   </span>
                 </div>
 
-                <h3 className="mt-2.5 truncate text-base font-extrabold text-slate-900">{r.name || r.role_key}</h3>
+                <h3 className="mt-2.5 truncate text-base font-extrabold text-slate-900">{r.name}</h3>
                 <p className="mt-0.5 line-clamp-2 min-h-[2rem] text-xs font-semibold text-slate-500">
                   {r.description || '—'}
                 </p>
