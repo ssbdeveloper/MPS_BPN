@@ -58,6 +58,38 @@ function sameWorkcenter(left, right) {
   return String(left || '').trim().toUpperCase() === String(right || '').trim().toUpperCase();
 }
 
+// Workcenter OVERTIME (mis. C50FABOT) = kode posting terpisah untuk jam lembur, tetapi job
+// di jadwal (ms_project_task / bay schedule) selalu memakai kode REGULER pasangannya
+// (C5100FAB) — master public.workcenter: workcenternew <-> workcenterot. Kalau daftar job
+// difilter dengan kode OT, jadwal tampak kosong (verified CKP 2026-09-08: 0 task ber-kode
+// OT; jadwal aktif hari ini semua C5100xx). Untuk MENCARI JOB, kode OT dipetakan ke kode
+// reguler; kode OT di session/datakaryawan TIDAK diubah (tetap dipakai saat posting jam OT).
+let otBaseMapPromise = null;
+async function resolveBaseWorkcenter(rawWorkcenter) {
+  const wc = String(rawWorkcenter || '').trim().toUpperCase();
+  if (!wc) return wc;
+  try {
+    if (!otBaseMapPromise) {
+      otBaseMapPromise = fetch(`${API_BASE.replace(/\/$/, '')}/workcenter/`)
+        .then((res) => (res.ok ? res.json() : []))
+        .then((rows) => {
+          const map = {};
+          (Array.isArray(rows) ? rows : []).forEach((m) => {
+            if (m?.workcenterot && m?.workcenternew) {
+              map[String(m.workcenterot).trim().toUpperCase()] = String(m.workcenternew).trim().toUpperCase();
+            }
+          });
+          return map;
+        })
+        .catch(() => ({}));
+    }
+    const map = await otBaseMapPromise;
+    return map[wc] || wc;
+  } catch {
+    return wc;
+  }
+}
+
 function writeStoredValue(key, value) {
   try {
     if (value) localStorage.setItem(key, value);
@@ -156,9 +188,14 @@ export default function ManufacturingSelectJobPage() {
 
     setLoading(true);
     try {
+      // Mode Overtime: session membawa kode OT (C50FABOT) — job dicari dengan kode reguler
+      // pasangannya (C5100FAB), karena semua task di jadwal memakai kode reguler. Kalau map
+      // gagal dimuat, resolveBaseWorkcenter mengembalikan kode apa adanya (perilaku lama).
+      const searchWorkcenter = await resolveBaseWorkcenter(currentWorkcenter);
+
       const response = await fetch(apiUrl('/ms-project/bay-schedule-tasks', {
         area_code: deviceAreaCode,
-        workcenter: currentWorkcenter,
+        workcenter: searchWorkcenter,
         start_date: weekBounds.start,
         end_date: weekBounds.end,
         q: searchOverride ?? searchText,
@@ -170,7 +207,7 @@ export default function ManufacturingSelectJobPage() {
       // di klien harus meloloskannya — kalau tidak, badge order-level jadi kode mati dan bay
       // yang terpakai tampak kosong bagi operator.
       const rows = (payload.data || []).filter(
-        (job) => isOrderLevelJob(job) || sameWorkcenter(job.workcenter, currentWorkcenter)
+        (job) => isOrderLevelJob(job) || sameWorkcenter(job.workcenter, searchWorkcenter)
       );
       setJobs(rows);
       setExpandedProjects(new Set());
