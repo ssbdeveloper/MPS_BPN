@@ -2500,6 +2500,25 @@ async function listBayScheduleTasks(query = {}) {
   // adalah penanda "bay terpakai, operasi belum dipilih" yang dibangun Fase 1/A-02 —
   // menyembunyikannya akan membuat bay yang terpakai tampak kosong.
   where.push(`(s.task_id is null or ${MSP_TASK_SCHEDULABLE_SQL})`);
+  // ...dan operasi itu harus BENAR-BENAR ADA di SAP. MSP_TASK_SCHEDULABLE_SQL hanya menuntut
+  // operation_no tidak kosong, sehingga nilai placeholder seperti '0' lolos: string '0' bukan
+  // string kosong. Task semacam itu tidak bisa dikonfirmasi ke SAP — pasangan order+op-nya
+  // tidak ada di sana — jadi ia jalan buntu yang menyamar sebagai pekerjaan, persis kelas bug
+  // yang sama dengan task tanpa operation_no. Terukur saat aturan ini dipasang (CKP
+  // 2026-09-14): 3 dari 1.283 baris terjadwal terbuang, semuanya 1 task sampah yang sama
+  // (order 1000120826 "CUTTING STRUCTURAL TANK" op 0, workcenter kosong; operasi aslinya di
+  // SAP = op 20 CUTTING STRUCTURAL) — tidak ada job sah yang ikut hilang.
+  // sow = cermin ph3_order; dipakai karena operation_no-nya integer (bebas ambiguitas
+  // leading-zero '0120' vs '120' yang menjebak saat pengukuran).
+  where.push(`(
+    s.task_id is null
+    or exists (
+      select 1 from sow w
+      where ltrim(w.order_no, '0') = ltrim(t.order_no, '0')
+        and w.operation_no = (case when btrim(coalesce(t.operation_no, '')) ~ '^\\d+$'
+                                   then btrim(t.operation_no)::integer end)
+    )
+  )`);
   if (q) {
     values.push(`%${q.toLowerCase()}%`);
     where.push(`(
@@ -2551,6 +2570,14 @@ async function listBayScheduleTasks(query = {}) {
        t.plan_finish,
        t.duration_minutes,
        t.planned_work_minutes,
+       -- JAM STANDAR = milik SAP, bukan MS Project. sow.planhours adalah hasil parse
+       -- ph3_order.standard_value; ms_project_task.planned_work_minutes adalah durasi
+       -- kerja versi file .mpp dan untuk task SUMMARY ia rollup anak-anaknya (op 130
+       -- order 1000130219: 82,1 jam MSP vs 4 jam standar SAP). Layar operator memakai
+       -- pasangan order_no + operation_no milik SAP, jadi jamnya harus dari sumber yang
+       -- sama. Verified CKP 2026-09-14: 978 operasi terjadwal = 1:1 ke task (tidak ada
+       -- jam standar terhitung ganda).
+       std.planhours as plan_hours_sap,
        t.actual_progress,
        t.is_summary,
        act.actual_hours,
@@ -2572,13 +2599,35 @@ async function listBayScheduleTasks(query = {}) {
          from ph3_order k
          where ltrim(k.order_no, '0') = ltrim(s.order_no, '0')
        ) ph on true
-       -- Actual hours per order dari timesheet_transaction (duration dalam JAM).
+       -- Actual hours per OPERASI (bukan per order): join wajib menyertakan operation_no,
+       -- kalau tidak setiap baris job menampilkan total seluruh order — angka identik dan
+       -- besar di semua operasi, dan penanda over-plan ikut salah. tt.operation_no integer,
+       -- t.operation_no text (bisa '0120' atau non-numerik) -> cast hanya yang numerik;
+       -- non-numerik tidak cocok dengan apa pun dan jujur bernilai 0.
+       -- Reservasi ORDER-LEVEL (t.task_id null) tidak menunjuk operasi -> tetap total order.
        left join lateral (
          select coalesce(sum(coalesce(tt.duration, 0)), 0) as actual_hours
          from timesheet_transaction tt
          where ltrim(tt.order_no, '0') = ltrim(s.order_no, '0')
            and tt.duration is not null and tt.duration > 0
+           and (
+             t.task_id is null
+             or tt.operation_no = (case when btrim(coalesce(t.operation_no, '')) ~ '^\\d+$'
+                                        then btrim(t.operation_no)::integer end)
+           )
        ) act on true
+      -- Jam standar SAP per operasi. Kunci = pasangan order_no + operation_no versi SAP.
+      -- sow.operation_no INTEGER, t.operation_no TEXT dan bisa ber-leading-zero ('0120')
+      -- -> cast numerik, bukan perbandingan teks (perbandingan teks meleset di 106 baris
+      -- terjadwal saat diukur). Operasi non-numerik tidak punya padanan SAP -> NULL.
+      left join lateral (
+        select w.planhours
+        from sow w
+        where ltrim(w.order_no, '0') = ltrim(s.order_no, '0')
+          and w.operation_no = (case when btrim(coalesce(t.operation_no, '')) ~ '^\\d+$'
+                                     then btrim(t.operation_no)::integer end)
+        limit 1
+      ) std on true
        -- Grouping job per "Unit": naikkan rantai parent sampai summary yang namanya mengandung
        -- 'unit' (mis. "UNIT 1", "UNIT 01"). Kalau tidak ada (project berbasis proses seperti
        -- FABRICATION/BLASTING), unit_name NULL → FE menampilkan bucket "No Unit".

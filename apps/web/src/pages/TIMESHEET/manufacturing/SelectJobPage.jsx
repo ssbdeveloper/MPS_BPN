@@ -115,10 +115,9 @@ function formatDate(value) {
   return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
 }
 
-function formatHoursFromMinutes(value) {
-  const minutes = Math.max(0, Number(value || 0));
-  if (!minutes) return '-';
-  const hours = minutes / 60;
+function formatHours(value) {
+  const hours = Math.max(0, Number(value || 0));
+  if (!hours) return '-';
   return `${hours.toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam`;
 }
 
@@ -128,6 +127,17 @@ function formatHoursFromMinutes(value) {
 // only an explicit true counts as order-level.
 function isOrderLevelJob(job) {
   return job?.is_order_level === true;
+}
+
+// Jam standar sebuah job = milik SAP (plan_hours_sap, dari sow.planhours <- ph3_order).
+// planned_work_minutes MS Project hanya CADANGAN untuk operasi yang tidak punya padanan
+// SAP: untuk task summary angka MSP adalah rollup anak-anaknya, jadi memakainya sebagai
+// jam standar melebih-lebihkan rencana (op 130 order 1000130219: 82,1 j vs 4 j standar).
+function planHoursOf(job) {
+  const sap = Number(job?.plan_hours_sap);
+  if (Number.isFinite(sap) && sap > 0) return sap;
+  const minutes = Number(job?.planned_work_minutes || job?.duration_minutes || 0);
+  return minutes ? minutes / 60 : 0;
 }
 
 export default function ManufacturingSelectJobPage() {
@@ -459,7 +469,7 @@ export default function ManufacturingSelectJobPage() {
   };
 
   const handleSelectJob = (job) => {
-    const plannedMinutes = Number(job.planned_work_minutes || job.duration_minutes || 0);
+    const planHours = planHoursOf(job);
     const rowData = {
       order: job.task_order_no || job.order_no,
       order_no: job.task_order_no || job.order_no,
@@ -468,7 +478,7 @@ export default function ManufacturingSelectJobPage() {
       operationtext: job.task_name,
       operation_text: job.task_name,
       operation_no: job.operation_no,
-      planhours: plannedMinutes ? plannedMinutes / 60 : 0,
+      planhours: planHours,
       remaining_seconds_before: null,
       workcenter: job.workcenter,
       manufacturing_area_code: job.area_code,
@@ -673,9 +683,9 @@ export default function ManufacturingSelectJobPage() {
                       // part of the comparison or every one of them would highlight at once.
                       const isSelected = selectedJob?.schedule_id === job.schedule_id
                         && selectedJob?.task_id === job.task_id;
-                      const plannedMinutes = Number(job.planned_work_minutes || job.duration_minutes || 0);
+                      const planHours = planHoursOf(job);
                       const actualHours = Number(job.actual_hours || 0);
-                      const overPlan = actualHours > plannedMinutes / 60;
+                      const overPlan = planHours > 0 && actualHours > planHours;
 
                       return (
                         <tr
@@ -706,7 +716,7 @@ export default function ManufacturingSelectJobPage() {
                           <td className={`${cellBase} text-center tabular-nums ${overPlan ? 'font-extrabold text-red-700' : 'text-slate-700'}`}>
                             {actualHours > 0 ? `${actualHours.toFixed(1)}h` : '-'}
                           </td>
-                          <td className={`${cellBase} text-center tabular-nums text-slate-700`}>{formatHoursFromMinutes(plannedMinutes)}</td>
+                          <td className={`${cellBase} text-center tabular-nums text-slate-700`}>{formatHours(planHours)}</td>
                           <td className={`${cellBase} text-center text-slate-700`}>
                             {formatDate(job.start_date)} - {formatDate(job.end_date)}
                           </td>
