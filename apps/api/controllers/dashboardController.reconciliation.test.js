@@ -28,3 +28,14 @@ for (const [name, build] of [
     assert.match(sql, /date_trunc\('second', t\.longdate_checkin AT TIME ZONE/);
   });
 }
+
+test("paginated reconciliation carries foreign data into the page once", () => {
+  const sql = buildRecordsPageSql(cfg);
+  const heavy = sql.slice(sql.indexOf("recs AS ("));
+  assert.doesNotMatch(heavy, /JOIN public\.sap_timesheet_staging/);
+  assert.doesNotMatch(heavy, /JOIN public\.sap_staging_source/);
+  assert.match(sql, /base AS MATERIALIZED/);
+  assert.match(sql, /exclusions AS MATERIALIZED/);
+  assert.match(sql, /st\.bucket_start >= \$1::date/);
+  assert.match(sql, /st\.source_min_start >= \$1::date/);
+});

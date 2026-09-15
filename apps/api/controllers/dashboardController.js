@@ -1809,7 +1809,8 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
   const endCapped = END_CAPPED_EXPR(cfg);
   const tsCut = TS_CAP_CUT_SECONDS(cfg);
   const tsEff = TS_EFFECTIVE_SECONDS(cfg);
-  const mchEff = MCH_EFFECTIVE_SECONDS(cfg);
+  const pageClamped = CLAMPED_SEG_SECONDS.replaceAll("src.bucket_start", "p.bucket_start");
+  const pageMchEff = MCH_EFFECTIVE_SECONDS(cfg).replaceAll("src.bucket_start", "p.bucket_start");
   const mchSearch = search
     ? "AND (m.sn_employee ILIKE $3 OR m.full_name ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
     : "";
@@ -1817,31 +1818,47 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     ? "AND (t.serialnumber ILIKE $3 OR t.full_name ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
     : "";
 
+  // Bawa field foreign staging ke page SEKALI. Heavy query di bawah tidak boleh join
+  // ulang foreign tables per baris; itu penyebab filter MCH >60 detik.
   const mchBase = `
     SELECT 'MCH_HOURS'::text AS source,
            st.bucket_start::date AS sort_day,
            st.id AS staging_id,
            src.source_row_id AS row_id,
-           m.startdatetime AS start
+           m.startdatetime AS start,
+           st.status AS bundle_status,
+           st.is_productive AS bundle_productive,
+           src.seconds::bigint AS recognized,
+           st.rueck AS confirmation,
+           src.bucket_start,
+           m.sn_employee AS employee_pernr
     FROM public.sap_staging_source src
     JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
     JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
     WHERE src.source_system = 'MCH_HOURS'${sourcePlantScope("src")}
-      AND st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${mchSearch}`;
+      AND st.bucket_start >= $1::date
+      AND st.bucket_start < ($2::date + interval '1 day')${plantScope("st")} ${mchSearch}`;
 
   const tsBase = `
     SELECT 'TIMESHEET'::text AS source,
            st.source_min_start::date AS sort_day,
            st.id AS staging_id,
            t.tsnumber::text AS row_id,
-           t.longdate_checkin AT TIME ZONE '${TZ}' AS start
+           t.longdate_checkin AT TIME ZONE '${TZ}' AS start,
+           st.status AS bundle_status,
+           st.is_productive AS bundle_productive,
+           st.total_seconds::bigint AS recognized,
+           st.rueck AS confirmation,
+           NULL::timestamp AS bucket_start,
+           COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS employee_pernr
     FROM public.sap_timesheet_staging st
     JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int
     LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
     WHERE st.source_system = 'TIMESHEET'
       AND split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$'
-      AND st.source_min_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${tsSearch}`;
+      AND st.source_min_start >= $1::date
+      AND st.source_min_start < ($2::date + interval '1 day')${plantScope("st")} ${tsSearch}`;
 
   let baseSql = source === "mch" ? mchBase : source === "timesheet" ? tsBase : `${mchBase}\n    UNION ALL\n${tsBase}`;
 
@@ -1849,7 +1866,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     SELECT
       p.source, p.sort_day,
       to_char(p.sort_day, 'YYYY-MM-DD') AS date,
-      p.staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+      p.staging_id, p.bundle_status, p.bundle_productive,
       m.proddataid::text AS source_row_id,
       m.sn_employee AS pernr,
       COALESCE(NULLIF(BTRIM(m.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
@@ -1860,15 +1877,11 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       to_char(m.enddatetime, 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
       to_char(${endCapped}, 'YYYY-MM-DD HH24:MI:SS') AS end_capped,
       COALESCE(m.duration_seconds, EXTRACT(EPOCH FROM (m.enddatetime - m.startdatetime)))::bigint AS raw,
-      (${CLAMPED_SEG_SECONDS})::bigint AS clamped,
+      (${pageClamped})::bigint AS clamped,
       (${cutSec})::bigint AS capcut,
       (${BREAK_CUT_SECONDS}) AS breakcut,
-      (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
-      -- Selisih yang TIDAK dijelaskan aturan: durasi efektif menurut rules sekarang vs
-      -- kontribusi yang benar-benar dikirim ke SAP (src.seconds). != 0 = baris mesin
-      -- berubah setelah posting (mis. end_effective di-clamp ulang) — bukan potongan rule,
-      -- karena cap/break di kedua sisi sudah ikut diperhitungkan.
-      ((${mchEff}) - COALESCE(src.seconds, 0))::bigint AS shift,
+      (${pageClamped} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
+      ((${pageMchEff}) - COALESCE(p.recognized, 0))::bigint AS shift,
       COALESCE(m.order_no, '') AS order_no, COALESCE(m.operation_no, '') AS operation_no,
       COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
       COALESCE(m.confirmation_number, '') AS confirmation,
@@ -1876,21 +1889,17 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       (ex2.source_row_id IS NOT NULL) AS excluded,
       true AS can_exclude
     FROM page p
-    JOIN public.sap_staging_source src
-      ON src.staging_id = p.staging_id AND src.source_row_id = p.row_id AND p.source = 'MCH_HOURS'${sourcePlantScope("src")}
-    JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
-    JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
+    JOIN public.mch_transaction m ON m.proddataid = p.row_id::int AND p.source = 'MCH_HOURS'
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
-    LEFT JOIN public.sap_staging_exclusion ex2
-      ON ex2.source_system = 'MCH_HOURS' AND ex2.plant = src.plant AND ex2.source_row_id = m.proddataid::text`;
+    LEFT JOIN exclusions ex2 ON ex2.source_row_id = p.row_id`;
 
   const tsHeavy = `
     SELECT
       p.source, p.sort_day,
       to_char(p.sort_day, 'YYYY-MM-DD') AS date,
-      p.staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
+      p.staging_id, p.bundle_status, p.bundle_productive,
       t.tsnumber::text AS source_row_id,
-      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr,
+      p.employee_pernr AS pernr,
       COALESCE(NULLIF(BTRIM(t.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
       COALESCE(t.workcentercode, '') AS machine,
       BTRIM(COALESCE(t.activitytype, '')) AS activity,
@@ -1898,45 +1907,44 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
                CASE WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN 'Productive (order work)' ELSE '' END) AS status_desc,
       to_char(t.longdate_checkin AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS start,
       to_char(t.longdate_checkout AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
-      -- "Adjusted End Time" = checkin SEKARANG + durasi efektif menurut rules (break utk
-      -- non-produktif + cap jenis) — makna sama dengan MCH. Dulu memakai durasi snapshot
-      -- (st.total_seconds) sehingga end tampak terpotong saat timesheet di-edit setelah
-      -- di-stage meski capcut/breakcut = 0 (penyebab laporan "jam kena potong aneh").
       to_char(date_trunc('second', t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
               'YYYY-MM-DD HH24:MI:SS') AS end_capped,
       ${TS_RAW_SECONDS} AS raw,
       ${TS_RAW_SECONDS} AS clamped,
       (${tsCut})::bigint AS capcut,
       (${TS_BREAK_CUT_SECONDS}) AS breakcut,
-      st.total_seconds::bigint AS recognized,
-      -- Selisih yang TIDAK dijelaskan aturan: durasi efektif menurut rules sekarang vs
-      -- durasi yang benar-benar dikirim ke SAP (total_seconds snapshot). != 0 = record
-      -- timesheet berubah setelah bundle di-stage. Positif = SAP menerima lebih sedikit.
-      (${tsEff} - st.total_seconds::bigint)::bigint AS shift,
+      p.recognized,
+      (${tsEff} - p.recognized)::bigint AS shift,
       COALESCE(t.order_no, '') AS order_no, COALESCE(t.operation_no::text, '') AS operation_no,
       NULL::text AS operation_text,
-      COALESCE(st.rueck, '') AS confirmation,
+      COALESCE(p.confirmation, '') AS confirmation,
       false AS stuck,
       false AS excluded,
       false AS can_exclude
     FROM page p
-    JOIN public.sap_timesheet_staging st ON st.id = p.staging_id AND p.source = 'TIMESHEET'
-    JOIN public.timesheet_transaction t ON t.tsnumber = split_part(st.source_key, ':', 2)::int
-    LEFT JOIN public.usernfc u ON u.snssb = COALESCE(NULLIF(st.pernr_origin, ''), st.pernr)
-    LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))
-    WHERE split_part(st.source_key, ':', 2) ~ '^[0-9]{1,9}$'`;
+    JOIN public.timesheet_transaction t ON t.tsnumber = p.row_id::int AND p.source = 'TIMESHEET'
+    LEFT JOIN public.usernfc u ON u.snssb = t.serialnumber
+    LEFT JOIN ews.activity_type_ref r ON r.activitytype = BTRIM(COALESCE(t.activitytype, ''))`;
 
   let heavySql = source === "mch" ? mchHeavy : source === "timesheet" ? tsHeavy : `${mchHeavy}\n    UNION ALL\n${tsHeavy}`;
 
   return `
-    WITH base AS (
+    WITH exclusions AS MATERIALIZED (
+      SELECT source_row_id
+      FROM public.sap_staging_exclusion
+      WHERE source_system = 'MCH_HOURS'${PLANT_SSB ? ` AND plant = '${PLANT_SSB}'` : " AND false"}
+    ),
+    base AS MATERIALIZED (
       ${baseSql}
     ),
     cnt AS (
       SELECT count(*)::int AS total FROM base
     ),
     page AS MATERIALIZED (
-      SELECT source, staging_id, row_id, sort_day, start FROM base
+      SELECT source, staging_id, row_id, sort_day, start,
+             bundle_status, bundle_productive, recognized, confirmation,
+             bucket_start, employee_pernr
+      FROM base
       ORDER BY sort_day DESC, staging_id DESC, start
       LIMIT $${search ? 4 : 3} OFFSET $${search ? 5 : 4}
     ),
