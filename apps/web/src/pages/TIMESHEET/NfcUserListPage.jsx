@@ -492,15 +492,17 @@ const ActiveBadge = ({ inactiveFrom, today }) => {
 };
 
 const RoleBadge = ({ role }) => {
+  const displayRole = role === 'USER' ? 'SSB' : role === 'ADMINISTRATOR' ? 'OUTSOURCE' : role;
   const styles = {
-    Admin:      'bg-purple-100 text-purple-700 border-purple-200',
-    Supervisor: 'bg-[#caf0f8] border-[#90e0ef] text-[#0077b6]',
-    Technician: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    SSB:       'bg-sky-50 text-sky-700 border-sky-200',
+    FOREMAN:   'bg-indigo-50 text-indigo-700 border-indigo-200',
+    OUTSOURCE: 'bg-amber-50 text-amber-700 border-amber-200',
+    SUBCONT:   'bg-slate-100 text-slate-600 border-slate-200',
   };
-  const cls = styles[role] || 'bg-slate-100 text-slate-600 border-slate-200';
+  const cls = styles[displayRole] || 'bg-slate-100 text-slate-600 border-slate-200';
   return (
     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}`}>
-      {role || '-'}
+      {displayRole || '-'}
     </span>
   );
 };

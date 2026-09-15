@@ -1,6 +1,18 @@
 const db = global.pool || require("../db");
 const { normalizeNfcId, nfcIdVariants } = require("../utils/nfcId");
 
+const NFC_ROLES = new Set(["SSB", "FOREMAN", "OUTSOURCE", "SUBCONT"]);
+
+function normalizeNfcRole(value) {
+  const role = String(value || "").trim().toUpperCase();
+  if (!role) return "";
+  if (role === "USER") return "SSB";
+  if (role === "ADMINISTRATOR") return "OUTSOURCE";
+  return NFC_ROLES.has(role) ? role : null;
+}
+
+exports.normalizeNfcRole = normalizeNfcRole;
+
 // GET all
 exports.getAll = async (req, res) => {
   try {
@@ -91,6 +103,10 @@ exports.create = async (req, res) => {
       workcenter,
       roles
     } = req.body;
+    const normalizedRole = normalizeNfcRole(roles);
+    if (normalizedRole === null) {
+      return res.status(400).json({ error: "Role harus SSB, FOREMAN, OUTSOURCE, atau SUBCONT." });
+    }
 
     // Simpan dalam bentuk KANONIK (desimal little-endian), apa pun reader yang dipakai
     // saat mendaftar. Ini yang mencegah dialek baru masuk ke tabel.
@@ -116,7 +132,7 @@ exports.create = async (req, res) => {
         (nfcid, full_name, snssb, machineid, machinename, workcenter, roles)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [canonical, full_name, snssb, machineid, machinename, workcenter, roles]
+      [canonical, full_name, snssb, machineid, machinename, workcenter, normalizedRole]
     );
 
     res.json(result.rows[0]);
@@ -267,6 +283,10 @@ exports.updatenfc = async (req, res) => {
   try {
     const { nfcid: originalNfcId } = req.params;
     const { nfcid: newNfcId, full_name, snssb, machineid, machinename, workcenter, roles } = req.body;
+    const normalizedRole = normalizeNfcRole(roles);
+    if (normalizedRole === null) {
+      return res.status(400).json({ error: "Role harus SSB, FOREMAN, OUTSOURCE, atau SUBCONT." });
+    }
 
     console.log("[USERNFC UPDATE]", originalNfcId, "→", newNfcId, JSON.stringify(req.body));
 
@@ -295,7 +315,7 @@ exports.updatenfc = async (req, res) => {
        SET nfcid = $1, full_name = $2, snssb = $3, machineid = $4, machinename = $5, workcenter = $6, roles = $7
        WHERE nfcid = ANY($8::text[])
        RETURNING *`,
-      [canonical, full_name, snssb, machineid, machinename, workcenter, roles, originalVariants]
+      [canonical, full_name, snssb, machineid, machinename, workcenter, normalizedRole, originalVariants]
     );
 
     if (result.rows.length === 0) {

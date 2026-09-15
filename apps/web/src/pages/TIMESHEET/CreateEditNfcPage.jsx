@@ -107,7 +107,7 @@ const CreateEditNfcPage = () => {
         machineid: data.machineid || '',
         machinename: data.machinename || '',
         workcenter: data.workcenter || '',
-        roles: data.roles || ''
+        roles: data.roles === 'USER' ? 'SSB' : data.roles === 'ADMINISTRATOR' ? 'OUTSOURCE' : data.roles || ''
       });
     } catch (err) {
       console.error('Error loading user data:', err);
@@ -440,10 +440,10 @@ const CreateEditNfcPage = () => {
                       className={inputCls}
                     >
                       <option value="">-- Select Role --</option>
-                      <option value="USER">User</option>
+                      <option value="SSB">SSB</option>
                       <option value="FOREMAN">Foreman</option>
-                      <option value="ADMINISTRATOR">Administrator</option>
-                      <option value="SUPERUSER">SuperUser</option>
+                      <option value="OUTSOURCE">Outsource</option>
+                      <option value="SUBCONT">Subcont</option>
                     </select>
                   </div>
                 </div>

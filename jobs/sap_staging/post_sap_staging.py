@@ -29,6 +29,73 @@ log = setup_logging("post_sap_staging")
 ALLOWED_PLANTS = ("5051", "5071", "5100", "5153")
 
 
+OUTSOURCE_SAP_PERNR = "11009413"
+
+
+def sap_employee_number(origin: str) -> str:
+    return origin.zfill(8) if origin.isdigit() else origin
+
+
+def apply_current_nfc_roles(staging_cur, rows: list[dict]) -> list[dict]:
+    """Apply latest NFC role to staging only; source employee SN stays unchanged."""
+    origins = sorted({str(row.get("pernr_origin") or "").strip() for row in rows if row.get("pernr_origin")})
+    if not origins:
+        return rows
+
+    with connect_source() as source_conn:
+        with source_conn.cursor() as source_cur:
+            source_cur.execute(
+                """
+                SELECT DISTINCT ON (x.origin) x.origin,
+                       upper(btrim(COALESCE(u.roles, ''))) AS role
+                FROM unnest(%s::text[]) AS x(origin)
+                JOIN public.usernfc u ON
+                  upper(regexp_replace(COALESCE(u.snssb, ''), '\s+', '', 'g'))
+                    = upper(regexp_replace(x.origin, '\s+', '', 'g'))
+                  OR (
+                    regexp_replace(COALESCE(u.snssb, ''), '\s+', '', 'g') ~ '^[0-9]+$'
+                    AND regexp_replace(x.origin, '\s+', '', 'g') ~ '^[0-9]+$'
+                    AND ltrim(regexp_replace(COALESCE(u.snssb, ''), '\s+', '', 'g'), '0')
+                      = ltrim(regexp_replace(x.origin, '\s+', '', 'g'), '0')
+                  )
+                ORDER BY x.origin, u.idrow
+                """,
+                (origins,),
+            )
+            roles = {origin: role for origin, role in source_cur.fetchall()}
+
+    eligible = []
+    for row in rows:
+        origin = str(row.get("pernr_origin") or "").strip()
+        role = roles.get(origin, "")
+        if role == "SUBCONT":
+            staging_cur.execute(
+                """UPDATE sap_timesheet_staging
+                   SET status = 'SKIPPED', sap_error = 'NFC role SUBCONT: not sent to SAP', updated_at = now()
+                   WHERE id = %s AND status <> 'POSTED'""",
+                (row["id"],),
+            )
+            continue
+
+        if role in ("OUTSOURCE", "ADMINISTRATOR"):
+            desired_pernr = OUTSOURCE_SAP_PERNR
+        elif role in ("SSB", "USER", "FOREMAN"):
+            desired_pernr = sap_employee_number(origin)
+        else:
+            desired_pernr = str(row.get("pernr") or row.get("payload", {}).get("PERNR") or "")
+
+        if desired_pernr:
+            row["payload"]["PERNR"] = desired_pernr
+            staging_cur.execute(
+                """UPDATE sap_timesheet_staging
+                   SET pernr = %s, payload = jsonb_set(payload, '{PERNR}', to_jsonb(%s::text)), updated_at = now()
+                   WHERE id = %s""",
+                (desired_pernr, desired_pernr, row["id"]),
+            )
+        eligible.append(row)
+    return eligible
+
+
 def validate_date_range(date_from: str | None, date_to: str | None) -> None:
     """Manual range must be bounded, valid, and ordered."""
     if bool(date_from) != bool(date_to):
@@ -200,7 +267,7 @@ def claim_rows(
 
     where_sql = " AND ".join(filters)
     sql = f"""
-    SELECT id, source_system, source_ref_id, werks, payload
+    SELECT id, source_system, source_ref_id, werks, status, pernr, pernr_origin, payload
     FROM sap_timesheet_staging
     WHERE {where_sql}
     ORDER BY id
@@ -213,7 +280,7 @@ def claim_rows(
         ensure_staging_schema(conn)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
-            rows = [dict(row) for row in cur.fetchall()]
+            rows = apply_current_nfc_roles(cur, [dict(row) for row in cur.fetchall()])
             if rows:
                 cur.execute(
                     """
@@ -257,7 +324,7 @@ def claim_selected_rows(ids: list[str], ztimesheetids: list[str], allow_posted: 
     status_filter = "" if allow_posted else "AND status <> 'POSTED'"
     where_sql = " OR ".join(f"({item})" for item in filters)
     sql = f"""
-    SELECT id, source_system, source_ref_id, werks, payload
+    SELECT id, source_system, source_ref_id, werks, status, pernr, pernr_origin, payload
     FROM sap_timesheet_staging
     WHERE ({where_sql})
       {status_filter}
@@ -270,7 +337,7 @@ def claim_selected_rows(ids: list[str], ztimesheetids: list[str], allow_posted: 
         ensure_staging_schema(conn)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
-            rows = [dict(row) for row in cur.fetchall()]
+            rows = apply_current_nfc_roles(cur, [dict(row) for row in cur.fetchall()])
             if rows:
                 cur.execute(
                     """
