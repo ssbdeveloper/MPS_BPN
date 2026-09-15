@@ -157,6 +157,29 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     WITH cap_cfg AS (
       SELECT %s::jsonb AS mch
     ),
+    -- KUNCI SUMBER (2026-09-15): dibaca SEKALI sebagai CTE MATERIALIZED, bukan NOT EXISTS
+    -- berkorelasi. Keduanya FOREIGN TABLE ke AWS: bentuk berkorelasi memaksa satu Foreign
+    -- Scan PER BARIS mch_transaction yang menarik SELURUH himpunan tiap kali.
+    -- Terukur (jendela 1 jam, plant 5051, 15 Sep): provenance 11.531 baris x 52 loop,
+    -- exclusion 33 baris x 52 loop -> jendela 1 hari (ribuan loop) melampaui
+    -- statement_timeout server -> catch-up MCH gagal terus. MATERIALIZED = dibaca sekali,
+    -- lalu anti-join lokal (hash) memakai source_row_id.
+    -- IS NOT NULL wajib: NOT IN terhadap himpunan ber-NULL selalu NULL -> baris hilang.
+    excluded_keys AS MATERIALIZED (
+      SELECT ex.source_row_id
+      FROM public.sap_staging_exclusion ex
+      WHERE ex.source_system = 'MCH_HOURS'
+        AND ex.plant = %s
+        AND ex.source_row_id IS NOT NULL
+    ),
+    provenance_keys AS MATERIALIZED (
+      SELECT ss.source_row_id
+      FROM public.sap_staging_source ss
+      WHERE ss.source_system = 'MCH_HOURS'
+        AND ss.plant = %s
+        AND ss.source_row_id IS NOT NULL
+        __PROVENANCE_POSTED_FILTER__
+    ),
     source_rows AS (
       SELECT
         proddataid,
@@ -303,12 +326,8 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         -- EXCLUDED (soft delete per record, 2026-08-27): record yang ditandai lewat UI
         -- tidak pernah ikut di-bundle/dikirim. Berlaku juga saat rebuild (tabel exclusion
         -- terpisah dari provenance, jadi bertahan). Un-exclude = hapus baris dari tabel.
-        AND NOT EXISTS (
-          SELECT 1 FROM public.sap_staging_exclusion ex
-          WHERE ex.source_system = 'MCH_HOURS'
-            AND ex.plant = %s
-            AND ex.source_row_id = mch_transaction.proddataid::text
-        )
+        -- Anti-join ke CTE MATERIALIZED `excluded_keys` (bukan NOT EXISTS berkorelasi).
+        AND mch_transaction.proddataid::text NOT IN (SELECT source_row_id FROM excluded_keys)
         -- Subcont role (2026-09-15, owner keputusan): jam operator Subcont TIDAK PERNAH
         -- dikirim ke SAP — dikecualikan di sini, sebelum bundling. Adoption (EWS) tidak
         -- terpengaruh karena job adoption membaca mch_transaction langsung, bukan staging.
@@ -527,26 +546,29 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     # yang belum pernah di-post hari itu). Kalau pakai key-level, kunci baru lolos ke normal
     # lalu auto-post ke hari yang sudah "ditutup" tanpa review. Day-level menangkap semuanya.
     if mode == "correction":
-        seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
-                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.plant = %s "
-                      "AND ss.source_row_id = mch_transaction.proddataid::text)")
+        provenance_posted_filter = ""
         source_key_expr = "md5(f.norm_key || '|KOREKSI|' || f.seg_hash)"
         is_correction_expr = "true"
         posted_key_filter = ("EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
                              "WHERE p.werks = f.werks AND p.bucket_start = f.bucket_start "
                              "AND p.status = 'POSTED')")
     else:  # normal
-        seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
-                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.plant = %s "
-                      "AND ss.source_row_id = mch_transaction.proddataid::text "
-                      "AND ss.posted_at IS NOT NULL)")
+        provenance_posted_filter = "AND ss.posted_at IS NOT NULL"
         source_key_expr = "f.norm_key"
         is_correction_expr = "false"
         posted_key_filter = ("NOT EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
                              "WHERE p.werks = f.werks AND p.bucket_start = f.bucket_start "
                              "AND p.status = 'POSTED')")
 
+    # Provenance = anti-join ke CTE MATERIALIZED `provenance_keys` (bukan NOT EXISTS
+    # berkorelasi ke foreign table — lihat komentar di SQL). Mode normal mengecualikan
+    # kunci yang SUDAH ter-post; mode correction mengecualikan semua yang sudah punya
+    # provenance (segmen benar-benar baru untuk bundel KOREKSI).
+    seg_filter = ("AND mch_transaction.proddataid::text NOT IN "
+                  "(SELECT source_row_id FROM provenance_keys)")
+
     sql = (sql
+           .replace("__PROVENANCE_POSTED_FILTER__", provenance_posted_filter)
            .replace("__SEGMENT_PROVENANCE_FILTER__", seg_filter)
            .replace("__SOURCE_KEY_EXPR__", source_key_expr)
            .replace("__IS_CORRECTION_EXPR__", is_correction_expr)
@@ -556,9 +578,14 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 sql,
-                (max_record_mch_json, fb_va, fb_nnva, fb_nva, to_ts, from_ts, werks,
-                 break_windows_json, from_ts, to_ts, from_ts, to_ts,
-                 werks, werks, werks),
+                # URUTAN WAJIB SAMA dengan urutan %s di SQL (jangan disisipkan sembarangan —
+                # 2026-09-15: pernah bergeser 1 posisi -> boundary jsonb break_windows menerima
+                # timestamp -> "cannot cast type timestamp without time zone to jsonb"):
+                # #1 jam cap jsonb (cap_cfg) | #2 plant CTE excluded_keys | #3 plant CTE
+                # provenance_keys | #4-6 fallback VA/NNVA/NVA | #7 to_ts | #8 from_ts
+                # #9 break windows jsonb | #10-13 timestamp split per hari | #14-15 werks.
+                (max_record_mch_json, werks, werks, fb_va, fb_nnva, fb_nva, to_ts, from_ts,
+                 break_windows_json, from_ts, to_ts, from_ts, to_ts, werks, werks),
             )
             return [dict(row) for row in cur.fetchall()]
 
