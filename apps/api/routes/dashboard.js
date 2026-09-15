@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/dashboardController");
 const mpsController = require("../controllers/mpsDashboardController");
+const manufacturingOrderProgressController = require("../controllers/manufacturingOrderProgressController");
 
 router.get("/kpi", controller.getKpi);
 router.get("/order-status", controller.getOrderStatus);
@@ -43,6 +44,7 @@ router.get("/mps-lean-distribution", mpsController.getLeanDistribution);
 router.get("/mps-snapshot", mpsController.getSnapshot);
 
 router.get("/order-progress", controller.getOrderProgress);
+router.get("/manufacturing-order-progress", manufacturingOrderProgressController.getManufacturingOrderProgress);
 router.get("/order-activity-detail/:orderNo", controller.getOrderActivityDetail);
 router.get("/operation-timesheet-history", controller.getOperationTimesheetHistory);
 router.post("/refresh-order-matviews", async (req, res) => {
