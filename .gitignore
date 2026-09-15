@@ -48,8 +48,12 @@ apps/api/uploads/
 *.sw?
 *.code-workspace
 
-# Claude
-.claude/
+# Claude — local workspace stays out, but .claude/commands/ is part of the contract:
+# CLAUDE.md section 8 tells agents to read those workflows, so they have to be in the repo.
+# (A negation cannot reach inside an ignored directory, hence .claude/* and not .claude/)
+.claude/*
+!.claude/commands/
+.claude/settings.local.json
 
 # Codebase-memory MCP — artefak graph (.codebase-memory/graph.db.zst), jangan commit
 .codebase-memory/

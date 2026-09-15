@@ -1,0 +1,29 @@
+{
+    "ZTIMESHEETID": "505151",  // PLANT_SSB + id (505101)
+    "PERNR":"00000000",    // sn_employee (dummy — scrubbed)
+    "RUECK":"64727824",  // confirmation_number
+    "AUFNR":"1000073558", // order_no
+    "VORNR":"20",         // operation_no
+    "FLGAT":"",             // sequence_category
+    "PLNFL":"",             // sequence_number
+    "VORNR_B":"",           // branch_operation
+    "VORNR_R":"",           // return_operation
+    "ZCONF_TYPE": "",       // sap_act_type (ambil M1 dan M2 saja, blank selain itu)
+    "ARBPL": "M5051WLS",    // machine_id
+    "LSTAR": "",            // sap_act_type (ambil yang selain M1 dan M2, selain itu blank)
+    "ISDD": "20260118",     // start_date_time (start "yyyymmdd") 
+    "ISDZ": "153800",       // start_date_time (start "hhmm")
+    "IEDD": "20260118",     // end_date_time (finish "yyyymmdd")
+    "IEDZ": "205900",       // end_date_time (finish "hhmm")
+    "WERKS": "5051",        // PLANT_SSB (dari .env )
+    "AUERU": "",            // Final Confirmation (kosong aja)
+    "ZBARCODEID": ""        // mach_state (Loading, Unloading, Setting, Meassure sesuai Status Descriptionnya di table status_master (Jika M2 di ZCONF_TYPE))
+  }
+
+
+
+
+
+
+
+  //QR = confirmation_no + ZCONF_TYPE + Sequence

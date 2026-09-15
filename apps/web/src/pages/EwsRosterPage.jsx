@@ -5,6 +5,7 @@ import {
   RefreshCw, Search, Settings, Trash2, Users, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { authHeaders, readAuthUser } from '../rbac/useAuth';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const STATUS_OPTIONS = ['SCHEDULED', 'LEAVE', 'SICK', 'PERMIT', 'SITE_VISIT', 'OFF'];
@@ -228,7 +229,7 @@ function EwsRosterPage() {
   const navigate = useNavigate();
   const [month, setMonth] = useState(monthOf(todayLocalISO()));
   const [scope, setScope] = useState(() => {
-    const u = JSON.parse(sessionStorage.getItem('authUser') || 'null');
+    const u = readAuthUser();
     return String(u?.roles || '').toLowerCase().includes('foreman') ? 'team' : 'all';
   });
   const [rows, setRows] = useState([]);
@@ -246,7 +247,7 @@ function EwsRosterPage() {
     setIsLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API_BASE}/ews/roster/month?month=${encodeURIComponent(m)}&scope=${sc}`);
+      const res = await fetch(`${API_BASE}/ews/roster/month?month=${encodeURIComponent(m)}&scope=${sc}`, { headers: authHeaders() });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
       const payload = await res.json();
       setRows(Array.isArray(payload?.data) ? payload.data : []);

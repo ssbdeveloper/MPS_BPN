@@ -1,0 +1,157 @@
+{
+  "ZTIMESHEETID": "537",
+  "PERNR": "00016502", //personel number 16502//
+  "RUECK": "6719456", //* confirmationnumber*//
+  "ZCONF_TYPE": "RG", //confirmationtype
+  "ARBPL": "M5153ASY", //workcenter
+  "LSTAR": "", //activitytype
+  "ISDD": "20251211",
+  "ISDZ": "093800",
+  "IEDD": "20251211",
+  "IEDZ": "105900",
+  "WERKS": "5100",
+  "AUERU": "",
+  "ZBARCODEID": "11515343"
+}
+
+{
+  "ZTIMESHEETID": "539",
+  "PERNR": "00016502",
+  "RUECK": "",
+  "ZCONF_TYPE": "",
+  "ARBPL": "M5153ASY",
+  "LSTAR": "1770",
+  "ISDD": "20250918",
+  "ISDZ": "153800",
+  "IEDD": "20250918",
+  "IEDZ": "205900",
+  "WERKS": "5153",
+  "AUERU": "",
+  "ZBARCODEID": "1575343"
+}
+
+        "DATA": {
+            "RUECK": "0004727824",
+            "ZINDICATOR": "UPDT",
+            "LTXA1": "pararel",
+            "AUFNR": "001000073558", // PO ORIGIN atau PO REWORK
+            "VORNR": "0020",
+            "FLGAT": "1",
+            "PLNFL": "000001",
+            "VORNR_B": "0020",
+            "VORNR_R": "0030",
+            "MATNR": "SSBRSPINDLEEH4500",
+            "MAKTX": "Spindle Casting EH4500",
+            "ZTXT04_VORNR": "PCNF",
+            "ARBPL": "M5051WLS",
+            "KOSTL": "0056040010",
+            "WERKS": "5051",
+            "VGE01": "HR",
+            "VGW01": "0.000 ",
+            "AUART": "ZPP4",
+            "ZTXT04_AUFNR": "REL",
+            "PRO_REG": "001000073558" //PO INDUK
+
+
+        }
+
+        
+{
+"type": "object",
+"properties": {
+"AUTH": {
+"type": "object",
+"properties": {
+"TOKEN": {
+"type": "string"
+}
+}
+},
+"DATA": {
+"type": "object",
+"properties": {
+"RUECK": {
+"type": "string"
+},
+"ZINDICATOR": {
+"type": "string"
+},
+"LTXA1": {
+"type": "string"
+},
+"AUFNR": {
+"type": "string"
+},
+"VORNR": {
+"type": "string"
+},
+"FLGAT": {
+"type": "string"
+},
+"PLNFL": {
+"type": "string"
+},
+"VORNR_B": {
+"type": "string"
+},
+"VORNR_R": {
+"type": "string"
+},
+"MATNR": {
+"type": "string"
+},
+"MAKTX": {
+"type": "string"
+},
+"ZTXT04_VORNR": {
+"type": "string"
+},
+"ARBPL": {
+"type": "string"
+},
+"KOSTL": {
+"type": "string"
+},
+"WERKS": {
+"type": "string"
+},
+"VGE01": {
+"type": "string"
+},
+"VGW01": {
+"type": "string"
+},
+"AUART": {
+"type": "string"
+},
+"ZTXT04_AUFNR": {
+"type": "string"
+}
+}
+}
+}
+}
+
+
+
+          "DATA": {
+            "RUECK": "0004727824",
+            "ZINDICATOR": "UPDT",
+            "LTXA1": "pararel",
+            "AUFNR": "001000073558",
+            "VORNR": "0020",
+            "FLGAT": "1",
+            "PLNFL": "000001",
+            "VORNR_B": "0020",
+            "VORNR_R": "0030",
+            "MATNR": "SSBRSPINDLEEH4500",
+            "MAKTX": "Spindle Casting EH4500",
+            "ZTXT04_VORNR": "PCNF",
+            "ARBPL": "M5051WLS",
+            "KOSTL": "0056040010",
+            "WERKS": "5051",
+            "VGE01": "HR",
+            "VGW01": "0.000 ",
+            "AUART": "ZPP4",
+            "ZTXT04_AUFNR": "REL"
+        }

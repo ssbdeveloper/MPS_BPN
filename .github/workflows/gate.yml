@@ -1,0 +1,52 @@
+name: Gate (T0)
+
+# The tier table in CLAUDE.md says T0 is "enforced by node scripts/gate.mjs in pre-commit and
+# CI". This workflow is the CI half. The pre-commit half is scripts/hooks/pre-commit, which a
+# developer can forget to install or bypass with --no-verify; this one cannot be bypassed.
+
+on:
+  pull_request:
+    branches: ["main", "2b"]
+  push:
+    branches: ["main", "2b"]
+  workflow_dispatch: {}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # the gate is diff-scoped; it needs history to compute a range
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix apps/web
+
+      - name: Compute the diff range
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            echo "range=origin/${{ github.base_ref }}...HEAD" >> "$GITHUB_OUTPUT"
+          elif git rev-parse --verify --quiet "${{ github.event.before }}^{commit}" > /dev/null; then
+            echo "range=${{ github.event.before }}..HEAD" >> "$GITHUB_OUTPUT"
+          else
+            echo "range=HEAD~1..HEAD" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate
+        run: node scripts/gate.mjs --range "${{ steps.range.outputs.range }}"
+
+      # Not a gate: the whole-codebase numbers, so the debt is visible in every run and a
+      # reviewer can see whether it is going up or down.
+      - name: Debt report (never blocks)
+        if: always()
+        run: |
+          node scripts/deslop.mjs --all || true
+          node scripts/lint-gate.mjs --all || true

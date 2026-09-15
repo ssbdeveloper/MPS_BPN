@@ -1,0 +1,206 @@
+---
+title: Duplikat task dari Map SAP Operation — order 1000127752
+date: 2026-08-04
+tags: [domain/msproject, domain/sow]
+---
+
+# Duplikat task MS Project dari Map SAP Operation
+
+Dilaporkan owner: saat membooking order **1000127752** ke area, daftar operasi muncul berkali-kali.
+Dugaan owner (Map SAP Operation) **terbukti benar**. Terkait [[MFG_PLAN_AREA_PLAN]].
+
+## Temuan
+
+`public.sow` **bersih** — 294 baris, 294 `operation_no` unik, dijaga
+`uq_sow_order_operation UNIQUE (order_no, operation_no)`. Aturan owner memang ditegakkan **di sow**.
+
+Duplikasi ada di `ms_project_task`: **1.176 baris aktif untuk 294 operasi — tepat 4 salinan tiap
+operasi**, tersebar di 3 project:
+
+| Project | Baris | Operasi unik | Dibuat |
+|---|---|---|---|
+| `contoh project` | **588** | 294 | 16:08:50 **dan** 16:09:24 (dua run, jarak 34 detik) |
+| `Project_Rizka_31.07` | 294 | 294 | 16:09:43 |
+| `Test` | 294 | 294 | 16:11:57 |
+
+Jadi ada **dua masalah berbeda** yang gejalanya sama:
+
+1. **Duplikat DI DALAM satu project** — `contoh project` dipetakan dua kali. Ini bug.
+2. **Duplikat LINTAS project** — order yang sama dipetakan ke 3 project. Bukan pelanggaran
+   integritas, tapi picker reservasi tidak menyaring per project sehingga tiap operasi tampil
+   sekali per project tanpa cara membedakannya.
+
+Order lain yang kena masalah #1: `1000128374` (14 baris duplikat).
+
+## Akar masalah
+
+`mapSowOrderToProjectTasks` (`apps/api/services/msProjectService.js`) mengambil daftar operasi SOW,
+lalu untuk tiap operasi mencari task placeholder yang masih tersedia di project target. Kalau
+placeholder habis, ia **meng-INSERT task baru**.
+
+Ia tidak pernah memeriksa apakah `(project_id, order_no, operation_no)` sudah pernah dipetakan, dan
+tabelnya **tidak punya constraint apa pun** untuk itu — satu-satunya UNIQUE adalah
+`(project_id, task_id)` dan PK `task_id`, keduanya tidak menghalangi baris kedua.
+
+Akibatnya menjalankan ulang mapping = menggandakan seluruh set operasi, tanpa error, tanpa
+peringatan.
+
+## Yang dikerjakan
+
+### 1. Perbaikan data (prod Cikupa)
+
+308 baris duplikat di dalam project yang sama di-set `is_active = false` — **bukan DELETE**:
+`ms_project_dependency` menunjuk 27 di antaranya, dan seluruh query aplikasi sudah memfilter
+`is_active`. Reversibel, tanpa risiko FK.
+
+Baris yang dipertahankan dipilih berurutan: yang dipakai reservasi bay dulu, lalu `created_at`
+terlama. Diverifikasi sebelum eksekusi: **0 duplikat yang jadi parent, 0 yang dipakai reservasi bay**.
+
+Setelah: 0 duplikat aktif di dalam project mana pun.
+
+### 2. Pengaman database
+
+Migrasi `20260804_ms_project_task_unique_order_op.sql` — partial unique index
+`(project_id, ltrim(order_no,'0'), operation_no)` untuk baris aktif non-summary. Sudah diterapkan
+dan diuji: INSERT duplikat kini ditolak `23505`.
+
+### 3. Perbaikan kode — mapping jadi idempoten
+
+`mapSowOrderToProjectTasks` sekarang memuat pemetaan yang SUDAH ADA lebih dulu dan memakainya ulang.
+Run kedua hanya menyegarkan nilai, tidak menambah baris. Task yang sudah memegang operasi order ini
+juga dikeluarkan dari kolam placeholder — kalau tidak, run kedua akan menimpa operasi yang benar
+dengan operasi tetangganya. Respons menambah `reused` / `reused_count`.
+
+### 4. Peringatan lintas project
+
+Respons mapping menambah `also_mapped_in` (daftar project lain yang memuat order itu), dan
+`listOrderTasks` menambah `project_name` + `duplicate_across_projects` supaya picker reservasi bisa
+melabeli asal task.
+
+## Yang masih perlu keputusan owner
+
+**11 project di prod, semuanya berstatus ACTIVE, dan sebagian besar jelas eksperimen:**
+`contoh project`, `Test`, `Test Yoig`, `PROJEC TESTING Y`, `Test MPS Project1`,
+`MPS 2 Trial - RPW - 20260731`, `project pangeran`, `Project_Rizka_31.07`.
+
+Selama project uji coba dibiarkan ACTIVE, `listOrderTasks` tetap mengembalikan operasi yang sama
+sekali per project — sekarang berlabel, tapi tetap ramai. Pilihan:
+
+1. **Nonaktifkan project uji coba** (butuh kolom/status arsip — `ms_project.status` sudah ada,
+   tinggal disepakati nilai mana yang berarti "jangan tampilkan").
+2. **Saring `listOrderTasks` per project** — butuh scheduler memilih project dulu sebelum memilih
+   task. Mengubah alur reservasi.
+3. Biarkan, andalkan label baru.
+
+Rekomendasi: opsi 1. Ini masalah kebersihan data, bukan kekurangan fitur — dan constraint teknis
+apa pun yang memaksa "satu order satu project" berisiko salah, karena satu order memang bisa sah
+muncul di beberapa file project.
+
+## Catatan
+
+`uq_sow_order_operation` di `sow` **ada di prod tapi tidak ada di satu pun file migrasi repo**
+(sudah dicatat sebagai anomali A-06 di [[MFG_PLAN_AREA_PLAN]] dan
+[[2026-08-04-rekonsiliasi-ledger-migrasi]]). Aturan unik andalan owner karenanya tidak
+terdokumentasi di kode — layak dibuatkan migrasi retroaktif agar tidak hilang saat setup lingkungan
+baru.
+
+---
+
+## Susulan: duplikat masih terlihat di picker (sore 4 Agu)
+
+Owner melaporkan picker masih ramai. Benar — perbaikan pertama hanya menyembuhkan masalah #1
+(dalam satu project). Yang tersisa 294 × 3 project = 882 baris adalah masalah #2, yang memang
+sengaja belum diputuskan.
+
+### Bukti bahwa ini bukan kosmetik
+
+Kedua reservasi order 1000127752 ternyata **satu reservasi yang sama**:
+
+```
+Project_Rizka_31.07 | group 83cbb090 | {A30} | 31 Jul–6 Agu | op 280 | user 37
+Test                | group 83cbb090 | {A30} | 31 Jul–6 Agu | op 280 | user 37
+```
+
+`schedule_group_id` identik. Artinya scheduler memilih **operasi 280 dua kali** — sekali dari
+`Project_Rizka_31.07`, sekali dari `Test` — karena picker menampilkannya berkali-kali tanpa
+pembeda. Duplikat picker langsung menghasilkan task ganda di dalam satu reservasi.
+
+### Perbaikan tambahan
+
+- `createBaySchedule` cabang task-level kini men-dedupe **per operasi**, bukan hanya per `task_id`.
+  `normalizeTaskRows` tidak cukup: task_id berbeda dari project berbeda membawa operasi yang sama.
+  Yang dibuang dilaporkan sebagai warning `DUPLICATE_OPERATION_DROPPED`, bukan 400 — niat
+  penggunanya jelas, yang salah cuma pilihan gandanya.
+- Controller meneruskan warning itu; `SchedulingAreaPage` memunculkan toast terpisah
+  "Operasi ganda dilewati" dengan daftar nomor operasinya.
+- Data prod: 1 baris reservasi redundan (`df29e754`, op 280 di grup `83cbb090`) DIHAPUS.
+  Reservasinya sendiri utuh — hanya baris keduanya yang hilang.
+
+### Kenapa sisanya tidak ikut dihapus
+
+Ketiga project punya revisi (5 / 4 / 2) dan berstatus ACTIVE — bukan stub kosong. **Dua di
+antaranya memegang reservasi untuk order ini.** Tidak ada penanda teknis mana yang "asli";
+ketiganya bernama seperti project uji coba. Memilih salah satu secara sepihak berisiko membuang
+pemetaan yang sedang dipakai orang.
+
+Keputusan yang dibutuhkan: **project mana yang otoritatif untuk order 1000127752**, atau lebih
+umum — nilai `ms_project.status` mana yang berarti "arsip, jangan tampilkan di picker". Setelah itu
+`listOrderTasks` tinggal menyaringnya dan picker bersih dengan sendirinya, tanpa menghapus apa pun.
+
+---
+
+## Penyelesaian: keunikan dinaikkan jadi GLOBAL (malam 4 Agu)
+
+Keputusan owner: **satu `(order_no, operation_no)` = satu task, apa pun project-nya.** Prod masih
+dummy sehingga schedule boleh dihapus; `public.ph3_order` tidak boleh disentuh (dan tidak disentuh).
+
+### Pembersihan data
+
+Dedupe dilakukan **per (order, operasi)**, bukan dengan membuang project kalah bulat-bulat —
+operasi yang hanya ada di project kalah bukan duplikat dan tetap dipertahankan. Prioritas baris
+yang dipertahankan:
+
+1. task yang sedang dipakai reservasi bay (jangan pernah membuat reservasi menggantung)
+2. project "pemenang" order itu (paling banyak dipakai reservasi, lalu paling lengkap, lalu terbaru)
+3. `created_at` tertua
+
+Hasil: **897 task aktif = 897 pasangan unik (1:1)**, 610 baris dinonaktifkan, **0 reservasi
+menggantung**, 0 baris `ph3_order`/`sow` tersentuh.
+
+Picker untuk 1000127752 sekarang: `Test` — 294 baris, 294 operasi unik, satu project.
+
+### Pengaman permanen
+
+Migrasi `20260804b_ms_project_task_unique_order_op_global.sql`: index lama per-project di-DROP,
+diganti `uq_ms_project_task_order_op` pada `(ltrim(order_no,'0'), operation_no)` untuk baris aktif
+non-summary. Diuji: INSERT operasi yang sama ke project **lain** kini ditolak `23505`.
+
+### Konsekuensi alur kerja — dan penanganannya
+
+Dengan keunikan global, memetakan order yang sudah ada di project lain akan gagal. Supaya tidak
+muncul sebagai `23505` mentah, `mapSowOrderToProjectTasks` sekarang:
+
+- mendeteksi pemetaan di project lain **sebelum** bekerja, dan menolak
+  **409 `ORDER_MAPPED_ELSEWHERE`** dengan menyebut nama project-nya;
+- menerima `takeover: true` untuk memindahkan pemetaan: task lama dinonaktifkan, pemetaan baru
+  dibuat, lalu reservasi bay yang menempel di-repoint ke task dengan operasi yang sama;
+- membatalkan takeover dengan **409 `TAKEOVER_WOULD_ORPHAN_RESERVATION`** kalau ada reservasi yang
+  operasinya tidak punya padanan di project tujuan — lebih baik gagal keras daripada meninggalkan
+  bay yang tampak kosong padahal terpakai.
+
+Ringkasan respons menambah `taken_over_task_count` dan `repointed_reservation_count`.
+
+### Status pertanyaan lama
+
+Pertanyaan "project mana yang otoritatif" **tidak lagi menghalangi** — aturan global memilihkannya
+secara deterministik, dan konflik berikutnya ditolak dengan pesan yang bisa ditindaklanjuti.
+Pembersihan project uji coba (11 project, semua ACTIVE) tetap layak dilakukan, tapi kini sekadar
+kerapian, bukan syarat agar picker benar.
+
+---
+
+## Terkait: angka "37" di kolom created by
+
+Owner melaporkan reservasi bay menampilkan `37`, bukan nama user. Bukan bug aktif — itu data
+lama. Rinciannya dan perbaikan permanennya ada di
+[[2026-08-04-created-by-id-bocor-ke-ui]].

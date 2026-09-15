@@ -1,0 +1,70 @@
+{
+    "ZTIMESHEETID": "566",  // Timesheet ID
+    "PERNR": "00016502",    // serialnumber (table timesheet_transaction)
+    "RUECK": "0004727824",  // confirmation_number (table production_operations)
+    "AUFNR":"001000073558", // order_no (table timesheet_transaction)
+    "VORNR":"0020",         // operation_no (table timesheet_transaction)
+    "FLGAT":"1",            // Sequence Category (table production_operations)
+    "PLNFL":"000001",       // Sequence Number (table production_operations)
+    "VORNR_B":"0020",       // Branch Operation (table production_operations)
+    "VORNR_R":"0030",       // Return Operation (table production_operations)
+    "ZCONF_TYPE": "",       // Confirmation Type (Jika nilai workcenter diakhiri dengan kata "OT", maka set ZCONF_TYPE = "OV"
+                            // Jika order_no diawali 32, maka set ZCONF_TYPE = "RW"
+                            // Jika tidak memenuhi semua kondisi, maka set ZCONF_TYPE = "RG")
+                            // Jika dari Machine Hours (M1 untuk VA, M2 untuk NNVA, M3 untuk VA Overtime, M4 untuk NNVA Overtime)
+    "ARBPL": "M5051WLS",    // workcenter (table timesheet_transaction)
+    "LSTAR": "",            // activitytype (table timesheet_transaction)
+    "ISDD": "20260118",     // Start Date (table timesheet_transaction date_checkin "yyyymmdd")
+    "ISDZ": "153800",       // Start Time (table timesheet_transaction hour_checkin "hhmm")
+    "IEDD": "20260118",     // Finish Date (table timesheet_transaction date_checkout "yyyymmdd")
+    "IEDZ": "205900",       // Finish Time (table timesheet_transaction hour_checkout "hhmm")
+    "WERKS": "5051",        // Plant (table timesheet_transaction)
+    "AUERU": "",            // Final Confirmation (kosong aja)
+    "ZBARCODEID": ""        // Confirm Text (Loading, Unloading, Setting, Meassure (Jika M2 di ZCONF_TYPE)) -> (jika sumbernya dari timesheet_transaction, PROD -> VA, UNPROD -> Blank)
+  },
+        // confirmation + sequence, (split by digit confirmation)
+            // 0006876534
+  {
+    "ZTIMESHEETID": "",
+    "AUFNR": "1000131548",
+    "VORNR": "0005",
+    "FLGAT": "",
+    "PLNFL": "",
+    "VORNR_B": "",
+    "VORNR_R": "",
+    "PERNR": "00016502",
+    "RUECK": "0006799014",
+    "ZCONF_TYPE": "RG",
+    "ARBPL": "M5051GD1",
+    "LSTAR": "",
+    "ISDD": "20260311",
+    "ISDZ": "153800",
+    "IEDD": "20260311",
+    "IEDZ": "235900",
+    "WERKS": "5051",
+    "AUERU": "",
+    "ZBARCODEID": ""
+},
+{
+    "ZTIMESHEETID": "",
+    "AUFNR": "1000131548",
+    "VORNR": "0020",
+    "FLGAT": "1",
+    "PLNFL": "1",
+    "VORNR_B": "5001",
+    "VORNR_R": "5004",
+    "PERNR": "00016502",
+    "RUECK": "6799019",
+    "ZCONF_TYPE": "RG",
+    "ARBPL": "M5051DIS",
+    "LSTAR": "",
+    "ISDD": "20260311",
+    "ISDZ": "153800",
+    "IEDD": "20260311",
+    "IEDZ": "235900",
+    "WERKS": "5051",
+    "AUERU": "",
+    "ZBARCODEID": ""
+}
+
+Confirmation of order 001000131557 saved

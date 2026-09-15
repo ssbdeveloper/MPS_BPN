@@ -1,1348 +1,356 @@
-# CLAUDE.md — MPS Timesheet (apps/web)
- 
-> AI context file. Baca ini sebelum membuat atau mengubah kode apapun di project ini.
- 
-untuk koneksi dengan postgres gunakan
-"C:\Program Files\PostgreSQL\15\bin\psql.exe" 
- $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Program Files\PostgreSQL\15\bin"; [System.Environment]::SetEnvironmentVariable("Path", $env:Path, "User")
----
- 
-## Project Overview
- 
-**MPS Timesheet** adalah aplikasi Timesheet Manufacturing berbasis React + Vite + Tailwind CSS dengan dukungan PWA (Progressive Web App) untuk mode offline.
- 
-- **Framework:** React 19 + Vite 7
-- **Styling:** Tailwind CSS v3 + inline style untuk nilai warna dinamis
-- **Router:** React Router v7 (`createBrowserRouter`, semua route lazy)
-- **State/Cache:** useState/useCallback + fetch native (TIDAK ada React Query / state library eksternal)
-- **Notifications:** sonner (toast)
-- **PWA:** vite-plugin-pwa + Workbox
+# CLAUDE.md — MPS (Master Production System)
 
----
-
-## Dokumentasi & Second Brain
-
-`docs/` adalah vault Obsidian (second brain proyek). **Baca `docs/KONVENSI.md` sebelum
-menulis dokumen apa pun.** Aturan inti:
-
-- **Sebelum mendesain/menjawab soal sistem:** cek `docs/concepts/` (pengetahuan menetap)
-  dan `docs/log/` (keputusan per sesi) — jangan litigasi ulang keputusan yang sudah tercatat.
-- **Setelah sesi kerja signifikan:** tulis `docs/log/YYYY-MM-DD-topik.md`, update baris di
-  `docs/PLANNING.md`, dan update note `docs/concepts/` yang tersentuh.
-- Papan kerja: `docs/PLANNING.md` · Peta dokumen: `docs/00-INDEX.md`.
-
-### Tangkap permintaan ke vault (WAJIB)
-
-Begitu user minta **develop / rencana / to-do / mencatat keputusan**, tulis LANGSUNG ke layer yang
-benar lalu lapor path-nya (jangan minta ACC dulu — user bisa revert). BUKAN untuk tiap pertanyaan
-atau eksplorasi; hanya permintaan kerja nyata.
-
-- Rencana / desain / PRD / fitur baru → doc baru di folder sesuai (`security/`, `salvaging/`,
-  `prd/`, `timesheet/`, `planning/`, …) + frontmatter `type: plan|prd|design|feature`, `status:`,
-  `tags: [domain/<x>]`; daftarkan barisnya di `docs/PLANNING.md`.
-- To-do singkat → baris backlog `docs/PLANNING.md`. Keputusan sesi → `docs/log/YYYY-MM-DD-topik.md`.
-  Pengetahuan menetap → `docs/concepts/<nama>.md`.
-- **Status lifecycle** (frontmatter, HANYA dok kerja plan/prd/design/feature): `planning` (belum
-  mulai) · `active` (sebagian fase rilis) · `done` (SEMUA fase rilis) · `parked` (ditunda/superseded).
-  Referensi (concept/log/ops/guide/moc) TIDAK ber-status. Papan live: `docs/STATUS.md` (Dataview).
-- **Tag domain wajib** (nested `tags:`): `domain/ews|sow|timesheet|sap|msproject|security|ops|vault`
-  — 1 utama, maks 2.
-- **Verifikasi status ke KODE, jangan tebak** ("fase X rilis?" → cek migrasi/endpoint/`schema_prod` dulu).
-
-Detail konvensi: `docs/KONVENSI.md` §3.
-
----
-
-## Navigasi kode — codebase-memory-mcp
-
-Graph kode via MCP (`search_graph`, `trace_path`, `query_graph`, `get_architecture`). Project: **`D-website-MPS2`**.
-- **Discovery** (simbol, Route, struktur, arsitektur, klaster) — andal, pakai bebas.
-- **Callers / impact / dead-code** (`trace_path` inbound, "siapa memanggil X", "X kepakai?") — graph UNDER-report; perlakukan sebagai petunjuk. WAJIB cross-check ke Grep/sumber sebelum klaim negatif/impact ("tak ada pemanggil", "dead code", "aman diubah").
-- **Delegasi subagent:** saat menugaskan subagent untuk eksplorasi kode, tulis batasan cross-check ini di prompt tugasnya — jangan andalkan subagent mewarisinya.
-
-Detail + repro batas extractor: `docs/concepts/codebase-memory-graph-accuracy.md`.
-
-### Graph graphify (pelengkap cbm; auto-refresh aktif)
-
-Dua graph tersimpan: `graphify-out/` (seluruh repo, kode+docs) & `docs/graphify-out/` (vault docs +
-Obsidian vault). Keduanya git-ignored.
-- **Query dulu, jangan rebuild:** pertanyaan arsitektur / relasi file / isi vault → baca graph yang
-  ADA (`graphify query "..."` atau `graph.json`). Instan, nol token ekstra.
-- **Auto-refresh KODE:** post-commit hook (`graphify hook`, terpasang) rebuild graph tiap commit —
-  AST saja, gratis, otomatis. Cek `graphify hook status`.
-- **Perubahan DOC:** hook TIDAK menyentuh semantik doc; setelah edit docs signifikan jalankan
-  `/graphify docs --update` (perlu sesi AI — headless tak bisa ekstraksi semantik tanpa Gemini key).
-
----
- 
-## Corporate Color System
- 
-> Status: **APPROVED & ACTIVE** (ditetapkan 2026-03-19)
-> Referensi implementasi (struktur/layout): `src/pages/TIMESHEET/TimesheetValidationPage.jsx`
-> (catatan: file `TimesheetValidationPageV2.jsx` sudah tidak ada; jangan mencarinya.
-> Warna tombol primary di file referensi masih standar lama `#0096c7` —
-> standar yang berlaku sekarang `#0077b6`, lihat Accessibility Rules di bawah)
- 
-Palette ini adalah **standard corporate color** untuk seluruh UI aplikasi MPS Timesheet.
-Setiap komponen baru atau halaman baru HARUS mengikuti aturan ini.
- 
----
- 
-### 1. Color Palette
- 
-| Token Name         | CSS Variable             | HEX Value   | Keterangan                        |
-|--------------------|--------------------------|-------------|-----------------------------------|
-| `deep-twilight`    | `--deep-twilight`        | `#03045e`   | Terdalam — text kontras tinggi, border aktif |
-| `french-blue`      | `--french-blue`          | `#023e8a`   | Warna brand utama (employee group header, hover button primary) |
-| `bright-teal-blue` | `--bright-teal-blue`     | `#0077b6`   | **Primary action color** (bg button, link) — AA di atas putih (4.9:1) |
-| `blue-green`       | `--blue-green`           | `#0096c7`   | Accent besar, ikon, border aktif, teks besar — BUKAN teks kecil / bg tombol (3.4:1 vs putih, gagal AA) |
-| `turquoise-surf`   | `--turquoise-surf`       | `#00b4d8`   | Focus ring, spinner, highlight    |
-| `sky-aqua`         | `--sky-aqua`             | `#48cae4`   | Subtle accent, icon accent        |
-| `frosted-blue`     | `--frosted-blue`         | `#90e0ef`   | Border ringan, divider            |
-| `frosted-blue-2`   | `--frosted-blue-2`       | `#ade8f4`   | Background surface sekunder       |
-| `light-cyan`       | `--light-cyan`           | `#caf0f8`   | Background tabel header, stat card |
-
-**Penambahan 2026-09-04 (berlaku di `/sow-scheduling`):**
-
-| Token | HEX | Keterangan |
-|---|---|---|
-| `--canvas` | `#eef2f6` | Latar berlapis. **Hanya untuk latar** — `#0077b6` di atasnya hanya 4,33:1, gagal AA; `#b45309` di atasnya hanya 4,46:1, juga gagal AA. Kanvas vs putih hanya 1,12:1 — pemisahan kartu datang dari border + shadow, bukan dari tint kanvas; border tetap wajib walau kartu diberi elevasi |
-| `--status-late` | `#b45309` | 5,02:1 di atas putih (4,46:1 di atas kanvas — gagal) |
-| `--status-running` | `#0077b6` | 4,87:1 di atas putih (4,33:1 di atas kanvas — gagal) |
-| `--status-ok` | `#047857` | 5,48:1 di atas putih |
-
-**Aturan mengikat (yang terpenting di bagian ini):** teks/label beraksen **wajib** di atas
-permukaan putih, **tidak pernah** langsung di atas `--canvas`. Kedua warna aksen yang paling
-sering dipakai (`--status-running` 4,33:1, `--status-late` 4,46:1) gagal AA (4.5:1) persis di
-atas kanvas — hanya lolos di atas putih (4,87:1 / 5,02:1). `--canvas` cuma untuk background.
-
-**Neutral (Tailwind built-in — gunakan langsung):**
- 
-| Peran             | Tailwind Class       | Keterangan                          |
-|-------------------|----------------------|-------------------------------------|
-| Background utama  | `bg-slate-50`        | Halaman & layout background         |
-| Surface (card)    | `bg-white`           | Card, panel, modal, input           |
-| Border default    | `border-slate-200`   | Semua border di atas background putih |
-| Border hover      | `border-slate-300`   | Border saat hover                   |
-| Text utama        | `text-slate-800`     | Heading & body text                 |
-| Text sekunder     | `text-slate-500`     | Label, hint, placeholder            |
-| Text placeholder  | `placeholder-slate-400` | Input placeholder                |
- 
----
- 
-### 2. Prinsip Utama (WAJIB DIIKUTI)
- 
-```
-Rasio penggunaan warna:
-  ✅ ~80% Putih / neutral (slate-50, white, slate-100)
-  ✅ ~20% Warna brand biru (sebagai accent, bukan background besar)
-```
- 
-1. **Light theme only** — Aplikasi ini TIDAK menggunakan dark mode.
-   Jangan gunakan `dark:` prefix Tailwind.
- 
-2. **Biru sebagai accent, bukan background** — Warna `deep-twilight` hingga `french-blue`
-   hanya boleh digunakan sebagai background pada elemen kecil seperti:
-   - Employee group header / card header gradient
-   - Active nav indicator
-   - Badge/chip
-   Jangan gunakan sebagai background halaman, panel filter, atau header utama.
- 
-3. **Surface selalu putih atau slate-50** — Card, modal, panel, sidebar,
-   dan container utama harus menggunakan `bg-white` atau `bg-slate-50`.
-   **Pengecualian tercatat (2026-09-05, Proyek A):** LATAR halaman `/sow-scheduling`
-   memakai `bg-canvas` (`#eef2f6`). Kartu di atasnya TETAP `bg-white`. Kanvas HANYA untuk
-   latar — `#0077b6` di atasnya cuma 4,33:1 (gagal AA), dan kanvas vs putih cuma 1,12:1
-   sehingga pemisahan kartu WAJIB datang dari border + shadow, bukan beda warna.
- 
-4. **Teks harus kontras** — Teks di atas background putih menggunakan `text-slate-800`
-   minimum. Teks hint/secondary menggunakan `text-slate-500`. Jangan gunakan warna
-   biru terang sebagai teks di atas background putih (kontras rendah).
- 
----
- 
-### 3. Color Usage Rules
- 
-#### Background
- 
-| Konteks                   | Warna yang benar                  | Yang harus dihindari               |
-|---------------------------|-----------------------------------|------------------------------------|
-| Halaman / layout root     | `bg-slate-50` — **kecuali `/sow-scheduling`: `bg-canvas` (`#eef2f6`)** | Gradient biru gelap |
-| Header aplikasi           | `bg-white border-b border-slate-200` | `bg-blue-900`, rgba gelap        |
-| Panel filter / sidebar    | `bg-white border-b border-slate-200` | Background semi-transparan gelap |
-| Card / container          | `bg-white shadow-sm border border-slate-200 rounded-xl` | Background biru |
-| Stat card accent          | `#fffbeb`, `#f0fdf4`, `#caf0f8`, `#eef2ff` (ringan) | Background pekat |
-| Tabel header row          | `#caf0f8` (light-cyan)            | Background biru gelap              |
-| Scrollable list area      | `bg-slate-50`                     | Gradient gelap                     |
-| Employee group header     | Gradient `#023e8a → #0077b6`      | ✅ Boleh — elemen kecil yang terdefinisi |
- 
-#### Text
- 
-| Konteks                   | Class                   |
-|---------------------------|-------------------------|
-| Heading / title halaman   | `text-slate-800 font-bold` |
-| Body / label              | `text-slate-700`        |
-| Hint / secondary          | `text-slate-500`        |
-| Placeholder input         | `placeholder-slate-400` |
-| Teks di atas biru gelap   | `text-white`            |
-| Teks accent / link        | `text-[#0077b6]` — jangan `#0096c7` (3.4:1, gagal AA) |
-| Error text                | `text-red-600`          |
-| Success text              | `text-emerald-600`      |
-| Warning text              | `text-amber-600`        |
- 
-#### Button
- 
-| Tipe              | Class                                                                 |
-|-------------------|-----------------------------------------------------------------------|
-| **Primary**       | `bg-[#0077b6] hover:bg-[#023e8a] text-white rounded-lg`              |
-| **Outline**       | `bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300 rounded-lg` |
-| **Danger**        | `bg-red-600 hover:bg-red-500 text-white rounded-lg`                  |
-| **Success**       | `bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg`          |
-| **Ghost (di atas biru)** | `bg-white/20 hover:bg-white/35 text-white rounded-full`       |
-| **Disabled**      | Tambahkan `disabled:opacity-50 disabled:cursor-not-allowed`          |
-| **Active press**  | Tambahkan `active:scale-95 transition-all duration-150`              |
-| **Tinggi minimum** | Tambahkan `min-h-[44px]` — touch target WAJIB di layar sentuh (lihat Touch Target Rules) |
-| **Focus**         | Tambahkan `focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:outline-none` |
- 
-#### Input & Form
- 
-```jsx
-// Kelas standar untuk semua input text, date, select:
-className="bg-white border border-slate-200 text-slate-800 placeholder-slate-400
-           rounded-lg text-sm focus:outline-none focus:ring-2
-           focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all duration-150"
-```
- 
-| State  | Efek                                                        |
-|--------|-------------------------------------------------------------|
-| Normal | `border-slate-200`                                          |
-| Focus  | `ring-2 ring-[#00b4d8]` + `border-[#0096c7]`               |
-| Error  | `border-red-400 ring-2 ring-red-200`                        |
-| Disabled | `opacity-50 cursor-not-allowed bg-slate-50`               |
- 
-#### Status Badge (pill)
- 
-```jsx
-// Pending
-"px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 border border-amber-200"
- 
-// Validated
-"px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200"
- 
-// Deleted
-"px-2 py-0.5 rounded-full text-[11px] font-bold bg-red-100 text-red-700 border border-red-200"
- 
-// SAP Reject
-"px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-100 text-purple-700 border border-purple-200"
-```
- 
----
- 
-### 4. Accessibility Rules
- 
-1. **Kontras minimum WCAG AA:**
-   - Teks normal: rasio kontras ≥ 4.5:1 terhadap background
-   - Teks besar (≥ 24px, atau bold ≥ 18.66px): rasio ≥ 3:1
-   - `text-slate-800` di atas `bg-white` → ✅ ~14:1 (AA pass)
-   - `text-white` di atas `#0077b6` → ✅ 4.9:1 (AA pass) — **standar bg tombol primary**
-   - `text-white` di atas `#0096c7` → ❌ **3.4:1 — GAGAL AA untuk teks normal.**
-     Kombinasi ini hanya untuk teks besar/ikon — BUKAN untuk tombol `text-xs`
-   - `#0096c7` sebagai teks/link di atas putih → ❌ 3.4:1 — gunakan `#0077b6`
-   - Teks `#48cae4` (sky-aqua) di atas `bg-white` → ❌ jauh di bawah AA
- 
-2. **Focus state wajib terlihat** — Button/link/elemen interaktif:
-   `focus-visible:ring-2 focus-visible:ring-[#00b4d8] focus-visible:outline-none`
-   (ring hanya muncul saat navigasi keyboard, tidak menyala saat tap).
-   Input/select tetap `focus:ring-2 focus:ring-[#00b4d8]`.
-   Jangan `outline-none` tanpa pengganti visual.
- 
-3. **Jangan mengandalkan warna saja** — Status (pending/validated/deleted) harus
-   ditunjukkan dengan label teks + warna, bukan warna saja.
- 
-4. **Ukuran teks minimum 12px (`text-xs`)** untuk teks yang dibaca.
-   `text-[11px]` hanya untuk label uppercase kecil (badge/eyebrow).
-   `text-[10px]` ke bawah dilarang.
- 
----
- 
-### 5. Tailwind Config — Extend Colors
- 
-Tambahkan ke `tailwind.config.js` untuk bisa menggunakan nama token sebagai class:
- 
-```js
-// tailwind.config.js
-theme: {
-  extend: {
-    colors: {
-      // ... existing colors (primary, success, dll) ...
- 
-      // Corporate Blue Palette
-      brand: {
-        'deep-twilight':    '#03045e',
-        'french-blue':      '#023e8a',
-        'bright-teal-blue': '#0077b6',  // ← primary action
-        'blue-green':       '#0096c7',
-        'turquoise-surf':   '#00b4d8',  // ← focus ring
-        'sky-aqua':         '#48cae4',
-        'frosted-blue':     '#90e0ef',
-        'frosted-blue-2':   '#ade8f4',
-        'light-cyan':       '#caf0f8',
-      },
-    },
-  },
-},
-```
- 
-Setelah ditambahkan, bisa digunakan sebagai:
-```jsx
-<button className="bg-brand-bright-teal-blue hover:bg-brand-french-blue text-white">
-  Primary Action
-</button>
-```
- 
-> **Catatan:** Selama belum ditambahkan ke config, gunakan inline `bg-[#0077b6]` — ini valid di Tailwind v3.
-> Saat menambahkan palet ini ke config, sekaligus rencanakan deprecation token legacy
-> `primary (#007bff)/success/danger/warning/secondary` dan `boxShadow 3d-*` yang masih ada
-> di `tailwind.config.js` dan dipakai komponen lama (`ui/Button`, `forms/Input`, `ui/Switch`,
-> `tables/Table`) — jangan pakai token legacy itu untuk UI baru.
- 
----
- 
-### 6. Contoh Implementasi Lengkap
- 
-#### Page Shell (layout dasar)
-```jsx
-<div className="h-screen w-screen flex flex-col overflow-hidden bg-slate-50">
- 
-  {/* Header */}
-  <header className="flex-shrink-0 flex items-center justify-between px-4 py-2.5
-                     bg-white border-b border-slate-200 shadow-sm">
-    <button className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50
-                       px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95">
-      Back
-    </button>
-    <h1 className="text-base font-extrabold text-slate-800">Page Title</h1>
-    <button className="bg-[#0077b6] hover:bg-[#023e8a] text-white
-                       px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95">
-      Action
-    </button>
-  </header>
- 
-  {/* Filter / toolbar */}
-  <div className="flex-shrink-0 px-4 py-3 bg-white border-b border-slate-200">
-    <input
-      className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
-                 placeholder-slate-400 rounded-lg text-sm focus:outline-none
-                 focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
-      placeholder="Search..."
-    />
-  </div>
- 
-  {/* Content */}
-  <div className="flex-1 overflow-y-auto px-4 py-3 bg-slate-50">
-    {/* Cards */}
-    <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
-      Content here
-    </div>
-  </div>
- 
-</div>
-```
- 
-#### Stat Card
-```jsx
-// Pending (amber)
-<div className="rounded-xl px-2 py-3 text-center border shadow-sm
-                bg-amber-50 border-amber-200">
-  <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">Pending</div>
-  <div className="text-base font-extrabold text-amber-700">12 Act</div>
-  <div className="text-[11px] text-gray-500">45.5 hrs</div>
-</div>
- 
-// Validated (emerald)
-<div className="rounded-xl px-2 py-3 text-center border shadow-sm
-                bg-emerald-50 border-emerald-200">
-  <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">Validated</div>
-  <div className="text-base font-extrabold text-emerald-700">30 Act</div>
-</div>
- 
-// Info (brand blue)
-<div className="rounded-xl px-2 py-3 text-center border shadow-sm"
-     style={{ background: '#caf0f8', borderColor: '#90e0ef' }}>
-  <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: '#023e8a' }}>Total Hrs</div>
-  <div className="text-base font-extrabold" style={{ color: '#023e8a' }}>120.5</div>
-</div>
-```
- 
-#### Employee Group Header (satu-satunya elemen yang boleh pakai background biru gelap)
-```jsx
-<div className="px-4 py-3 cursor-pointer transition-colors"
-     style={{ background: 'linear-gradient(135deg, #023e8a 0%, #0077b6 100%)' }}>
-  <div className="text-sm font-bold text-white">John Doe</div>
-  <div className="text-xs font-mono text-[#ade8f4]">EMP001</div>
-</div>
-```
- 
----
- 
-### 7. Anti-Patterns
-
-> Lihat section **"Anti-Patterns → Perbaikan"** di bawah — versi berpasangan ❌/✅
-> (setiap larangan ada padanan yang benar). Jangan duplikasi daftarnya di sini.
- 
----
- 
-## CSS Variable Declarations (`:root`)
- 
-> Tambahkan ke `src/index.css` atau file CSS global sebelum Tailwind directives.
-> Wajib ada agar `var(--...)` bisa digunakan di inline style.
-> **Status: ✅ ada sejak 2026-09-04 (Proyek A Task 2)** — blok di bawah ini disalin persis
-> dari `apps/web/src/index.css`, bukan lagi versi aspiratif yang belum ter-ship.
- 
-```css
-/* src/index.css */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
- 
-:root {
-  /* Corporate Blue Palette */
-  --deep-twilight:    #03045e;
-  --french-blue:      #023e8a;
-  --bright-teal-blue: #0077b6;   /* ← primary action */
-  --blue-green:       #0096c7;
-  --turquoise-surf:   #00b4d8;   /* ← focus ring */
-  --sky-aqua:         #48cae4;
-  --frosted-blue:     #90e0ef;
-  --frosted-blue-2:   #ade8f4;
-  --light-cyan:       #caf0f8;
-
-  /* Kanvas bernada — dasar kartu mengambang. HANYA untuk latar:
-     #0077b6 di atas #eef2f6 = 4,33:1, gagal AA. */
-  --canvas:           #eef2f6;
-
-  /* Aksen semantik. Angka = kontras terhadap PUTIH. */
-  --status-late:      #b45309;   /* 5,02:1 */
-  --status-running:   #0077b6;   /* 4,87:1 */
-  --status-ok:        #047857;   /* 5,48:1 */
-
-  /* Shadow scale (gunakan konsisten, lihat aturan di bawah). Nilai ini LEBIH TEBAL
-     dari draft lama dokumen ini — konsekuensi arah visual "layered" yang dipilih owner
-     2026-09-04 untuk kartu di atas --canvas. */
-  --shadow-card:      0 1px 2px rgba(15,23,42,.05), 0 4px 12px rgba(15,23,42,.06);
-  --shadow-panel:     0 4px 12px rgba(0,0,0,.08);
-  --shadow-modal:     0 8px 32px rgba(0,0,0,.12);
-
-  /* Motion */
-  --dur-press:  150ms;
-  --dur-panel:  200ms;
-  --dur-route:  250ms;
-  --dur-modal:  300ms;
-  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-exit:  cubic-bezier(0.7, 0, 0.84, 0);
-}
-```
- 
----
- 
-## Shadow & Elevation Scale
- 
-> Pakai shadow yang **paling ringan** yang masih cukup untuk memberi kesan kedalaman.
-> Jangan gunakan shadow gelap atau besar pada elemen kecil.
- 
-| Konteks | Tailwind / Variable | Kapan Dipakai |
-|---|---|---|
-| Card di atas `bg-slate-50` | `shadow-sm` | Permukaan datar, latar netral |
-| Card di atas `bg-canvas` (`#eef2f6`) | `shadow-card` | Kartu mengambang. Border WAJIB tetap ada — kanvas vs putih hanya 1,12:1, jadi pemisahan tidak boleh bergantung pada shadow saja |
-| Panel / drawer | `shadow-md` | Sidebar, filter panel yang "mengambang" |
-| Modal / popover | `shadow-xl` | Overlay di atas halaman |
-| Header | `shadow-sm` + `border-b border-slate-200` | App header — **selalu kombinasikan** |
-| Tombol | Tidak ada shadow | Button tidak perlu shadow |
-| Input | Tidak ada shadow | Gunakan border + ring saja |
- 
-```jsx
-// ✅ Card — shadow-sm cukup di atas bg-slate-50
-<div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
- 
-// ✅ Modal
-<div className="bg-white shadow-xl rounded-2xl p-6">
- 
-// ❌ Jangan: shadow besar pada card biasa
-<div className="bg-white shadow-xl border ...">
-```
- 
----
- 
-## Spacing & Sizing Scale
- 
-> Aturan padding dan gap standar agar semua halaman terasa konsisten.
-> AI wajib mengikuti ini — jangan menggunakan nilai arbitrary tanpa alasan.
- 
-### Padding Internal (dalam komponen)
- 
-| Komponen | Class |
-|---|---|
-| Card / panel body | `p-4` (16px) |
-| Card header (dengan judul) | `px-4 py-3` |
-| Table cell | `px-3 py-2` |
-| Input / select | `px-3 py-2` |
-| Button default | `px-4 py-2` |
-| Button kecil (compact) | `px-3 py-1.5` |
-| Badge / pill | `px-2 py-0.5` |
-| Modal | `p-6` |
-| Page section | `px-4 py-3` (mobile) / `px-6 py-4` (tablet+) |
- 
-### Gap / Spacing Antar Elemen
- 
-| Konteks | Class |
-|---|---|
-| Antar card dalam grid | `gap-3` |
-| Antar item dalam list | `gap-2` |
-| Antar field dalam form | `gap-4` |
-| Antar tombol dalam group | `gap-2` |
-| Antar section / block | `gap-6` |
-| Icon + teks dalam button | `gap-1.5` |
- 
-### Border Radius
- 
-| Elemen | Class |
-|---|---|
-| Card, panel, modal | `rounded-xl` |
-| Input, select, textarea | `rounded-lg` |
-| Button | `rounded-lg` |
-| Badge / pill | `rounded-full` |
-| Avatar / gambar kecil | `rounded-full` |
-| Tabel (wrapper) | `rounded-xl overflow-hidden` |
- 
----
- 
-## Anti-Patterns → Perbaikan (Pasangan ❌ / ✅)
- 
-> Setiap larangan harus ada padanan yang benar. AI wajib menggunakan versi ✅.
- 
-### Background halaman
- 
-```jsx
-// ❌ Background halaman dengan gradient gelap
-<div style={{ background: 'linear-gradient(160deg, #03045e 0%, #0077b6 100%)' }}>
- 
-// ✅ Background halaman: slate-50 (default) ATAU bg-canvas khusus /sow-scheduling
-<div className="min-h-screen bg-slate-50">
-```
- 
-### Header aplikasi
- 
-```jsx
-// ❌ Header gelap
-<header className="bg-blue-900 text-white px-4 py-3">
- 
-// ✅ Header putih dengan border bawah
-<header className="bg-white border-b border-slate-200 shadow-sm px-4 py-2.5
-                   flex items-center justify-between">
-```
- 
-### Filter panel / toolbar
- 
-```jsx
-// ❌ Filter panel semi-transparan gelap
-<div style={{ background: 'rgba(3,4,94,0.55)', backdropFilter: 'blur(8px)' }}>
- 
-// ✅ Filter panel putih dengan border bawah
-<div className="bg-white border-b border-slate-200 px-4 py-3">
-```
- 
-### Input field
- 
-```jsx
-// ❌ Input gelap
-<input className="bg-white/10 text-white placeholder-white/50 border-white/20">
- 
-// ✅ Input standar
-<input className="bg-white border border-slate-200 text-slate-800 placeholder-slate-400
-                  rounded-lg px-3 py-2 text-sm focus:outline-none
-                  focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all">
-```
- 
-### Teks accent / link
- 
-```jsx
-// ❌ Sky-aqua ATAU blue-green sebagai teks di atas putih — dua-duanya gagal AA
-<span className="text-[#48cae4]">Label di atas bg-white</span>
-<span className="text-[#0096c7]">Link di atas bg-white (3.4:1 — FAIL)</span>
- 
-// ✅ Gunakan bright-teal-blue untuk teks/link di atas putih (4.9:1 — AA pass)
-<span className="text-[#0077b6]">Label di atas bg-white</span>
-```
- 
-### Deep-twilight / french-blue sebagai background besar
- 
-```jsx
-// ❌ Seluruh halaman biru gelap
-<div className="bg-[#03045e] min-h-screen">
- 
-// ✅ Hanya gunakan pada elemen kecil tertentu (employee group header, badge, dll)
-<div className="px-4 py-3"
-     style={{ background: 'linear-gradient(135deg, #023e8a 0%, #0077b6 100%)' }}>
-  <span className="text-sm font-bold text-white">Employee Group</span>
-</div>
-```
- 
----
- 
-## Responsive Layout — Tablet (Landscape & Portrait)
- 
-> MPS Timesheet digunakan di tablet (landscape 800–960px / portrait 768×1024).
-> Semua halaman WAJIB responsif di kedua orientasi.
-> Gunakan breakpoint `md:` (768px) sebagai breakpoint landscape utama.
- 
----
- 
-### Prinsip Responsive
- 
-1. **Mobile-first** — tulis class tanpa prefix dulu (untuk mobile/portrait kecil),
-   lalu override dengan `md:` untuk tablet landscape.
- 
-2. **Hindari fixed width** — jangan gunakan `w-[320px]` atau nilai pixel tetap
-   untuk container utama. Gunakan `w-full`, `max-w-*`, atau `flex-1`.
- 
-3. **Orientasi landscape tablet (≥768px)** — manfaatkan lebar dengan layout 2-kolom.
-   Filter / sidebar bisa muncul berdampingan dengan konten.
- 
-4. **Orientasi portrait tablet (< 768px)** — layout tetap 1 kolom,
-   tapi padding dan ukuran elemen lebih besar dari mobile.
- 
-5. **Touch-friendly tap target** — semua elemen interaktif minimal `44×44px`.
-   Gunakan `min-h-[44px]` dan `min-w-[44px]` pada tombol dan item list.
- 
----
- 
-### Breakpoint Reference
- 
-| Prefix | Min-width | Target Device |
-|---|---|---|
-| (none) | 0px | Mobile portrait (fallback) |
-| `sm:` | 640px | Mobile landscape (jarang dipakai) |
-| `md:` | 768px | Tablet landscape — **breakpoint utama** |
-| `lg:` | 1024px | Desktop only (bukan target tablet) |
-| `xl:` | 1280px | Desktop lebar (opsional, bukan target utama) |
- 
----
- 
-### Page Shell — Responsive
- 
-```jsx
-// Layout dasar yang adaptif untuk tablet landscape & portrait
-<div className="h-screen w-screen flex flex-col overflow-hidden bg-slate-50">
- 
-  {/* Header — selalu full width */}
-  <header className="flex-shrink-0 flex items-center justify-between
-                     px-4 md:px-6 py-2.5
-                     bg-white border-b border-slate-200 shadow-sm">
-    <button className="min-h-[44px] min-w-[44px] flex items-center justify-center
-                       bg-white border border-slate-200 text-slate-700
-                       hover:bg-slate-50 px-3 py-1.5 rounded-lg text-xs font-semibold
-                       transition-all active:scale-95">
-      Back
-    </button>
-    <h1 className="text-sm md:text-base font-extrabold text-slate-800">Page Title</h1>
-    <button className="min-h-[44px] flex items-center
-                       bg-[#0077b6] hover:bg-[#023e8a] text-white
-                       px-3 md:px-4 py-1.5 rounded-lg text-xs font-semibold
-                       transition-all active:scale-95">
-      Action
-    </button>
-  </header>
- 
-  {/* Body: portrait = 1 kolom, landscape = bisa 2 kolom */}
-  <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
- 
-    {/* Filter / sidebar — collapse di portrait, side panel di landscape */}
-    <div className="flex-shrink-0
-                    border-b border-slate-200 md:border-b-0 md:border-r
-                    bg-white px-4 py-3 md:w-72 md:overflow-y-auto">
-      {/* Filter controls */}
-      <input
-        className="w-full px-3 py-2 bg-white border border-slate-200 text-slate-800
-                   placeholder-slate-400 rounded-lg text-sm focus:outline-none
-                   focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all"
-        placeholder="Search..."
-      />
-    </div>
- 
-    {/* Content area */}
-    <div className="flex-1 overflow-y-auto px-4 md:px-6 py-3 md:py-4 bg-slate-50">
-      <div className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
-        Content
-      </div>
-    </div>
- 
-  </div>
-</div>
-```
- 
----
- 
-### Grid Responsive
- 
-```jsx
-// 1 kolom di mobile, 2 di tablet portrait, 3 di tablet landscape
-<div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-  {items.map(item => (
-    <div key={item.id} className="bg-white shadow-sm border border-slate-200 rounded-xl p-4">
-      {/* card content */}
-    </div>
-  ))}
-</div>
- 
-// Stat cards: 2 kolom di mobile, 4 di tablet landscape
-<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-  {/* stat cards */}
-</div>
-```
- 
----
- 
-### Tabel Responsive
- 
-> Tabel data sering overflow di tablet portrait. Gunakan pola ini.
- 
-```jsx
-// Wrapper dengan horizontal scroll — lebih baik dari collapse kolom
-<div className="bg-white shadow-sm border border-slate-200 rounded-xl overflow-hidden">
-  <div className="overflow-x-auto">
-    <table className="w-full text-sm">
-      <thead>
-        <tr style={{ background: '#caf0f8' }}>
-          {/* Kolom penting: visible selalu */}
-          <th className="px-3 py-2 text-left font-semibold text-slate-700 whitespace-nowrap">
-            No. TS
-          </th>
-          {/* Kolom sekunder: hide di portrait, show di landscape */}
-          <th className="px-3 py-2 text-left font-semibold text-slate-700 whitespace-nowrap
-                         hidden md:table-cell">
-            Tanggal
-          </th>
-          <th className="px-3 py-2 text-left font-semibold text-slate-700 whitespace-nowrap">
-            Teknisi
-          </th>
-          <th className="px-3 py-2 text-left font-semibold text-slate-700 whitespace-nowrap">
-            Status
-          </th>
-        </tr>
-      </thead>
-      <tbody className="divide-y divide-slate-100">
-        {rows.map(row => (
-          <tr key={row.id} className="hover:bg-slate-50 transition-colors">
-            <td className="px-3 py-2 text-slate-800 font-mono text-xs">{row.tsNumber}</td>
-            <td className="px-3 py-2 text-slate-600 hidden md:table-cell">{row.date}</td>
-            <td className="px-3 py-2 text-slate-800">{row.technician}</td>
-            <td className="px-3 py-2">{/* badge */}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-</div>
-```
- 
----
- 
-### Modal Responsive
- 
-```jsx
-// Modal yang nyaman di tablet landscape maupun portrait
-<div className="fixed inset-0 z-50 flex items-end md:items-center justify-center
-                bg-black/30 backdrop-blur-sm px-0 md:px-4">
-  <div className="bg-white w-full md:max-w-lg rounded-t-2xl md:rounded-2xl
-                  shadow-xl p-6 max-h-[90vh] overflow-y-auto">
-    {/* Modal content */}
-    <h2 className="text-base font-bold text-slate-800 mb-4">Judul Modal</h2>
-    {/* form fields */}
-    <div className="flex gap-2 justify-end mt-6">
-      <button className="bg-white border border-slate-200 text-slate-700
-                         hover:bg-slate-50 px-4 py-2 rounded-lg text-sm font-semibold
-                         transition-all active:scale-95">
-        Batal
-      </button>
-      <button className="bg-[#0077b6] hover:bg-[#023e8a] text-white
-                         px-4 py-2 rounded-lg text-sm font-semibold
-                         transition-all active:scale-95">
-        Simpan
-      </button>
-    </div>
-  </div>
-</div>
- 
-{/* Catatan: di mobile/portrait = bottom sheet (rounded-t-2xl, items-end)
-            di tablet/landscape = centered modal (rounded-2xl, items-center md:) */}
-```
- 
----
- 
-### Typography Scale Responsive
- 
-```jsx
-// Heading halaman
-<h1 className="text-sm md:text-base font-extrabold text-slate-800">
- 
-// Sub-heading / section title
-<h2 className="text-xs md:text-sm font-bold text-slate-700 uppercase tracking-wide">
- 
-// Body / label
-<p className="text-xs md:text-sm text-slate-700">
- 
-// Hint / secondary
-<span className="text-[11px] md:text-xs text-slate-500">
- 
-// Mono / kode (no. TS, kode operasi)
-<span className="font-mono text-xs text-slate-600">
-```
- 
----
- 
-### Touch Target Rules
- 
-```jsx
-// ✅ Semua elemen interaktif harus punya area tap minimal 44×44px
-<button className="min-h-[44px] min-w-[44px] flex items-center justify-center ...">
-  <IconSearch size={16} />
-</button>
- 
-// ✅ List item yang bisa diklik
-<div className="min-h-[52px] flex items-center px-4 cursor-pointer
-                hover:bg-slate-50 active:bg-slate-100 transition-colors">
-  Content
-</div>
- 
-// ❌ Jangan: tap target terlalu kecil
-<button className="p-1 text-xs">×</button>
-```
- 
----
- 
-### Orientation Detection (opsional, untuk behavior khusus)
- 
-```jsx
-// Jika perlu deteksi orientasi secara programatik
-import { useState, useEffect } from 'react';
- 
-function useOrientation() {
-  const [isLandscape, setIsLandscape] = useState(
-    window.innerWidth > window.innerHeight
-  );
- 
-  useEffect(() => {
-    const handler = () => setIsLandscape(window.innerWidth > window.innerHeight);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, []);
- 
-  return isLandscape;
-}
- 
-// Penggunaan
-const isLandscape = useOrientation();
-// Tapi UTAMAKAN CSS Tailwind (md:) — gunakan hook ini hanya untuk logic JS
-```
-
----
-
-## UI Engineering Standards (Professional Grade)
-
-> Corporate Color System mengatur *tampilan*; section ini mengatur *perilaku dan
-> cara membangun* UI. Berlaku untuk semua halaman/komponen baru, dan setiap kali
-> halaman lama disentuh.
-
-### 1. Component-First (WAJIB — anti-boilerplate)
-
-Jangan menulis ulang string className panjang di tiap halaman. Urutan kerja SELALU:
-
-1. **Cek dulu `apps/web/src/components/`** — kalau komponennya sudah ada, pakai/extend.
-2. Kalau belum ada dan polanya dipakai (atau akan dipakai) di ≥2 tempat →
-   **buat komponennya dulu** di `components/ui/` (atau `forms/`, `tables/`, `layout/`),
-   baru pakai di halaman.
-3. Saat melihat markup duplikat ≥2× ketika mengedit halaman, **rekomendasikan
-   ekstraksi komponen** secara eksplisit — jangan menambah salinan ketiga.
-
-Aturan API komponen:
-- Varian lewat props (`variant="primary|outline|danger|success|ghost"`, `size`),
-  BUKAN lewat className bebas dari pemanggil.
-- `className` dari luar hanya untuk layout (margin, width, grid placement) —
-  bukan override warna/radius/shadow, supaya sistem tetap konsisten.
-- Komponen UI murni presentasional; logic/fetch tetap di halaman (Critical Rule #3).
-
-**Inventaris komponen saat ini (status per 2026-07-11):**
-
-| Komponen | Status |
-|---|---|
-| `ui/Button.jsx`, `forms/Input.jsx`, `ui/Switch.jsx`, `tables/Table.jsx` | ⚠️ Ada, tapi masih gaya LAMA (`shadow-3d`, `primary #007bff`) — JANGAN dijadikan acuan visual; migrasikan ke standar ini saat disentuh |
-| `ui/Modal.jsx`, `ui/ConfirmationModal.jsx`, `ui/Card.jsx`, `layout/PageContainer.jsx` | ✅ Ada — pakai ini; jangan bikin modal/card inline baru |
-| `dashboard/KpiCard.jsx`, `dashboard/ChartErrorBoundary.jsx`, `dashboard/*Chart.jsx` | ✅ Ada — chart baru ikut pola ini + aturan Dataviz (§8) |
-
-**Komponen target — buat saat pertama kali dibutuhkan, jangan tulis inline:**
-`Badge`/`StatusPill`, `EmptyState`, `Skeleton`, `Spinner`/`LoadingButton`,
-`PageHeader` (back + title + action standar), `SearchInput`,
-`StatCard`, `FilterBar`, `OfflineIndicator`.
-(`Select` sudah ada versi LAMA di `forms/Input.jsx` — migrasikan, jangan buat baru.)
-
-### 2. Offline-First — Larangan Aset Eksternal (WAJIB)
-
-Aplikasi berjalan di jaringan pabrik yang bisa terputus dari internet. Semua aset
-HARUS berasal dari bundle sendiri (npm → Vite) atau origin sendiri.
-
-- ❌ Dilarang: `<link>`/`<script>`/`@import` ke CDN apapun (unpkg, jsdelivr,
-  cdnjs, dll.), Google Fonts, ikon/gambar hotlink dari URL eksternal.
-- ✅ Library selalu via npm dan di-bundle Vite: `lucide-react` untuk ikon,
-  `echarts`/`recharts` untuk chart, dst.
-- ✅ Font: **system font stack** (nol network, render instan — lihat §3). Kalau
-  suatu saat butuh font brand → self-host via package `@fontsource/*` (ikut
-  bundle), BUKAN link CDN.
-- Entry `google-fonts-cache` di `vite.config.js` (workbox) adalah sisa konfigurasi
-  lama (SW rule tak terpakai). TAPI `apps/web/src/templates/backuptc.html` masih memuat
-  `<link>` ke fonts.googleapis.com — **pelanggaran offline-first, hapus link itu**.
-
-### 3. Typography & Angka
-
-- Font stack standar (ganti `Arial` di `index.css` saat menyentuh file itu):
-  ```css
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  ```
-- **Kolom angka WAJIB `tabular-nums`** (class Tailwind) — jam, qty, durasi,
-  no. order. Tanpa ini digit tidak sejajar antar-baris dan kolom sulit di-scan.
-- Ukuran minimum: 12px (`text-xs`) untuk teks yang dibaca; `text-[11px]` hanya
-  label uppercase kecil (badge/eyebrow); `text-[10px]` ke bawah dilarang.
-
-### 4. State Standar: Loading / Empty / Error (WAJIB di setiap halaman fetch)
-
-| State | Pola |
-|---|---|
-| Loading konten | Skeleton (`animate-pulse`, blok abu-abu seukuran konten) — bukan spinner satu layar |
-| Loading aksi | Spinner kecil DI DALAM tombol + `disabled` — jangan blok seluruh layar |
-| Empty | Ikon + 1 kalimat penjelasan + aksi utama ("Belum ada timesheet hari ini" + tombol buat) — jangan tabel/area kosong tanpa keterangan |
-| Error fetch | Pesan inline di area konten + tombol "Coba lagi" — JANGAN hanya toast (toast hilang, halaman tetap kosong) |
-| Error form | Inline di bawah field (`border-red-400` + `text-red-600 text-xs`); fokus pindah ke field pertama yang error |
-
-Aturan toast (sonner):
-- Toast hanya untuk HASIL aksi async: "Timesheet tersimpan", "Gagal posting SAP: <sebab>".
-- Toast error menyebut penyebab + apa yang bisa dilakukan user; jangan generik "Error!".
-- JANGAN toast untuk validasi form (inline) atau error fetch halaman (inline + retry).
-- Copy konsisten dengan label tombol: tombol "Simpan" → toast "Tersimpan"
-  (bukan "Submit berhasil"); kata kerja aktif, sentence case.
-
-### 5. Motion
-
-- Durasi: hover/press **150ms**; dropdown/panel **200ms**; modal/drawer **250–300ms**.
-  Masuk `ease-out`, keluar `ease-in`.
-- framer-motion hanya untuk transisi bermakna (modal, reorder list, page
-  transition). Untuk hover/press cukup Tailwind `transition-*`.
-- **WAJIB hormati `prefers-reduced-motion`**: `motion-reduce:transition-none
-  motion-reduce:transform-none` (Tailwind) atau `useReducedMotion()` (framer-motion).
-- Animasi berjalan terus (pulse/spin) hanya untuk status loading yang nyata.
-
-### 6. Focus & Keyboard
-
-- Button/link: `focus-visible:ring-2 focus-visible:ring-[#00b4d8]
-  focus-visible:outline-none` (ring hanya saat keyboard). Input: tetap `focus:ring-2`.
-- Modal WAJIB pakai `ui/Modal.jsx` (jangan modal inline): fokus pindah ke modal
-  saat buka, `Escape` menutup, fokus kembali ke tombol pemicu saat tutup,
-  `role="dialog" aria-modal="true"`.
-- Elemen klik-able = `<button>`, bukan `<div onClick>`. Kalau terpaksa div:
-  `role="button" tabIndex={0}` + handler Enter/Space.
-
-### 7. Z-Index Scale
-
-| Layer | Class |
-|---|---|
-| Dropdown / popover | `z-30` |
-| Sticky header / toolbar | `z-40` |
-| Modal overlay + modal | `z-50` |
-| Toast (sonner) | default sonner (di atas modal) — jangan diubah |
-
-Jangan pakai nilai arbitrary (`z-[999]`). Butuh layer baru → tambahkan ke tabel ini.
-
-### 8. Chart & Dataviz (ECharts + Recharts)
-
-Palet kategorikal standar — **urutan TETAP, sudah tervalidasi colorblind-safe
-(ΔE CVD ≥ 19) dan kontras ≥ 3:1 di atas putih**. Seri ke-1 selalu warna ke-1, dst:
-
-| Urutan | Hex | Nama |
-|---|---|---|
-| 1 | `#0077b6` | biru brand |
-| 2 | `#b45309` | amber tua |
-| 3 | `#7c3aed` | violet |
-| 4 | `#0d9488` | teal |
-| 5 | `#be185d` | magenta |
-| 6 | `#4d7c0f` | olive |
-
-- **> 6 seri** → gabungkan sisanya jadi "Lainnya" (`#94a3b8`) atau pecah jadi
-  small multiples. Jangan generate hue baru.
-- **Warna mengikuti entitas, bukan urutan render** — filter yang mengubah jumlah
-  seri tidak boleh mengecat ulang seri yang tersisa.
-- Sequential (magnitude/heatmap): satu hue biru, terang→gelap:
-  `#caf0f8 → #90e0ef → #00b4d8 → #0077b6 → #023e8a`. Jangan rainbow.
-- Diverging (di atas/bawah target): `#0077b6` ↔ `#b45309`, titik tengah netral
-  `#e2e8f0`.
-- Warna status (emerald/amber/red) HANYA untuk makna status — jangan dipakai
-  sebagai warna seri biasa.
-- **Satu sumbu Y per chart** — dilarang dual-axis. Dua ukuran beda skala →
-  dua chart bertumpuk / small multiples.
-- ≥ 2 seri wajib legend; jangan tempel angka di setiap titik (label selektif
-  saja); teks label/axis pakai warna teks slate — bukan warna seri; grid tipis
-  `#e2e8f0`.
-- Tooltip/hover wajib aktif di semua chart (ECharts `tooltip`, Recharts `<Tooltip>`).
-
-### 9. PWA / Offline UX
-
-- Sediakan indikator offline global (komponen `OfflineIndicator`, listen event
-  `online`/`offline`) — user harus tahu sedang offline SEBELUM kehilangan input.
-- Data yang tampil dari cache (NetworkFirst) saat offline diberi tanda:
-  "Data tersimpan — terakhir diperbarui HH:mm".
-- Aksi tulis saat offline: tolak langsung dengan pesan jelas ("Tidak ada koneksi —
-  perubahan belum disimpan"), kecuali fitur antrian offline memang dibangun.
-
-### 10. Status Implementasi Design System (per 2026-07-11 — JANGAN berasumsi)
-
-| Item | Standar (dokumen ini) | Kondisi kode nyata |
-|---|---|---|
-| CSS vars `:root` | blok di atas | ✅ selesai 2026-09-04 (Proyek A) — diverifikasi langsung di `apps/web/src/index.css`, termasuk `--canvas`, tiga `--status-*`, empat `--dur-*`, dua `--ease-*` |
-| Palet brand di `tailwind.config.js` | §5 Corporate Color | ✅ selesai 2026-09-04 (Proyek A) — diverifikasi di `apps/web/tailwind.config.js`: blok `colors.brand.*` (9 token) + `colors.canvas` + `colors.status.*` ada. Token legacy `primary #007bff` + `shadow-3d-*` MASIH ada di file yang sama (belum dihapus, dipakai komponen lama) — jangan salah baca ini sebagai migrasi tuntas |
-| `ui/Button`, `forms/Input`, `ui/Switch`, `tables/Table` | Component-First §1 | ⚠️ Ada tapi gaya lama — migrasikan saat disentuh |
-| Font | system stack (§3) | ✅ selesai 2026-09-04 (Proyek A) — diverifikasi di `apps/web/src/index.css`: `font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;` pada `html, body, #root`, bukan `Arial` lagi |
-| Warna primary button | `#0077b6` (AA 4.9:1) | ⚠️ ±364 pemakaian `#0096c7` di 62 file (standar lama). Migrasi bertahap: saat mengedit sebuah halaman, samakan SELURUH tombol primary halaman itu ke `#0077b6` — jangan campur dua warna primary dalam satu halaman |
-
----
-
-## Tech Stack
-
-| Layer | Technology | Notes |
-|-------|-----------|-------|
-| Frontend Framework | React 19.2 + Vite 7 | ESM (`"type": "module"`) |
-| Language | JavaScript (JSX) | No TypeScript |
-| Styling | Tailwind CSS v3.4 | + inline `bg-[#xxx]` for dynamic brand colors |
-| Router | React Router v7.13 | `createBrowserRouter` |
-| State Management | useState + useCallback | No Redux/Zustand/MobX — logic stays in components |
-| Notifications | sonner v2 | `Toaster` in `App.jsx` with `richColors` |
-| PWA | vite-plugin-pwa + Workbox v7 | Runtime caching /api/* (NetworkFirst 5min). Entry `google-fonts-cache` di vite.config = sisa lama (SW rule tak terpakai, boleh dihapus). Catatan: `src/templates/backuptc.html` MASIH punya `<link>` Google Fonts — pelanggaran offline-first, hapus |
-| Charts | ECharts v6 + Recharts v3 | Both used across dashboard |
-| Drag & Drop | @dnd-kit (core, sortable, modifiers) | |
-| Icons | lucide-react v1 | |
-| Animations | framer-motion v12 | |
-| Backend API | Express.js 4 (Node 20, CommonJS) | In `apps/api/server.js` |
-| Backend Python | FastAPI (Python 3.11, uvicorn) | In `apps/fastapi-msproject/main.py` — SOW plan-sync + antrian TTS (MS Project .mpp sync sebenarnya di Express `/ms-project`) |
-| Database | PostgreSQL 15 | + Microsoft SQL Server (SSB_OEE for machine hours) |
-| Reverse Proxy | Nginx (Alpine) | SSL/TLS 1.2-1.3, HTTP→HTTPS redirect, routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/`, SPA fallback |
-| Containerization | Docker Compose | 16 services (main compose) — lihat tabel "Docker Compose Services" di bawah |
-| API Client | fetch (native) | No Axios |
-| Dev port (frontend) | 5173 | Proxied `/api` → `http://localhost:3001` |
-| API port | 3001 | |
-
----
-
-## Key Commands
-
-```bash
-# === Frontend (apps/web/) ===
-cd apps/web
-npm run dev              # → http://localhost:5173
-npm run build            # Production build → dist/
-npm run preview          # Preview production build
-npm run lint             # ESLint
-
-# === Backend API (apps/api/) ===
-cd apps/api
-node server.js           # Express API on port 3001
-# or with nodemon:
-npx nodemon server.js
-
-# === PostgreSQL (local/dev) ===
-"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb
-
-# === Docker (production) ===
-scripts/deploy.sh build        # Build all containers
-scripts/deploy.sh start        # Start all services
-scripts/deploy.sh stop         # Stop all services
-scripts/deploy.sh restart      # Restart all services
-scripts/deploy.sh status       # Check service status
-scripts/deploy.sh logs api     # View API logs
-```
-
----
-
-## Monorepo Structure
-
-```text
-MPS2/
-+- apps/
-�  +- web/                         # React + Vite frontend
-�  +- api/                         # Express API, controllers, routes, rbac, jobs, uploads
-�  +- fastapi-msproject/            # FastAPI SOW/TTS helper service (MS Project sync sebenarnya di Express /ms-project)
-�  +- tts-worker/                   # Piper/Edge TTS worker (EWS audio announcements)
-   +- mobile/                      # Android (Kotlin) 'MPS Heartbeat' — device heartbeat armada tablet → POST /device-heartbeat
-+- jobs/
-�  +- sap_staging/                  # Stage/post/seed SAP payload rows
-�  +- etl/                          # SQL Server -> Postgres ETL (machine hours, heartbeat, order sync)
-�  +- export/                       # CSV/TXT export helpers
-�  +- sow/                          # SOW seed/export Docker helper files
-�  +- machine_ping/                 # Dockerfile untuk machine-ping-worker (script di scripts/ping_m5051_machines.js)
-+- database/
-�  +- migrations/                   # api/ (timestamped) + legacy/ (tidak berurut) + deferred/
-�  +- seeds/                        # Seed data and seed helpers
-�  +- schema/                       # schema_prod.sql = SATU-SATUNYA dump kanonik (regenerate dari prod tiap batch migrasi)
-�  +- machinehours/                 # CSV data + import scripts machine hours
-�  +- toolsmanagement/              # SQL domain tools management
-�  +- paket_kumplit/, query_use/    # SQL/data pendukung
-+- docs/
-�  +- operations/, sap/, frontend/, deployment/, archive/
-�  +- Work Instruction/, security/, timesheet/, concepts/, log/, prd/, salvaging/ (+ _isolasi/, graphify-out/ git-ignored)
-+- samples/
-�  +- sap_payloads/, excel/, media/
-+- infra/
-�  +- docker/                       # Shared docker infra notes/assets
-�  +- nginx/                        # Nginx config and SSL material
-+- aws/
-�  +- sap-ph3-order-lambda/         # AWS Lambda inbound order feed dari SAP -> ph3_order
-+- backups/                         # pg_dump output (gitignored)
-+- export/                          # Mount target sow_exporter (/data/export)
-+- tools/
-�  +- msproject-v2/                 # VBA MS Project v2 AKTIF (config.ini, checkout/checkin) — versi lama di docs/archive
-+- scripts/                         # Root-level operational helper scripts
-```
-
-## Folder Ownership Rules
-
-- Frontend changes go in `apps/web`; run npm commands from that folder.
-- Express API changes go in `apps/api`; route/controller imports must stay relative inside that app.
-- FastAPI MS Project changes go in `apps/fastapi-msproject`.
-- TTS worker changes go in `apps/tts-worker`; generated upload output belongs under `apps/api/uploads` or the Docker `/uploads` mount.
-- Android heartbeat app ("MPS Heartbeat", Gradle/Kotlin) changes go in `apps/mobile`; kirim device heartbeat ke `POST /device-heartbeat`.
-- SAP staging/posting code goes in `jobs/sap_staging`; shared staging helpers stay in `sap_staging_common.py` only when used by more than one SAP script.
-- ETL sync jobs go in `jobs/etl`; export-only helpers go in `jobs/export`; SOW seed/export container files go in `jobs/sow`.
-- SQL migrations and schema references go under `database`; do not put new migration files in app folders.
-- Operational docs go in `docs`; current SAP docs go in `docs/sap`; old/historical docs go in `docs/archive`.
-- Example payloads and manual test JSON go in `samples/sap_payloads`; do not keep test payloads inside runtime app folders.
-
----
-
-## Frontend Routes (Current)
-
-> Guard types: **PIN** = `ProtectedRoute` (sessionStorage `isVerified`); **RBAC:x** = `RequireFeature(x)` (permission dari sessionStorage `authPermissions`). Keduanya client-side only.
-
-| Path | Component | Guard | Module |
-|------|-----------|-------|--------|
-| `/` , `/welcome` | `WelcomePage` | — | Core |
-| `/LandingPage` , `/operations-hub` | `OperationsHubPage` | — | Core |
-| `/ews/:type/detail` | `EwsDetailPage` | — | EWS |
-| `/ews/notifications` | `EwsNotificationsPage` | — | EWS |
-| `/ews/roster` | `EwsRosterPage` | RBAC:roster_operator | EWS |
-| `/ews/roster/config` | `EwsRosterConfigPage` | RBAC:roster_operator | EWS |
-| `/ews/issue/:issueKey` | `EwsIssueDrillPage` | — | EWS |
-| `/sap-log` | `SapLogPage` | — | Core |
-| `/order-progress-dashboard` | `OrderProgressDashboardPage` | — | Core |
-| `/login-timesheet` | `LoginTimesheetPage` | — | TIMESHEET |
-| `/timesheet` | `TimesheetPage` | — | TIMESHEET |
-| `/timesheet-mainmenu` | `TimesheetMainMenuPage` (dispatcher varian) | — | TIMESHEET |
-| `/view-timesheet` | `TimesheetListPage` | — | TIMESHEET |
-| `/timesheet-validation` | `TimesheetValidationPage` | PIN | TIMESHEET |
-| `/operator-performance` | `OperatorPerformancePage` | PIN | TIMESHEET |
-| `/timesheet-edit/:tsnumber` | `TimesheetEditPage` | — | TIMESHEET |
-| `/log-timesheet` | `LogTimesheetPage` | — | TIMESHEET |
-| `/select-job` | `SelectJobPage` (dispatcher varian) | — | TIMESHEET |
-| `/select-machine` | `SelectMachinePage` | — | TIMESHEET |
-| `/tts-audio-test` | `TtsAudioTestPage` | — | TIMESHEET |
-| `/nfc-users` | `NfcUserListPage` | RBAC:nfc_users | TIMESHEET |
-| `/create-edit-nfc` | `CreateEditNfcPage` | RBAC:nfc_users | TIMESHEET |
-| `/unproductive` | `UnproductiveMenuPage` | — | TIMESHEET |
-| `/dashboard` | `DashboardPage` | — | Core |
-| `/setting` | `SettingPage` | — | Core |
-| `/download` | `DownloadPage` | — | Core |
-| `/editor-image` | `EditorImage` | — | Core |
-| `/process-control` | `ProcessControlPage` | — | MACHINE_H |
-| `/edit-parameter` | `EditParameterPage` | — | MACHINE_H |
-| `/machine-hours-sqlserver` | `MachineHoursSqlServerPage` | — | MACHINE_H |
-| `/machine-hours-validation` | `MachineHoursValidationPage` | PIN | MACHINE_H |
-| `/component-tracking` | `ComponentTrackingPage` | — | PPC |
-| `/kanban-board` | `KanbanLevelOnePage` | — | PPC |
-| `/buffer-transaction` | `BufferTransactionPage` | — | PPC |
-| `/sow-scheduling` | `SowSchedulingPage` (dispatcher varian) | — | PPC |
-| `/sow-verification` | `SowVerificationPage` | — | PPC |
-| `/shift-definition` | `ShiftDefinitionPage` | PIN | PPC |
-| `/ms-project-hub` | `MsProjectHubPage` | PIN | PPC |
-| `/ms-project-admin` | `MsProjectHubPage` (alias lama) | PIN | PPC |
-| `/receiving-shipment` | `ReceivingShipmentPage` | — | PPC |
-| `/manage-user` | `ManageUserPage` (menu hub) | RBAC:manage_users | PPC |
-| `/manage-users` | `ManageUsersPage` (user CRUD) | RBAC:manage_users | PPC |
-| `/sow-orders` | `OrderListPage` | RBAC:sow_management | PE |
-| `/sow-edit/revision/:orderNo` | `SowRevisionEditPage` | RBAC:sow_management | PE |
-| `/sow-edit/:id` | `SowEditPage` | RBAC:sow_management | PE |
-| `/sow-management` (parent) | `SowManagementPage` | RBAC:sow_management | PE |
-| `/sow-management/list` | `SowStandardListPage` | — (di bawah parent) | PE |
-| `/sow-management/create` | `SowCreatePage` | — (di bawah parent) | PE |
-| `/sow-management/history` | `SowHistoryPage` | — (di bawah parent) | PE |
-| `/consumable-request` | `ConsumableRequestPage` | — | WAREHOUSE |
-| `/tools-consumable-request` | `ToolsRequestHubPage` | — | WAREHOUSE |
-| `/tools-request` | `ToolsRequestPage` | — | WAREHOUSE |
-| `/consumable-control` | `ConsumableControlPage` | PIN | WAREHOUSE |
-| `/tools-management` | `ToolsManagementPage` | PIN | WAREHOUSE |
-| `*` | `NotFoundPage` (link ke /operations-hub) | — | — |
-
-> Semua route lazy-loaded. Halaman TIMESHEET/PPC tertentu punya varian `salvaging/` vs
-> `manufacturing/`; dispatcher memilih via `isManufacturing()` (`apps/web/src/config/appVariant.js`).
+> Agent context file. Read this before writing or changing any code in this repository.
 >
-> **Varian di-drive DB, bukan build flag.** `getVariant()` membaca **config runtime** dari
-> `GET /config` — di-`loadConfig()` saat boot (`apps/web/src/main.jsx`), di-cache `localStorage`
-> untuk offline. Sumber kebenaran = **baris DB `public.plant_config`** (single-row `id=1`).
-> `getVariant()` TIDAK membaca `VITE_APP_VARIANT` di runtime (default hard-coded `'salvaging'`).
-> Env `APP_VARIANT`/`VITE_APP_VARIANT` kini hanya: (a) fallback backend `buildConfigFromEnv` saat
-> baris DB hilang/DB error, dan (b) input seeder `apps/api/scripts/seed_plant_config.js`.
-> Ganti varian sebuah plant = **UPDATE baris `plant_config`** (lalu `reloadPlantConfig`), bukan
-> rebuild image.
+> **This file is the contract. It is deliberately short.** Everything binding lives here;
+> everything detailed lives in the linked standards and reference documents, which you load
+> **only when the task needs them**. Do not paste those documents back into this one — a long
+> context file is an ignored context file, and this repo has already been burned once by a
+> duplicated context file that drifted for months.
 >
-> **Timezone TIDAK ikut mekanisme itu (revisi 2026-09-02).** `resolveTimezone()`
-> (`apps/api/config/timezone.js`) kini **env-first**: `.env TIMEZONE` menang, baris
-> `plant_config.timezone` hanya fallback, lalu default `Asia/Makassar`. Sebabnya baris CKP
-> ter-seed `Asia/Makassar` padahal Cikupa WIB, sementara stager Python sudah membaca env —
-> dua sumber kebenaran berbeda. Jadi: **identitas + varian = baris DB; timezone = env, baris DB
-> fallback.** Ganti timezone plant = ubah `TIMEZONE` di `.env` lalu restart container (baris DB
-> tetap di-seed benar untuk konsumen DB). `GET /config` menerbitkan `resolveTimezone()` supaya
-> frontend dan query API tak pernah beda zona; `loadPlantConfig` menulis WARNING ke log boot
-> kalau env dan baris DB berbeda. Seeder `seed_plant_config.js` menyalin `TIMEZONE` dari env
-> pemanggil — untuk plant non-Makassar WAJIB `TIMEZONE=<zona plant>` saat seed.
-> Desain & rollout: `docs/deployment/PLANT_CONFIG_VARIANT_DESIGN.md`.
+> Sections 3–7 are the working rules: tiers, STOP list, spec-first, Definition of Done, and how
+> to report what you did. If you read nothing else, read those.
 
----
+## 1. What this system is
 
-## Backend API Routes
+MPS is the shop-floor execution system for a manufacturing plant. It is **not** a timesheet app;
+timesheets are one module. Production, labour, machine time and material movement are all
+recorded here and pushed to SAP.
 
-> 20 router di-mount di `server.js`. Jumlah endpoint per router tidak dihitung ulang — lihat file route masing-masing.
+| Domain | What it does |
+|---|---|
+| Timesheet | Operator check-in/out via NFC, validation, SAP posting, operator performance |
+| SOW | Scope-of-work orders, standards, revisions, scheduling, verification |
+| PPC | Kanban board, component tracking, buffer transactions, receiving/shipment |
+| Machine hours | SQL Server (SSB_OEE) ingest, validation, live machine streaming |
+| EWS | Early-warning KPIs, adoption, shift roster, alerts, TTS announcements |
+| Warehouse | Consumable requests/stock/tickets, tools reservation and handover |
+| Integrations | SAP CPI inbound/outbound, AWS Lambda order feed, MS Project (.mpp) sync |
 
-| Base Path | Description |
-|-----------|-------------|
-| `/timesheet` | CRUD, search, validation stats, bulk validation, SAP posting, CSV/Excel export, checkout |
-| `/sow` | Standard CRUD, grouped orders, parts/operations, history, reports, planhours |
-| `/sow-schedule` | SOW scheduling, shift rules, overtime, capacity |
-| `/process-control` | Categories, parameters, choices, items, controls CRUD + validation |
-| `/dashboard` | KPI, order status, workload, daily hours, operator efficiency, on-time, progress, heatmap |
-| `/component-tracking` | Machines, SOW operations, buffer transactions |
-| `/kanban` | Kanban order board (materialized view + refresh job) |
-| `/machine-hours-sqlserver` | Machine hours dari SQL Server, validation stats, health + WebSocket |
-| `/machine-hours-validation` | Validation stats, group records |
-| `/receiving-shipment` | Lookups, components, CRUD |
-| `/consumable` | History, stock search, control tickets, approve/close/adjust/reject |
-| `/tools` | Tool reservations/handovers |
-| `/auth` | Login, change password, user CRUD, permissions |
-| `/usernfc` | NFC user CRUD, search by NFC ID/SN/name |
-| `/workcenter` | List all workcenters |
-| `/production-operations` | List all, lookup, get by ID |
-| `/ms-project` | MS Project sync (.mpp upload/import; dipakai VBA client) |
-| `/ews` | EWS KPI summary/detail/trend/actions/roster/notifications + SSE `/ews/stream` |
-| `/config` | `GET /` — subset publik profil plant (`plant_code`, `plant_name`, `variant`, `timezone`, `feature_flags`) dari `plant_config`; di-fetch frontend saat boot. `Cache-Control: max-age=60`, 503 kalau config belum siap |
-| `/device-heartbeat` | Heartbeat perangkat/tablet — `POST /` dari app Android (`X-Device-Token`), `GET /fleet` monitoring armada |
+Operating reality that drives most of the rules below:
 
-### Important Backend Details
-- **PostgreSQL pool:** `.env` dari root `D:\website\MPS2\.env`. Di Docker, api konek via **pgbouncer:6432** (transaction pooling) dengan `DB_POOL_MAX` default 5; default pool di kode 10. Pool disimpan di `global.pool`; ada pool kedua di `db.js` (fallback `require("../db")`) — dua instance berbeda, hati-hati.
-- **Timezone:** env `TIMEZONE` saat ini `Asia/Makassar` (WITA), bukan Asia/Jakarta.
-- **RBAC guard:** `rbacGuard` global untuk semua write (POST/PUT/PATCH/DELETE), identitas dari header `x-user-id`/`x-user-role`; **log-only kecuali `RBAC_ENFORCE=1`**.
-- **Timestamp handling:** OID 1082/1114/1184 forced to string (no JS Date conversion)
-- **WebSocket:** `/machine-hours-sqlserver/ws` (streaming machine data); `mpsDashboardSocket` opsional via `ENABLE_MPS_DASHBOARD_WS=1`. SSE di `/ews/stream`.
-- **EWS jobs:** `apps/api/jobs/` (ewsSnapshotJob, ewsAdoptionBucketJob, ewsRosterGenerateJob) — dijalankan sebagai service compose `ews-*-job` (`npm run ews:*`).
-- **File uploads:** multer diskStorage → `apps/api/uploads/` (subfolder: sow-pdf/, ms-project-mpp/, operation-card/, announcement/). Catatan: upload `consumable` pakai `memoryStorage` (tak ditulis ke disk)
-- **SAP Integration:** POST ke SAP CPI inbound URL (env `SAP_INBOUND_URL`)
-- **CORS:** `*` origin (all origins allowed)
+- **Runs on shop-floor tablets**, portrait and landscape, often behind gloves, in glare, on a
+  factory network that drops. Offline-first is a requirement, not a preference.
+- **Multi-plant, single codebase.** Plant identity and `variant` (`salvaging` | `manufacturing`)
+  come from the database row `plant_config`, resolved at runtime — not from a build flag.
+- **Data is operational, not decorative.** A wrong number here becomes a wrong SAP posting.
 
----
+## 2. Document map — load on demand, not by default
 
-## Database Schema (Key Tables — PostgreSQL)
+| Document | Load it when |
+|---|---|
+| `AGENTS.md` | You are an agent whose harness reads `AGENTS.md` instead of this file — it points back here |
+| `docs/standards/design-system.md` | Any visual change: colour, spacing, typography, states, charts, responsive |
+| `docs/standards/component-architecture.md` | Creating, extending or refactoring a component |
+| `docs/standards/anti-slop.md` | Any code you write — it is the review checklist |
+| `docs/reference/architecture.md` | You need routes, DB tables, services, env vars, folder ownership |
+| `docs/KONVENSI.md` | You are writing anything into `docs/` — it owns frontmatter, linking and the vault layers |
+| `docs/00-INDEX.md`, `docs/PLANNING.md`, `docs/STATUS.md` | You need to find an existing plan, or record that one moved |
+| `docs/concepts/`, `docs/log/` | **Before** designing anything — do not relitigate settled decisions |
+| `docs/planning/UI-DEBT.md`, `docs/planning/API-PERF-BACKLOG.md` | You found debt you are not fixing now — write it down there |
 
-| Table | Description |
-|-------|-------------|
-| `timesheet_transaction` | Core timesheet (tsnumber PK, check-in/out, validation, SAP status) |
-| `sow` | Scope of Work orders + operations |
-| `sow_standard` | Standard SOW operation templates |
-| `order` | Materialized view aggregating SOW by order_no |
-| `usernfc` | NFC user master data |
-| `workcenter` | Workcenter definitions |
-| `parts` | Part master data |
-| `operations` | Operation definitions |
-| `components` | Component definitions |
-| `process_category` | Process parameter categories |
-| `process_parameter` | Process parameters with choice/number flags |
-| `process_parameter_choicebase` | Parameter choice options |
-| `processcontroldata` | Process control data records (linked to timesheet) |
-| `processcontroldata_item` | Process control data item values |
-| `production_operations` | Production operations from SAP/ETL |
-| `buffer_transaction` | Transaksi pergerakan buffer/komponen (PPC / component-tracking + kanban) |
-| `log_timesheet_sap` | SAP posting audit log |
-| `progress_update_history` | Progress update tracking |
-| `ph3_order` / `qh3_order` | Order/operation master dari SAP (via AWS Lambda + ETL) — acuan eligibility SAP |
-| `sap_timesheet_staging` (+ satelit `sap_staging_source`, `sap_ops_request`, `sap_stage_cursor`, `sap_staging_eligibility_audit`) | Antrian posting SAP (unique `(source_system, source_key)`, status PENDING/POSTED/FAILED) + tabel sumber/ops-queue/cursor/audit |
-| `mch_productiondata`, `mch_transaction`, `mch_machines`, `mch_statustypes` | Machine hours dari SQL Server SSB_OEE (via ETL) |
-| `ews.machine_heartbeat_daily` | Agregat heartbeat mesin **harian** (1 baris/hari/mesin, PK `(work_date, machineno)`) dari SQL Server `dbo.MachineHeartbeat` via ETL `jobs/etl/sync_machine_heartbeat.py`. Sengaja TANPA tabel beat mentah |
-| `mch_machine_ping_log` | Log ping jaringan mesin (machine-ping-worker) |
-| `ews.*` (schema) | kpi_snapshot, kpi_threshold, adoption_bucket/summary_snapshot, shift_roster, operator_shift, rotation_config, action_table/history, alert_log, tts_notification, activity_type_ref |
-| `ms_project_*` | MS Project sync (task, assignment, resource, calendar, revision, lock, audit_log, dll) |
-| `sow_schedule*`, `sow_verification_log`, `sow_revision_history`, `sow_templates`, `sow_template_lines` | SOW extended (scheduling, verifikasi, revisi, template) |
-| `consumable_item/stock/ticket`, tools tables | Warehouse consumable & tools management |
-| `users`, `rbac.user_permissions` | Login users + RBAC per-user overrides |
-| `shift_definition`, `device_status`, `tts_notification_order` | Shift; `device_status` = monitoring armada tablet/perangkat (+ counter harian `ews.device_heartbeat_daily`, diisi dari `POST /device-heartbeat`); antrian TTS |
-| `plant_config` | **Single-row (`id=1`)** config per-plant: identitas plant + `variant` (`salvaging`\|`manufacturing`) + `timezone` + `order_master_table` + `feature_flags`/`sap_rules` (jsonb). **Sumber varian runtime** (via `GET /config`); seed `apps/api/scripts/seed_plant_config.js`. Migrasi `20260727_plant_config.sql` |
+**Division of authority.** This file governs code, gates and workflow. `docs/KONVENSI.md`
+governs the `docs/` vault: frontmatter, the four layers, linking rules. Where they overlap —
+what to record after a session — this file states the obligation and KONVENSI states the format.
+Neither one may contradict the other; if they do, that is a bug, and this file wins until it is
+fixed.
 
-- **Trigram (gin_trgm_ops) indexes** hanya 2: `timesheet_transaction.order_no` dan `consumable_stock.material_description`. `serialnumber` = **btree** (bukan trigram); `full_name`/`part_name` **tidak** ber-index (verifikasi 2026-07-28)
-- **Foreign keys:** process control → timesheet, SOW ↔ parts/operations; FK `fk_timesheet_user`: `timesheet_transaction.serialnumber → usernfc.snssb` (ON UPDATE CASCADE, ON DELETE RESTRICT) — **validated** (bukan `NOT VALID`)
-- **Schema kanonik:** `database/schema/schema_prod.sql` (regenerate dari prod setelah tiap batch migrasi). Migration ledger: tabel `schema_migrations` + `node database/migrate.js` (per 2026-07-11); dump lama yang saling drift sudah dihapus.
+## 3. Rule tiers — every rule has exactly one
 
----
+| Tier | Meaning | Enforced by |
+|---|---|---|
+| **T0 — hard gate** | Non-negotiable. The commit is rejected. | `node scripts/gate.mjs` in `.git/hooks/pre-commit` and in `.github/workflows/gate.yml` |
+| **T1 — approval gate** | Allowed, but **stop and ask a human first**. | Agent discipline + review |
+| **T2 — standard** | The written standards. Deviating is allowed, but the reason goes in `docs/log/`. | Review |
 
-## Docker Compose Services
+An unenforced rule is a suggestion. When adding a rule, assign its tier first; if it cannot be
+machine-checked and is not worth stopping a human for, do not add it.
 
-| Service | Image/Build | Port | Notes |
-|---------|-------------|------|-------|
-| `db` | `postgres:15-alpine` | 5433→5432 | Healthcheck, volume `postgres_data`, mount `./backups`, `shm_size: 1gb` |
-| `pgbouncer` | bitnamilegacy/pgbouncer | 6432 (internal) | Transaction pooling; api konek ke sini, bukan langsung ke db |
-| `api` | Node 20 Alpine (`./apps/api`) | 3001 (internal) | Express.js; `DB_HOST=pgbouncer`, `DB_PORT=6432`, `DB_POOL_MAX=5` |
-| `ews-snapshot-job` | (image api) | — | `npm run ews:snapshot` |
-| `ews-adoption-job` | (image api) | — | `npm run ews:adoption` |
-| `ews-roster-job` | (image api) | — | `npm run ews:roster` |
-| `sap-stage-worker` | build `./jobs/sap_staging` (Dockerfile.sap) | — | Loop `stage_machinehours.py --catchup` — auto-bundle machine hours → staging SAP |
-| `sap-post-worker` | (image sap_staging) | — | Loop `post_sap_staging.py` — auto-post hari yang lengkap ke SAP |
-| `sap-ops-worker` | (image sap_staging) | — | `ops_worker.py --loop` — konsumen antrian tombol-UI |
-| `frontend` | nginx:alpine (built React) | 80 (internal) | Build args `VITE_API_URL=/api`, `VITE_TTS_API_URL=""` (BUKAN `VITE_APP_VARIANT` — itu env service `api`: `APP_VARIANT=${VITE_APP_VARIANT:-salvaging}`) |
-| `nginx` | nginx:alpine | 80, 443 | Reverse proxy + SSL; routes `/api/`, `/fastapi/`, `/tts/`, `/uploads/` |
-| `sow_exporter` | Python (`./jobs` + `sow/Dockerfile`) | — | SOW export ke `./export`; cron `*/10` via `docker compose run` |
-| `machine-ping-worker` | `jobs/machine_ping/Dockerfile` | — | Ping mesin M5051, `cap_add: NET_RAW` |
-| `fastapi` | Python 3.11 slim | 8000 (internal) | FastAPI SOW/TTS helper |
-| `tts-worker` | `./apps/tts-worker` | — | Piper TTS worker |
-| `ews-tts-worker` | (tts-worker) | — | `generate_ews_audio.py`, Edge TTS `id-ID-GadisNeural` |
+**This tier table is a claim about reality, and it is checkable.** If `.git/hooks/pre-commit` is
+missing, or no CI workflow runs the gate, then T0 does not exist and this table is lying. Verify
+before relying on it:
 
-> Compose terpisah: `jobs/etl/docker-compose.etl.yml` (service `timesheet_sap_etl`) dan `jobs/etl/docker-compose.heartbeat.yml` (service `machine_heartbeat_sync`).
+```powershell
+Test-Path .git/hooks/pre-commit          # must be True
+node scripts/gate.mjs --fast             # must run, with your work staged
+git ls-files scripts | Measure-Object    # must not be 0 - see the warning below
+```
 
----
+If the hook is missing, install it — see section 8 — and say so in your session log.
 
-## Critical Rules
+### Known blocker as of 2026-09-05: the enforcement machinery is not committed
 
-1. **Ikuti Corporate Color System + UI Engineering Standards** — Semua halaman dan komponen baru HARUS mengikuti keduanya. Referensi struktur/layout: `TimesheetValidationPage.jsx` (warna tombol primary di file itu masih standar lama `#0096c7`; standar berlaku `#0077b6`).
+`scripts/` was dropped from the git index in commit `65e5afc` and never restored, and most of
+`docs/` — including every standard this file links to — has never been committed at all. At
+`HEAD` the repository contains **4 files under `docs/` and 0 under `scripts/`**.
 
-2. **Light theme only** — Jangan gunakan dark background sebagai surface utama.
+The practical meaning: `gate.mjs`, `deslop.mjs`, `lint-gate.mjs`, `mirror.mjs`, `migrate.js`'s
+companions, `deploy.sh`, `docs/standards/*` and `docs/concepts/*` exist on this machine and
+nowhere else. A fresh clone has no gate. CI cannot run one. Every rule in this file currently
+points at a file that only one developer has.
 
-3. **Logic tetap di komponen** — Tidak ada library state management eksternal (tidak ada Redux/Zustand). Gunakan useState + useCallback + fetch ke API.
+Until a human decides what may be published to a public GitHub remote and commits it, T0 is
+enforced by the local pre-commit hook only, and `.github/workflows/gate.yml` will fail on its
+first run. Do not paper over this by rewriting the tier table; it is a real gap with a real fix,
+and the fix is a human's call because it publishes documents to a public repository.
 
-4. **FormData upload via fetch native** — Jangan gunakan Axios untuk FormData (transformRequest bisa corrupt payload).
+## 4. STOP list (T1) — ask before doing, never apologise after
 
-5. **Daftarkan route baru di `src/router/index.jsx`** — Selalu import page baru dan tambahkan entri route.
+<!-- MIRROR:stop-list -->
+1. Touching `apps/api/**`, `apps/fastapi-msproject/**`, `apps/tts-worker/**`, `apps/mobile/**`,
+   `jobs/**`, `database/migrations/**`.
+2. Changing an API contract — path, query param, response shape. "Just adding a field" counts.
+3. Adding, removing or major-upgrading an npm dependency.
+4. Changing `tailwind.config.js`, the `:root` block in `index.css`, `vite.config.js`,
+   `router/index.jsx`, `eslint.config.js`, or anything in `scripts/`.
+5. Deleting files, renaming a component used by more than one page, or any refactor spanning
+   five or more files.
+6. Changing business behaviour — validation, hour arithmetic, SAP eligibility — while the task
+   is "change the UI".
+7. Anything touching `.env`, docker compose, or nginx.
+8. Weakening a gate: editing `scripts/lint-baseline.json` upward, adding `deslop-allow` to more
+   than three lines in one commit, or committing with `--no-verify`.
+<!-- /MIRROR:stop-list -->
 
-6. **Work in `apps/web/` for frontend** — Semua perintah npm (dev, build, lint) dijalankan dari direktori `apps/web/`.
+"Ask first" means stop and wait for an answer. It does not mean do it and mention it afterwards,
+and it does not mean ask a question and then answer it yourself in the same message.
 
-7. **Backend di `apps/api/`** — Express.js CommonJS. Nodemon untuk development.
+## 5. Spec first — no code until the plan exists
 
-8. **`.env` di root `MPS2/`** — Dibaca oleh backend (`apps/api/server.js`) dan frontend (`vite.config.js` envDir points to repo root (`../..` from apps/web)).
+<!-- MIRROR:spec-first -->
+For any change spanning more than one file:
 
-9. **PostgreSQL connection (local):** `"C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb`
+**Investigate → Spec (`docs/planning/<topic>.md`) → Plan → Approval → Implement → Verify →
+Record (`docs/log/`)**
 
-10. **Environment variables (kunci utama):** `DB_HOST`, `DB_NAME` (ptssb), `DB_USER`, `DB_PASSWORD`, `DB_PORT`, `PORT` (3001), `PLANT_SSB` (per-plant; mis. `5051` Balikpapan / `5100` Cikupa — identitas juga di-resolve via DB `plant_config`, tak ada default kode `5100`), `TIMEZONE` (**Asia/Makassar**). Selain itu `.env` root juga berisi kelompok: `SAP_INBOUND_*`, `SAP_STAGING_DB_*`, `SAP_STAGE_*`, `SQLSERVER_*`, `SRC_*`/`TGT_*` (+ varian per-plant `_BALIKPAPAN/_CIKUPA/_KUALA_KENCANA/_SEBAMBAN`), `EWS_*`, `AWS_PG*`, `VITE_API_URL`, `VITE_API_PROXY_TARGET`, `VITE_APP_VARIANT`, `VITE_TTS_PROXY_TARGET`, `CORS_ORIGIN`, `DRAWINGS_PATH`, `clientid_ph3/qh3`, `clientsecret_ph3/qh3`, `tokenurl`, `url_ph3/qh3`.
+A single obvious fix — a typo, one wrong class — skips this.
+<!-- /MIRROR:spec-first -->
 
-11. **Component-first (anti-boilerplate)** — Sebelum menulis UI, cek `apps/web/src/components/`. Pakai/extend komponen yang ada; kalau pola akan dipakai ≥2 tempat, buat komponennya dulu di `components/`. Saat melihat markup duplikat ≥2×, WAJIB merekomendasikan ekstraksi komponen — jangan menambah salinan baru. Detail: "UI Engineering Standards §1".
+1. **Investigate (read-only).** Read the actual code. Check `docs/concepts/` and `docs/log/`
+   first. Any negative claim — "nothing calls this", "safe to delete" — must be backed by grep
+   output, not by the code graph alone; the graph under-reports callers (see
+   `docs/concepts/codebase-memory-graph-accuracy.md`).
+2. **Spec** — one page at `docs/planning/<topic>.md`: the problem, the scope, **what is
+   explicitly out of scope**, the blast radius, and how the result will be verified.
+3. **Plan** — numbered steps, files touched per step, commit order.
+4. **Approval** — wait for anything on the STOP list. Otherwise continue.
+5. **Implement** — one step, one commit. Never mix a refactor and a behaviour change in one
+   commit; if it regresses, the two cannot be separated at revert time.
+6. **Verify** — the Definition of Done below.
+7. **Record** — see section 7.
 
-12. **Offline-first — dilarang aset eksternal** — Tidak boleh ada CDN, Google Fonts, atau URL aset eksternal apapun di frontend. Semua library via npm (di-bundle Vite); font = system stack. Detail: "UI Engineering Standards §2".
+## 6. Definition of Done — all of it, not a selection
 
-13. **Aksesibilitas terukur** — Bg tombol primary & warna link di atas putih: `#0077b6` (4.9:1, AA). `#0096c7` GAGAL AA untuk teks kecil (3.4:1) — hanya untuk ikon/teks besar/border. Teks minimum 12px. `focus-visible:` untuk button/link, `focus:` untuk input. Touch target ≥ 44px.
- 
- 
+- [ ] **Work is staged.** `node scripts/gate.mjs` reads the staged diff. Run it on an empty
+      index and it checks nothing and prints `gate passed` — true, and worthless.
+- [ ] `node scripts/gate.mjs` passes. UI work runs `node scripts/gate.mjs --track-a`.
+- [ ] `npm --prefix apps/web run test` passes, and **behaviour you changed has a test**. A new
+      component gets a render test; changed hour arithmetic, validation or SAP eligibility gets
+      a unit test with the boundary case that motivated the change. "It is only UI" is not an
+      exemption for logic that produces a number.
+- [ ] Exercised at **768×1024** (tablet portrait) and **≈960×600** (tablet landscape).
+- [ ] Loading, empty and error states are present and correct.
+- [ ] Keyboard: every action reachable by Tab, focus ring visible, `Escape` closes modals.
+- [ ] **Network behaviour unchanged** for UI work — same requests, same order, same count.
+      `node scripts/deslop.mjs --track-a` proves it; see section 10 for exactly what it catches.
+- [ ] The diff removes more than it adds, or removes duplication. If a "tidy-up" grows the file,
+      the commit message explains why.
+- [ ] Recorded per section 7 — log, `PLANNING.md` line, and any concept note the work changed.
+
+## 7. Recording and reporting
+
+**Record (T2, every session that changed anything):**
+
+1. `docs/log/YYYY-MM-DD-topic.md` — what was decided, what was executed, what is still pending
+   on a human. Frontmatter and linking rules are in `docs/KONVENSI.md`.
+2. A line in `docs/PLANNING.md`.
+3. **Update the concept note the work changed.** If the session altered how the system actually
+   works — not just what happened today — the durable knowledge belongs in `docs/concepts/`, not
+   buried in a log nobody rereads. New durable knowledge means a new concept note.
+
+**Report (T0 in spirit — this is the rule most easily broken and hardest to detect):**
+
+- Never claim a check you did not run. Paste the gate output; do not summarise it from memory.
+- If the build failed, say it failed. If a page could not be exercised, say which one and why.
+- If you skipped part of the task, say which part and why, in the same message where you report
+  the rest as done. Scaling the work down is the human's decision, not yours.
+- An agent that reports success it did not verify is worse than one that reports failure,
+  because the failure surfaces later, in production, attached to an SAP posting.
+
+**When something you shipped regresses:** revert first, diagnose second. `git revert <sha>` of
+the single commit — this is why section 5 forbids mixing a refactor with a behaviour change.
+Then write the log entry: what broke, what the revert restored, what the fix will need. Do not
+fix forward on a broken shop floor.
+
+## 8. Commands
+
+<!-- MIRROR:gate -->
+**The gate, before every commit, with your work staged:**
+
+```
+node scripts/gate.mjs          # UI work: node scripts/gate.mjs --track-a
+```
+
+It runs, in order: context mirror → design contract (`deslop`, changed lines only) → eslint
+ratchet → tests → production build. The last three are skipped when the diff does not touch
+`apps/web`. **Nothing staged means nothing checked** — `git add` first, or the gate passes
+vacuously.
+<!-- /MIRROR:gate -->
+
+| Command | What it does |
+|---|---|
+| `node scripts/gate.mjs` | Every T0 check on the staged diff. Run before every commit. |
+| `node scripts/gate.mjs --fast` | Same, without the production build. What the pre-commit hook runs. |
+| `node scripts/gate.mjs --track-a` | Adds the Track A guard. UI work uses this. |
+| `node scripts/deslop.mjs --staged` | Design contract on the staged diff — changed lines only. |
+| `node scripts/deslop.mjs --all` | Whole-codebase debt report. Never blocks. |
+| `node scripts/deslop.mjs --files <a> <b>` | Full-file audit of named files. Blocking. |
+| `node scripts/lint-gate.mjs` | ESLint ratchet — fails only on **new** errors. |
+| `node scripts/lint-gate.mjs --all` | Whole-app ESLint count. Never blocks. |
+| `node scripts/mirror.mjs` | Verifies the duplicated blocks in `AGENTS.md`. `--fix` rewrites them. |
+| `npm --prefix apps/web run test` | Vitest, once. |
+| `npm --prefix apps/web run test:watch` | Vitest, watching. |
+| `npm --prefix apps/web run dev` | Frontend dev server on :5173. |
+| `npm --prefix apps/web run build` | Production build. |
+| `npm --prefix apps/web run lint` | Raw ESLint. Reports the debt too — use `lint-gate.mjs` to decide. |
+| `node apps/api/server.js` | Express API on :3001. |
+| `node database/migrate.js` | Apply migrations through the `schema_migrations` ledger. |
+| `scripts/deploy.sh build\|start\|stop\|status\|logs api` | Docker lifecycle. |
+
+Agent workflows live in `.claude/commands/`: `/spec`, `/ui-audit`, `/ui-component`, `/ui-page`,
+`/deslop`, `/api-perf`. Each one encodes a workflow from this file; read the command file rather
+than reconstructing the workflow from memory.
+
+**Install the pre-commit hook once**, per clone:
+
+```powershell
+Copy-Item scripts/hooks/pre-commit .git/hooks/pre-commit -Force
+```
+
+```sh
+cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+Do **not** install husky — it repoints `core.hooksPath` and silently kills the graphify
+post-commit hook already installed in `.git/hooks/`.
+
+## 9. Non-negotiables
+
+1. **Design system is not optional.** Colour, spacing, radius, elevation, motion and states come
+   from `docs/standards/design-system.md`. No new palette, no new scale, no ad-hoc value.
+2. **Light theme only.** No `dark:` prefix, no dark surface as a page background.
+3. **Offline-first — no external assets.** No CDN, no Google Fonts, no hot-linked images. Every
+   library through npm and bundled by Vite; fonts are the system stack.
+4. **Component-first.** Check `apps/web/src/components/` before writing markup. A pattern used
+   twice becomes a component. Never copy a long `className` string between pages.
+5. **Logic stays in components.** No Redux/Zustand/MobX. `useState` + `useCallback` + native
+   `fetch`. Never Axios for FormData — its transform corrupts the payload.
+6. **Accessibility is measured, not assumed.** Primary action and links on white: `#0077b6`
+   (4.9:1). `#0096c7` fails AA for small text (3.4:1) — icons, large text and borders only.
+   Minimum text size 12px. Touch targets ≥ 44px. `focus-visible:` on buttons and links.
+7. **Every fetch page has loading, empty and error states.** An error must be inline with a
+   retry, not only a toast; a toast disappears and leaves a blank screen behind.
+8. **`.env` is single, at the repo root**, read by both backend and frontend, and never
+   committed. Timezone comes from `TIMEZONE` (currently `Asia/Makassar`) — never hard-coded.
+9. **New routes are registered in `apps/web/src/router/index.jsx`** — and that file is on the
+   STOP list.
+10. **Migrations only in `database/migrations/`**, applied through the ledger. Never inline DDL
+    in application code.
+11. **Track A ≠ Track B** — section 10.
+12. **No progress reports inside source files.** No `// === REFACTORED ===` banners, no
+    changelogs in JSX. Reports belong in `docs/log/`.
+13. **Do not weaken a gate to make a commit pass.** Fix the code, or stop and ask. Suppressions
+    (`deslop-allow C<n>: reason`) are for real exceptions, one at a time, with the reason
+    written out — not for clearing a backlog of findings.
+
+## 10. Track A and Track B
+
+<!-- MIRROR:track-split -->
+**Track A ≠ Track B.** UI work never changes `apps/api/**` or the shape of any request or
+response — and that includes polling intervals, which change server load from inside frontend
+code. Backend performance findings are written to `docs/planning/API-PERF-BACKLOG.md` and
+scheduled separately; they are never fixed opportunistically inside a UI commit.
+<!-- /MIRROR:track-split -->
+
+**Track A allows:** component extraction; colour/spacing/radius normalisation;
+loading/empty/error states; accessibility and touch targets; tablet responsiveness; memoisation;
+debounced search inputs; `AbortController` for stale requests; removing duplicate frontend
+fetches; list virtualisation; deleting dead code; tests.
+
+**Track A forbids (this is Track B):** new or changed endpoints; new response fields;
+server-side pagination changes; moving aggregation into SQL; changing a polling interval.
+
+**What `--track-a` actually enforces**, so a block is never a surprise:
+
+- The staged diff may only touch `apps/web/` and `docs/`. Anything else fails, including
+  `scripts/`, `infra/` and `apps/mobile/`.
+- Inside `apps/web/`, no added or removed line may match `fetch(`, `axios`, `new WebSocket`,
+  `new EventSource`, **`setInterval(`**, or a `'/api/…'` string. `setInterval` is in that list
+  deliberately: a polling interval is server load expressed in frontend code.
+
+**Phases, in order.** F0 audit (read-only) → F1 foundation components → F2 pilot page →
+F3 module-by-module rollout → F4 legacy cleanup. One PR is one page **or** one foundation
+component; a diff beyond roughly 400 lines must be split.
+
+**Track B output is a document, not code.** Findings go in `docs/planning/API-PERF-BACKLOG.md`,
+one row each:
+`endpoint · consuming page · symptom · evidence · suspected cause · proposal · risk · effort · status`.
+
+Look for, in rough order of likelihood: endpoints returning whole tables that the frontend then
+filters; `SELECT *` on wide tables; N+1 queries inside JavaScript loops; non-sargable date
+filters (`DATE(col) = …`) that skip indexes; full `COUNT(*)` for pagination; joins to expensive
+views; missing indexes on hot filter columns — this repo has only two trigram indexes and no
+index at all on `full_name` / `part_name`; short frontend polling intervals against expensive
+endpoints; synchronous materialized-view refresh inside a request; and pool starvation from
+`DB_POOL_MAX=5` behind pgbouncer transaction pooling.
+
+Rules if a change is later approved: numbers before and after, or no change.
+`EXPLAIN (ANALYZE, BUFFERS)` in the document for every query touched. New indexes via migration,
+`CREATE INDEX CONCURRENTLY` in production. API changes are additive and opt-in (`?fields=`,
+`?limit=`) — never a redefinition of an existing field. One performance PR improves one number.
+
+## 11. The gate is a ratchet, not a clean bill of health
+
+This codebase predates its own standards. As of 2026-09-05:
+
+| Check | Debt | Where |
+|---|---|---|
+| `deslop --all` | ~1,722 errors across 115 of 177 files under `apps/web/src` | `docs/planning/UI-DEBT.md` |
+| `lint-gate --all` | 65 errors across 29 files | `scripts/lint-baseline.json` |
+
+So the gates are **diff-scoped on purpose**:
+
+- `deslop --staged` checks the **lines your diff added or changed**, not the whole file. A file
+  your diff creates is checked in full — it has no legacy. File-level rules (C13 length, C14
+  duplicated `className`) are warnings on an existing file and errors on a new one.
+- `lint-gate.mjs` fails only when a file gains ESLint errors it did not have in
+  `scripts/lint-baseline.json`. The count per (file, rule) is the unit, so it survives line
+  shifts.
+
+**Why this matters for how you behave.** A whole-file gate on this codebase would block edits to
+two thirds of the frontend, and the first thing anyone would do is uninstall the hook — which is
+exactly what had happened before this was written. So: do not treat a legacy finding in a file
+you touched as your problem to fix in this commit. Fix your lines, note the rest in
+`docs/planning/UI-DEBT.md`, move on. And do not mass-apply `deslop-allow` or raise the lint
+baseline to get a commit through — both are on the STOP list.
+
+Paying debt down is deliberate work: a commit that only pays debt, with the baseline regenerated
+(`node scripts/lint-gate.mjs --update-baseline`) and the reduction stated in the message.
+
+## 12. Language
+
+- **Code, comments, commit messages, `CLAUDE.md`, `AGENTS.md`, `docs/standards/`,
+  `docs/reference/`, `.claude/commands/`: English.** These are read by tooling and by agents.
+- **`docs/` vault content — concepts, logs, plans, PRDs, UAT checklists: Indonesian**, matching
+  `docs/00-INDEX.md` and `docs/KONVENSI.md`.
+- **Operator-facing UI copy:** the language the plant uses. System terms (SAP, work center, TS
+  number) stay verbatim. Never half and half on one screen — see `docs/standards/anti-slop.md`.
+- Match the document you are editing. Never switch a document's language as a side effect of
+  another change.
+
+## 13. Local database access (Windows dev box)
+
+```powershell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","User") + ";C:\Program Files\PostgreSQL\15\bin"
+& "C:\Program Files\PostgreSQL\15\bin\psql.exe" -U postgres -d ptssb
+```

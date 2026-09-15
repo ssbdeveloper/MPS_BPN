@@ -1,0 +1,21 @@
+#!/bin/sh
+# T0 gate. See CLAUDE.md section 3 (rule tiers) and section 6 (Definition of Done).
+# Install: cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# --fast skips the production build. The build takes minutes and is covered by CI on every push
+# and pull request; a pre-commit hook that costs minutes is a hook that gets uninstalled, and an
+# uninstalled hook checks nothing. Everything else runs here.
+#
+# gate.mjs itself decides what applies: the eslint ratchet, the tests and the build are skipped
+# when the staged diff does not touch apps/web.
+#
+# Do NOT install husky. It repoints core.hooksPath at .husky/, which silently disables the
+# graphify post-commit hook already living in .git/hooks/. If husky ever becomes unavoidable,
+# move the graphify hook across at the same time.
+#
+# `git commit --no-verify` bypasses this. Doing so is a T1 action: it needs a human's agreement
+# and a line in the commit message saying which check was skipped and why.
+
+set -e
+
+node scripts/gate.mjs --fast
