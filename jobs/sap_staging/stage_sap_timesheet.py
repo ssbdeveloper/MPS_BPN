@@ -65,7 +65,7 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
       t.tsnumber::text AS source_ref_id,
       COALESCE(t.plant, '') AS werks,
       CASE
-        WHEN COALESCE(un.employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
+        WHEN upper(BTRIM(COALESCE(un.roles, ''))) IN ('OUTSOURCE', 'ADMINISTRATOR') THEN '11009413'
         ELSE LPAD(COALESCE(t.serialnumber, ''), 8, '0')
       END AS pernr,
       LPAD(COALESCE(t.serialnumber, ''), 8, '0') AS pernr_origin,
@@ -102,13 +102,18 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
       ON LTRIM(po.order_no, '0') = t.order_no
      AND LTRIM(po.operation_no, '0') = t.operation_no::text
     LEFT JOIN LATERAL (
-      SELECT employee_category
+      SELECT roles
       FROM usernfc u
       WHERE upper(regexp_replace(COALESCE(u.snssb, ''), '\\s+', '', 'g'))
           = upper(regexp_replace(COALESCE(t.serialnumber, ''), '\\s+', '', 'g'))
       LIMIT 1
     ) un ON TRUE
     WHERE {where_sql}
+      -- Subcont role (2026-09-15, owner keputusan): jam operator Subcont TIDAK PERNAH
+      -- dikirim ke SAP — dikecualikan dari staging di sini, sebelum baris masuk
+      -- sap_timesheet_staging. Hitungan adoption (EWS) TIDAK dipengaruhi karena job
+      -- adoption membaca timesheet_transaction/mch_transaction langsung, bukan staging.
+      AND upper(BTRIM(COALESCE(un.roles, ''))) <> 'SUBCONT'
     ORDER BY t.tsnumber
     """
 
@@ -196,7 +201,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         -- (CATATAN: LEAST(end_effective, enddatetime) yang dulu ada di sini TIDAK dihapus —
         --  diganti LEAST dengan cap di atas, yang juga memotong end_effective bila melebihi cap.)
         sn_employee,
-        un.employee_category,
+        un.roles,
         confirmation_number,
         order_no,
         operation_no,
@@ -230,7 +235,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
       FROM mch_transaction
       CROSS JOIN cap_cfg cc
       LEFT JOIN LATERAL (
-        SELECT employee_category
+        SELECT roles
         FROM usernfc u
         WHERE upper(regexp_replace(COALESCE(u.snssb, ''), '\\s+', '', 'g'))
             = upper(regexp_replace(COALESCE(mch_transaction.sn_employee, ''), '\\s+', '', 'g'))
@@ -301,8 +306,13 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         AND NOT EXISTS (
           SELECT 1 FROM public.sap_staging_exclusion ex
           WHERE ex.source_system = 'MCH_HOURS'
+            AND ex.plant = %s
             AND ex.source_row_id = mch_transaction.proddataid::text
         )
+        -- Subcont role (2026-09-15, owner keputusan): jam operator Subcont TIDAK PERNAH
+        -- dikirim ke SAP — dikecualikan di sini, sebelum bundling. Adoption (EWS) tidak
+        -- terpengaruh karena job adoption membaca mch_transaction langsung, bukan staging.
+        AND upper(BTRIM(COALESCE(un.roles, ''))) <> 'SUBCONT'
         __SEGMENT_PROVENANCE_FILTER__
     ),
     -- BREAK WINDOWS (rules config, 2026-08-19): jam istirahat menentukan aktivitas
@@ -380,7 +390,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         day_bucket AS bucket_start,
         COALESCE(sn_employee, '') AS employee_key,
         CASE
-          WHEN COALESCE(employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
+          WHEN upper(BTRIM(COALESCE(roles, ''))) IN ('OUTSOURCE', 'ADMINISTRATOR') THEN '11009413'
           ELSE COALESCE(sn_employee, '')
         END AS pernr,
         COALESCE(confirmation_number, '') AS rueck_raw,
@@ -431,7 +441,7 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         day_bucket,
         COALESCE(sn_employee, ''),
         CASE
-          WHEN COALESCE(employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
+          WHEN upper(BTRIM(COALESCE(roles, ''))) IN ('OUTSOURCE', 'ADMINISTRATOR') THEN '11009413'
           ELSE COALESCE(sn_employee, '')
         END,
         COALESCE(confirmation_number, ''),
@@ -518,19 +528,23 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
     # lalu auto-post ke hari yang sudah "ditutup" tanpa review. Day-level menangkap semuanya.
     if mode == "correction":
         seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
-                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = mch_transaction.proddataid::text)")
+                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.plant = %s "
+                      "AND ss.source_row_id = mch_transaction.proddataid::text)")
         source_key_expr = "md5(f.norm_key || '|KOREKSI|' || f.seg_hash)"
         is_correction_expr = "true"
         posted_key_filter = ("EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
-                             "WHERE p.bucket_start = f.bucket_start AND p.status = 'POSTED')")
+                             "WHERE p.werks = f.werks AND p.bucket_start = f.bucket_start "
+                             "AND p.status = 'POSTED')")
     else:  # normal
         seg_filter = ("AND NOT EXISTS (SELECT 1 FROM public.sap_staging_source ss "
-                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = mch_transaction.proddataid::text "
+                      "WHERE ss.source_system = 'MCH_HOURS' AND ss.plant = %s "
+                      "AND ss.source_row_id = mch_transaction.proddataid::text "
                       "AND ss.posted_at IS NOT NULL)")
         source_key_expr = "f.norm_key"
         is_correction_expr = "false"
         posted_key_filter = ("NOT EXISTS (SELECT 1 FROM public.sap_timesheet_staging p "
-                             "WHERE p.bucket_start = f.bucket_start AND p.status = 'POSTED')")
+                             "WHERE p.werks = f.werks AND p.bucket_start = f.bucket_start "
+                             "AND p.status = 'POSTED')")
 
     sql = (sql
            .replace("__SEGMENT_PROVENANCE_FILTER__", seg_filter)
@@ -542,8 +556,9 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 sql,
-                (max_record_mch_json, fb_va, fb_nnva, fb_nva, to_ts, from_ts, break_windows_json,
-                 from_ts, to_ts, from_ts, to_ts, werks, werks),
+                (max_record_mch_json, fb_va, fb_nnva, fb_nva, to_ts, from_ts, werks,
+                 break_windows_json, from_ts, to_ts, from_ts, to_ts,
+                 werks, werks, werks),
             )
             return [dict(row) for row in cur.fetchall()]
 

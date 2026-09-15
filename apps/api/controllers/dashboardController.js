@@ -13,12 +13,12 @@ const TZ = resolveTimezone();
 const meta = () => ({ generated_at: new Date().toISOString() });
 
 // ── Plant scope ────────────────────────────────────────────────────────────
-// Setiap server hanya menampilkan staging plant-nya sendiri (PLANT_SSB dari env;
-// kosong di dev = tanpa filter). Dipakai di SEMUA query sap_* supaya operator
-// Cikupa tidak melihat baris Balikpapan dan sebaliknya.
-const PLANT_SSB = /^\d{4}$/.test(process.env.PLANT_SSB || "") ? process.env.PLANT_SSB : null;
-const PW_SQL = PLANT_SSB ? ` AND werks = '${PLANT_SSB}'` : ""; // query tanpa alias
-const plantScope = (alias = "st") => (PLANT_SSB ? ` AND ${alias}.werks = '${PLANT_SSB}'` : "");
+// Setiap server hanya menampilkan staging plant-nya sendiri. Jika PLANT_SSB hilang/
+// invalid, fail closed: query staging menghasilkan nol baris, bukan membuka semua plant.
+const PLANT_SSB = /^(5051|5071|5100|5153)$/.test(process.env.PLANT_SSB || "") ? process.env.PLANT_SSB : null;
+const PW_SQL = PLANT_SSB ? ` AND werks = '${PLANT_SSB}'` : " AND false"; // query tanpa alias
+const plantScope = (alias = "st") => (PLANT_SSB ? ` AND ${alias}.werks = '${PLANT_SSB}'` : " AND false");
+const sourcePlantScope = (alias = "src") => (PLANT_SSB ? ` AND ${alias}.plant = '${PLANT_SSB}'` : " AND false");
 // Rentang export rekonsiliasi maksimal (hari) — sheet Records berat (subquery break/cap
 // per baris), di atas ini berisiko melewati query_timeout 45 s.
 const SAP_RECON_EXPORT_MAX_DAYS = 62;
@@ -497,7 +497,7 @@ async function getSapTimesheetStagingLog(req, res) {
         OR arbpl ILIKE $${idx}
         OR sap_response_text ILIKE $${idx}
         OR sap_error ILIKE $${idx}
-        OR id IN (SELECT staging_id FROM public.sap_staging_source WHERE source_row_id ILIKE $${idx})
+        OR id IN (SELECT staging_id FROM public.sap_staging_source src WHERE source_row_id ILIKE $${idx}${sourcePlantScope("src")})
       )`);
     }
 
@@ -687,6 +687,7 @@ const SAP_ELIGIBLE_SQL = "m.status_record";
 const POSTED_EXISTS_SQL = `EXISTS (
   SELECT 1 FROM public.sap_staging_source s
   WHERE s.source_system = 'MCH_HOURS'
+    ${sourcePlantScope("s")}
     AND s.source_row_id = m.proddataid::text
     AND s.posted_at IS NOT NULL
 )`;
@@ -945,6 +946,9 @@ async function saveMachineHoursOverride(req, res) {
     if (!Number.isFinite(proddataid)) {
       return res.status(400).json({ error: "proddataid is required" });
     }
+    if (!PLANT_SSB) {
+      return res.status(500).json({ error: "PLANT_SSB wajib untuk edit machine hours" });
+    }
     if (orderNo && !operationNo) {
       return res.status(400).json({ error: "operation_no is required when order_no is set" });
     }
@@ -955,8 +959,8 @@ async function saveMachineHoursOverride(req, res) {
     // Tolak kalau sudah terkirim ke SAP — koreksi butuh storno, bukan edit senyap.
     const posted = await client.query(
       `SELECT 1 FROM public.sap_staging_source
-        WHERE source_system='MCH_HOURS' AND source_row_id=$1::text AND posted_at IS NOT NULL LIMIT 1`,
-      [proddataid]
+        WHERE source_system='MCH_HOURS' AND plant=$2 AND source_row_id=$1::text AND posted_at IS NOT NULL LIMIT 1`,
+      [proddataid, PLANT_SSB]
     );
     if (posted.rows.length > 0) {
       return res.status(409).json({ error: "Record already sent to SAP. A correction needs a storno in SAP first." });
@@ -1657,6 +1661,31 @@ const TS_CAP_CUT_SECONDS = (cfg) => `
     0
   )`;
 
+// Durasi efektif SATU record timesheet setelah rules (potong break utk non-produktif,
+// lalu cap jenis) dihitung dari record SAAT INI — sama dengan effective_seconds di
+// stage_timesheet_transaction.py. Dipakai untuk "Adjusted End Time": maknanya harus
+// SAMA dengan MCH (end setelah aturan diterapkan pada record sekarang). Sebelumnya
+// kolom itu memakai durasi SNAPSHOT (st.total_seconds) di atas checkin sekarang —
+// campuran dua versi record, sehingga end tampak "dipotong" (mis. 23:03:44 vs end asli
+// 23:04:00) padahal capcut/breakcut = 0 karena timesheet-nya di-edit setelah di-stage.
+const TS_EFFECTIVE_SECONDS = (cfg) => `
+  LEAST(
+    GREATEST(${TS_RAW_SECONDS} - (${TS_BREAK_CUT_SECONDS}), 0),
+    (${TS_CAP_MINUTES(cfg)}::bigint * 60)
+  )`;
+
+// Bentuk umum durasi efektif menurut rules (potong break lalu cap jenis; cap NULL =
+// No Limit karena LEAST mengabaikan NULL). MCH memakai versi yang sama atas kontribusi
+// clamp barisnya supaya kolom "Changed After Posting" kedua sumber bisa dibandingkan
+// apel-ke-apel dengan detik yang benar-benar dikirim (sap_staging_source.seconds).
+const EFFECTIVE_SECONDS = (rawExpr, breakExpr, capExpr) => `
+  LEAST(
+    GREATEST(${rawExpr} - (${breakExpr}), 0),
+    (${capExpr}::bigint * 60)
+  )`;
+const MCH_EFFECTIVE_SECONDS = (cfg) =>
+  EFFECTIVE_SECONDS(CLAMPED_SEG_SECONDS, BREAK_CUT_SECONDS, MCH_CAP_MINUTES(cfg));
+
 // Records rekonsiliasi dalam SATU bentuk kolom untuk dua sumber:
 //   MCH_HOURS = 1 baris per segmen mch_transaction (bundel bisa banyak segmen)
 //   TIMESHEET = 1 baris staging = 1 tsnumber (tidak ada provenance/bundling)
@@ -1666,6 +1695,8 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
   const cutSec = CAP_CUT_SECONDS(cfg);
   const endCapped = END_CAPPED_EXPR(cfg);
   const tsCut = TS_CAP_CUT_SECONDS(cfg);
+  const tsEff = TS_EFFECTIVE_SECONDS(cfg);
+  const mchEff = MCH_EFFECTIVE_SECONDS(cfg);
   const mchSearch = search
     ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
     : "";
@@ -1692,6 +1723,11 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       (${cutSec})::bigint AS capcut,
       (${BREAK_CUT_SECONDS}) AS breakcut,
       (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
+      -- Selisih yang TIDAK dijelaskan aturan: durasi efektif menurut rules sekarang vs
+      -- kontribusi yang benar-benar dikirim ke SAP (src.seconds). != 0 = baris mesin
+      -- berubah setelah posting (mis. end_effective di-clamp ulang) — bukan potongan rule,
+      -- karena cap/break di kedua sisi sudah ikut diperhitungkan.
+      ((${mchEff}) - COALESCE(src.seconds, 0))::bigint AS shift,
       COALESCE(m.order_no, '') AS order_no, COALESCE(m.operation_no, '') AS operation_no,
       COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
       COALESCE(m.confirmation_number, '') AS confirmation,
@@ -1703,8 +1739,8 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
     JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
     LEFT JOIN public.sap_staging_exclusion ex2
-      ON ex2.source_system = 'MCH_HOURS' AND ex2.source_row_id = m.proddataid::text
-    WHERE src.source_system = 'MCH_HOURS'
+      ON ex2.source_system = 'MCH_HOURS' AND ex2.plant = src.plant AND ex2.source_row_id = m.proddataid::text
+    WHERE src.source_system = 'MCH_HOURS'${sourcePlantScope("src")}
       AND st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${mchSearch}`;
 
   // TIMESHEET: bucket_start NULL by design -> tanggal dari source_min_start (= checkin
@@ -1724,13 +1760,21 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
                CASE WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN 'Productive (order work)' ELSE '' END) AS status_desc,
       to_char(t.longdate_checkin AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS start,
       to_char(t.longdate_checkout AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
-      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (st.total_seconds || ' seconds')::interval,
+      -- "Adjusted End Time" = checkin SEKARANG + durasi efektif menurut rules (break utk
+      -- non-produktif + cap jenis) — makna sama dengan MCH. Dulu memakai durasi snapshot
+      -- (st.total_seconds) sehingga end tampak terpotong saat timesheet di-edit setelah
+      -- di-stage meski capcut/breakcut = 0 (penyebab laporan "jam kena potong aneh").
+      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
               'YYYY-MM-DD HH24:MI:SS') AS end_capped,
       ${TS_RAW_SECONDS} AS raw,
       ${TS_RAW_SECONDS} AS clamped,
       (${tsCut})::bigint AS capcut,
       (${TS_BREAK_CUT_SECONDS}) AS breakcut,
       st.total_seconds::bigint AS recognized,
+      -- Selisih yang TIDAK dijelaskan aturan: durasi efektif menurut rules sekarang vs
+      -- durasi yang benar-benar dikirim ke SAP (total_seconds snapshot). != 0 = record
+      -- timesheet berubah setelah bundle di-stage. Positif = SAP menerima lebih sedikit.
+      (${tsEff} - st.total_seconds::bigint)::bigint AS shift,
       COALESCE(t.order_no, '') AS order_no, COALESCE(t.operation_no::text, '') AS operation_no,
       NULL::text AS operation_text,
       COALESCE(st.rueck, '') AS confirmation,
@@ -1758,6 +1802,8 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
   const cutSec = CAP_CUT_SECONDS(cfg);
   const endCapped = END_CAPPED_EXPR(cfg);
   const tsCut = TS_CAP_CUT_SECONDS(cfg);
+  const tsEff = TS_EFFECTIVE_SECONDS(cfg);
+  const mchEff = MCH_EFFECTIVE_SECONDS(cfg);
   const mchSearch = search
     ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
     : "";
@@ -1775,7 +1821,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
     JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
     JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
-    WHERE src.source_system = 'MCH_HOURS'
+    WHERE src.source_system = 'MCH_HOURS'${sourcePlantScope("src")}
       AND st.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("st")} ${mchSearch}`;
 
   const tsBase = `
@@ -1811,6 +1857,11 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       (${cutSec})::bigint AS capcut,
       (${BREAK_CUT_SECONDS}) AS breakcut,
       (${CLAMPED_SEG_SECONDS} - ${cutSec} - ${BREAK_CUT_SECONDS})::bigint AS recognized,
+      -- Selisih yang TIDAK dijelaskan aturan: durasi efektif menurut rules sekarang vs
+      -- kontribusi yang benar-benar dikirim ke SAP (src.seconds). != 0 = baris mesin
+      -- berubah setelah posting (mis. end_effective di-clamp ulang) — bukan potongan rule,
+      -- karena cap/break di kedua sisi sudah ikut diperhitungkan.
+      ((${mchEff}) - COALESCE(src.seconds, 0))::bigint AS shift,
       COALESCE(m.order_no, '') AS order_no, COALESCE(m.operation_no, '') AS operation_no,
       COALESCE(NULLIF(m.operation_short_text, ''), m.operation_description) AS operation_text,
       COALESCE(m.confirmation_number, '') AS confirmation,
@@ -1819,12 +1870,12 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       true AS can_exclude
     FROM page p
     JOIN public.sap_staging_source src
-      ON src.staging_id = p.staging_id AND src.source_row_id = p.row_id AND p.source = 'MCH_HOURS'
+      ON src.staging_id = p.staging_id AND src.source_row_id = p.row_id AND p.source = 'MCH_HOURS'${sourcePlantScope("src")}
     JOIN public.sap_timesheet_staging st ON st.id = src.staging_id
     JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
     LEFT JOIN public.usernfc u ON u.snssb = m.sn_employee
     LEFT JOIN public.sap_staging_exclusion ex2
-      ON ex2.source_system = 'MCH_HOURS' AND ex2.source_row_id = m.proddataid::text`;
+      ON ex2.source_system = 'MCH_HOURS' AND ex2.plant = src.plant AND ex2.source_row_id = m.proddataid::text`;
 
   const tsHeavy = `
     SELECT
@@ -1839,13 +1890,21 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
                CASE WHEN BTRIM(COALESCE(t.activitytype, '')) = '' THEN 'Productive (order work)' ELSE '' END) AS status_desc,
       to_char(t.longdate_checkin AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS start,
       to_char(t.longdate_checkout AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI:SS') AS end_orig,
-      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (st.total_seconds || ' seconds')::interval,
+      -- "Adjusted End Time" = checkin SEKARANG + durasi efektif menurut rules (break utk
+      -- non-produktif + cap jenis) — makna sama dengan MCH. Dulu memakai durasi snapshot
+      -- (st.total_seconds) sehingga end tampak terpotong saat timesheet di-edit setelah
+      -- di-stage meski capcut/breakcut = 0 (penyebab laporan "jam kena potong aneh").
+      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
               'YYYY-MM-DD HH24:MI:SS') AS end_capped,
       ${TS_RAW_SECONDS} AS raw,
       ${TS_RAW_SECONDS} AS clamped,
       (${tsCut})::bigint AS capcut,
       (${TS_BREAK_CUT_SECONDS}) AS breakcut,
       st.total_seconds::bigint AS recognized,
+      -- Selisih yang TIDAK dijelaskan aturan: durasi efektif menurut rules sekarang vs
+      -- durasi yang benar-benar dikirim ke SAP (total_seconds snapshot). != 0 = record
+      -- timesheet berubah setelah bundle di-stage. Positif = SAP menerima lebih sedikit.
+      (${tsEff} - st.total_seconds::bigint)::bigint AS shift,
       COALESCE(t.order_no, '') AS order_no, COALESCE(t.operation_no::text, '') AS operation_no,
       NULL::text AS operation_text,
       COALESCE(st.rueck, '') AS confirmation,
@@ -1948,7 +2007,7 @@ async function loadSapReconciliationData(fromDate, toDate) {
          JOIN public.sap_timesheet_staging st
            ON st.id = src.staging_id AND st.status = 'PENDING' AND st.source_system = 'MCH_HOURS'
          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-         WHERE st.bucket_start::date BETWEEN $1 AND $2${plantScope("st")}
+         WHERE st.bucket_start::date BETWEEN $1 AND $2${plantScope("st")}${sourcePlantScope("src")}
          GROUP BY src.staging_id
          HAVING sum(src.seconds) > sum(${CLAMPED_SEG_SECONDS})
        )
@@ -2161,7 +2220,7 @@ async function exportSapReconciliation(req, res) {
          JOIN public.sap_timesheet_staging sts ON sts.id = src.staging_id
          LEFT JOIN public.mch_transaction m
            ON m.proddataid = (CASE WHEN src.source_row_id ~ '^[0-9]{1,9}$' THEN src.source_row_id::int END)
-         WHERE sts.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("sts")}
+         WHERE sts.bucket_start::date BETWEEN $1::date AND $2::date${plantScope("sts")}${sourcePlantScope("src")}
          GROUP BY src.staging_id
        )
        SELECT
@@ -2224,6 +2283,7 @@ async function exportSapReconciliation(req, res) {
       { header: "Cap cut secs", key: "capcut", width: 13 },
       { header: "Break cut secs", key: "breakcut", width: 14 },
       { header: "Duration recognized", key: "recognized", width: 17 },
+      { header: "Changed after posting secs", key: "shift", width: 16 },
       { header: "Order", key: "order_no", width: 14 },
       { header: "Operation", key: "operation_no", width: 10 },
       { header: "Op text", key: "operation_text", width: 26 },
@@ -2254,6 +2314,7 @@ async function exportSapReconciliation(req, res) {
         capcut: r.capcut,
         breakcut: Math.max(Number(r.breakcut) || 0, 0),
         recognized: Math.max(Number(r.recognized) || 0, 0),
+        shift: Number(r.shift) || 0,
         order_no: r.order_no,
         operation_no: r.operation_no,
         operation_text: r.operation_text,
@@ -2264,6 +2325,20 @@ async function exportSapReconciliation(req, res) {
     rc.getRow(1).font = { bold: true };
     rc.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCAF0F8" } };
     rc.views = [{ state: "frozen", ySplit: 1 }];
+
+    // Rekap "Changed after posting": baris sumber yang berubah setelah bundel di-stage —
+    // selisih yang TIDAK berasal dari aturan cap/break (dulu tak terlihat di UI sehingga
+    // tampak seperti jam terpotong tanpa sebab).
+    const shifted = recRows.filter((r) => Number(r.shift));
+    if (shifted.length) {
+      const netSec = shifted.reduce((s, r) => s + (Number(r.shift) || 0), 0);
+      const tsCount = shifted.filter((r) => r.source === "TIMESHEET").length;
+      const mchCount = shifted.length - tsCount;
+      sum.addRow({});
+      sum.addRow({ label: "Changed after posting (rows)", hrs: shifted.length });
+      sum.addRow({ label: "  · TIMESHEET / MCH_HOURS", hrs: `${tsCount} / ${mchCount}` });
+      sum.addRow({ label: "Changed after posting (net hrs)", hrs: fmt(netSec / 3600) });
+    }
 
     const filename = `sap_reconciliation_${data.range.from}_to_${data.range.to}.xlsx`;
     res.setHeader(
@@ -2307,7 +2382,7 @@ async function getSapReconciliationDay(req, res) {
          JOIN public.sap_timesheet_staging sts ON sts.id = src.staging_id
          LEFT JOIN public.mch_transaction m
            ON m.proddataid = (CASE WHEN src.source_row_id ~ '^[0-9]{1,9}$' THEN src.source_row_id::int END)
-         WHERE sts.source_system = 'MCH_HOURS' AND sts.bucket_start::date = $1::date${plantScope("sts")}
+         WHERE sts.source_system = 'MCH_HOURS' AND sts.bucket_start::date = $1::date${plantScope("sts")}${sourcePlantScope("src")}
          GROUP BY src.staging_id
        )
        SELECT
@@ -2375,17 +2450,18 @@ async function excludeSapRecord(req, res) {
     const { rows } = await sapPool.query(
       `SELECT to_char(st.bucket_start, 'YYYY-MM-DD') AS d FROM public.sap_staging_source ss
        JOIN public.sap_timesheet_staging st ON st.id = ss.staging_id
-       WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = $1${plantScope("st")}
+       WHERE ss.source_system = 'MCH_HOURS' AND ss.source_row_id = $1${plantScope("st")}${sourcePlantScope("ss")}
        ORDER BY st.bucket_start DESC LIMIT 1`,
       [sourceRowId],
     );
     const date = rows[0]?.d || null;
 
+    if (!PLANT_SSB) return res.status(500).json({ error: "PLANT_SSB wajib untuk exclusion" });
     await pool.query(
-      `INSERT INTO public.sap_staging_exclusion (source_system, source_row_id, excluded_by, note)
-       VALUES ('MCH_HOURS', $1, $2, $3)
-       ON CONFLICT (source_system, source_row_id) DO UPDATE SET note = EXCLUDED.note`,
-      [sourceRowId, excludedBy, note],
+      `INSERT INTO public.sap_staging_exclusion (source_system, plant, source_row_id, excluded_by, note)
+       VALUES ('MCH_HOURS', $1, $2, $3, $4)
+       ON CONFLICT (source_system, plant, source_row_id) DO UPDATE SET note = EXCLUDED.note`,
+      [PLANT_SSB, sourceRowId, excludedBy, note],
     );
 
     let recalc = null;
@@ -2421,9 +2497,11 @@ async function unexcludeSapRecord(req, res) {
     );
     const date = rows[0]?.d || null;
 
+    if (!PLANT_SSB) return res.status(500).json({ error: "PLANT_SSB wajib untuk exclusion" });
     await pool.query(
-      `DELETE FROM public.sap_staging_exclusion WHERE source_system = 'MCH_HOURS' AND source_row_id = $1`,
-      [sourceRowId],
+      `DELETE FROM public.sap_staging_exclusion
+       WHERE source_system = 'MCH_HOURS' AND plant = $2 AND source_row_id = $1`,
+      [sourceRowId, PLANT_SSB],
     );
 
     let recalc = null;
@@ -2453,8 +2531,9 @@ async function listSapExclusions(req, res) {
     const from = String(req.query.from || "").trim();
     const to = String(req.query.to || "").trim();
     const q = String(req.query.q || "").trim();
-    const conds = ["ex.source_system = 'MCH_HOURS'"];
-    const params = [];
+    if (!PLANT_SSB) return res.status(500).json({ error: "PLANT_SSB wajib untuk exclusion" });
+    const conds = ["ex.source_system = 'MCH_HOURS'", "ex.plant = $1"];
+    const params = [PLANT_SSB];
     if (from && to) {
       params.push(from, to);
       conds.push(`m.startdatetime::date BETWEEN $${params.length - 1}::date AND $${params.length}::date`);
@@ -2516,7 +2595,7 @@ async function getSapReconciliationRecord(req, res) {
            COALESCE(m.is_stuck, false) AS is_stuck
          FROM public.sap_staging_source src
          JOIN public.mch_transaction m ON m.proddataid = src.source_row_id::int
-         WHERE src.staging_id = $1
+         WHERE src.staging_id = $1${sourcePlantScope("src")}
          ORDER BY m.startdatetime`,
         [stagingId],
       ),

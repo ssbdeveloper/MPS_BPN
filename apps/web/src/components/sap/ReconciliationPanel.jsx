@@ -85,6 +85,7 @@ const RECORD_COLS = [
   { en: 'Time Reduction', right: true, tone: 'text-amber-700' },
   { en: 'Break Time', right: true, tone: 'text-amber-700' },
   { en: 'Recognized Time', right: true, tone: 'text-emerald-700' },
+  { en: 'Changed After Posting', right: true, tone: 'text-amber-700' },
   { en: 'Stuck Time' },
   { en: 'Action' },
 ];
@@ -105,6 +106,10 @@ const shortDate = (iso) => {
 const RecordRow = React.memo(function RecordRow({ r, excludeBusy, onExclude }) {
   const hitBreak = Number(r.breakcut) > 0;
   const hitCap = Number(r.capcut) > 0;
+  // Selisih yang TIDAK berasal dari aturan cap/break: record sumber berubah setelah
+  // bundel di-stage (mis. timesheet di-edit/dibulatkan setelah dikirim ke SAP).
+  const shift = Number(r.shift) || 0;
+  const hitShift = shift !== 0;
   return (
     <tr
       className={`align-top transition-colors hover:bg-slate-50 ${hitBreak ? 'bg-amber-50/60' : ''}`}
@@ -136,6 +141,12 @@ const RecordRow = React.memo(function RecordRow({ r, excludeBusy, onExclude }) {
         {hitBreak ? `${r.breakcut} ⏸` : r.breakcut}
       </td>
       <td className="whitespace-nowrap px-2.5 py-1.5 text-center font-bold tabular-nums text-emerald-700">{r.recognized}</td>
+      <td
+        className={`whitespace-nowrap px-2.5 py-1.5 text-center font-bold tabular-nums ${hitShift ? 'text-amber-700' : 'text-slate-300'}`}
+        title={hitShift ? 'Record sumber berubah setelah dikirim ke SAP — selisih ini bukan potongan aturan cap/break (positif = SAP menerima lebih sedikit)' : undefined}
+      >
+        {hitShift ? (shift > 0 ? `+${shift}` : shift) : 0}
+      </td>
       <td className="whitespace-nowrap px-2 py-1.5 text-center">{r.stuck ? <span className="text-amber-500" title="Dropped machine signal">⚠</span> : ''}</td>
       <td className="whitespace-nowrap px-2 py-1.5 text-center">
         {!r.can_exclude ? (

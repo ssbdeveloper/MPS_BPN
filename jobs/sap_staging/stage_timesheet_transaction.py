@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import psycopg2.extras
 
 from sap_staging_common import (
+    stage_lock,
     app_timezone,
     connect_source,
     connect_staging,
@@ -91,7 +92,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
     base AS (
       SELECT
         t.*,
-        un.employee_category,
+        un.roles,
         po.confirmation_number,
         po.sequence_category,
         po.sequence_number,
@@ -112,7 +113,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         ON LTRIM(COALESCE(po.order_no, ''), '0') = t.order_no
        AND LTRIM(COALESCE(po.operation_no, ''), '0') = t.operation_no::text
       LEFT JOIN LATERAL (
-        SELECT employee_category
+        SELECT roles
         FROM usernfc u
         WHERE upper(regexp_replace(COALESCE(u.snssb, ''), '\\s+', '', 'g'))
             = upper(regexp_replace(COALESCE(t.serialnumber, ''), '\\s+', '', 'g'))
@@ -147,6 +148,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         AND t.longdate_checkout > t.longdate_checkin
         AND t.longdate_checkout >= (%s::timestamp AT TIME ZONE %s)
         AND t.longdate_checkout <  (%s::timestamp AT TIME ZONE %s)
+        AND COALESCE(t.plant::text, '') = %s
         AND COALESCE(t.state_flag, 0) <> 5
         AND COALESCE(t.activitytype, '') <> '0000'
         -- EXCLUDED (soft delete per record, 2026-08-31): tsnumber yang ditandai
@@ -154,8 +156,13 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         AND NOT EXISTS (
           SELECT 1 FROM public.sap_staging_exclusion ex
           WHERE ex.source_system = 'TIMESHEET'
+            AND ex.plant = %s
             AND ex.source_row_id = t.tsnumber::text
         )
+        -- Subcont role (2026-09-15, owner keputusan): jam operator Subcont TIDAK PERNAH
+        -- dikirim ke SAP — dikecualikan di sini, sebelum bundling. Adoption (EWS) tidak
+        -- terpengaruh karena job adoption membaca timesheet_transaction langsung.
+        AND upper(BTRIM(COALESCE(un.roles, ''))) <> 'SUBCONT'
     ),
     effective AS (
       SELECT
@@ -176,7 +183,7 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       tsnumber::text AS source_ref_id,
       COALESCE(plant, '') AS werks,
       CASE
-        WHEN COALESCE(employee_category, '') ILIKE '%%Outsource%%' THEN '11009413'
+        WHEN upper(BTRIM(COALESCE(roles, ''))) IN ('OUTSOURCE', 'ADMINISTRATOR') THEN '11009413'
         ELSE LPAD(COALESCE(serialnumber, ''), 8, '0')
       END AS pernr,
       LPAD(COALESCE(serialnumber, ''), 8, '0') AS pernr_origin,
@@ -209,7 +216,12 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       effective_seconds AS total_seconds,
       1::integer AS source_row_count,
       longdate_checkin AT TIME ZONE %s AS source_min_start,
-      longdate_checkin AT TIME ZONE %s + (effective_seconds || ' seconds')::interval AS source_max_end
+      longdate_checkin AT TIME ZONE %s + (effective_seconds || ' seconds')::interval AS source_max_end,
+      jsonb_build_array(jsonb_build_object(
+        'id', tsnumber::text,
+        'bucket', longdate_checkin AT TIME ZONE %s,
+        'sec', effective_seconds
+      )) AS segments
     FROM effective
     WHERE effective_seconds > 0
     ORDER BY longdate_checkout, tsnumber
@@ -221,8 +233,8 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         break_windows_json,
         fb_va, fb_nva,
         timezone, timezone, timezone, timezone,
-        from_ts, timezone, to_ts, timezone,
-        timezone, timezone, timezone, timezone, timezone, timezone,
+        from_ts, timezone, to_ts, timezone, plant_code(), plant_code(),
+        timezone, timezone, timezone, timezone, timezone, timezone, timezone,
         limit,
     ]
     with connect_source() as conn:
@@ -391,7 +403,7 @@ def run_once(args: argparse.Namespace) -> bool:
     return cursor_to > from_ts
 
 
-def run(args: argparse.Namespace) -> None:
+def _run_unlocked(args: argparse.Namespace) -> None:
     if not args.loop:
         run_once(args)
         return
@@ -407,6 +419,14 @@ def run(args: argparse.Namespace) -> None:
             break
         if args.loop_sleep_seconds > 0 and iteration < args.loop:
             time.sleep(args.loop_sleep_seconds)
+
+
+def run(args: argparse.Namespace) -> None:
+    with stage_lock("TIMESHEET", plant_code()) as acquired:
+        if not acquired:
+            log.info("Timesheet staging skipped: worker plant %s masih berjalan", plant_code())
+            return
+        _run_unlocked(args)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable
 
@@ -588,16 +589,16 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
 # sehingga guard di post_sap_staging bisa menolak double-post. Baris yang sudah
 # ter-POST tidak disentuh (unique index parsial menjaganya di level DB).
 PROVENANCE_INSERT_SQL = """
-INSERT INTO sap_staging_source (staging_id, source_system, source_row_id, bucket_start, seconds)
+INSERT INTO sap_staging_source (staging_id, source_system, plant, source_row_id, bucket_start, seconds)
 VALUES %s
-ON CONFLICT (staging_id, source_system, source_row_id, bucket_start) DO UPDATE
+ON CONFLICT (staging_id, source_system, plant, source_row_id, bucket_start) DO UPDATE
   SET seconds = EXCLUDED.seconds
   WHERE sap_staging_source.posted_at IS NULL
 """
 
 
 def insert_provenance(cur, rows: list[dict]) -> int:
-    """Tulis segmen sumber untuk baris yang punya `segments` (MCH_HOURS)."""
+    """Tulis provenance sumber MCH_HOURS maupun TIMESHEET."""
     keyed = {
         (row["source_system"], row["source_key"]): row
         for row in rows
@@ -629,12 +630,38 @@ def insert_provenance(cur, rows: list[dict]) -> int:
             seconds = int(seg.get("sec") or 0)
             if seconds <= 0:
                 continue
-            values.append((staging_id, source_system, str(seg["id"]), bucket_start, seconds))
+            segment_start = seg.get("bucket") or bucket_start
+            if segment_start is None:
+                raise ValueError(f"Provenance timestamp missing for {source_system}:{source_key}")
+            values.append((staging_id, source_system, row["werks"], str(seg["id"]), segment_start, seconds))
 
     if not values:
         return 0
     psycopg2.extras.execute_values(cur, PROVENANCE_INSERT_SQL, values, page_size=1000)
     return len(values)
+
+
+@contextmanager
+def stage_lock(source_system: str, plant: str):
+    """Hold one session lock for the complete staging run."""
+    conn = connect_staging()
+    acquired = False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s), hashtext(%s))",
+                (f"sap_stage:{source_system}", plant),
+            )
+            acquired = bool(cur.fetchone()[0])
+        yield acquired
+    finally:
+        if acquired and not conn.closed:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_unlock(hashtext(%s), hashtext(%s))",
+                    (f"sap_stage:{source_system}", plant),
+                )
+        conn.close()
 
 
 def upsert_eligibility_audit(conn, rows: list[dict]) -> int:

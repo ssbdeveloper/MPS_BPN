@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from stage_sap_timesheet import fetch_machine_hour_rows, parse_dt, previous_completed_hour, stage_rows
 from sap_staging_common import (
+    stage_lock,
     connect_staging,
     connect_source,
     cursor_initial_from,
@@ -138,13 +139,14 @@ def find_catchup_days(days: int, floor) -> list:
       AND NOT EXISTS (
         SELECT 1 FROM sap_staging_source s
         WHERE s.source_system = 'MCH_HOURS'
+          AND s.plant = %s
           AND s.source_row_id = m.proddataid::text
       )
     ORDER BY 1
     """
     with connect_source() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (days, floor))
+            cur.execute(sql, (days, floor, plant_code()))
             return cur.fetchall()
 
 
@@ -234,7 +236,7 @@ def run_once(args: argparse.Namespace) -> bool:
     return cursor_to > from_ts
 
 
-def run(args: argparse.Namespace) -> None:
+def _run_unlocked(args: argparse.Namespace) -> None:
     if args.catchup:
         run_catchup(args)
         return
@@ -258,6 +260,18 @@ def run(args: argparse.Namespace) -> None:
             break
         if args.loop_sleep_seconds > 0 and iteration < args.loop:
             time.sleep(args.loop_sleep_seconds)
+
+
+def run(args: argparse.Namespace) -> None:
+    plant = plant_code()
+    if plant not in {"5051", "5071", "5153"}:
+        log.warning("MCH_HOURS disabled for plant %s (salvaging only)", plant)
+        return
+    with stage_lock("MCH_HOURS", plant) as acquired:
+        if not acquired:
+            log.info("Machine-hour staging skipped: worker plant %s masih berjalan", plant)
+            return
+        _run_unlocked(args)
 
 
 def build_parser() -> argparse.ArgumentParser:

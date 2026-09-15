@@ -3,6 +3,8 @@
 Menyiapkan payload timesheet & jam mesin ke `sap_timesheet_staging`, lalu mengirimkannya ke SAP.
 Semua script membaca `.env` dari root repo `MPS2/.env`.
 
+Panduan deployment dan operasi 4 plant: `docs/operations/sap-staging-multiplant-runbook.md`.
+
 > **Ini jalur payroll.** Kesalahan di sini = jam kerja hilang, dobel, atau salah pemilik.
 > Baca bagian **[Pengaman](#pengaman-jangan-dilucuti)** dan **[Batas Berbahaya](#-batas-berbahaya)**
 > sebelum mengubah apa pun. Latar belakang: `docs/concepts/sap-staging-identity.md`.

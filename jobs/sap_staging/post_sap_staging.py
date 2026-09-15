@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+from datetime import date
 
 import psycopg2.extras
 
@@ -25,6 +26,22 @@ from sap_staging_common import (
 )
 
 log = setup_logging("post_sap_staging")
+ALLOWED_PLANTS = ("5051", "5071", "5100", "5153")
+
+
+def validate_date_range(date_from: str | None, date_to: str | None) -> None:
+    """Manual range must be bounded, valid, and ordered."""
+    if bool(date_from) != bool(date_to):
+        raise ValueError("--date-from dan --date-to wajib dipakai bersama")
+    if not date_from:
+        return
+    try:
+        start = date.fromisoformat(date_from)
+        end = date.fromisoformat(date_to)
+    except ValueError as exc:
+        raise ValueError("Tanggal wajib format YYYY-MM-DD") from exc
+    if start > end:
+        raise ValueError("--date-from tidak boleh setelah --date-to")
 
 
 # ── Koneksi DB per-thread, dipakai ulang ─────────────────────────────────────
@@ -108,6 +125,8 @@ def claim_rows(
     include_today: bool = False,
     date_filter: str | None = None,
     pernr_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[dict]:
     # failed_only: HANYA baris FAILED (untuk tombol "kirim ulang gagal" di UI — supaya
     # tidak ikut mem-blast ribuan PENDING). Menang atas include_failed.
@@ -153,6 +172,14 @@ def claim_rows(
     if date_filter:
         filters.append("(bucket_start::date = %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' = %s))")
         params.extend([date_filter, date_filter.replace("-", "")])
+    if date_from or date_to:
+        lo = date_from or "1900-01-01"
+        hi = date_to or "2999-12-31"
+        filters.append(
+            "(bucket_start::date BETWEEN %s AND %s OR "
+            "(source_system = 'TIMESHEET' AND payload->>'ISDD' BETWEEN %s AND %s))"
+        )
+        params.extend([lo, hi, lo.replace("-", ""), hi.replace("-", "")])
     if pernr_filter:
         filters.append("(pernr = %s OR pernr_origin = %s)")
         params.extend([pernr_filter, pernr_filter])
@@ -164,7 +191,9 @@ def claim_rows(
       NOT EXISTS (
         SELECT 1 FROM public.sap_staging_source ss
         JOIN public.sap_staging_exclusion ex
-          ON ex.source_system = ss.source_system AND ex.source_row_id = ss.source_row_id
+          ON ex.source_system = ss.source_system
+         AND ex.plant         = ss.plant
+         AND ex.source_row_id = ss.source_row_id
         WHERE ss.staging_id = public.sap_timesheet_staging.id
       )
     """)
@@ -387,6 +416,7 @@ def find_posted_conflicts(row_ids: list[int]) -> dict[int, str]:
     JOIN sap_timesheet_staging cur ON cur.id = s.staging_id
     JOIN sap_staging_source prev
       ON  prev.source_system = s.source_system
+      AND prev.plant         = s.plant
       AND prev.source_row_id = s.source_row_id
       AND prev.bucket_start  = s.bucket_start
       AND prev.posted_at IS NOT NULL
@@ -540,6 +570,7 @@ def post_order_group(rows: list[dict], args: argparse.Namespace) -> list[str]:
 
 
 def process_rows(args: argparse.Namespace) -> None:
+    validate_date_range(args.date_from, args.date_to)
     selected_ids = parse_csv_values(args.ids)
     selected_ztimesheetids = parse_csv_values(args.ztimesheetids)
     if selected_ids or selected_ztimesheetids:
@@ -552,7 +583,9 @@ def process_rows(args: argparse.Namespace) -> None:
             productive = True
         elif args.unproductive_only:
             productive = False
-        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive, args.failed_only, args.include_today, args.date, args.pernr)
+        rows = claim_rows(args.limit, args.retry_failed, args.source_system, plant, productive,
+                          args.failed_only, args.include_today, args.date, args.pernr,
+                          args.date_from, args.date_to)
     if not rows:
         log.info("No staging rows to post")
         return
@@ -586,10 +619,10 @@ def process_rows(args: argparse.Namespace) -> None:
 
     # Kelompokkan per ORDER (AUFNR). Baris tanpa order (unproductive: AUFNR kosong) tidak
     # mengunci order apa pun -> tiap baris jadi grup sendiri, boleh paralel penuh.
-    groups: dict[str, list[dict]] = {}
+    groups: dict[tuple[str, str], list[dict]] = {}
     for row in postable:
         aufnr = (row["payload"] or {}).get("AUFNR") or ""
-        key = aufnr if aufnr else f"__free_{row['id']}"
+        key = (row.get("werks") or "", aufnr if aufnr else f"__free_{row['id']}")
         groups.setdefault(key, []).append(row)
 
     started = time.perf_counter()
@@ -653,12 +686,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--unproductive-only", action="store_true",
         help="Hanya kirim baris UNPRODUCTIVE (LSTAR). Jalankan setelah fix cost center di SAP.",
     )
-    parser.add_argument("--plant", help="Only post one plant. Defaults to PLANT_SSB")
+    parser.add_argument("--plant", choices=ALLOWED_PLANTS,
+                        help="Only post one plant. Defaults to PLANT_SSB")
     parser.add_argument("--all-plants", action="store_true", help="Ignore plant filter")
     parser.add_argument("--ids", help="Comma-separated staging id list to post for manual testing")
     parser.add_argument("--ztimesheetids", help="Comma-separated ZTIMESHEETID list to post for manual testing")
     parser.add_argument("--allow-posted", action="store_true", help="Allow selected --ids/--ztimesheetids even if already POSTED")
     parser.add_argument("--date", help="Posting manual per tanggal bucket (YYYY-MM-DD) via UI")
+    parser.add_argument("--date-from", help="Awal rentang tanggal (YYYY-MM-DD), inklusif")
+    parser.add_argument("--date-to", help="Akhir rentang tanggal (YYYY-MM-DD), inklusif")
     parser.add_argument("--pernr", help="Posting manual per operator (PERNR) via UI")
     return parser
 

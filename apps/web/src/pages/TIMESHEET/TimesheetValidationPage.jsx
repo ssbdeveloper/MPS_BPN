@@ -388,9 +388,10 @@ const TimesheetValidationPage = () => {
   const [downloadingExcel,     setDownloadingExcel]     = useState(false);
   const [sapStatus,            setSapStatus]            = useState(null);
   const [sapPendingTsnumbers,  setSapPendingTsnumbers]  = useState(new Set());
-  const [postToSapEnabled,     setPostToSapEnabled]     = useState(
-    () => localStorage.getItem('validation_postToSap') !== 'false'
-  );
+  // Posting langsung ke SAP dari halaman ini DIPENSIUNKAN (cutover CKP 2026-09-15): semua
+  // pengiriman jam lewat pipeline staging. Sengaja KONSTANTA — dulu state dari
+  // localStorage 'validation_postToSap'; sekarang tidak ada cara mengaktifkannya dari UI.
+  const postToSapEnabled = false;
 
   const containerRef    = useRef(null);
   const searchTimerRef  = useRef(null);
@@ -779,23 +780,18 @@ const TimesheetValidationPage = () => {
 
             <button onClick={clearFilters}  className={btnOutline}>Clear</button>
 
-            {/* SAP Post toggle */}
-            <button
-              onClick={() => setPostToSapEnabled(v => { const next = !v; localStorage.setItem('validation_postToSap', next); return next; })}
-              title={postToSapEnabled ? 'Post ke SAP aktif — klik untuk nonaktifkan' : 'Post ke SAP nonaktif — klik untuk aktifkan'}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all duration-150 active:scale-95
-                ${postToSapEnabled
-                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
-                  : 'bg-slate-100 border-slate-300 text-slate-500 hover:bg-slate-200'}`}
+            {/* Posting langsung ke SAP DIPENSIUNKAN (cutover CKP 2026-09-15). Dulu ini toggle
+                (state + localStorage 'validation_postToSap'); sekarang mati permanen dan
+                tidak bisa diaktifkan — pengiriman jam lewat pipeline staging. */}
+            <span
+              title="Posting langsung ke SAP dipensiunkan — pengiriman jam lewat pipeline staging"
+              className="flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-400"
             >
-              {/* Toggle track */}
-              <span className={`relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border transition-colors duration-200
-                ${postToSapEnabled ? 'bg-emerald-500 border-emerald-500' : 'bg-slate-300 border-slate-300'}`}>
-                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform duration-200
-                  ${postToSapEnabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+              <span className="relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border border-slate-300 bg-slate-200">
+                <span className="absolute top-0.5 h-3 w-3 translate-x-0.5 rounded-full bg-white shadow" />
               </span>
-              SAP
-            </button>
+              SAP off
+            </span>
             <button onClick={expandAll}     className={btnOutline}>Expand All</button>
             <button onClick={collapseAll}   className={btnOutline}>Collapse All</button>
             <button
