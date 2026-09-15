@@ -1602,13 +1602,30 @@ exports.addProgressUpdate = async (req, res) => {
       image_path = `/uploads/progress/${safeOrd}/${safeOp}/${filename}`;
     }
 
+    // ── Freeze the hours behind this update ─────────────────────────────────
+    // Timesheets can be revised later, so recomputing actual hours after the
+    // fact would silently rewrite history. Snapshot them with the update.
+    const hoursRow = await db.query(
+      `SELECT COALESCE(SUM(t.duration), 0)::numeric AS actual_hours
+         FROM timesheet_transaction t
+         JOIN sow s ON s.idsow = $1
+        WHERE ltrim(t.order_no, '0') = ltrim(s.order_no, '0')
+          AND t.operation_no = s.operation_no
+          AND t.state_flag <> 5 AND t.duration > 0`,
+      [operation_id]
+    );
+    const actualHours = Number(hoursRow.rows[0]?.actual_hours ?? 0);
+    const eacHours = prog > 0 ? actualHours / (prog / 100) : null;
+
     // ── Insert history record ───────────────────────────────────────────────
     const result = await db.query(
       `INSERT INTO progress_update_history
-         (operation_id, order_no, progress, issue_description, image_path, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (operation_id, order_no, progress, issue_description, image_path, created_by,
+          actual_hours_at_update, eac_hours_at_update)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [operation_id, order_no || null, prog, issue_description || null, image_path, created_by || null]
+      [operation_id, order_no || null, prog, issue_description || null, image_path, created_by || null,
+        actualHours, eacHours]
     );
 
     // ── Update sow.progress for this operation ──────────────────────────────
@@ -1710,11 +1727,16 @@ exports.getSubtasks = async (req, res) => {
   try {
     const { idsow } = req.params;
     const result = await db.query(
-      `SELECT id, operation_id, order_no, title, sort_order, weight, standard_hours, progress,
-              status, is_active, msp_task_id,
-              created_by, created_at, updated_by, updated_at
-         FROM sow_sub_operation
-        WHERE operation_id = $1 AND is_active = true
+      `SELECT s.id, s.operation_id, s.order_no, s.title, s.sort_order, s.weight, s.standard_hours, s.progress,
+              s.status, s.is_active, s.msp_task_id, s.created_at, s.updated_at,
+              -- Old rows stored the numeric x-user-id before this was fixed to store the
+              -- name; resolve those to a display name here instead of showing a raw ID.
+              CASE WHEN s.created_by ~ '^\\d+$' THEN cu.name ELSE s.created_by END AS created_by,
+              CASE WHEN s.updated_by ~ '^\\d+$' THEN uu.name ELSE s.updated_by END AS updated_by
+         FROM sow_sub_operation s
+         LEFT JOIN public.users cu ON s.created_by ~ '^\\d+$' AND cu.id = s.created_by::int
+         LEFT JOIN public.users uu ON s.updated_by ~ '^\\d+$' AND uu.id = s.updated_by::int
+        WHERE s.operation_id = $1 AND s.is_active = true
         ORDER BY sort_order ASC, id ASC`,
       [idsow]
     );
@@ -1731,7 +1753,7 @@ exports.createSubtask = async (req, res) => {
   try {
     const { idsow } = req.params;
     const { title, standard_hours, sort_order } = req.body || {};
-    const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
+    const createdBy = req.body?.created_by || req.headers['x-user-name'] || req.headers['x-user-id'] || null;
 
     if (!title || !String(title).trim()) {
       return res.status(400).json({ error: 'title wajib diisi' });
@@ -1797,7 +1819,7 @@ exports.createSubtasksBatch = async (req, res) => {
   try {
     const { idsow } = req.params;
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
+    const createdBy = req.body?.created_by || req.headers['x-user-name'] || req.headers['x-user-id'] || null;
 
     if (items.length === 0) {
       return res.status(400).json({ error: 'items wajib diisi (array sub-task)' });
@@ -1899,7 +1921,7 @@ exports.updateSubtask = async (req, res) => {
   try {
     const { subId } = req.params;
     const { title, standard_hours, sort_order, status, is_active } = req.body || {};
-    const updatedBy = req.body?.updated_by || req.body?.created_by || req.headers['x-user-id'] || null;
+    const updatedBy = req.body?.updated_by || req.body?.created_by || req.headers['x-user-name'] || req.headers['x-user-id'] || null;
 
     const sets = [];
     const vals = [];
@@ -1985,7 +2007,7 @@ exports.addSubtaskProgress = async (req, res) => {
   try {
     const { subId } = req.params;
     const { progress, issue_description, image_data } = req.body || {};
-    const createdBy = req.body?.created_by || req.headers['x-user-id'] || null;
+    const createdBy = req.body?.created_by || req.headers['x-user-name'] || req.headers['x-user-id'] || null;
 
     const prog = parseInt(progress, 10);
     if (isNaN(prog) || prog < 1 || prog > 100) {

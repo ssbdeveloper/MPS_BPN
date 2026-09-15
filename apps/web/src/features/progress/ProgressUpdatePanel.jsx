@@ -20,6 +20,7 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
   const [submitting, setSubmitting]     = useState(false);
   const [error, setError]               = useState('');
   const [warn, setWarn]                 = useState('');
+  const [mobileTab, setMobileTab]       = useState('update'); // 'update' | 'history' — small screens only
   const fileInputRef = useRef(null);
 
   const lastProgress = history.length > 0 ? history[0].progress : null;
@@ -108,11 +109,33 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
   const canSubmit = progress !== '' && !warn && !submitting;
 
   return (
-    <div className="flex flex-col lg:flex-row h-full min-h-0">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+
+      {/* Mobile/tablet tab switch — desktop shows both panels side by side */}
+      <div role="tablist" className="flex flex-shrink-0 border-b border-slate-200 lg:hidden">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'update'}
+          onClick={() => setMobileTab('update')}
+          className={`min-h-[44px] flex-1 text-sm font-bold transition-colors ${mobileTab === 'update' ? 'border-b-2 border-[#0077b6] text-[#0077b6]' : 'text-slate-400'}`}
+        >
+          Update
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mobileTab === 'history'}
+          onClick={() => setMobileTab('history')}
+          className={`min-h-[44px] flex-1 text-sm font-bold transition-colors ${mobileTab === 'history' ? 'border-b-2 border-[#0077b6] text-[#0077b6]' : 'text-slate-400'}`}
+        >
+          History{history.length > 0 ? ` (${history.length})` : ''}
+        </button>
+      </div>
 
       {/* ── Left: form ─────────────────────────────────────── */}
-      <div className="lg:w-[380px] flex-shrink-0 overflow-y-auto border-b lg:border-b-0 lg:border-r border-slate-200">
-        <div className="p-5 space-y-4">
+      <div className={`${mobileTab === 'update' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto border-slate-200 lg:flex lg:w-[380px] lg:flex-shrink-0 lg:flex-none lg:border-r`}>
+        <div className="space-y-4 p-4 sm:p-5">
 
           {/* Read-only info */}
           <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-2">
@@ -231,11 +254,11 @@ export const ProgressUpdatePanel = ({ historyUrl, submitUrl, infoRows, buildPayl
       </div>
 
       {/* ── Right: history ─────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-        <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0 bg-slate-50">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Update History</span>
+      <div className={`${mobileTab === 'history' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-hidden lg:flex`}>
+        <div className="hidden flex-shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3 lg:flex">
+          <span className="text-xs font-bold uppercase tracking-widest text-slate-500">Update History</span>
           {history.length > 0 && (
-            <span className="text-[11px] bg-[#0077b6] text-white rounded-full px-2 py-0.5 font-bold tabular-nums">
+            <span className="rounded-full bg-[#0077b6] px-2 py-0.5 text-xs font-bold tabular-nums text-white">
               {history.length} notes
             </span>
           )}

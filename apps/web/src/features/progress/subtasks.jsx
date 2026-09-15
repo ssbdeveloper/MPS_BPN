@@ -7,6 +7,7 @@ import ConfirmationModal from '../../components/ui/ConfirmationModal';
 import { API_BASE, authHeaders, fmtHours, fmtWeightPct, fmtTs } from './helpers';
 import { ModalShell, ProgressBar, StatusPill } from './primitives';
 import { ProgressUpdatePanel } from './ProgressUpdatePanel';
+import { useCan } from '../../rbac/usePermissions';
 
 // ─── Sub-task progress modal (reuses the shared interaction) ──────────────────
 export const SubTaskProgressModal = ({ sub, operationNo, onClose, onSaved }) => {
@@ -378,7 +379,7 @@ export const SubTaskFromStandardModal = ({ idsow, partNumber, operationText, exi
 };
 
 // ─── Sub-task row (presentational) ────────────────────────────────────────────
-export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
+export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate, canManage }) => (
   <div className="flex flex-col md:flex-row md:items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
     <div className="flex-1 min-w-0">
       <div className="flex items-center gap-2">
@@ -412,26 +413,30 @@ export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
       >
         Update
       </button>
-      <button
-        onClick={onEdit}
-        aria-label="Edit sub-task"
-        title="Edit sub-task"
-        className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg border border-slate-200 text-slate-600
-                   hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95
-                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
-      >
-        <Pencil size={15} />
-      </button>
-      <button
-        onClick={onDeactivate}
-        aria-label="Deactivate sub-task"
-        title="Deactivate sub-task"
-        className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg border border-slate-200 text-slate-500
-                  hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-all active:scale-95
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
-      >
-        <Ban size={15} />
-      </button>
+      {canManage && (
+        <>
+          <button
+            onClick={onEdit}
+            aria-label="Edit sub-task"
+            title="Edit sub-task"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-slate-200 text-slate-600
+                       hover:bg-slate-50 hover:border-slate-300 transition-all active:scale-95
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            <Pencil size={15} />
+          </button>
+          <button
+            onClick={onDeactivate}
+            aria-label="Deactivate sub-task"
+            title="Deactivate sub-task"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-slate-200 text-slate-500
+                      hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-all active:scale-95
+                      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+          >
+            <Ban size={15} />
+          </button>
+        </>
+      )}
     </div>
   </div>
 );
@@ -439,6 +444,7 @@ export const SubTaskRow = ({ sub, onUpdate, onEdit, onDeactivate }) => (
 // ─── Sub-operation panel (list + CRUD orchestration for one operation) ────────
 export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationText, state, onRefresh }) => {
   const { list = [], loading, error } = state || {};
+  const canManage = useCan('sow_management', 'write');
   const [formModal, setFormModal]         = useState(null); // { mode, sub? }
   const [stdModal, setStdModal]           = useState(false);
   const [progressSub, setProgressSub]     = useState(null);
@@ -509,7 +515,7 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
             </span>
           )}
         </div>
-        {!loading && !error && (
+        {!loading && !error && canManage && (
           <div className="flex items-center gap-2">
             {stdButton}
             {list.length > 0 && addButton}
@@ -536,7 +542,7 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
         <EmptyState
           icon={Layers}
           title="No sub-tasks yet"
-          action={addButton}
+          action={canManage ? addButton : undefined}
         />
       ) : (
         <div className="space-y-2">
@@ -544,6 +550,7 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
             <SubTaskRow
               key={sub.id}
               sub={sub}
+              canManage={canManage}
               onUpdate={() => setProgressSub(sub)}
               onEdit={() => setFormModal({ mode: 'edit', sub })}
               onDeactivate={() => setDeactivateSub(sub)}

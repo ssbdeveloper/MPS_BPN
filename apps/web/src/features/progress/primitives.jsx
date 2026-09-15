@@ -22,7 +22,7 @@ export const InfoRow = ({ label, value }) => (
 
 // ─── Inline progress bar (presentational, read-only) ──────────────────────────
 export const ProgressBar = ({ value, className = '' }) => {
-  const pct = value == null ? null : Math.min(100, Math.max(0, Number(value)));
+  const pct = value == null ? null : Math.round(Math.min(100, Math.max(0, Number(value))));
   if (pct == null) return <span className="text-slate-300 text-[10px]">—</span>;
   const color = pct >= 100 ? 'bg-emerald-500' : pct >= 70 ? 'bg-blue-500' : pct >= 40 ? 'bg-amber-500' : 'bg-slate-400';
   return (
@@ -42,6 +42,7 @@ export const ProgressBar = ({ value, className = '' }) => {
 export const HistoryCard = ({ item, isLatest }) => {
   const [imgOpen, setImgOpen] = useState(false);
   const imgUrl = item.image_path ? `${API_BASE}${item.image_path.startsWith('/') ? '' : '/'}${item.image_path}` : null;
+  const pct = Math.round(Number(item.progress) || 0);
 
   return (
     <div className={`rounded-xl border p-3 space-y-2 ${isLatest ? 'border-blue-200 bg-blue-50/60' : 'border-slate-200 bg-white'}`}>
@@ -53,11 +54,11 @@ export const HistoryCard = ({ item, isLatest }) => {
             </span>
           )}
           <span className={`text-xl font-black tabular-nums ${
-            item.progress >= 100 ? 'text-emerald-600' :
-            item.progress >= 70  ? 'text-blue-600'    :
-            item.progress >= 40  ? 'text-amber-600'   : 'text-slate-600'
+            pct >= 100 ? 'text-emerald-600' :
+            pct >= 70  ? 'text-blue-600'    :
+            pct >= 40  ? 'text-amber-600'   : 'text-slate-600'
           }`}>
-            {item.progress}%
+            {pct}%
           </span>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -152,7 +153,7 @@ export const ModalShell = ({ title, subtitle, onClose, size = 'lg', children }) 
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`bg-white w-full ${width} rounded-t-2xl md:rounded-2xl shadow-xl max-h-[92vh] flex flex-col overflow-hidden focus:outline-none`}
+        className={`bg-white w-full ${width} rounded-t-2xl md:rounded-2xl shadow-xl h-[92dvh] md:h-auto md:max-h-[92vh] flex flex-col overflow-hidden focus:outline-none`}
       >
         <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-200 flex-shrink-0">
           <div className="min-w-0">

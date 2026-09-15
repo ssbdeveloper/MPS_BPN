@@ -1,423 +1,234 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  RefreshCw,
-  PackageSearch,
-  Layers,
-  ChevronRight,
-  AlertCircle,
-  ClipboardList,
-} from 'lucide-react';
+import { AlertCircle, ChevronRight, FolderKanban, Layers3, RefreshCw, Search, Settings2 } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { goBackOrFallback } from '../utils/navigation';
 import PageHeader from '../components/layout/PageHeader';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
-import SearchInput from '../components/forms/SearchInput';
-import { API_BASE, ProgressBar, SubOperationPanel, SubTaskImportButton, SubTaskTemplateLink, computeRollup } from '../features/progress';
+import { API_BASE, ProgressBar, SubOperationPanel, SubTaskImportButton, SubTaskTemplateLink } from '../features/progress';
 
-const ORDER_PICKER_LIMIT = 50;
+const MotionDiv = motion.div;
+const PAGE_LIMIT = 50;
+const STATUS_OPTIONS = [
+  { value: 'active', label: 'Active' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'all', label: 'All' },
+];
+const collapse = { initial: { height: 0, opacity: 0 }, animate: { height: 'auto', opacity: 1 }, exit: { height: 0, opacity: 0 } };
 
-/**
- * ProgressUpdatePage — dedicated FOREMAN place to maintain PHYSICAL progress.
- *
- * The foreman breaks a SAP operation into child sub-tasks and updates a
- * SUBJECTIVE physical-progress estimate; the backend rolls each sub-task up to
- * its operation. Operators never touch this — they only check in on the
- * operation. This page is an estimate tool, NOT a work-assignment list.
- *
- * Flow: pick an order (searchable) → its operations appear → expand an
- * operation to add / update / retire its sub-tasks (shared SubOperationPanel).
- */
+const countOperations = (project) => (project.units || []).reduce((sum, unit) => sum + (unit.operations || []).length, 0);
+const number = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString('id-ID', { maximumFractionDigits: 1 }) : '—';
+const MetaText = ({ children }) => <span className="mt-0.5 block truncate text-[11px] text-slate-500 sm:text-xs">{children}</span>;
+
+function ProgressSummary({ value, label }) {
+  return (
+    <div className="w-24 shrink-0 sm:w-40">
+      <span className="mb-1 hidden text-xs font-semibold uppercase tracking-wide text-slate-400 sm:block">{label}</span>
+      <ProgressBar value={value} />
+    </div>
+  );
+}
+
+function OutlineButton({ expanded, icon, title, meta, progress, onClick, level }) {
+  const project = level === 'project';
+  return (
+    <button type="button" aria-expanded={expanded} onClick={onClick} className={`flex min-h-[52px] w-full items-center gap-2 px-3 py-2 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8] motion-reduce:transition-none sm:min-h-[58px] sm:gap-3 sm:px-4 sm:py-2.5 ${project ? 'bg-sky-50 hover:bg-sky-100' : 'border-t border-slate-200 bg-white hover:bg-slate-50'}`}>
+      <ChevronRight size={15} className={`shrink-0 text-slate-400 transition-transform duration-200 motion-reduce:transition-none sm:h-[17px] sm:w-[17px] ${expanded ? 'rotate-90 text-[#0077b6]' : ''}`} />
+      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors sm:h-8 sm:w-8 ${project ? 'bg-[#0077b6] text-white' : 'bg-slate-100 text-slate-500'}`}>{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className={`${project ? 'text-[13px] font-extrabold text-slate-900 sm:text-sm' : 'text-[13px] font-bold text-slate-800 sm:text-sm'} block truncate`}>{title}</span>
+        <MetaText>{meta}</MetaText>
+      </span>
+      <ProgressSummary value={progress} label="Progress" />
+    </button>
+  );
+}
+
+function OperationRow({ operation, expanded, state, onToggle, onRefresh }) {
+  const reduce = useReducedMotion();
+  const subtasks = state?.list || operation.subtasks || [];
+  const loading = state?.loading;
+  return (
+    <div className="border-t border-slate-100 bg-white">
+      <button type="button" aria-expanded={expanded} onClick={onToggle} className="grid min-h-[44px] w-full grid-cols-[auto_minmax(0,1fr)_56px_120px_auto] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-sky-50/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8] motion-reduce:transition-none sm:grid-cols-[auto_minmax(0,1fr)_80px_170px_auto] sm:gap-3 sm:px-4 sm:py-2.5">
+        <ChevronRight size={14} className={`ml-5 shrink-0 text-slate-400 transition-transform duration-200 motion-reduce:transition-none sm:ml-8 sm:h-4 sm:w-4 ${expanded ? 'rotate-90 text-[#0077b6]' : ''}`} />
+        <span className="min-w-0 border-l-2 border-sky-300 pl-2 sm:pl-3">
+          <span className="block truncate text-[13px] font-bold text-slate-800 sm:text-sm">{operation.operation_text || 'SAP Operation'}</span>
+          <MetaText>{operation.order_no} · Op {operation.operation_no}{operation.workcenter ? ` · ${operation.workcenter}` : ''}</MetaText>
+        </span>
+        <span className="text-center text-[11px] font-semibold tabular-nums text-slate-600 sm:text-xs">{number(operation.plan_hours)}</span>
+        <ProgressBar value={operation.progress_pct} />
+        <span className="min-w-[50px] text-right text-[11px] font-semibold text-slate-500 sm:min-w-[74px] sm:text-xs">{loading ? 'Loading…' : `${subtasks.length} tasks`}</span>
+      </button>
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <MotionDiv {...(reduce ? {} : collapse)} transition={{ duration: 0.16 }} className="overflow-hidden">
+            <SubOperationPanel
+              idsow={operation.idsow}
+              operationNo={operation.operation_no}
+              partNumber={operation.part_number}
+              operationText={operation.operation_text}
+              state={state || { list: subtasks, loading: false, error: '' }}
+              onRefresh={onRefresh}
+            />
+          </MotionDiv>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function ProgressUpdatePage() {
   const navigate = useNavigate();
+  const reduce = useReducedMotion();
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('active');
+  const [projects, setProjects] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, total_projects: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [openProjects, setOpenProjects] = useState(new Set());
+  const [openUnits, setOpenUnits] = useState(new Set());
+  const [openOperations, setOpenOperations] = useState(new Set());
+  const [subState, setSubState] = useState({});
+  const abortRef = useRef(null);
 
-  // ── Order picker ────────────────────────────────────────────────
-  const [search, setSearch]             = useState('');
-  const [activeSearch, setActiveSearch] = useState('');
-  const [orders, setOrders]             = useState([]);
-  const [total, setTotal]               = useState(0);
-  const [ordersLoading, setOrdersLoading] = useState(true);
-  const [ordersError, setOrdersError]   = useState('');
-  const ordersAbort = useRef(null);
-
-  // ── Selected order + its operations ─────────────────────────────
-  const [selectedOrder, setSelectedOrder] = useState(null);
-  const [ops, setOps]           = useState([]);
-  const [opsLoading, setOpsLoading] = useState(false);
-  const [opsError, setOpsError]     = useState('');
-  const [subState, setSubState]     = useState({}); // { [idsow]: { list, loading, error } }
-  const [expandedOps, setExpandedOps] = useState(new Set());
-  const opsReqRef = useRef(0);
-  const mountedRef = useRef(true);
-
-  // StrictMode-safe: effect body harus SET ulang mountedRef = true (StrictMode di dev
-  // menjalankan cleanup lalu remount; tanpa set ulang, ref tetap false → fetch async
-  // di-skip dan UI macet di skeleton loading).
   useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  // Debounce free-text search into the actual fetch trigger.
-  useEffect(() => {
-    const t = setTimeout(() => setActiveSearch(search), 400);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setQuery(search.trim()), 350);
+    return () => clearTimeout(timer);
   }, [search]);
 
-  const loadOrders = useCallback(async (term) => {
-    if (ordersAbort.current) ordersAbort.current.abort();
-    ordersAbort.current = new AbortController();
-    setOrdersLoading(true);
-    setOrdersError('');
+  const load = useCallback(async (page = 1) => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    setLoading(true);
+    setError('');
     try {
-      const params = new URLSearchParams({ page: 1, limit: ORDER_PICKER_LIMIT });
-      if (term.trim()) params.set('search', term.trim());
-      const res = await fetch(`${API_BASE}/sow/grouped?${params}`, { signal: ordersAbort.current.signal });
-      if (!res.ok) throw new Error('Server error');
-      const json = await res.json();
-      setOrders(json.data ?? []);
-      setTotal(json.total ?? 0);
+      const params = new URLSearchParams({ status, page: String(page), limit: String(PAGE_LIMIT) });
+      if (query) params.set('q', query);
+      const response = await fetch(`${API_BASE}/dashboard/manufacturing-order-progress?${params}`, { signal: abortRef.current.signal });
+      if (!response.ok) throw new Error();
+      const payload = await response.json();
+      setProjects(Array.isArray(payload.data) ? payload.data : []);
+      setPagination(payload.pagination || { page, total_projects: 0 });
     } catch (err) {
-      if (err.name === 'AbortError') return;
-      setOrders([]);
-      setTotal(0);
-      setOrdersError('Failed to load order list. Try again.');
+      if (err.name !== 'AbortError') setError('Failed to load progress hierarchy.');
     } finally {
-      setOrdersLoading(false);
+      setLoading(false);
     }
-  }, []);
+  }, [query, status]);
 
-  useEffect(() => { loadOrders(activeSearch); }, [activeSearch, loadOrders]);
+  useEffect(() => { load(1); return () => abortRef.current?.abort(); }, [load]);
 
-  // ── Sub-tasks for one operation (mirrors OrderListPage loader) ──
-  const loadSubtasks = useCallback(async (idsow) => {
-    setSubState((prev) => ({ ...prev, [idsow]: { ...(prev[idsow] || {}), loading: true, error: '' } }));
+  const loadSubtasks = useCallback(async (operation) => {
+    const id = operation.idsow;
+    setSubState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), list: prev[id]?.list || operation.subtasks || [], loading: true, error: '' } }));
     try {
-      const res = await fetch(`${API_BASE}/sow/operations/${idsow}/subtasks`);
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      if (!mountedRef.current) return;
-      setSubState((prev) => ({ ...prev, [idsow]: { list: Array.isArray(data) ? data : [], loading: false, error: '' } }));
+      const response = await fetch(`${API_BASE}/sow/operations/${id}/subtasks`);
+      if (!response.ok) throw new Error();
+      const list = await response.json();
+      setSubState((prev) => ({ ...prev, [id]: { list: Array.isArray(list) ? list : [], loading: false, error: '' } }));
     } catch {
-      if (!mountedRef.current) return;
-      setSubState((prev) => ({
-        ...prev,
-        [idsow]: { list: prev[idsow]?.list || [], loading: false, error: 'Failed to load sub-tasks' },
-      }));
+      setSubState((prev) => ({ ...prev, [id]: { list: prev[id]?.list || [], loading: false, error: 'Failed to load sub-tasks' } }));
     }
   }, []);
 
-  const loadOps = useCallback(async (orderNo) => {
-    const reqId = ++opsReqRef.current;
-    setOpsLoading(true);
-    setOpsError('');
-    setOps([]);
-    setSubState({});
-    setExpandedOps(new Set());
-    try {
-      const res = await fetch(`${API_BASE}/sow/${encodeURIComponent(orderNo)}`);
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      if (opsReqRef.current !== reqId) return;
-      const arr = Array.isArray(data) ? data : [];
-      setOps(arr);
-      arr.forEach((o) => loadSubtasks(o.idsow));
-    } catch {
-      if (opsReqRef.current !== reqId) return;
-      setOps([]);
-      setOpsError('Failed to load operations for this order.');
-    } finally {
-      if (opsReqRef.current === reqId) setOpsLoading(false);
-    }
-  }, [loadSubtasks]);
+  const toggle = (setter, key) => setter((previous) => {
+    const next = new Set(previous);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
 
-  useEffect(() => {
-    if (selectedOrder) loadOps(selectedOrder.order_no);
-  }, [selectedOrder, loadOps]);
-
-  const toggleOp = useCallback((idsow) => {
-    setExpandedOps((prev) => {
-      const next = new Set(prev);
-      next.has(idsow) ? next.delete(idsow) : next.add(idsow);
-      return next;
-    });
-  }, []);
-
-  const handleRefresh = useCallback(() => {
-    loadOrders(activeSearch);
-    if (selectedOrder) loadOps(selectedOrder.order_no);
-  }, [loadOrders, activeSearch, selectedOrder, loadOps]);
-
-  const busy = ordersLoading || opsLoading;
-
-  // ── Order card (left picker) ────────────────────────────────────
-  const renderOrderCard = (order) => {
-    const active = selectedOrder?.order_no === order.order_no;
-    return (
-      <button
-        key={order.order_no}
-        type="button"
-        onClick={() => setSelectedOrder(order)}
-        aria-pressed={active}
-        className={`w-full text-left rounded-xl border px-3 py-2.5 transition-all duration-150 active:scale-[0.99]
-                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none
-                    ${active
-                      ? 'border-[#0077b6] bg-sky-50 shadow-sm'
-                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'}`}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <span className="font-bold text-sm text-slate-800 truncate tabular-nums">{order.order_no}</span>
-          <span className="flex-shrink-0 inline-flex items-center justify-center min-w-[2.25rem] px-1.5 h-5 rounded-full
-                           bg-[#0077b6] text-white text-[11px] font-bold tabular-nums">
-            {order.operation_count} ops
-          </span>
-        </div>
-        <p className="mt-0.5 text-xs text-slate-700 truncate">{order.part_name || '—'}</p>
-        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-500">
-          {order.part_number && <span className="truncate">{order.part_number}</span>}
-          {order.model && (
-            <>
-              <span className="text-slate-300">·</span>
-              <span className="truncate">{order.model}</span>
-            </>
-          )}
-        </div>
-        <div className="mt-2">
-          <ProgressBar value={order.avg_progress} />
-        </div>
-      </button>
-    );
+  const toggleOperation = (operation) => {
+    const opening = !openOperations.has(operation.idsow);
+    toggle(setOpenOperations, operation.idsow);
+    if (opening && !subState[operation.idsow]) loadSubtasks(operation);
   };
 
-  // ── Operation card (right detail) ───────────────────────────────
-  const renderOperationCard = (op) => {
-    const subs        = subState[op.idsow];
-    const subLoading  = !subs || subs.loading;
-    const list        = subs?.list || [];
-    const hasSubs     = list.length > 0;
-    const expanded    = expandedOps.has(op.idsow);
-    const displayProg = hasSubs ? computeRollup(list) : (op.progress ?? null);
-    const opText      = op.operation_text || op.operationtext || '—';
-
-    return (
-      <div key={op.idsow} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-        <button
-          type="button"
-          onClick={() => toggleOp(op.idsow)}
-          aria-expanded={expanded}
-          className="w-full text-left flex items-center gap-3 px-4 py-3 transition-colors
-                     hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#00b4d8]
-                     motion-reduce:transition-none"
-        >
-          <span className="flex-shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg
-                           bg-sky-50 text-[#0077b6] font-bold text-xs tabular-nums border border-sky-100">
-            {op.operation_no}
-          </span>
-
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-slate-800 leading-snug line-clamp-2">{opText}</p>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
-              {op.workcenter && <span className="truncate">{op.workcenter}</span>}
-              {op.planhours != null && (
-                <>
-                  <span className="text-slate-300">·</span>
-                  <span className="tabular-nums">{Number(op.planhours).toFixed(2)} plan hrs</span>
-                </>
-              )}
-              <span className="text-slate-300">·</span>
-              {subLoading ? (
-                <span className="text-slate-400">loading sub-tasks…</span>
-              ) : hasSubs ? (
-                <span className="font-semibold text-[#0077b6] tabular-nums">{list.length} sub-tasks</span>
-              ) : (
-                <span className="text-slate-400">no sub-tasks</span>
-              )}
-            </div>
-          </div>
-
-          <div className="hidden sm:block w-40 flex-shrink-0">
-            {subLoading ? <Skeleton className="h-2.5 w-full" /> : <ProgressBar value={displayProg} />}
-          </div>
-
-          <ChevronRight
-            size={18}
-            className={`flex-shrink-0 text-slate-400 transition-transform duration-200 motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
-          />
-        </button>
-
-        {/* Progress bar for narrow screens (hidden above) */}
-        <div className="sm:hidden px-4 pb-3">
-          {subLoading ? <Skeleton className="h-2.5 w-full" /> : <ProgressBar value={displayProg} />}
-        </div>
-
-        {expanded && (
-          <SubOperationPanel
-            idsow={op.idsow}
-            operationNo={op.operation_no}
-            partNumber={op.part_number}
-            operationText={op.operation_text}
-            state={subs}
-            onRefresh={() => loadSubtasks(op.idsow)}
-          />
-        )}
-      </div>
-    );
+  const operations = useMemo(() => projects.reduce((sum, project) => sum + countOperations(project), 0), [projects]);
+  const busy = loading || Object.values(subState).some((state) => state.loading);
+  const refresh = () => {
+    load(pagination.page || 1);
+    for (const project of projects) for (const unit of project.units || []) for (const operation of unit.operations || []) {
+      if (openOperations.has(operation.idsow)) loadSubtasks(operation);
+    }
   };
 
   return (
-    <div className="h-dvh flex flex-col bg-slate-50 overflow-hidden">
+    <div className="flex min-h-dvh flex-col bg-slate-50">
       <PageHeader
-        title="Update Progress"
-        eyebrow="Foreman · Physical Progress"
+        title="Foreman Physical Progress"
         onBack={() => goBackOrFallback(navigate)}
-        right={
-          <>
-            <SubTaskTemplateLink />
-            <SubTaskImportButton onImported={handleRefresh} />
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 bg-[#0077b6] hover:bg-[#023e8a] text-white
-                         px-3 py-1.5 rounded-lg text-xs font-semibold min-h-[40px]
-                         transition-all duration-150 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
-                         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]
-                         motion-reduce:transition-none motion-reduce:transform-none"
-            >
-              <RefreshCw size={15} className={busy ? 'animate-spin motion-reduce:animate-none' : ''} />
-              <span>Refresh</span>
-            </button>
-          </>
-        }
+        right={<>
+          <SubTaskTemplateLink />
+          <SubTaskImportButton onImported={refresh} />
+          <button type="button" onClick={refresh} disabled={busy} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 text-xs font-semibold text-white transition-colors hover:bg-[#023e8a] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"><RefreshCw size={15} className={busy ? 'animate-spin motion-reduce:animate-none' : ''} /> Refresh</button>
+        </>}
       />
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
-
-        {/* ── Left: order picker ─────────────────────────────── */}
-        <aside className="flex-shrink-0 flex flex-col min-h-0 bg-white border-b md:border-b-0 md:border-r border-slate-200
-                          md:w-80 lg:w-96 max-h-[42vh] md:max-h-none">
-          <div className="flex-shrink-0 px-4 py-3 border-b border-slate-200">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold uppercase tracking-wide text-slate-500">Select Order</h2>
-              {!ordersLoading && !ordersError && (
-                <span className="text-[11px] font-semibold text-slate-400 tabular-nums">
-                  {total.toLocaleString('id-ID')} orders
-                </span>
-              )}
-            </div>
-            <SearchInput
-              value={search}
-              onChange={setSearch}
-              placeholder="Search order, part, SSBR..."
-            />
+      <main className="mx-auto w-full max-w-[1500px] flex-1 px-3 py-3 sm:px-4 sm:py-4 md:px-6">
+        <section className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm sm:mb-4 sm:gap-3 sm:p-3">
+          <label className="relative min-w-[200px] flex-1">
+            <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search project, unit, order, operation…" className="min-h-[40px] w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-800 transition-shadow focus:outline-none focus:ring-2 focus:ring-[#00b4d8] sm:min-h-[44px]" />
+          </label>
+          <div className="inline-flex min-h-[40px] items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1 sm:min-h-[44px]">
+            {STATUS_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setStatus(option.value)}
+                className={`min-h-[32px] rounded-md px-2.5 text-xs font-bold transition-colors sm:min-h-[36px] sm:px-3 ${status === option.value ? 'bg-[#0077b6] text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
+          <div className="flex min-h-[40px] items-center gap-2 text-[11px] font-semibold text-slate-500 sm:min-h-[44px] sm:gap-3 sm:text-xs"><span>{pagination.total_projects || 0} projects</span><span className="text-slate-300">·</span><span>{operations} ops</span></div>
+        </section>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
-            {ordersLoading ? (
-              <>
-                <Skeleton className="h-[74px] rounded-xl" />
-                <Skeleton className="h-[74px] rounded-xl" />
-                <Skeleton className="h-[74px] rounded-xl" />
-                <Skeleton className="h-[74px] rounded-xl" />
-              </>
-            ) : ordersError ? (
-              <div className="flex items-center justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2.5">
-                <span className="flex items-center gap-2 text-xs text-red-700 font-medium">
-                  <AlertCircle size={15} className="flex-shrink-0" />
-                  {ordersError}
-                </span>
-                <button
-                  onClick={() => loadOrders(activeSearch)}
-                  className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : orders.length === 0 ? (
-              <EmptyState
-                icon={PackageSearch}
-                title={activeSearch ? 'Order not found' : 'No orders yet'}
-              />
-            ) : (
-              orders.map(renderOrderCard)
-            )}
+        {loading ? (
+          <div className="space-y-3"><Skeleton className="h-16 rounded-xl" /><Skeleton className="h-16 rounded-xl" /><Skeleton className="h-16 rounded-xl" /></div>
+        ) : error ? (
+          <div className="flex items-center justify-between rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700"><span className="flex items-center gap-2"><AlertCircle size={17} />{error}</span><button type="button" onClick={() => load(1)} className="underline">Retry</button></div>
+        ) : projects.length === 0 ? (
+          <EmptyState icon={Settings2} title="No work found" />
+        ) : (
+          <div className="space-y-3">
+            {projects.map((project) => {
+              const projectOpen = openProjects.has(project.project_id);
+              const units = project.units || [];
+              return (
+                <section key={project.project_id} className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
+                  <OutlineButton level="project" expanded={projectOpen} icon={<FolderKanban size={17} />} title={project.project_name} meta={`${units.length} units · ${countOperations(project)} operations`} progress={project.progress_pct} onClick={() => toggle(setOpenProjects, project.project_id)} />
+                  <AnimatePresence initial={false}>
+                    {projectOpen && <MotionDiv {...(reduce ? {} : collapse)} transition={{ duration: 0.16 }} className="overflow-hidden">
+                      {units.map((unit) => {
+                        const unitKey = `${project.project_id}:${unit.unit_key}`;
+                        const unitOpen = openUnits.has(unitKey);
+                        const unitOps = unit.operations || [];
+                        return (
+                          <div key={unitKey}>
+                            <OutlineButton expanded={unitOpen} icon={<Layers3 size={16} />} title={unit.unit_name || 'No Unit'} meta={`${unitOps.length} operations`} progress={unit.progress_pct} onClick={() => toggle(setOpenUnits, unitKey)} />
+                            <AnimatePresence initial={false}>
+                              {unitOpen && <MotionDiv {...(reduce ? {} : collapse)} transition={{ duration: 0.16 }} className="overflow-hidden bg-white">
+                                <div className="hidden grid-cols-[minmax(0,1fr)_80px_170px_74px] gap-3 border-t border-slate-100 bg-slate-50 px-4 py-1.5 pl-[76px] text-xs font-bold uppercase tracking-wide text-slate-400 lg:grid"><span>Operation</span><span className="text-center">Plan</span><span>Progress</span><span className="text-right">Tasks</span></div>
+                                {unitOps.map((operation) => <OperationRow key={operation.idsow} operation={operation} expanded={openOperations.has(operation.idsow)} state={subState[operation.idsow]} onToggle={() => toggleOperation(operation)} onRefresh={() => loadSubtasks(operation)} />)}
+                              </MotionDiv>}
+                            </AnimatePresence>
+                          </div>
+                        );
+                      })}
+                    </MotionDiv>}
+                  </AnimatePresence>
+                </section>
+              );
+            })}
           </div>
-        </aside>
-
-        {/* ── Right: operations of selected order ─────────────── */}
-        <main className="flex-1 overflow-y-auto min-h-0 px-4 md:px-6 py-4">
-          {!selectedOrder ? (
-            <div className="h-full flex items-center justify-center">
-              <EmptyState
-                icon={ClipboardList}
-                title="Select an order to start"
-              />
-            </div>
-          ) : (
-            <div className="max-w-4xl mx-auto space-y-4">
-
-              {/* Selected order summary */}
-              <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wide text-[#0077b6]">Order</span>
-                      <span className="text-base font-extrabold text-slate-800 tabular-nums truncate">
-                        {selectedOrder.order_no}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-sm text-slate-700 truncate">{selectedOrder.part_name || '—'}</p>
-                    <p className="text-xs text-slate-500 truncate">
-                      {[selectedOrder.part_number, selectedOrder.model, selectedOrder.ssbr_id].filter(Boolean).join(' · ') || '—'}
-                    </p>
-                  </div>
-                  <div className="w-full sm:w-56 flex-shrink-0">
-                    <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Order Progress</p>
-                    <ProgressBar value={selectedOrder.avg_progress} />
-                  </div>
-                </div>
-              </section>
-
-              {/* Operations list */}
-              <section>
-                <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2.5">
-                  Operations &amp; Progress
-                </h3>
-
-                {opsLoading ? (
-                  <div className="space-y-2.5">
-                    <Skeleton className="h-16 rounded-xl" />
-                    <Skeleton className="h-16 rounded-xl" />
-                    <Skeleton className="h-16 rounded-xl" />
-                  </div>
-                ) : opsError ? (
-                  <div className="flex items-center justify-between rounded-xl bg-red-50 border border-red-200 px-4 py-3">
-                    <span className="flex items-center gap-2 text-xs text-red-700 font-medium">
-                      <AlertCircle size={16} className="flex-shrink-0" />
-                      {opsError}
-                    </span>
-                    <button
-                      onClick={() => loadOps(selectedOrder.order_no)}
-                      className="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                ) : ops.length === 0 ? (
-                  <EmptyState
-                    icon={Layers}
-                    title="No operations"
-                  />
-                ) : (
-                  <div className="space-y-2.5">
-                    {ops.map(renderOperationCard)}
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
-        </main>
-      </div>
+        )}
+      </main>
     </div>
   );
 }
