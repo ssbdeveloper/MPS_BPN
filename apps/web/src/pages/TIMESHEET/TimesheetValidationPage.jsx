@@ -41,39 +41,20 @@ const formatDurationStacked = (durationStr) => {
 };
 
 // ─── Badge helper ─────────────────────────────────────────────────────────────
-const StatusBadge = ({ isDeleted, isSapReject, isValidated, isSapPending }) => {
+const StatusBadge = ({ isDeleted, isSapReject, isValidated }) => {
   if (isDeleted)
     return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">Deleted</span>;
   if (isSapReject)
     return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 whitespace-nowrap">SAP Reject</span>;
-  if (isSapPending)
-    return (
-      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200 whitespace-nowrap inline-flex items-center gap-1">
-        <span className="w-2.5 h-2.5 border border-t-transparent border-blue-600 rounded-full animate-spin flex-shrink-0" />
-        SAP…
-      </span>
-    );
   if (isValidated)
     return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200 whitespace-nowrap">Validated</span>;
   return <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">Pending</span>;
 };
 
-// ─── ValidateButton (circle-check icon) ──────────────────────────────────────
-const ValidateBtn = ({ onClick, size = 'sm', title = 'Validate' }) => (
-  <button
-    onClick={onClick}
-    title={title}
-    className={`flex items-center justify-center rounded-full transition-all duration-150
-      text-emerald-600 hover:bg-emerald-100 active:scale-95
-      ${size === 'lg' ? 'w-9 h-9' : 'w-7 h-7'}`}
-  >
-    <CheckCircle2 className={size === 'lg' ? 'w-5 h-5' : 'w-4 h-4'} strokeWidth={2.5} />
-  </button>
-);
 
 // ─── RecordRow ────────────────────────────────────────────────────────────────
-const RecordRow = React.memo(({ record, onEdit, onValidateSingle, isSapPending }) => {
-  const isValidated  = !!record.validation_date && !isSapPending;
+const RecordRow = React.memo(({ record, onEdit }) => {
+  const isValidated  = !!record.validation_date;
   const isDeleted    = String(record.state_flag) === '5';
   const isSapReject  = String(record.state_flag) === '3';
   const isUnprod     = !!record.activitytype;
@@ -173,34 +154,15 @@ const RecordRow = React.memo(({ record, onEdit, onValidateSingle, isSapPending }
 
         {/* Status */}
         <div className="flex items-center justify-center">
-          <StatusBadge isDeleted={isDeleted} isSapReject={isSapReject} isValidated={isValidated} isSapPending={isSapPending} />
+          <StatusBadge isDeleted={isDeleted} isSapReject={isSapReject} isValidated={isValidated} />
         </div>
 
-        {/* Action */}
+        {/* Action — tombol Validate DIHAPUS (2026-09-15, keputusan owner 1c): staging SAP
+            tidak pernah menunggu validasi (stager memfilter state_flag<>5, bukan
+            validation_date), jadi tombol itu tidak menggerbangi apa pun. Edit tetap ada
+            untuk koreksi order/jam yang salah. */}
         <div className="flex items-center justify-center">
-          {isSapPending ? (
-            <div className="w-7 h-7 flex items-center justify-center">
-              <span className="w-3.5 h-3.5 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: PALETTE.turquoiseSurf, borderTopColor: 'transparent' }} />
-            </div>
-          ) : !isValidated && !isDeleted && (
-            isSapReject ? (
-              <button
-                onClick={(e) => { e.stopPropagation(); onValidateSingle(record.tsnumber); }}
-                title="Kirim ulang ke SAP"
-                className="w-7 h-7 flex items-center justify-center rounded-full transition-all duration-150 text-red-600 hover:bg-red-100 active:scale-95"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                </svg>
-              </button>
-            ) : (
-              <ValidateBtn
-                onClick={(e) => { e.stopPropagation(); onValidateSingle(record.tsnumber); }}
-              />
-            )
-          )}
-        </div>
+          </div>
       </div>
     </div>
   );
@@ -209,12 +171,11 @@ const RecordRow = React.memo(({ record, onEdit, onValidateSingle, isSapPending }
 // ─── EmployeeGroup ────────────────────────────────────────────────────────────
 const EmployeeGroup = React.memo(({
   group, isExpanded, records, loadingRecords,
-  onToggle, onEdit, onValidateSingle, onValidateGroup, sapPendingTsnumbers
+  onToggle, onEdit
 }) => {
   const pendingCount     = parseInt(group.pending_count);
   const rejectCount      = parseInt(group.reject_count || 0);
   const validatedCount   = parseInt(group.validated_count);
-  const hasSapPending    = records.some(r => sapPendingTsnumbers.has(r.tsnumber));
   const groupHours       = parseFloat(group.total_hours || 0);
   const grpPendingHrs    = parseFloat(group.pending_hours || 0);
   const grpRejectHrs     = parseFloat(group.reject_hours || 0);
@@ -263,24 +224,7 @@ const EmployeeGroup = React.memo(({
               </div>
             </div>
 
-            {(pendingCount > 0 || hasSapPending) && (
-              <button
-                onClick={(e) => { e.stopPropagation(); if (!hasSapPending) onValidateGroup(group.serialnumber, records); }}
-                disabled={hasSapPending}
-                title={hasSapPending ? 'Waiting for SAP confirmation…' : 'Validate all pending in group'}
-                className="w-9 h-9 flex items-center justify-center rounded-full bg-white/20 hover:bg-white/35 active:scale-95 transition-all duration-150 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {hasSapPending ? (
-                  <span className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin" />
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                    <path d="M9 12l2 2 4-4" />
-                  </svg>
-                )}
-              </button>
-            )}
-          </div>
+                      </div>
         </div>
       </div>
 
@@ -313,7 +257,7 @@ const EmployeeGroup = React.memo(({
               </div>
             ) : records.length > 0 ? (
               records.map((record) => (
-                <RecordRow key={record.tsnumber} record={record} onEdit={onEdit} onValidateSingle={onValidateSingle} isSapPending={sapPendingTsnumbers.has(record.tsnumber)} />
+                <RecordRow key={record.tsnumber} record={record} onEdit={onEdit} />
               ))
             ) : (
               <div className="py-6 text-center text-sm text-gray-400">No records found</div>
@@ -386,12 +330,6 @@ const TimesheetValidationPage = () => {
   const [lastSearchForGroups,setLastSearchForGroups] = useState('');
   const [loading,              setLoading]              = useState(false);
   const [downloadingExcel,     setDownloadingExcel]     = useState(false);
-  const [sapStatus,            setSapStatus]            = useState(null);
-  const [sapPendingTsnumbers,  setSapPendingTsnumbers]  = useState(new Set());
-  // Posting langsung ke SAP dari halaman ini DIPENSIUNKAN (cutover CKP 2026-09-15): semua
-  // pengiriman jam lewat pipeline staging. Sengaja KONSTANTA — dulu state dari
-  // localStorage 'validation_postToSap'; sekarang tidak ada cara mengaktifkannya dari UI.
-  const postToSapEnabled = false;
 
   const containerRef    = useRef(null);
   const searchTimerRef  = useRef(null);
@@ -570,114 +508,6 @@ const TimesheetValidationPage = () => {
     } finally { setDownloadingExcel(false); }
   }, [startDate, endDate]);
 
-  const sendToSap = useCallback(async (tsnumbers) => {
-    setSapStatus({ posting: true, successCount: 0, failCount: 0, results: [] });
-    const clearPending = (ids) => setSapPendingTsnumbers(prev => {
-      const next = new Set(prev);
-      ids.forEach(t => next.delete(t));
-      return next;
-    });
-    try {
-      const res  = await fetch(`${API_BASE}/timesheet/post-to-sap`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tsnumbers })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setSapStatus({ posting: false, successCount: 0, failCount: tsnumbers.length, results: [], error: data.error || 'SAP error' });
-        clearPending(tsnumbers);
-        loadValidationData(true);
-        return;
-      }
-      const results  = data.results || [];
-      const accepted = results.filter(r => r.ok);
-      const rejected = results.filter(r => !r.ok);
-      setSapStatus({ posting: false, successCount: data.successCount, failCount: data.failCount, results });
-      // Toast success for each accepted record
-      accepted.forEach(r => toast.success(`SAP OK — Tsnumber ${r.tsnumber}`, { description: r.sapMessage || 'Berhasil dikirim ke SAP', duration: 4000 }));
-      // Patch rejected records locally so they show SAP Reject immediately
-      if (rejected.length > 0) {
-        const rejectedSet = new Set(rejected.map(r => r.tsnumber));
-        setGroupRecords(prev => {
-          const next = { ...prev };
-          for (const [sn, entry] of Object.entries(next)) {
-            const updated = entry.records.map(r =>
-              rejectedSet.has(r.tsnumber) ? { ...r, state_flag: '3', validation_date: null } : r
-            );
-            if (updated.some((r, i) => r !== entry.records[i]))
-              next[sn] = { ...entry, records: updated };
-          }
-          return next;
-        });
-        rejected.forEach(r => toast.error(`SAP Reject — Tsnumber ${r.tsnumber}`, { description: r.sapMessage || 'Tidak ada pesan dari SAP', duration: 5000 }));
-      }
-      clearPending(tsnumbers);
-      // Silent refresh to sync stats and group counts
-      loadValidationData(true);
-    } catch (err) {
-      console.error(err);
-      setSapStatus({ posting: false, successCount: 0, failCount: tsnumbers.length, results: [], error: err.message });
-      clearPending(tsnumbers);
-      loadValidationData(true);
-    }
-  }, [loadValidationData]);
-
-  const handleValidateSingle = useCallback(async (tsnumber) => {
-    // Disable button immediately — show spinner in place
-    setSapPendingTsnumbers(prev => new Set([...prev, tsnumber]));
-    try {
-      const res  = await fetch(`${API_BASE}/timesheet/validation`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tsnumbers: [tsnumber] })
-      });
-      if (!res.ok) throw new Error('Gagal validasi');
-      const data = await res.json();
-      const validated = (data.updated_rows || []).map(r => r.tsnumber);
-      if (validated.length > 0 && postToSapEnabled) {
-        // sendToSap will clear pending and refresh after SAP responds
-        sendToSap(validated);
-      } else {
-        setSapPendingTsnumbers(prev => { const next = new Set(prev); next.delete(tsnumber); return next; });
-        loadValidationData(true);
-        if (validated.length > 0) toast.success('Validated (SAP off)');
-      }
-    } catch (err) {
-      console.error(err);
-      setSapPendingTsnumbers(prev => { const next = new Set(prev); next.delete(tsnumber); return next; });
-      toast.error('Gagal validasi timesheet', { description: err.message });
-    }
-  }, [sendToSap, postToSapEnabled, loadValidationData]);
-
-  const handleValidateGroup = useCallback(async (sn, records) => {
-    const recs = records || groupRecords[sn]?.records || [];
-    const tsnumbers = recs
-      .filter(r => !r.validation_date && !['3', '5'].includes(String(r.state_flag)))
-      .map(r => r.tsnumber);
-    if (tsnumbers.length === 0) return;
-    // Disable all pending buttons immediately
-    setSapPendingTsnumbers(prev => new Set([...prev, ...tsnumbers]));
-    try {
-      const res  = await fetch(`${API_BASE}/timesheet/validation`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tsnumbers })
-      });
-      if (!res.ok) throw new Error('Gagal validasi batch');
-      const data = await res.json();
-      const validated = (data.updated_rows || []).map(r => r.tsnumber);
-      if (validated.length > 0 && postToSapEnabled) {
-        // sendToSap will clear pending and refresh after SAP responds
-        sendToSap(validated);
-      } else {
-        setSapPendingTsnumbers(prev => { const next = new Set(prev); tsnumbers.forEach(t => next.delete(t)); return next; });
-        loadValidationData(true);
-        if (validated.length > 0) toast.success(`${validated.length} records validated (SAP off)`);
-      }
-    } catch (err) {
-      console.error(err);
-      setSapPendingTsnumbers(prev => { const next = new Set(prev); tsnumbers.forEach(t => next.delete(t)); return next; });
-      toast.error('Gagal validasi batch', { description: err.message });
-    }
-  }, [groupRecords, sendToSap, postToSapEnabled, loadValidationData]);
 
   const handleEdit = useCallback((tsnumber) => {
     if (containerRef.current) sessionStorage.setItem('timesheet_scroll', containerRef.current.scrollTop);
@@ -700,15 +530,6 @@ const TimesheetValidationPage = () => {
   const btnSolid   = `${btnBase} text-white`; // used for coloured variants (e.g. emerald download btn)
 
   // ── SAP banner color logic ────────────────────────────────────────────────
-  const sapBannerStyle = sapStatus
-    ? sapStatus.posting
-      ? { bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8' }
-      : sapStatus.failCount > 0 && sapStatus.successCount === 0
-        ? { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' }
-        : sapStatus.failCount > 0
-          ? { bg: '#fffbeb', border: '#fde68a', text: '#92400e' }
-          : { bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d' }
-    : null;
 
   // ── Input class helper ────────────────────────────────────────────────────
   const inputCls = 'bg-white border border-slate-200 text-slate-800 placeholder-slate-400 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00b4d8] focus:border-[#0096c7] transition-all duration-150';
@@ -779,19 +600,6 @@ const TimesheetValidationPage = () => {
             <div className="flex-1" />
 
             <button onClick={clearFilters}  className={btnOutline}>Clear</button>
-
-            {/* Posting langsung ke SAP DIPENSIUNKAN (cutover CKP 2026-09-15). Dulu ini toggle
-                (state + localStorage 'validation_postToSap'); sekarang mati permanen dan
-                tidak bisa diaktifkan — pengiriman jam lewat pipeline staging. */}
-            <span
-              title="Posting langsung ke SAP dipensiunkan — pengiriman jam lewat pipeline staging"
-              className="flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-400"
-            >
-              <span className="relative inline-flex h-4 w-7 flex-shrink-0 rounded-full border border-slate-300 bg-slate-200">
-                <span className="absolute top-0.5 h-3 w-3 translate-x-0.5 rounded-full bg-white shadow" />
-              </span>
-              SAP off
-            </span>
             <button onClick={expandAll}     className={btnOutline}>Expand All</button>
             <button onClick={collapseAll}   className={btnOutline}>Collapse All</button>
             <button
@@ -854,26 +662,6 @@ const TimesheetValidationPage = () => {
         </div>
       </div>
 
-      {/* ══ SAP STATUS BANNER ═══════════════════════════════════════════════ */}
-      {sapStatus && sapBannerStyle && (
-        <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 text-sm border-b"
-          style={{ background: sapBannerStyle.bg, borderColor: sapBannerStyle.border, color: sapBannerStyle.text }}>
-          <div className="flex items-center gap-2 font-medium">
-            {sapStatus.posting ? (
-              <><span className="w-4 h-4 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: sapBannerStyle.text, borderTopColor: 'transparent' }} />Mengirim data ke SAP…</>
-            ) : sapStatus.error ? (
-              `SAP Error: ${sapStatus.error}`
-            ) : (
-              `SAP: ${sapStatus.successCount} berhasil${sapStatus.failCount > 0 ? `, ${sapStatus.failCount} gagal` : ''}`
-            )}
-          </div>
-          {!sapStatus.posting && (
-            <button onClick={() => setSapStatus(null)}
-              className="text-xs px-2 py-0.5 rounded hover:bg-black/10 transition-colors">✕</button>
-          )}
-        </div>
-      )}
-
       {/* ══ SCROLLABLE LIST ═════════════════════════════════════════════════ */}
       <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-3 bg-slate-50">
 
@@ -902,9 +690,6 @@ const TimesheetValidationPage = () => {
                   loadingRecords={grpCache?.loading || false}
                   onToggle={toggleGroup}
                   onEdit={handleEdit}
-                  onValidateSingle={handleValidateSingle}
-                  onValidateGroup={handleValidateGroup}
-                  sapPendingTsnumbers={sapPendingTsnumbers}
                 />
               );
             })}

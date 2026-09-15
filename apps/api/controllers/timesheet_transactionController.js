@@ -9,6 +9,48 @@ const ExcelJS = require('exceljs');
 // Configuration from environment variables
 const PLANT_SSB = process.env.PLANT_SSB;  // ✅ Nama var sesuai .env
 const TIMEZONE = process.env.TIMEZONE;  // ✅ Fallback default
+
+// AUTO-EXCLUDE record yang DIHAPUS (state_flag = 5) — 2026-09-15, keputusan owner 3b.
+// Sebab: stager TIMESHEET mengambil record segera setelah checkout (siklus ~15 menit) dan
+// hanya memfilter state_flag <> 5 SAAT ITU. Record yang dihapus BELAKANGAN (terukur di BPN:
+// 426 dari 427 dihapus >15 menit setelah checkout) sudah terlanjur masuk staging dan tidak
+// pernah ditarik kembali -> berisiko jam batal ikut terkirim ke SAP.
+// Menulis ke sap_staging_exclusion membuat poster melewatinya (guard exclusion di
+// post_sap_staging.claim_rows) DAN stager tidak pernah men-stage ulang.
+// Best-effort: kegagalan di sini TIDAK boleh menggagalkan penghapusan timesheet-nya.
+async function autoExcludeDeletedTimesheet(tsnumbers, actor) {
+  const ids = (Array.isArray(tsnumbers) ? tsnumbers : [tsnumbers])
+    .map((t) => String(t ?? "").trim())
+    .filter((t) => /^\d+$/.test(t));
+  if (ids.length === 0) return { excluded: 0 };
+  if (!PLANT_SSB) {
+    console.warn("autoExcludeDeletedTimesheet: PLANT_SSB kosong — exclusion dilewati", ids);
+    return { excluded: 0, skipped: "no_plant" };
+  }
+  try {
+    // CATATAN: di DB plant, sap_staging_exclusion adalah FOREIGN TABLE (postgres_fdw ke AWS)
+    // -> (a) ON CONFLICT TIDAK didukung ("no unique or exclusion constraint matching..."),
+    // (b) DEFAULT kolom remote TIDAK diterapkan lewat foreign table, sehingga excluded_at
+    // harus diisi EKSPLISIT atau kena "null value in column excluded_at ... not-null"
+    // (keduanya terverifikasi di BPN 2026-09-15). Dedupe lewat anti-join NOT EXISTS.
+    const { rowCount } = await db.query(
+      `INSERT INTO public.sap_staging_exclusion
+         (source_system, plant, source_row_id, excluded_by, excluded_at, note)
+       SELECT 'TIMESHEET', $1, x, $2, now(), 'auto: timesheet dihapus (state_flag=5)'
+       FROM unnest($3::text[]) AS x
+       WHERE NOT EXISTS (
+         SELECT 1 FROM public.sap_staging_exclusion ex
+         WHERE ex.source_system = 'TIMESHEET' AND ex.plant = $1 AND ex.source_row_id = x
+       )`,
+      [PLANT_SSB, actor || null, ids],
+    );
+    return { excluded: rowCount };
+  } catch (err) {
+    console.error("autoExcludeDeletedTimesheet error:", err.message);
+    return { excluded: 0, error: err.message };
+  }
+}
+
 console.log('⚙️ Timesheet Controller Config:');
 console.log('   Plant:', PLANT_SSB);
 console.log('   Timezone:', TIMEZONE);
@@ -824,6 +866,15 @@ exports.updateTimesheetadmin = async (req, res) => {
       return res.status(404).json({ error: 'Timesheet record not found' });
     }
 
+    // Edit admin bisa MEMBUAT record jadi terhapus: SQL di atas men-set state_flag='5'
+    // otomatis ketika durasi hasil edit = 0 jam. Samakan perlakuannya dengan hapus manual.
+    if (String(result.rows[0].state_flag ?? "") === "5") {
+      await autoExcludeDeletedTimesheet(
+        [result.rows[0].tsnumber],
+        req.header("x-user-name") || req.header("x-user-id") || null,
+      );
+    }
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error('updateTimesheetadmin error:', err);
@@ -847,8 +898,15 @@ exports.remove = async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Record not found' });
     }
-    
-    res.json({ message: 'Deleted successfully', tsnumber: result.rows[0].tsnumber });
+
+    // Record dihapus PERMANEN dari sumber, tapi salinannya bisa sudah ter-stage.
+    // Tanpa exclusion, bundel staging-nya tetap bisa terkirim ke SAP padahal jamnya batal.
+    const staging = await autoExcludeDeletedTimesheet(
+      [result.rows[0].tsnumber],
+      req.header("x-user-name") || req.header("x-user-id") || null,
+    );
+
+    res.json({ message: 'Deleted successfully', tsnumber: result.rows[0].tsnumber, staging_exclusion: staging });
   } catch (err) {
     console.error('remove error:', err);
     res.status(500).json({ error: err.message });
@@ -1032,9 +1090,20 @@ exports.partialUpdate = async (req, res) => {
       return res.status(404).json({ message: "Timesheet not found" });
     }
 
+    // Auto-exclude kalau record ini baru saja ditandai DIHAPUS (state_flag=5) — lihat
+    // catatan autoExcludeDeletedTimesheet. Non-blocking: gagal exclusion tidak membatalkan update.
+    let staging = null;
+    if (String(result.rows[0].state_flag ?? "") === "5") {
+      staging = await autoExcludeDeletedTimesheet(
+        [result.rows[0].tsnumber],
+        req.header("x-user-name") || req.header("x-user-id") || null,
+      );
+    }
+
     res.json({
       message: "Timesheet updated",
-      data: result.rows[0]
+      data: result.rows[0],
+      ...(staging ? { staging_exclusion: staging } : {}),
     });
   } catch (err) {
     console.error("partialUpdate error:", err);
