@@ -1623,7 +1623,11 @@ const TS_CAP_MINUTES = (cfg) => {
     END)`;
 };
 
-const TS_RAW_SECONDS = `EXTRACT(EPOCH FROM (t.longdate_checkout - t.longdate_checkin))::bigint`;
+// SAP menyimpan waktu hanya sampai detik. Hitung durasi dari endpoint yang sudah
+// dinormalisasi agar Adjusted End tidak mundur akibat check-in bermilidetik.
+const TS_RAW_SECONDS = `EXTRACT(EPOCH FROM (
+  date_trunc('second', t.longdate_checkout) - date_trunc('second', t.longdate_checkin)
+))::bigint`;
 
 // Potongan break hours untuk record timesheet — HANYA non-produktif (activitytype
 // terisi), per hari (record bisa lintas tengah malam). Sama dengan CTE break di
@@ -1640,8 +1644,8 @@ const TS_BREAK_CUT_SECONDS = `
       interval '1 day'
     ) AS g(day_bucket)
     CROSS JOIN LATERAL (
-      SELECT GREATEST(t.longdate_checkin AT TIME ZONE '${TZ}', g.day_bucket) AS seg_start,
-             LEAST(t.longdate_checkout AT TIME ZONE '${TZ}', g.day_bucket + interval '1 day') AS seg_end
+      SELECT GREATEST(date_trunc('second', t.longdate_checkin AT TIME ZONE '${TZ}'), g.day_bucket) AS seg_start,
+             LEAST(date_trunc('second', t.longdate_checkout AT TIME ZONE '${TZ}'), g.day_bucket + interval '1 day') AS seg_end
     ) seg
     CROSS JOIN LATERAL jsonb_array_elements(
       COALESCE((SELECT sap_rules->'break_windows' FROM public.plant_config WHERE id = 1), '[]'::jsonb)
@@ -1766,7 +1770,7 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       -- non-produktif + cap jenis) — makna sama dengan MCH. Dulu memakai durasi snapshot
       -- (st.total_seconds) sehingga end tampak terpotong saat timesheet di-edit setelah
       -- di-stage meski capcut/breakcut = 0 (penyebab laporan "jam kena potong aneh").
-      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
+      to_char(date_trunc('second', t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
               'YYYY-MM-DD HH24:MI:SS') AS end_capped,
       ${TS_RAW_SECONDS} AS raw,
       ${TS_RAW_SECONDS} AS clamped,
@@ -1898,7 +1902,7 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       -- non-produktif + cap jenis) — makna sama dengan MCH. Dulu memakai durasi snapshot
       -- (st.total_seconds) sehingga end tampak terpotong saat timesheet di-edit setelah
       -- di-stage meski capcut/breakcut = 0 (penyebab laporan "jam kena potong aneh").
-      to_char((t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
+      to_char(date_trunc('second', t.longdate_checkin AT TIME ZONE '${TZ}') + (${tsEff}::bigint || ' seconds')::interval,
               'YYYY-MM-DD HH24:MI:SS') AS end_capped,
       ${TS_RAW_SECONDS} AS raw,
       ${TS_RAW_SECONDS} AS clamped,

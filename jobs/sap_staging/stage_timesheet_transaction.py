@@ -98,7 +98,12 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         po.sequence_number,
         po.branch_operation_no,
         po.return_operation_no,
-        EXTRACT(EPOCH FROM (t.longdate_checkout - t.longdate_checkin))::bigint AS raw_seconds,
+        -- SAP hanya menerima HHMMSS. Normalisasi kedua endpoint ke detik sebelum
+        -- menghitung durasi agar IEDZ tidak tampak mundur akibat milidetik.
+        EXTRACT(EPOCH FROM (
+          date_trunc('second', t.longdate_checkout)
+          - date_trunc('second', t.longdate_checkin)
+        ))::bigint AS raw_seconds,
         COALESCE(b.break_seconds, 0)::bigint AS break_seconds,
         CASE
           WHEN jsonb_typeof(cc.ts -> BTRIM(COALESCE(t.activitytype, ''))) = 'null' THEN NULL
@@ -134,8 +139,8 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
         ) AS g(day_bucket)
         CROSS JOIN LATERAL (
           SELECT
-            GREATEST(t.longdate_checkin AT TIME ZONE %s, g.day_bucket) AS seg_start,
-            LEAST(t.longdate_checkout AT TIME ZONE %s, g.day_bucket + interval '1 day') AS seg_end
+            GREATEST(date_trunc('second', t.longdate_checkin AT TIME ZONE %s), g.day_bucket) AS seg_start,
+            LEAST(date_trunc('second', t.longdate_checkout AT TIME ZONE %s), g.day_bucket + interval '1 day') AS seg_end
         ) seg
         CROSS JOIN break_windows bw
         WHERE EXTRACT(DOW FROM g.day_bucket) = bw.dow
@@ -206,8 +211,8 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       TO_CHAR(longdate_checkin AT TIME ZONE %s, 'HH24MISS') AS isdz,
       -- IEDD/IEDZ SINTETIS: checkin + durasi efektif (non-produktif dipotong
       -- istirahat; produktif tetap penuh; keduanya di-cap).
-      TO_CHAR((longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
-      TO_CHAR((longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
+      TO_CHAR(date_trunc('second', longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'YYYYMMDD') AS iedd,
+      TO_CHAR(date_trunc('second', longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval, 'HH24MISS') AS iedz,
       '' AS aueru,
       '' AS zbarcodeid,
       NULL::timestamp AS bucket_start,
@@ -215,11 +220,11 @@ def fetch_rows(from_ts: datetime, to_ts: datetime, limit: int) -> list[dict]:
       NULL::timestamp AS synthetic_end,
       effective_seconds AS total_seconds,
       1::integer AS source_row_count,
-      longdate_checkin AT TIME ZONE %s AS source_min_start,
-      longdate_checkin AT TIME ZONE %s + (effective_seconds || ' seconds')::interval AS source_max_end,
+      date_trunc('second', longdate_checkin AT TIME ZONE %s) AS source_min_start,
+      date_trunc('second', longdate_checkin AT TIME ZONE %s) + (effective_seconds || ' seconds')::interval AS source_max_end,
       jsonb_build_array(jsonb_build_object(
         'id', tsnumber::text,
-        'bucket', longdate_checkin AT TIME ZONE %s,
+        'bucket', date_trunc('second', longdate_checkin AT TIME ZONE %s),
         'sec', effective_seconds
       )) AS segments
     FROM effective

@@ -21,4 +21,10 @@ for (const [name, build] of [
     assert.match(sql, /m\.full_name ILIKE \$3/);
     assert.match(sql, /t\.full_name ILIKE \$3/);
   });
+
+  test(`${name} reconciliation normalizes timesheet endpoints to whole seconds`, () => {
+    const sql = build(cfg);
+    assert.match(sql, /date_trunc\('second', t\.longdate_checkout\) - date_trunc\('second', t\.longdate_checkin\)/);
+    assert.match(sql, /date_trunc\('second', t\.longdate_checkin AT TIME ZONE/);
+  });
 }
