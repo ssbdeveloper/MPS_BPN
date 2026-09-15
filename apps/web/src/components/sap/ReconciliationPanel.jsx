@@ -124,7 +124,9 @@ const RecordRow = React.memo(function RecordRow({ r, excludeBusy, onExclude }) {
         <span className={`inline-block h-2.5 w-2.5 rounded-full ${DOT[r.bundle_status] || 'bg-slate-300'}`} title={r.bundle_status} />
       </td>
       <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.pernr}</td>
-      <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">{r.name || '—'}</td>
+      <td className="whitespace-nowrap px-2.5 py-1.5 font-semibold text-slate-800">
+        {r.name || (r.pernr ? `SN ${r.pernr}` : '—')}
+      </td>
       <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-slate-700">{r.order_no || ''}</td>
       <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">{r.operation_no || ''}</td>
       <td className="max-w-[180px] truncate px-2.5 py-1.5 text-slate-500" title={r.operation_text}>{r.operation_text}</td>

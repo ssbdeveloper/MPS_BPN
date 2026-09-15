@@ -1698,10 +1698,10 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
   const tsEff = TS_EFFECTIVE_SECONDS(cfg);
   const mchEff = MCH_EFFECTIVE_SECONDS(cfg);
   const mchSearch = search
-    ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
+    ? "AND (m.sn_employee ILIKE $3 OR m.full_name ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
     : "";
   const tsSearch = search
-    ? "AND (t.serialnumber ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
+    ? "AND (t.serialnumber ILIKE $3 OR t.full_name ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
     : "";
 
   const mchSql = `
@@ -1711,7 +1711,8 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
       st.id AS staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
       m.proddataid::text AS source_row_id,
-      m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+      m.sn_employee AS pernr,
+      COALESCE(NULLIF(BTRIM(m.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
       COALESCE(m.machinename, '') AS machine,
       COALESCE(m.status_activitytype, '') AS activity,
       COALESCE(m.status_description, '') AS status_desc,
@@ -1753,7 +1754,8 @@ function buildRecordsSql(cfg, { source = "all", search = false } = {}) {
       to_char(st.source_min_start, 'YYYY-MM-DD') AS date,
       st.id AS staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
       t.tsnumber::text AS source_row_id,
-      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr, COALESCE(u.full_name, '') AS name,
+      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr,
+      COALESCE(NULLIF(BTRIM(t.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
       COALESCE(t.workcentercode, '') AS machine,
       BTRIM(COALESCE(t.activitytype, '')) AS activity,
       COALESCE(NULLIF(r.description, ''),
@@ -1805,10 +1807,10 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
   const tsEff = TS_EFFECTIVE_SECONDS(cfg);
   const mchEff = MCH_EFFECTIVE_SECONDS(cfg);
   const mchSearch = search
-    ? "AND (m.sn_employee ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
+    ? "AND (m.sn_employee ILIKE $3 OR m.full_name ILIKE $3 OR u.full_name ILIKE $3 OR m.machinename ILIKE $3 OR m.order_no ILIKE $3)"
     : "";
   const tsSearch = search
-    ? "AND (t.serialnumber ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
+    ? "AND (t.serialnumber ILIKE $3 OR t.full_name ILIKE $3 OR u.full_name ILIKE $3 OR t.workcentercode ILIKE $3 OR COALESCE(t.order_no,'') ILIKE $3)"
     : "";
 
   const mchBase = `
@@ -1845,7 +1847,8 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       to_char(p.sort_day, 'YYYY-MM-DD') AS date,
       p.staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
       m.proddataid::text AS source_row_id,
-      m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+      m.sn_employee AS pernr,
+      COALESCE(NULLIF(BTRIM(m.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
       COALESCE(m.machinename, '') AS machine,
       COALESCE(m.status_activitytype, '') AS activity,
       COALESCE(m.status_description, '') AS status_desc,
@@ -1883,7 +1886,8 @@ function buildRecordsPageSql(cfg, { source = "all", search = false } = {}) {
       to_char(p.sort_day, 'YYYY-MM-DD') AS date,
       p.staging_id, st.status AS bundle_status, st.is_productive AS bundle_productive,
       t.tsnumber::text AS source_row_id,
-      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr, COALESCE(u.full_name, '') AS name,
+      COALESCE(NULLIF(st.pernr_origin, ''), st.pernr) AS pernr,
+      COALESCE(NULLIF(BTRIM(t.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
       COALESCE(t.workcentercode, '') AS machine,
       BTRIM(COALESCE(t.activitytype, '')) AS activity,
       COALESCE(NULLIF(r.description, ''),
@@ -2214,6 +2218,7 @@ async function exportSapReconciliation(req, res) {
            round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float AS source_hrs,
            round(sum(${cutSec})/3600.0, 2)::float AS cut,
            bool_or(m.is_stuck) AS stuck,
+           NULLIF(BTRIM(max(m.full_name)), '') AS source_name,
            COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), '')) AS operation,
            max(m.machinename) AS machine
          FROM public.sap_staging_source src
@@ -2226,7 +2231,8 @@ async function exportSapReconciliation(req, res) {
        SELECT
          to_char(st.bucket_start AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
          st.id AS staging_id, st.source_system AS source, st.pernr,
-         COALESCE(u.full_name, '') AS name, st.status, st.is_productive AS prod,
+         COALESCE(NULLIF(BTRIM(bs.source_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
+         st.status, st.is_productive AS prod,
          round(st.total_seconds/3600.0, 2)::float AS sent,
          bs.source_hrs, bs.cut, bs.nrows, bs.stuck,
          st.aufnr, st.lstar, bs.operation, bs.machine,
@@ -2375,6 +2381,7 @@ async function getSapReconciliationDay(req, res) {
            round(sum(${CLAMPED_SEG_SECONDS})/3600.0, 2)::float AS source_hrs,
            round(sum(${cutSec})/3600.0, 2)::float AS cap_cut_hrs,
            bool_or(m.is_stuck) AS has_stuck,
+           NULLIF(BTRIM(max(m.full_name)), '') AS source_name,
            COALESCE(NULLIF(max(m.operation_short_text), ''), NULLIF(max(m.operation_description), '')) AS operation_text,
            max(m.machineid) AS machineid,
            max(m.machinename) AS machinename
@@ -2390,7 +2397,7 @@ async function getSapReconciliationDay(req, res) {
          st.is_correction, st.status,
          round(st.total_seconds/3600.0, 2)::float AS sent_hrs,
          to_char(st.posted_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD HH24:MI') AS posted_at,
-         u.full_name,
+         COALESCE(NULLIF(BTRIM(bs.source_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS full_name,
          bs.n_rows, bs.source_hrs, bs.cap_cut_hrs, bs.has_stuck, bs.operation_text,
          bs.machineid, bs.machinename
        FROM public.sap_timesheet_staging st
@@ -2546,7 +2553,8 @@ async function listSapExclusions(req, res) {
     }
     const { rows } = await pool.query(
       `SELECT ex.source_row_id, ex.excluded_by, ex.excluded_at, ex.note,
-              m.sn_employee AS pernr, COALESCE(u.full_name, '') AS name,
+              m.sn_employee AS pernr,
+              COALESCE(NULLIF(BTRIM(m.full_name), ''), NULLIF(BTRIM(u.full_name), ''), '') AS name,
               m.machinename, m.status_activitytype AS activity,
               to_char(m.startdatetime, 'YYYY-MM-DD') AS record_date,
               m.startdatetime, COALESCE(m.end_effective, m.enddatetime) AS end_dt,
