@@ -15,6 +15,16 @@ import { DashboardCard, DashboardPager, TimesheetHistoryTable } from './orderPro
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const LIMIT = 20;
+const URL_FILTERS = ['red', 'yellow', 'ongoing'];
+
+/**
+ * Filter boleh datang dari URL (`?filter=red`) supaya kartu Order Health di Operations Hub
+ * bisa deep-link langsung ke order yang jamnya sudah melewati rencana. Nilai asing diabaikan.
+ */
+function filterFromSearch(search) {
+  const value = String(new URLSearchParams(search).get('filter') || '').trim().toLowerCase();
+  return URL_FILTERS.includes(value) ? value : 'all';
+}
 
 function OrderProgressDashboard() {
   const [orders, setOrders] = useState([]);
@@ -24,7 +34,7 @@ function OrderProgressDashboard() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useState(() => filterFromSearch(window.location.search));
   const [tsHistory, setTsHistory] = useState(null);
   const [tsLoading, setTsLoading] = useState(false);
 

@@ -33,6 +33,7 @@ import sapLogo from '../assets/sap.svg';
 import EwsControlTower from '../components/ews/EwsControlTower';
 import { usePermissions, routeToFeature, getRole, authHeaders } from '../rbac';
 import { sidebarItems, getHiddenHubMenus } from '../config/hubSidebarItems';
+import { isManufacturing } from '../config/appVariant';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const SAP_LINKS = {
@@ -798,12 +799,15 @@ function OperationsHubPage() {
     sessionStorage.getItem('isVerified') === 'true' ? 'loading' : 'idle'
   ));
   const isAdmin = useMemo(() => getRole() === 'administrator', []);
+  const manufacturing = useMemo(() => isManufacturing(), []);
   const [announcements, setAnnouncements] = useState([]);
-  // Ringkasan health project (kartu Order Health). Sumbernya endpoint yang SAMA dengan
-  // halaman Order Progress supaya angkanya tidak pernah beda versi: summary dihitung
-  // backend atas SELURUH project (bukan cuma halaman yang tampil).
+  // Ringkasan health project/order (kartu Order Health). Sumbernya endpoint yang SAMA dengan
+  // halaman Order Progress varian ini supaya angkanya tidak pernah beda versi:
+  //   manufacturing -> /manufacturing-order-progress (health = consume% - progress%)
+  //   salvaging     -> /order-progress (health = actual vs plan hours; kolom progress di
+  //                    salvaging nyaris tidak pernah diisi, jadi rata-rata progress menyesatkan)
   // status: 'loading' | 'ready' | 'error' — kartu wajib punya keadaan aman kalau endpoint
-  // belum tersedia di plant ini (mis. MS Project belum dipakai -> total_projects 0).
+  // belum tersedia di plant ini (mis. MS Project belum dipakai -> total 0).
   const [healthSummary, setHealthSummary] = useState({ status: 'loading', red: 0, yellow: 0, green: 0, unknown: 0, total: 0 });
   const [announcing, setAnnouncing] = useState(false);
   const ttsAudioRef = useRef(null);
@@ -852,22 +856,28 @@ function OperationsHubPage() {
     return () => controller.abort();
   }, [isVerified]);
 
-  // Ringkasan health project untuk kartu Order Health. limit=1 karena yang dipakai hanya
-  // `summary` + `pagination.total_projects`; daftar project-nya tidak perlu ikut ditarik.
+  // Ringkasan health untuk kartu Order Health. limit=1 karena yang dipakai hanya `summary`;
+  // daftar project/order-nya tidak perlu ikut ditarik.
   useEffect(() => {
     if (!isVerified) return undefined;
     const controller = new AbortController();
-    fetch(`${API_BASE}/dashboard/manufacturing-order-progress?limit=1&status=active`, { signal: controller.signal })
+    const url = manufacturing
+      ? `${API_BASE}/dashboard/manufacturing-order-progress?limit=1&status=active`
+      : `${API_BASE}/dashboard/order-progress?limit=1&status=ongoing`;
+    fetch(url, { signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error('health unavailable');
         return response.json();
       })
       .then((payload) => {
-        const s = payload?.summary || {};
+        const s = payload?.summary;
+        if (!s) throw new Error('summary missing');
         setHealthSummary({
           status: 'ready',
           red: toNum(s.red), yellow: toNum(s.yellow), green: toNum(s.green), unknown: toNum(s.unknown),
-          total: toNum(payload?.pagination?.total_projects),
+          // manufacturing menghitung project (pagination.total_projects), salvaging
+          // menghitung order dan mengirim total di dalam summary.
+          total: toNum(s.total ?? payload?.pagination?.total_projects),
         });
       })
       .catch((err) => {
@@ -875,7 +885,7 @@ function OperationsHubPage() {
         setHealthSummary({ status: 'error', red: 0, yellow: 0, green: 0, unknown: 0, total: 0 });
       });
     return () => controller.abort();
-  }, [isVerified]);
+  }, [isVerified, manufacturing]);
 
   // Admin-only: prefetch today's ready TTS announcements so the header button can play
   // them synchronously on click — awaiting a fetch first would break the browser's
@@ -942,18 +952,18 @@ function OperationsHubPage() {
       progress: tecoPct,
     },
     {
-      // ORDER HEALTH (menggantikan 'Machine Productive', 2026-09-16 keputusan owner 2a/3a/4c —
-      // berlaku untuk KEDUA varian). Angka besar = project Critical, karena itu yang menuntut
-      // tindakan; chip memberi konteks At risk / On track tanpa menambah tinggi kartu.
-      // Health = gap antara jam terpakai dan progres (consume% − progress%): >=3 merah,
-      // >0 kuning, selebihnya hijau; project memakai anak TERBURUK (WORST_CHILD).
+      // ORDER HEALTH (menggantikan 'Machine Productive', 2026-09-16 keputusan owner — berlaku
+      // untuk KEDUA varian). Angka besar = yang Critical, karena itu yang menuntut tindakan;
+      // chip memberi konteks At risk / On track tanpa menambah tinggi kartu.
+      // Dasar health berbeda per varian (lihat komentar fetch di atas), tapi maknanya sama:
+      // "pekerjaan yang jamnya sudah melampaui rencana/progres".
       title: 'Order Health',
       value: healthSummary.red,
       helper: healthSummary.status === 'error'
         ? 'Data belum tersedia'
         : healthSummary.status === 'loading'
           ? 'Memuat…'
-          : `dari ${formatNumber(healthSummary.total)} project aktif`,
+          : `dari ${formatNumber(healthSummary.total)} ${manufacturing ? 'project aktif' : 'order berjalan'}`,
       icon: HeartPulse,
       tone: healthSummary.red > 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700',
       // Token palet resmi (deslop C1): b45309 = amber peringatan, 047857 = emerald aman.
@@ -966,7 +976,9 @@ function OperationsHubPage() {
         ]
         : [],
       onClick: healthSummary.status === 'ready' && healthSummary.total > 0
-        ? () => navigate('/order-progress-dashboard?health=red')
+        // Deep-link memakai nama parameter milik masing-masing halaman: manufacturing
+        // memfilter `health`, salvaging memfilter `filter` (dua endpoint berbeda).
+        ? () => navigate(manufacturing ? '/order-progress-dashboard?health=red' : '/order-progress-dashboard?filter=red')
         : undefined,
     },
     {
@@ -978,14 +990,16 @@ function OperationsHubPage() {
       accent: toNum(kpi.validation_pending) > 0 ? '#d97706' : '#059669',
       progress: toNum(kpi.validation_total) > 0 ? (toNum(kpi.validation_pending) / toNum(kpi.validation_total)) * 100 : 0,
     },
-  ], [kpi, activePct, tecoPct, healthSummary, navigate]);
+  ], [kpi, activePct, tecoPct, healthSummary, navigate, manufacturing]);
 
   const insights = useMemo(() => {
     const list = [];
     // Health lebih mendesak daripada tren mesin: project Critical = jam terpakai sudah
     // melampaui progres yang dilaporkan.
     if (healthSummary.status === 'ready' && healthSummary.red > 0) {
-      list.push({ tone: 'amber', text: `${formatNumber(healthSummary.red)} of ${formatNumber(healthSummary.total)} active projects are critical — hours consumed are ahead of reported progress.` });
+      list.push({ tone: 'amber', text: manufacturing
+        ? `${formatNumber(healthSummary.red)} of ${formatNumber(healthSummary.total)} active projects are critical — hours consumed are ahead of reported progress.`
+        : `${formatNumber(healthSummary.red)} of ${formatNumber(healthSummary.total)} running orders have used up their planned hours.` });
     }
     if (productiveDelta != null && productiveDelta <= -2) {
       list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% below the 7-day average (${machineAvgPct.toFixed(1)}%).` });
@@ -994,7 +1008,7 @@ function OperationsHubPage() {
       list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} records today awaiting foreman/supervisor validation.` });
     }
     return list.slice(0, 3);
-  }, [kpi, machineAvgPct, productiveDelta, healthSummary]);
+  }, [kpi, machineAvgPct, productiveDelta, healthSummary, manufacturing]);
 
   const handleLogout = useCallback(() => {
     sessionStorage.removeItem('isVerified');

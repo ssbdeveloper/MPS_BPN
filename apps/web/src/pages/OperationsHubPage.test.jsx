@@ -9,17 +9,19 @@ vi.mock('react-router-dom', async () => ({
 }));
 
 // Panel berat yang tidak ada hubungannya dengan kartu KPI: EwsControlTower membuka
-// EventSource (tidak ada di jsdom) dan chart recharts mahal dirender. Di-stub supaya tes
-// ini benar-benar menguji kartu Order Health, bukan seluruh dashboard.
+// EventSource (tidak ada di jsdom). Di-stub supaya tes ini benar-benar menguji kartu
+// Order Health, bukan seluruh dashboard.
 vi.mock('../components/ews/EwsControlTower', () => ({ default: () => <div data-testid="ews-stub" /> }));
+vi.mock('../config/appVariant', () => ({ isManufacturing: vi.fn() }));
+
+import { isManufacturing } from '../config/appVariant';
 
 /**
- * Kartu Order Health menggantikan Machine Productive (2026-09-16, keputusan owner 2a/3a/4c).
- * Yang dijaga tes ini:
- *   - angka besar = project Critical, chip = at risk / on track,
- *   - deep-link ke /order-progress-dashboard?health=red saat diklik,
- *   - plant tanpa data project (mis. varian salvaging tanpa MS Project) TIDAK merusak halaman
- *     dan kartunya tidak bisa diklik.
+ * Kartu Order Health menggantikan Machine Productive (2026-09-16, keputusan owner).
+ * Dasarnya berbeda per varian — manufacturing memakai /manufacturing-order-progress
+ * (consume% vs progress%), salvaging memakai /order-progress (actual vs plan hours,
+ * karena kolom progress di salvaging nyaris tidak pernah diisi) — tetapi bentuk kartu,
+ * deep-link, dan keadaan amannya harus sama.
  */
 const hubPayload = {
   data: {
@@ -33,10 +35,17 @@ const hubPayload = {
   },
 };
 
+/** Mengingat URL health yang benar-benar diminta, supaya tes bisa membuktikan varian. */
+let healthUrl = '';
+
 function mockFetch(healthResponse) {
   return vi.fn((url) => {
-    if (String(url).includes('manufacturing-order-progress')) return Promise.resolve(healthResponse());
-    if (String(url).includes('/ews/tts/playlist')) return Promise.resolve({ ok: true, json: async () => ({ data: [] }) });
+    const target = String(url);
+    if (target.includes('order-progress')) {
+      healthUrl = target;
+      return Promise.resolve(healthResponse());
+    }
+    if (target.includes('/ews/tts/playlist')) return Promise.resolve({ ok: true, json: async () => ({ data: [] }) });
     return Promise.resolve({ ok: true, json: async () => hubPayload });
   });
 }
@@ -46,12 +55,21 @@ let OperationsHubPage;
 beforeEach(async () => {
   sessionStorage.setItem('isVerified', 'true');
   navigate.mockClear();
+  healthUrl = '';
+  isManufacturing.mockReturnValue(true);
+  // prefers-reduced-motion: angka kartu (useCountUp) langsung melompat ke nilai akhir,
+  // bukan dianimasikan 900 ms lewat requestAnimationFrame — membuat tes deterministik
+  // sekaligus ikut menguji jalur aksesibilitas yang dipakai aplikasi.
+  vi.stubGlobal('matchMedia', vi.fn(() => ({
+    matches: true, media: '', addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    addListener: vi.fn(), removeListener: vi.fn(), onchange: null, dispatchEvent: vi.fn(),
+  })));
   ({ default: OperationsHubPage } = await import('./OperationsHubPage'));
 });
 afterEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
 
 describe('Operations Hub — kartu Order Health', () => {
-  it('menampilkan project critical dan deep-link ke daftar yang bermasalah', async () => {
+  it('manufacturing: project critical dari endpoint manufacturing + deep-link health=red', async () => {
     vi.stubGlobal('fetch', mockFetch(() => ({
       ok: true,
       json: async () => ({ summary: { red: 4, yellow: 3, green: 12, unknown: 1 }, pagination: { total_projects: 20 } }),
@@ -60,6 +78,7 @@ describe('Operations Hub — kartu Order Health', () => {
 
     const card = await screen.findByRole('button', { name: /order health/i });
     await waitFor(() => expect(card).toHaveTextContent('dari 20 project aktif'));
+    expect(healthUrl).toContain('/dashboard/manufacturing-order-progress');
     expect(card).toHaveTextContent('at risk');
     expect(card).toHaveTextContent('on track');
     expect(screen.queryByText(/Machine Productive/i)).not.toBeInTheDocument();
@@ -68,7 +87,26 @@ describe('Operations Hub — kartu Order Health', () => {
     expect(navigate).toHaveBeenCalledWith('/order-progress-dashboard?health=red');
   });
 
-  it('tetap aman di plant tanpa data project dan tidak bisa diklik', async () => {
+  it('salvaging: order berjalan dari endpoint order-progress + deep-link filter=red', async () => {
+    isManufacturing.mockReturnValue(false);
+    vi.stubGlobal('fetch', mockFetch(() => ({
+      ok: true,
+      json: async () => ({ summary: { red: 368, yellow: 77, green: 701, unknown: 53, total: 1199, basis: 'ACTUAL_VS_PLAN_HOURS' } }),
+    })));
+    render(<MemoryRouter><OperationsHubPage /></MemoryRouter>);
+
+    const card = await screen.findByRole('button', { name: /order health/i });
+    await waitFor(() => expect(card).toHaveTextContent('dari 1.199 order berjalan'));
+    expect(healthUrl).toContain('/dashboard/order-progress');
+    expect(healthUrl).not.toContain('manufacturing-order-progress');
+    // Angka kartu dianimasikan (useCountUp), jadi ditunggu sampai nilai akhirnya tercetak.
+    await waitFor(() => expect(card).toHaveTextContent('368'), { timeout: 3000 });
+
+    card.click();
+    expect(navigate).toHaveBeenCalledWith('/order-progress-dashboard?filter=red');
+  });
+
+  it('tetap aman di plant tanpa data dan tidak bisa diklik', async () => {
     vi.stubGlobal('fetch', mockFetch(() => ({
       ok: true,
       json: async () => ({ summary: { red: 0, yellow: 0, green: 0, unknown: 0 }, pagination: { total_projects: 0 } }),

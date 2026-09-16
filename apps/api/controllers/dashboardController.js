@@ -106,9 +106,32 @@ async function getOrderProgress(req, res) {
     const baseQuery = `${MV_ADJUSTED} SELECT m.* FROM mv_adj m ${whereClause}`;
     const countQuery = `${MV_ADJUSTED} SELECT COUNT(*)::int AS total FROM mv_adj m ${whereClause}`;
 
-    const [totalResult, rowsResult] = await Promise.all([
+    // RINGKASAN HEALTH (2026-09-16, keputusan owner 1a/2a untuk kartu Order Health varian
+    // salvaging). Dasarnya JAM, bukan progress: di salvaging kolom sow.progress nyaris tidak
+    // pernah diisi (BPN: 243 dari 1.199 order yang sedang berjalan), jadi rata-rata progress
+    // akan melaporkan ~2,4% dan menyesatkan. Ambang red/yellow SENGAJA menyalin filter
+    // halaman Order Progress salvaging supaya kartu dan daftar tidak pernah berbeda:
+    //   red    = actual >= plan, yellow = actual >= 90% plan, selebihnya green.
+    // Cakupan: order NON-TECO yang SUDAH punya jam actual (yang benar-benar dikerjakan);
+    // order tanpa plan dilaporkan terpisah supaya tidak diam-diam dihitung hijau.
+    const summaryQuery = `${MV_ADJUSTED}
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE m.total_planhours > 0 AND m.total_actual_hours >= m.total_planhours)::int AS red,
+        COUNT(*) FILTER (WHERE m.total_planhours > 0 AND m.total_actual_hours >= m.total_planhours * 0.9
+                           AND m.total_actual_hours < m.total_planhours)::int AS yellow,
+        COUNT(*) FILTER (WHERE m.total_planhours > 0 AND m.total_actual_hours < m.total_planhours * 0.9)::int AS green,
+        COUNT(*) FILTER (WHERE COALESCE(m.total_planhours, 0) = 0)::int AS unknown
+      FROM mv_adj m
+      WHERE m.total_actual_hours > 0
+        AND m.order_no NOT IN (
+          SELECT LTRIM(order_no, '0') FROM ph3_order WHERE order_description ILIKE '%TECO%'
+        )`;
+
+    const [totalResult, rowsResult, summaryResult] = await Promise.all([
       pool.query(countQuery),
       pool.query(`${baseQuery} ORDER BY actual_pct DESC NULLS LAST, total_planhours DESC LIMIT $1 OFFSET $2`, [limit, offset]),
+      pool.query(summaryQuery),
     ]);
 
     res.json({
@@ -120,6 +143,17 @@ async function getOrderProgress(req, res) {
         actual_pct: num(r.actual_pct, 0),
       })),
       pagination: { page, limit, total: totalResult.rows[0]?.total || 0 },
+      // Ringkasan health untuk kartu Operations Hub. Bentuknya SENGAJA sama dengan
+      // /dashboard/manufacturing-order-progress (red/yellow/green/unknown + total) supaya
+      // satu komponen kartu bisa melayani kedua varian tanpa cabang bentuk data.
+      summary: {
+        red: num(summaryResult.rows[0]?.red, 0),
+        yellow: num(summaryResult.rows[0]?.yellow, 0),
+        green: num(summaryResult.rows[0]?.green, 0),
+        unknown: num(summaryResult.rows[0]?.unknown, 0),
+        total: num(summaryResult.rows[0]?.total, 0),
+        basis: "ACTUAL_VS_PLAN_HOURS",
+      },
       meta: meta(),
     });
   } catch (err) {
