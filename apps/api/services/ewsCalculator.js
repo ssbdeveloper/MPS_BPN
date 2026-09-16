@@ -749,6 +749,30 @@ async function calculateAdoptionLabourFromRoster(bounds) {
   const result = await db.query(
     `
     WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
+    resolved_shift AS (
+      -- EWS roster memakai kode DAY/NIGHT; Shift Definition memakai SHIFT-1/SHIFT-2.
+      -- Gunakan sumber jadwal yang sama dengan Scheduling, termasuk override tanggal.
+      SELECT ews_shift, start_time, end_time, crosses_midnight
+      FROM (
+        SELECT
+          CASE sd.shift_code WHEN 'SHIFT-1' THEN 'DAY' WHEN 'SHIFT-2' THEN 'NIGHT' END AS ews_shift,
+          sd.start_time, sd.end_time, sd.crosses_midnight,
+          ROW_NUMBER() OVER (
+            PARTITION BY sd.shift_code
+            ORDER BY CASE
+              WHEN sd.is_default = false AND sd.effective_date = p.target_bd THEN 0
+              WHEN sd.is_default = true THEN 1
+              ELSE 2
+            END, sd.id
+          ) AS rn
+        FROM public.shift_definition sd
+        CROSS JOIN params p
+        WHERE sd.is_active = true
+          AND sd.shift_code IN ('SHIFT-1', 'SHIFT-2')
+          AND (sd.is_default = true OR sd.effective_date = p.target_bd)
+      ) x
+      WHERE rn = 1
+    ),
     logged_rows AS (
       -- duration is only written at CHECKOUT, so a row still in progress reads as 0 hours. This
       -- KPI compares recorded hours against expected-SO-FAR (elapsed clock), so ignoring the open
@@ -786,7 +810,7 @@ async function calculateAdoptionLabourFromRoster(bounds) {
              MAX(NULLIF(BTRIM(u.full_name), '')) AS operator_name
       FROM ews.roster_effective r
       JOIN params p ON r.business_date = p.target_bd
-      JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
+      JOIN resolved_shift os ON os.ews_shift = r.eff_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
       GROUP BY r.serialnumber, r.eff_shift, r.eff_std, r.status,
                r.business_date, os.start_time, os.end_time, os.crosses_midnight

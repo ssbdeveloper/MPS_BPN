@@ -1595,8 +1595,9 @@ const ADOPTION_BAR = { timesheet: '#0096c7', hmi: '#ade8f4' };
 // now), not the full shift standard. Mid-shift, comparing against a static 8h paints everyone red.
 // Falls back to standard_hours for the log-based variant, which has no progressive expectation.
 function adoptionTargetHours(o) {
-  const expected = o.expected_hours == null ? null : numeric(o.expected_hours);
-  return expected !== null && expected > 0 ? expected : numeric(o.standard_hours);
+  // expected_hours=0 berarti shift terjadwal tetapi BELUM mulai — bukan data hilang.
+  // Fallback ke standard_hours hanya untuk payload lama yang tidak punya field progresif.
+  return o.expected_hours == null ? numeric(o.standard_hours) : numeric(o.expected_hours);
 }
 
 // One bar per operator: TIMESHEET hours plus HMI hours recorded outside the timesheet windows.
