@@ -442,7 +442,7 @@ function EwsRosterConfigPage() {
                     );
                   })}
                 </div>
-                <p className="mt-2 text-xs font-semibold text-slate-500">Always Day/Night berlaku mulai hari ini dan tidak mengubah histori.</p>
+                <p className="mt-2 text-xs font-semibold text-slate-500">Always Day/Night berlaku mulai hari ini dan tidak mengubah histori. Untuk mengubah <strong>satu atau beberapa hari saja</strong>, klik selnya langsung di heatmap halaman Roster.</p>
               </div>
             </div>
           </Card>
