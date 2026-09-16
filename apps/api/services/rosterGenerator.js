@@ -55,10 +55,12 @@ op_date AS (
   WHERE u.inactive_from IS NULL OR g.bd < u.inactive_from
 ),
 scheduled AS (
-  SELECT od.bd, od.serialnumber, od.shift_code, os.standard_hours
+  -- Master tunggal: jam kerja bersih diambil dari public.shift_definition (termasuk
+  -- override tanggal), bukan dari snapshot tabel lama ews.operator_shift.
+  SELECT od.bd, od.serialnumber, od.shift_code, sd.standard_hours
   FROM op_date od
   JOIN ews.roster_workday_rule wr ON wr.day_of_week = EXTRACT(dow FROM od.bd)::int
-  JOIN ews.operator_shift os ON os.shift_code = od.shift_code AND os.is_active
+  JOIN public.resolve_shift_definition(od.bd) sd ON sd.roster_shift_code = od.shift_code
   WHERE (od.shift_code = 'DAY' AND wr.runs_day)
      OR (od.shift_code = 'NIGHT' AND wr.runs_night)
 )

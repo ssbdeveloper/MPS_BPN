@@ -2,30 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Loader2,
-  Moon, RefreshCw, Search, Settings, Sun, Trash2, Users, X,
+  RefreshCw, Search, Settings, Users, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { authHeaders, readAuthUser } from '../rbac/useAuth';
 
+import BulkPanel from '../components/ews-roster/BulkPanel';
+import { EXCUSED, todayLocalISO } from '../components/ews-roster/rosterConstants';
+import { MemoHeatmapCell, RosterLegend, StatTile } from '../components/ews-roster/rosterVisuals';
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
-const STATUS_OPTIONS = ['SCHEDULED', 'LEAVE', 'SICK', 'PERMIT', 'SITE_VISIT', 'OFF'];
 const DOW_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const EXCUSED = ['LEAVE', 'SICK', 'PERMIT', 'SITE_VISIT', 'OFF'];
-
-const EXCUSED_STYLE = {
-  LEAVE: 'bg-sky-200',
-  SICK: 'bg-purple-200',
-  PERMIT: 'bg-indigo-200',
-  SITE_VISIT: 'bg-teal-200',
-  OFF: 'bg-slate-300',
-};
-
-function todayLocalISO() {
-  const d = new Date();
-  const off = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - off).toISOString().slice(0, 10);
-}
-
 function monthOf(dateStr) {
   return dateStr.slice(0, 7);
 }
@@ -44,249 +30,6 @@ function daysOfMonth(month) {
 function cellKey(sn, date) {
   return `${sn}|${date}`;
 }
-
-function CellColor({ row, recorded, required }) {
-  if (!row) return { bg: 'bg-slate-100', note: 'No schedule' };
-  if (EXCUSED.includes(row.status)) return { bg: EXCUSED_STYLE[row.status], note: row.status };
-  if (row.attendance === 'PRESENT') {
-    const ratio = required > 0 ? recorded / required : 1;
-    if (ratio >= 1) return { bg: 'bg-emerald-400/80', note: `Present ${recorded.toFixed(1)}/${required.toFixed(0)}h` };
-    if (ratio >= 0.5) return { bg: 'bg-lime-300/90', note: `Partial ${recorded.toFixed(1)}/${required.toFixed(0)}h` };
-    return { bg: 'bg-red-300/80', note: `Low ${recorded.toFixed(1)}/${required.toFixed(0)}h` };
-  }
-  if (row.attendance === 'ABSENT') return { bg: 'bg-red-200', note: 'Absent' };
-  if (row.attendance === 'IN_PROGRESS') return { bg: 'bg-amber-100', note: 'In progress' };
-  return { bg: 'bg-slate-200', note: row.status };
-}
-
-function StatTile({ label, value, tone = 'neutral' }) {
-  const tones = {
-    neutral: { bg: '#f8fafc', border: '#e2e8f0', text: '#334155' },
-    good: { bg: '#f0fdf4', border: '#bbf7d0', text: '#047857' },
-    bad: { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' },
-    info: { bg: '#caf0f8', border: '#90e0ef', text: '#0077b6' },
-  };
-  const t = tones[tone] || tones.neutral;
-  return (
-    <div className="rounded-xl border px-3 py-2.5 text-center shadow-sm" style={{ background: t.bg, borderColor: t.border }}>
-      <div className="text-[10px] font-bold uppercase tracking-wide" style={{ color: t.text }}>{label}</div>
-      <div className="mt-1 text-lg font-black leading-none" style={{ color: t.text }}>{value}</div>
-    </div>
-  );
-}
-
-function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onClear }) {
-  const [status, setStatus] = useState('');
-  const [half, setHalf] = useState('');
-  const [shift, setShift] = useState('');
-  const [hours, setHours] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const single = selectedKeys.length === 1 ? rowsByKey[selectedKeys[0]] : null;
-
-  const doApply = async () => {
-    if (!status && half === '' && shift === '' && hours === '') return;
-    const cells = selectedKeys.map((key) => {
-      const [serialnumber, business_date] = key.split('|');
-      return { serialnumber, business_date };
-    });
-    setBusy(true);
-    try {
-      await onApply({
-        cells,
-        status: status || undefined,
-        half_day: half === '' ? undefined : half === 'half',
-        shift_override: shift === '' ? undefined : shift === 'ROTATION' ? null : shift,
-        standard_hours_override: hours === '' ? undefined : hours === 'DEFAULT' ? null : Number(hours),
-      });
-      setStatus('');
-      setHalf('');
-      setShift('');
-      setHours('');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="flex w-full flex-col border-l border-slate-300 bg-white md:w-80">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-        <h3 className="text-sm font-extrabold text-slate-900">
-          {single ? 'Operator detail' : `${selectedKeys.length} selected`}
-        </h3>
-        <div className="flex items-center gap-1">
-          <button onClick={onClear} className="min-h-[44px] rounded-lg px-2 text-xs font-bold text-slate-500 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" title="Clear selection">Clear</button>
-          <button onClick={onClose} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"><X size={15} /></button>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        {single ? (
-          <div className="space-y-3">
-            <div>
-              <div className="text-sm font-extrabold text-slate-800">{single.operator_name || single.serialnumber}</div>
-              <div className="font-mono text-xs text-slate-400">{single.serialnumber} · {single.business_date}</div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${single.scheduled_shift === 'DAY' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-                {single.scheduled_shift}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-extrabold text-slate-600">{single.attendance}</span>
-              {single.half_day && <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold text-amber-700">½ half day</span>}
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-              Hours <b className="tabular-nums">{Number(single.recorded_hours || 0).toFixed(1)}</b> / <b className="tabular-nums">{Number(single.scheduled_standard_hours || 0).toFixed(0)}h</b> required
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Status</label>
-              <select
-                value={single.status}
-                onChange={(e) => onApply({ serialnumbers: [single.serialnumber], business_dates: [single.business_date], status: e.target.value })}
-                className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-              >
-                {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Half day</label>
-              <button
-                type="button"
-                onClick={() => onApply({ serialnumbers: [single.serialnumber], business_dates: [single.business_date], half_day: !single.half_day })}
-                className={`relative inline-flex h-6 w-10 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-[#00b4d8]/30 ${single.half_day ? 'border-amber-500 bg-amber-400' : 'border-slate-400 bg-slate-200'}`}
-              >
-                <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${single.half_day ? 'translate-x-4' : 'translate-x-0'}`} />
-              </button>
-              <p className="mt-1 text-[10px] text-slate-400">Required hours are halved.</p>
-            </div>
-            {single.business_date >= todayLocalISO() && (
-              <div className="space-y-3 border-t border-slate-100 pt-3">
-                <div>
-                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Shift for this day</label>
-                  <select
-                    value={single.shift_override || ''}
-                    onChange={(e) => onApply({ cells: [{ serialnumber: single.serialnumber, business_date: single.business_date }], shift_override: e.target.value || null })}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800"
-                  >
-                    <option value="">Scheduled ({single.scheduled_shift})</option>
-                    <option value="DAY">DAY</option>
-                    <option value="NIGHT">NIGHT</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Exact target hours</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="number" min="0.01" max="24" step="0.25"
-                      defaultValue={single.standard_hours_override ?? ''}
-                      placeholder={`${Number(single.scheduled_standard_hours || 0)}h default`}
-                      onBlur={(e) => e.target.value && onApply({ cells: [{ serialnumber: single.serialnumber, business_date: single.business_date }], standard_hours_override: Number(e.target.value) })}
-                      className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800"
-                    />
-                    <button type="button" onClick={() => onApply({ cells: [{ serialnumber: single.serialnumber, business_date: single.business_date }], standard_hours_override: null })} className="rounded-lg border border-slate-300 px-2 text-xs font-bold text-slate-600">Default</button>
-                  </div>
-                </div>
-              </div>
-            )}
-            {single.business_date >= todayLocalISO() && (
-              <div className="border-t border-slate-100 pt-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!confirmDelete) { setConfirmDelete(true); return; }
-                    onDeleteDay(single.business_date);
-                  }}
-                  className={`flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-extrabold transition active:scale-95 ${confirmDelete ? 'border-red-600 bg-red-600 text-white' : 'border-red-200 bg-white text-red-600 hover:bg-red-50'}`}
-                >
-                  <Trash2 size={13} />
-                  {confirmDelete ? 'Confirm delete this day?' : 'Delete this day'}
-                </button>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="rounded-lg border border-[#90e0ef] bg-[#caf0f8]/60 px-3 py-2 text-xs text-slate-700">
-              Apply status or half-day to all {selectedKeys.length} selected cells.
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Apply status</label>
-              <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
-                <option value="">No change</option>
-                {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Half day</label>
-              <select value={half} onChange={(e) => setHalf(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
-                <option value="">No change</option>
-                <option value="half">Set half day</option>
-                <option value="full">Set full day</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Shift override</label>
-              <select value={shift} onChange={(e) => setShift(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
-                <option value="">No change</option>
-                <option value="ROTATION">Use scheduled shift</option>
-                <option value="DAY">Always DAY for selected dates</option>
-                <option value="NIGHT">Always NIGHT for selected dates</option>
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Target hours override</label>
-              <input type="number" min="0.01" max="24" step="0.25" value={hours === 'DEFAULT' ? '' : hours} onChange={(e) => setHours(e.target.value)} placeholder="No change" className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
-              <button type="button" onClick={() => setHours('DEFAULT')} className="mt-1 text-xs font-bold text-[#0077b6]">Use shift default</button>
-            </div>
-            <button
-              type="button"
-              onClick={doApply}
-              disabled={busy || (!status && half === '' && shift === '' && hours === '')}
-              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-2 text-xs font-extrabold text-white hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {busy ? <Loader2 size={13} className="animate-spin" /> : null}
-              Apply to {selectedKeys.length} cells
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function HeatmapCell({ row, selected, onStart, onExtend, ri, ci, name, date }) {
-  const recorded = Number(row?.recorded_hours || 0);
-  const required = Number(row?.scheduled_standard_hours || 0);
-  const { bg } = CellColor({ row, recorded, required });
-  const strip = row ? (row.scheduled_shift === 'DAY' ? 'border-t-2 border-amber-400' : 'border-t-2 border-indigo-500') : '';
-  return (
-    <button
-      type="button"
-      onMouseDown={(e) => onStart(e, ri, ci)}
-      onMouseEnter={() => onExtend(ri, ci)}
-      title={row
-        ? `${name} · ${date} · ${row.scheduled_shift} · ${row.attendance}${row.half_day ? ' · half day' : ''}${row.standard_hours_override ? ` · target ${row.standard_hours_override}h (override)` : ''}${row.shift_override ? ' · shift override' : ''}`
-        : `${name} · ${date} · no schedule`}
-      className={`relative block h-7 w-7 rounded-md border ${bg} ${strip} ${
-        selected ? 'ring-2 ring-[#0077b6]' : 'border-transparent'
-      } ${row ? 'cursor-pointer' : 'cursor-default'}`}
-    >
-      {row?.scheduled_shift === 'NIGHT' && (
-        <span className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] rounded-b-md bg-indigo-500" />
-      )}
-      {row?.half_day && (
-        <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span>
-      )}
-      {row && (
-        <span className={`pointer-events-none text-xs font-black ${row.scheduled_shift === 'DAY' ? 'text-amber-900' : 'text-indigo-900'}`}>
-          {row.scheduled_shift === 'DAY' ? 'D' : 'N'}
-        </span>
-      )}
-    </button>
-  );
-}
-
-const MemoHeatmapCell = React.memo(HeatmapCell);
-
 function EwsRosterPage() {
   const navigate = useNavigate();
   const [month, setMonth] = useState(monthOf(todayLocalISO()));
@@ -645,21 +388,7 @@ function EwsRosterPage() {
               </table>
               )}
             </div>
-            <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 px-4 py-2.5 text-[10px] font-semibold text-slate-500">
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-emerald-400/80" /> ≥100%</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-lime-300/90" /> 50–99%</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-red-300/80" /> &lt;50%</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-red-200" /> Absent</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-amber-100" /> In progress</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-sky-200" /> Leave</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-purple-200" /> Sick</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-indigo-200" /> Permit</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-slate-300" /> Off</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-slate-100" /> No schedule</span>
-              <span className="flex items-center gap-1"><Sun size={12} className="text-amber-500" /> DAY (garis atas kuning)</span>
-              <span className="flex items-center gap-1"><Moon size={12} className="text-indigo-500" /> NIGHT (garis biru atas+bawah)</span>
-              <span className="flex items-center gap-1"><span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span> half day</span>
-            </div>
+            <RosterLegend />
           </section>
         </div>
 

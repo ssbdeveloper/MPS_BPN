@@ -41,14 +41,17 @@ async function getRoster(req, res) {
              r.status, r.source, r.updated_by, r.half_day,
              r.shift_override, r.standard_hours_override, r.fixed_shift,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
-             ((r.business_date + os.end_time
-               + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now() AS completed,
+             CASE WHEN r.end_time IS NULL THEN NULL ELSE
+               ((r.business_date + r.end_time
+                 + CASE WHEN r.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now()
+             END AS completed,
              CASE WHEN r.status <> 'SCHEDULED' THEN r.status
-                  WHEN ((r.business_date + os.end_time + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
+                  WHEN r.end_time IS NULL THEN
+                    (CASE WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT' ELSE 'IN_PROGRESS' END)
+                  WHEN ((r.business_date + r.end_time + CASE WHEN r.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
                   WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT'
                   ELSE 'ABSENT' END AS attendance
       FROM ews.roster_effective r
-      JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
       LEFT JOIN logged lg ON lg.op = r.serialnumber
       WHERE r.business_date = $1::date
@@ -209,14 +212,17 @@ async function getRosterMonth(req, res) {
              r.status, r.half_day, r.shift_locked,
              r.shift_override, r.standard_hours_override, r.fixed_shift,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
-             ((r.business_date + os.end_time
-               + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now() AS completed,
+             CASE WHEN r.end_time IS NULL THEN NULL ELSE
+               ((r.business_date + r.end_time
+                 + CASE WHEN r.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now()
+             END AS completed,
              CASE WHEN r.status <> 'SCHEDULED' THEN r.status
-                  WHEN ((r.business_date + os.end_time + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
+                  WHEN r.end_time IS NULL THEN
+                    (CASE WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT' ELSE 'IN_PROGRESS' END)
+                  WHEN ((r.business_date + r.end_time + CASE WHEN r.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
                   WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT'
                   ELSE 'ABSENT' END AS attendance
       FROM ews.roster_effective r
-      JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
       LEFT JOIN logged lg ON lg.op = r.serialnumber AND lg.business_date = r.business_date
       WHERE r.business_date >= $1::date AND r.business_date < ($1::date + interval '1 month')::date
@@ -435,8 +441,25 @@ async function removeForemanMember(req, res) {
 // GET /ews/roster/config — shift defs, workday rules, active rotation config, group counts.
 async function getConfig(req, res) {
   try {
-    const [shifts, workdays, rotation, groups, members, roster] = await Promise.all([
-      db.query(`SELECT shift_code, shift_name, start_time::text, end_time::text, crosses_midnight, standard_hours, is_active FROM ews.operator_shift ORDER BY shift_code`),
+    const [shifts, overrides, workdays, rotation, groups, members, roster] = await Promise.all([
+      // Master tunggal: shift yang dipakai roster, diresolusi untuk hari ini. span_minutes =
+      // rentang kehadiran, standard_minutes = jam kerja bersih, selisihnya waktu istirahat.
+      db.query(`SELECT sd.roster_shift_code AS shift_code, sd.shift_code AS sow_shift_code,
+                       sd.shift_name, sd.start_time::text, sd.end_time::text, sd.crosses_midnight,
+                       sd.standard_hours, sd.default_capacity_hours, sd.is_active,
+                       (sd.standard_hours * 60)::int AS standard_minutes,
+                       (EXTRACT(EPOCH FROM (sd.end_time - sd.start_time)) / 60
+                         + CASE WHEN sd.crosses_midnight THEN 1440 ELSE 0 END)::int AS span_minutes
+                FROM public.resolve_shift_definition((now() AT TIME ZONE $1)::date) sd
+                WHERE sd.roster_shift_code IS NOT NULL
+                ORDER BY sd.start_time`, [TZ]),
+      // Override tanggal (mis. shift pendek saat hari besar) — dibaca dari baris non-default.
+      db.query(`SELECT sd.id, sd.shift_code AS sow_shift_code, sd.roster_shift_code AS shift_code,
+                       sd.shift_name, sd.effective_date::text, sd.start_time::text, sd.end_time::text,
+                       sd.crosses_midnight, sd.standard_hours, sd.is_active
+                FROM public.shift_definition sd
+                WHERE sd.roster_shift_code IS NOT NULL AND sd.effective_date IS NOT NULL
+                ORDER BY sd.effective_date DESC, sd.shift_code`),
       db.query(`SELECT day_of_week, runs_day, runs_night FROM ews.roster_workday_rule ORDER BY day_of_week`),
       db.query(`SELECT id, anchor_week_start::text, anchor_group_a_shift, rotation_period_weeks, week_start_dow, effective_from::text, is_active FROM ews.rotation_config WHERE is_active ORDER BY effective_from DESC, id DESC LIMIT 1`),
       db.query(`SELECT rotation_group, COUNT(*)::int AS n FROM ews.operator_rotation_group GROUP BY rotation_group ORDER BY rotation_group`),
@@ -457,6 +480,7 @@ async function getConfig(req, res) {
     res.json({
       data: {
         shifts: shifts.rows,
+        shift_overrides: overrides.rows,
         workday_rules: workdays.rows,
         rotation_config: rotation.rows[0] || null,
         group_counts: groups.rows,
@@ -695,4 +719,171 @@ async function listLocks(req, res) {
   }
 }
 
-module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, updateGroup, updatePermanentShift, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember };
+// ---- Master shift (single source) ---------------------------------------------------------
+// public.shift_definition adalah satu-satunya master jadwal: jam shift, jam kerja bersih,
+// dan override tanggal. Roster generator, heatmap, dan kalkulator adoption membacanya lewat
+// public.resolve_shift_definition(date), jadi perubahan di sini langsung ikut terpakai.
+const ROSTER_SHIFT_CODES = new Set(["DAY", "NIGHT"]);
+
+function normalizeClock(value, field) {
+  const text = String(value ?? "").trim();
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(text)) {
+    const error = new Error(`${field} must be HH:MM`);
+    error.status = 400;
+    throw error;
+  }
+  return text;
+}
+
+// PUT /ews/roster/shift
+// { shift_code: DAY|NIGHT, start_time?, end_time?, crosses_midnight?, standard_hours?, is_active?, updated_by? }
+async function updateShiftMaster(req, res) {
+  try {
+    const shiftCode = String(req.body?.shift_code || "").trim().toUpperCase();
+    if (!ROSTER_SHIFT_CODES.has(shiftCode)) {
+      return res.status(400).json({ error: "shift_code must be DAY or NIGHT" });
+    }
+    const sets = [];
+    const params = [shiftCode];
+    const body = req.body || {};
+    if (body.start_time !== undefined) {
+      params.push(normalizeClock(body.start_time, "start_time"));
+      sets.push(`start_time = $${params.length}::time`);
+    }
+    if (body.end_time !== undefined) {
+      params.push(normalizeClock(body.end_time, "end_time"));
+      sets.push(`end_time = $${params.length}::time`);
+    }
+    if (body.crosses_midnight !== undefined) {
+      params.push(Boolean(body.crosses_midnight));
+      sets.push(`crosses_midnight = $${params.length}`);
+    }
+    if (body.standard_hours !== undefined) {
+      const hours = Number(body.standard_hours);
+      if (!Number.isFinite(hours) || hours <= 0 || hours > 24) {
+        return res.status(400).json({ error: "standard_hours must be greater than 0 and at most 24" });
+      }
+      params.push(hours);
+      sets.push(`standard_hours = $${params.length}`);
+    }
+    if (body.is_active !== undefined) {
+      params.push(Boolean(body.is_active));
+      sets.push(`is_active = $${params.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ error: "At least one shift field is required" });
+    sets.push(`updated_at = now()`);
+
+    const result = await db.query(
+      `UPDATE public.shift_definition
+          SET ${sets.join(", ")}
+        WHERE roster_shift_code = $1 AND is_default = true
+        RETURNING id, shift_code AS sow_shift_code, roster_shift_code AS shift_code, shift_name,
+                  start_time::text, end_time::text, crosses_midnight, standard_hours,
+                  default_capacity_hours, is_active,
+                  (standard_hours * 60)::int AS standard_minutes,
+                  (EXTRACT(EPOCH FROM (end_time - start_time)) / 60
+                    + CASE WHEN crosses_midnight THEN 1440 ELSE 0 END)::int AS span_minutes`,
+      params,
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ error: `No default shift row mapped to ${shiftCode}` });
+    }
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    console.error("ews roster shift update error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// Filter baris future yang aman disinkronkan ke master: hasil generate, masih SCHEDULED,
+// tanpa override operator / half-day / lock.
+const RESYNCABLE_SQL = `
+  r.source = 'auto' AND r.status = 'SCHEDULED'
+  AND r.shift_override IS NULL AND r.standard_hours_override IS NULL
+  AND COALESCE(r.half_day, false) = false AND NOT e.shift_locked`;
+
+// GET /ews/roster/shift/impact?shift_code=DAY
+// Pratinjau dampak master saat ini: berapa baris future berbeda dari master, berapa aman
+// di-resync, dan berapa yang dilewati karena override/lock/manual.
+async function getShiftImpact(req, res) {
+  try {
+    const shiftCode = String(req.query?.shift_code || "").trim().toUpperCase();
+    if (shiftCode && !ROSTER_SHIFT_CODES.has(shiftCode)) {
+      return res.status(400).json({ error: "shift_code must be DAY or NIGHT" });
+    }
+    const result = await db.query(
+      `WITH t AS (SELECT (now() AT TIME ZONE $2)::date AS today),
+       rows AS (
+         SELECT r.serialnumber, r.business_date, r.scheduled_shift, r.scheduled_standard_hours,
+                COALESCE(r.shift_override, r.scheduled_shift) AS eff_code,
+                (${RESYNCABLE_SQL}) AS resyncable
+         FROM ews.shift_roster r
+         JOIN ews.roster_effective e USING (serialnumber, business_date)
+         CROSS JOIN t
+         WHERE r.business_date >= t.today
+           AND ($1::text IS NULL OR COALESCE(r.shift_override, r.scheduled_shift) = $1::text)
+       ),
+       master AS (
+         SELECT r.serialnumber, r.business_date, m.roster_shift_code AS code, m.standard_hours
+         FROM rows r
+         CROSS JOIN LATERAL public.resolve_shift_definition(r.business_date) m
+         WHERE m.roster_shift_code IS NOT NULL AND m.roster_shift_code = r.eff_code
+       )
+       SELECT COUNT(*)::int AS future_rows,
+              COUNT(*) FILTER (WHERE m.code IS NOT NULL
+                AND (r.scheduled_shift IS DISTINCT FROM m.code
+                     OR r.scheduled_standard_hours IS DISTINCT FROM m.standard_hours))::int AS differing_rows,
+              COUNT(*) FILTER (WHERE r.resyncable AND m.code IS NOT NULL
+                AND (r.scheduled_shift IS DISTINCT FROM m.code
+                     OR r.scheduled_standard_hours IS DISTINCT FROM m.standard_hours))::int AS resyncable_rows,
+              COUNT(*) FILTER (WHERE NOT r.resyncable)::int AS skipped_rows
+         FROM rows r
+         LEFT JOIN master m ON m.serialnumber = r.serialnumber AND m.business_date = r.business_date`,
+      [shiftCode || null, TZ],
+    );
+    res.json({ data: { shift_code: shiftCode || null, ...result.rows[0] } });
+  } catch (err) {
+    console.error("ews roster shift impact error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// PUT /ews/roster/shift/resync-future { updated_by? }
+// Menyamakan snapshot baris future (hasil generate) dengan master terbaru. Forward-only dan
+// hanya baris bersih; baris dengan override/lock/half-day/manual tidak disentuh.
+async function resyncFutureShifts(req, res) {
+  try {
+    const updatedBy = clampText(req.body?.updated_by, "ews-roster-ui", 120);
+    const result = await db.query(
+      `WITH t AS (SELECT (now() AT TIME ZONE $2)::date AS today),
+       target AS (
+         SELECT r.serialnumber, r.business_date, m.roster_shift_code AS code, m.standard_hours AS std
+         FROM ews.shift_roster r
+         JOIN ews.roster_effective e USING (serialnumber, business_date)
+         CROSS JOIN t
+         CROSS JOIN LATERAL public.resolve_shift_definition(r.business_date) m
+         WHERE r.business_date >= t.today
+           AND ${RESYNCABLE_SQL}
+           AND m.roster_shift_code IS NOT NULL
+           AND m.roster_shift_code = COALESCE(r.shift_override, r.scheduled_shift)
+           AND (r.scheduled_shift IS DISTINCT FROM m.roster_shift_code
+                OR r.scheduled_standard_hours IS DISTINCT FROM m.standard_hours)
+       )
+       UPDATE ews.shift_roster s
+          SET scheduled_shift = t.code,
+              scheduled_standard_hours = t.std,
+              updated_by = $1,
+              updated_at = now()
+         FROM target t
+        WHERE s.serialnumber = t.serialnumber AND s.business_date = t.business_date`,
+      [updatedBy, TZ],
+    );
+    res.json({ data: { rows_updated: result.rowCount, updated_by: updatedBy } });
+  } catch (err) {
+    console.error("ews roster shift resync error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, updateGroup, updatePermanentShift, updateShiftMaster, getShiftImpact, resyncFutureShifts, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember };

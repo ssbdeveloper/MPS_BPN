@@ -819,3 +819,54 @@ Live controller calls against CKP inside a transaction that applied the migratio
 Not yet done (needs approval, production write): applying the migration on CKP/BPN and restarting the API.
 
 Frontend perf note: drag no longer stores a rectangle in React state (ref only) and cells are memoised, so pointer movement no longer re-renders all 2,708 cells; the selection appears on release.
+
+
+## Phase 2 executed (2026-09-16) — single shift master, UI, component split
+
+Decisions taken by the user: **1b, 2a, 3a**.
+
+- 1b — `public.shift_definition` becomes the single master; EWS NIGHT now follows `SHIFT-2`
+  (16:30–00:30). Consequence: the night adoption window moves from 20:00–04:00 to 16:30–00:30
+  for 894 future rows and for the live calculator.
+- 2a — standard hours are edited from EWS Roster Config ("Shift & Standard Hours").
+- 3a — the heatmap page is split into presentational components.
+
+Added by migration `20260916b_shift_definition_single_master.sql`:
+
+- `roster_shift_code` (DAY/NIGHT) and `standard_hours` on `public.shift_definition`, backfilled
+  from the verified mapping SHIFT-1→DAY (8h), SHIFT-2→NIGHT (7h);
+- `public.resolve_shift_definition(date)`: the same dated resolution rule as Scheduling
+  (`resolvedShiftSql()`), so an override row only applies on its own `effective_date`;
+- `ews.roster_effective` rebuilt to take `eff_std` and the shift times from the master, while
+  `scheduled_*` stays the generated snapshot.
+
+Consumers switched to the master: `rosterGenerator`, `getRoster`, `getRosterMonth`, `getConfig`,
+and the adoption calculator (`calculateAdoptionLabourFromRoster`). No runtime code reads the
+legacy `ews.operator_shift` master any more (only `operator_shift_lock`, a different table).
+
+New API: `PUT /ews/roster/shift`, `GET /ews/roster/shift/impact`,
+`PUT /ews/roster/shift/resync-future` — the last one is forward-only and skips rows with an
+operator override, half-day, lock, or manual status.
+
+Frontend split: `src/components/ews-roster/rosterConstants.js`, `rosterVisuals.jsx`
+(`CellColor`, `StatTile`, `HeatmapCell`, `MemoHeatmapCell`, `RosterLegend`),
+`BulkPanel.jsx`, `ShiftSettingsCard.jsx`. State stayed in the page, so drag/selection behaviour
+is unchanged; the contract tests now read the page plus its components.
+
+### Verification log (phase 2, CKP, rolled back)
+
+- migrations a+b applied inside a transaction, then rolled back;
+- `getConfig` returns `DAY(SHIFT-1) 07:25–16:30 std 8 span 545m break 65m` and
+  `NIGHT(SHIFT-2) 16:30–00:30 std 7 span 480m break 60m`, plus the 2026-05-14 dated overrides;
+- resolution check: 2026-05-14 → `07:00–10:00 / 3h` and `20:00–23:00 / 3h`; 2026-05-17 → base rows;
+- impact before any edit: 1,763 future rows, 0 differing; after setting DAY to 7.5h: 869 rows
+  differ, 843 resyncable, 26 skipped; resync updated exactly 843 rows;
+- generator on brand-new dates inserted 300 DAY rows at 7.5h and 256 NIGHT rows at 7h →
+  proves generation follows the master;
+- edits from the UI endpoint propagate to existing future rows through the view
+  (`eff_std` 7.5 with `start_time` 06:30 while the snapshot still read 8);
+- operator override still wins over the master; guards return 400 for bad shift code, bad hours,
+  and bad time format;
+- view performance for a full month: 2,708 rows in 83 ms (DB execution 8.2 ms), faster than the
+  previous `operator_shift` join;
+- suites: apps/api 52/52, web 61/61, production build OK, design gate clean.

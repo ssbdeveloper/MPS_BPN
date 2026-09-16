@@ -750,28 +750,12 @@ async function calculateAdoptionLabourFromRoster(bounds) {
     `
     WITH params AS (SELECT ($1::timestamptz AT TIME ZONE $2)::date AS target_bd),
     resolved_shift AS (
-      -- EWS roster memakai kode DAY/NIGHT; Shift Definition memakai SHIFT-1/SHIFT-2.
-      -- Gunakan sumber jadwal yang sama dengan Scheduling, termasuk override tanggal.
-      SELECT ews_shift, start_time, end_time, crosses_midnight
-      FROM (
-        SELECT
-          CASE sd.shift_code WHEN 'SHIFT-1' THEN 'DAY' WHEN 'SHIFT-2' THEN 'NIGHT' END AS ews_shift,
-          sd.start_time, sd.end_time, sd.crosses_midnight,
-          ROW_NUMBER() OVER (
-            PARTITION BY sd.shift_code
-            ORDER BY CASE
-              WHEN sd.is_default = false AND sd.effective_date = p.target_bd THEN 0
-              WHEN sd.is_default = true THEN 1
-              ELSE 2
-            END, sd.id
-          ) AS rn
-        FROM public.shift_definition sd
-        CROSS JOIN params p
-        WHERE sd.is_active = true
-          AND sd.shift_code IN ('SHIFT-1', 'SHIFT-2')
-          AND (sd.is_default = true OR sd.effective_date = p.target_bd)
-      ) x
-      WHERE rn = 1
+      -- Master tunggal public.shift_definition. Resolusi tanggal memakai fungsi yang sama
+      -- dengan Scheduling dan generator roster: baris override hanya berlaku bila
+      -- effective_date = business date, selain itu baris default.
+      SELECT roster_shift_code AS ews_shift, start_time, end_time, crosses_midnight
+      FROM public.resolve_shift_definition((SELECT target_bd FROM params))
+      WHERE roster_shift_code IS NOT NULL
     ),
     logged_rows AS (
       -- duration is only written at CHECKOUT, so a row still in progress reads as 0 hours. This

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, CalendarCog, Save, Users, Wand2, Lock, ShieldCheck, Search, X, Eye } from 'lucide-react';
 import { toast } from 'sonner';
+import ShiftSettingsCard from '../components/ews-roster/ShiftSettingsCard';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -48,6 +49,8 @@ function EwsRosterConfigPage() {
   const [lockBusy, setLockBusy] = useState(false);
   const [lastLock, setLastLock] = useState(null);
   const [preview, setPreview] = useState({ open: false, loading: false, error: '', rows: [] });
+  const [shiftImpact, setShiftImpact] = useState(null);
+  const [shiftBusy, setShiftBusy] = useState(false);
 
   const rc = config?.rotation_config;
   const groupMembers = useMemo(() => config?.group_members || [], [config]);
@@ -166,6 +169,71 @@ function EwsRosterConfigPage() {
       toast.error(err.message);
     }
   }, [load]);
+
+  const fetchShiftImpact = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/ews/roster/shift/impact`);
+      if (!res.ok) return null;
+      return (await res.json()).data;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Master shift = public.shift_definition: satu tempat untuk jam shift dan jam kerja bersih.
+  const saveShiftMaster = useCallback(async (shiftCode, draft) => {
+    if (!draft || Object.keys(draft).length === 0) return;
+    setShiftBusy(true);
+    try {
+      const payload = { shift_code: shiftCode, updated_by: 'ews-roster-ui' };
+      if (draft.start_time !== undefined) payload.start_time = draft.start_time;
+      if (draft.end_time !== undefined) payload.end_time = draft.end_time;
+      if (draft.crosses_midnight !== undefined) payload.crosses_midnight = draft.crosses_midnight;
+      if (draft.standard_hours !== undefined) payload.standard_hours = Number(draft.standard_hours);
+      const res = await fetch(`${API_BASE}/ews/roster/shift`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
+      toast.success(`${shiftCode} tersimpan — roster, heatmap, dan adoption ikut memakai nilai baru`);
+      await load();
+      setShiftImpact(await fetchShiftImpact());
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setShiftBusy(false);
+    }
+  }, [load, fetchShiftImpact]);
+
+  const previewShiftImpact = useCallback(async () => {
+    setShiftBusy(true);
+    try {
+      setShiftImpact(await fetchShiftImpact());
+    } finally {
+      setShiftBusy(false);
+    }
+  }, [fetchShiftImpact]);
+
+  const resyncFutureShifts = useCallback(async () => {
+    setShiftBusy(true);
+    try {
+      const res = await fetch(`${API_BASE}/ews/roster/shift/resync-future`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updated_by: 'ews-roster-ui' }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
+      const j = await res.json();
+      toast.success(`${j.data.rows_updated} baris future disinkronkan ke master`);
+      await load();
+      setShiftImpact(await fetchShiftImpact());
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setShiftBusy(false);
+    }
+  }, [load, fetchShiftImpact]);
 
   const runGenerate = useCallback(async () => {
     try {
@@ -525,25 +593,28 @@ function EwsRosterConfigPage() {
             )}
           </Card>
 
-          <Card title="Shift & Rotation Definition (read-only)" icon={CalendarCog} accent="#64748b">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div>
-                <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Shifts</div>
-                {(config?.shifts || []).map((s) => (
-                  <div key={s.shift_code} className="text-sm text-slate-700">
-                    <b>{s.shift_code}</b> {s.start_time}–{s.end_time} · {s.standard_hours}h{s.crosses_midnight ? ' · crosses midnight' : ''}
-                  </div>
-                ))}
+          <Card title="Shift & Standard Hours" icon={CalendarCog} accent="#0077b6">
+            <ShiftSettingsCard
+              shifts={config?.shifts || []}
+              overrides={config?.shift_overrides || []}
+              impact={shiftImpact}
+              onSave={saveShiftMaster}
+              onPreview={previewShiftImpact}
+              onResync={resyncFutureShifts}
+              busy={shiftBusy}
+            />
+            <p className="mt-3 text-xs font-semibold text-slate-500">
+              Sumber tunggal: public.shift_definition. Jam dan jam kerja bersih di sini dipakai roster,
+              heatmap, dan adoption; override tanggal hanya berlaku pada tanggalnya.
+            </p>
+          </Card>
+
+          <Card title="Rotation" icon={CalendarCog} accent="#94a3b8">
+            {rc ? (
+              <div className="text-sm text-slate-700">
+                Anchor <b>{rc.anchor_week_start}</b> (Dayshift = {rc.anchor_group_a_shift}) · flip every {rc.rotation_period_weeks} week{rc.rotation_period_weeks > 1 ? 's' : ''}
               </div>
-              <div>
-                <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Rotation</div>
-                {rc ? (
-                  <div className="text-sm text-slate-700">
-                    Anchor <b>{rc.anchor_week_start}</b> (Dayshift = {rc.anchor_group_a_shift}) · flip every {rc.rotation_period_weeks} week{rc.rotation_period_weeks > 1 ? 's' : ''}
-                  </div>
-                ) : <div className="text-sm text-slate-400">—</div>}
-              </div>
-            </div>
+            ) : <div className="text-sm text-slate-400">—</div>}
           </Card>
         </div>
       </main>

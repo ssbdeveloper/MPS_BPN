@@ -11,8 +11,8 @@ const ui = fs.readFileSync(
   "utf8",
 );
 
-test("adoption labour resolves times from shift_definition", () => {
-  assert.match(api, /FROM public\.shift_definition sd/);
+test("adoption labour resolves times from the single shift master", () => {
+  assert.match(api, /public\.resolve_shift_definition\(/);
   assert.match(api, /JOIN resolved_shift os ON os\.ews_shift = r\.eff_shift/);
   assert.doesNotMatch(
     api.slice(api.indexOf("async function calculateAdoptionLabourFromRoster"), api.indexOf("async function getMachineHoursByOperator")),
