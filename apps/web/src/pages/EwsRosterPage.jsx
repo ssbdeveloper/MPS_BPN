@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, ArrowLeft, CalendarDays, ChevronLeft, ChevronRight, Loader2,
-  RefreshCw, Search, Settings, Trash2, Users, X,
+  Moon, RefreshCw, Search, Settings, Sun, Trash2, Users, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { authHeaders, readAuthUser } from '../rbac/useAuth';
@@ -78,20 +78,31 @@ function StatTile({ label, value, tone = 'neutral' }) {
 function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onClear }) {
   const [status, setStatus] = useState('');
   const [half, setHalf] = useState('');
+  const [shift, setShift] = useState('');
+  const [hours, setHours] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const single = selectedKeys.length === 1 ? rowsByKey[selectedKeys[0]] : null;
 
   const doApply = async () => {
-    if (!status && half === '') return;
-    const keys = selectedKeys;
-    const serialnumbers = [...new Set(keys.map((k) => k.split('|')[0]))];
-    const businessDates = [...new Set(keys.map((k) => k.split('|')[1]))];
+    if (!status && half === '' && shift === '' && hours === '') return;
+    const cells = selectedKeys.map((key) => {
+      const [serialnumber, business_date] = key.split('|');
+      return { serialnumber, business_date };
+    });
     setBusy(true);
     try {
-      await onApply({ serialnumbers, business_dates: businessDates, status: status || undefined, half_day: half === '' ? undefined : half === 'half' });
+      await onApply({
+        cells,
+        status: status || undefined,
+        half_day: half === '' ? undefined : half === 'half',
+        shift_override: shift === '' ? undefined : shift === 'ROTATION' ? null : shift,
+        standard_hours_override: hours === '' ? undefined : hours === 'DEFAULT' ? null : Number(hours),
+      });
       setStatus('');
       setHalf('');
+      setShift('');
+      setHours('');
     } finally {
       setBusy(false);
     }
@@ -104,8 +115,8 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
           {single ? 'Operator detail' : `${selectedKeys.length} selected`}
         </h3>
         <div className="flex items-center gap-1">
-          <button onClick={onClear} className="text-[11px] font-bold text-slate-500 hover:text-slate-700 px-1.5 py-1" title="Clear selection">Clear</button>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"><X size={15} /></button>
+          <button onClick={onClear} className="min-h-[44px] rounded-lg px-2 text-xs font-bold text-slate-500 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" title="Clear selection">Clear</button>
+          <button onClick={onClose} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"><X size={15} /></button>
         </div>
       </div>
 
@@ -114,7 +125,7 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
           <div className="space-y-3">
             <div>
               <div className="text-sm font-extrabold text-slate-800">{single.operator_name || single.serialnumber}</div>
-              <div className="font-mono text-[11px] text-slate-400">{single.serialnumber} · {single.business_date}</div>
+              <div className="font-mono text-xs text-slate-400">{single.serialnumber} · {single.business_date}</div>
             </div>
             <div className="flex items-center gap-2">
               <span className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${single.scheduled_shift === 'DAY' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
@@ -127,7 +138,7 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
               Hours <b className="tabular-nums">{Number(single.recorded_hours || 0).toFixed(1)}</b> / <b className="tabular-nums">{Number(single.scheduled_standard_hours || 0).toFixed(0)}h</b> required
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Status</label>
+              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Status</label>
               <select
                 value={single.status}
                 onChange={(e) => onApply({ serialnumbers: [single.serialnumber], business_dates: [single.business_date], status: e.target.value })}
@@ -137,7 +148,7 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Half day</label>
+              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Half day</label>
               <button
                 type="button"
                 onClick={() => onApply({ serialnumbers: [single.serialnumber], business_dates: [single.business_date], half_day: !single.half_day })}
@@ -147,6 +158,35 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
               </button>
               <p className="mt-1 text-[10px] text-slate-400">Required hours are halved.</p>
             </div>
+            {single.business_date >= todayLocalISO() && (
+              <div className="space-y-3 border-t border-slate-100 pt-3">
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Shift for this day</label>
+                  <select
+                    value={single.shift_override || ''}
+                    onChange={(e) => onApply({ cells: [{ serialnumber: single.serialnumber, business_date: single.business_date }], shift_override: e.target.value || null })}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800"
+                  >
+                    <option value="">Scheduled ({single.scheduled_shift})</option>
+                    <option value="DAY">DAY</option>
+                    <option value="NIGHT">NIGHT</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Exact target hours</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number" min="0.01" max="24" step="0.25"
+                      defaultValue={single.standard_hours_override ?? ''}
+                      placeholder={`${Number(single.scheduled_standard_hours || 0)}h default`}
+                      onBlur={(e) => e.target.value && onApply({ cells: [{ serialnumber: single.serialnumber, business_date: single.business_date }], standard_hours_override: Number(e.target.value) })}
+                      className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800"
+                    />
+                    <button type="button" onClick={() => onApply({ cells: [{ serialnumber: single.serialnumber, business_date: single.business_date }], standard_hours_override: null })} className="rounded-lg border border-slate-300 px-2 text-xs font-bold text-slate-600">Default</button>
+                  </div>
+                </div>
+              </div>
+            )}
             {single.business_date >= todayLocalISO() && (
               <div className="border-t border-slate-100 pt-3">
                 <button
@@ -169,24 +209,38 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
               Apply status or half-day to all {selectedKeys.length} selected cells.
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Apply status</label>
+              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Apply status</label>
               <select value={status} onChange={(e) => setStatus(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
                 <option value="">No change</option>
                 {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1">Half day</label>
+              <label className="block text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Half day</label>
               <select value={half} onChange={(e) => setHalf(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
                 <option value="">No change</option>
                 <option value="half">Set half day</option>
                 <option value="full">Set full day</option>
               </select>
             </div>
+            <div>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Shift override</label>
+              <select value={shift} onChange={(e) => setShift(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]">
+                <option value="">No change</option>
+                <option value="ROTATION">Use scheduled shift</option>
+                <option value="DAY">Always DAY for selected dates</option>
+                <option value="NIGHT">Always NIGHT for selected dates</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-500">Target hours override</label>
+              <input type="number" min="0.01" max="24" step="0.25" value={hours === 'DEFAULT' ? '' : hours} onChange={(e) => setHours(e.target.value)} placeholder="No change" className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#00b4d8]" />
+              <button type="button" onClick={() => setHours('DEFAULT')} className="mt-1 text-xs font-bold text-[#0077b6]">Use shift default</button>
+            </div>
             <button
               type="button"
               onClick={doApply}
-              disabled={busy || (!status && half === '')}
+              disabled={busy || (!status && half === '' && shift === '' && hours === '')}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#0077b6] px-3 py-2 text-xs font-extrabold text-white hover:bg-[#023e8a] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {busy ? <Loader2 size={13} className="animate-spin" /> : null}
@@ -199,25 +253,33 @@ function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onC
   );
 }
 
-function HeatmapCell({ row, selected, inRect, onStart, onExtend, ri, ci, name, date }) {
+function HeatmapCell({ row, selected, onStart, onExtend, ri, ci, name, date }) {
   const recorded = Number(row?.recorded_hours || 0);
   const required = Number(row?.scheduled_standard_hours || 0);
   const { bg } = CellColor({ row, recorded, required });
-  const strip = row ? (row.scheduled_shift === 'DAY' ? 'border-t-2 border-amber-400' : 'border-t-2 border-indigo-400') : '';
+  const strip = row ? (row.scheduled_shift === 'DAY' ? 'border-t-2 border-amber-400' : 'border-t-2 border-indigo-500') : '';
   return (
     <button
       type="button"
       onMouseDown={(e) => onStart(e, ri, ci)}
       onMouseEnter={() => onExtend(ri, ci)}
       title={row
-        ? `${name} · ${date} · ${row.scheduled_shift} · ${row.attendance}${row.half_day ? ' · half day' : ''}`
+        ? `${name} · ${date} · ${row.scheduled_shift} · ${row.attendance}${row.half_day ? ' · half day' : ''}${row.standard_hours_override ? ` · target ${row.standard_hours_override}h (override)` : ''}${row.shift_override ? ' · shift override' : ''}`
         : `${name} · ${date} · no schedule`}
-      className={`relative block h-7 w-7 rounded-md border transition-colors duration-150 ${bg} ${strip} ${
-        selected || inRect ? 'ring-2 ring-[#0077b6]' : 'border-transparent'
+      className={`relative block h-7 w-7 rounded-md border ${bg} ${strip} ${
+        selected ? 'ring-2 ring-[#0077b6]' : 'border-transparent'
       } ${row ? 'cursor-pointer' : 'cursor-default'}`}
     >
+      {row?.scheduled_shift === 'NIGHT' && (
+        <span className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] rounded-b-md bg-indigo-500" />
+      )}
       {row?.half_day && (
         <span className="absolute -right-0.5 -top-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span>
+      )}
+      {row && (
+        <span className={`pointer-events-none text-xs font-black ${row.scheduled_shift === 'DAY' ? 'text-amber-900' : 'text-indigo-900'}`}>
+          {row.scheduled_shift === 'DAY' ? 'D' : 'N'}
+        </span>
       )}
     </button>
   );
@@ -238,7 +300,7 @@ function EwsRosterPage() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [panelOpen, setPanelOpen] = useState(false);
-  const [dragSel, setDragSel] = useState(null);
+  const dragSel = useRef(null);
   const dragging = useRef(false);
 
   const days = useMemo(() => daysOfMonth(month), [month]);
@@ -301,16 +363,19 @@ function EwsRosterPage() {
   const startDrag = useCallback((e, ri, ci) => {
     e.preventDefault();
     dragging.current = true;
-    setDragSel({ r1: ri, c1: ci, r2: ri, c2: ci });
+    dragSel.current = { r1: ri, c1: ci, r2: ri, c2: ci };
   }, []);
   const extendDrag = useCallback((ri, ci) => {
-    if (dragging.current) setDragSel((s) => (s ? { ...s, r2: ri, c2: ci } : s));
+    if (dragging.current && dragSel.current) {
+      dragSel.current.r2 = ri;
+      dragSel.current.c2 = ci;
+    }
   }, []);
   const endDrag = () => {
     if (!dragging.current) return;
     dragging.current = false;
-    const s = dragSel;
-    setDragSel(null);
+    const s = dragSel.current;
+    dragSel.current = null;
     if (!s) return;
     const rMin = Math.min(s.r1, s.r2);
     const rMax = Math.max(s.r1, s.r2);
@@ -348,7 +413,7 @@ function EwsRosterPage() {
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragSel, selected, operators, days]);
+  }, [selected, operators, days]);
 
   const applyBulk = useCallback(async (payload) => {
     try {
@@ -490,11 +555,11 @@ function EwsRosterPage() {
                 <h2 className="text-sm font-extrabold text-slate-900">
                   {new Date(`${month}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
                 </h2>
-                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-500">
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-500">
                   {operators.length} operators
                 </span>
                 {counts.half_day > 0 && (
-                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700">
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
                     {counts.half_day} half days
                   </span>
                 )}
@@ -537,7 +602,7 @@ function EwsRosterPage() {
                     {days.map((d) => (
                       <th key={d.date} className={`sticky top-0 z-10 border-b border-[#90e0ef] px-0.5 py-1 text-center ${d.dow === 0 || d.dow === 6 ? 'bg-amber-50' : 'bg-[#caf0f8]'}`}>
                         <div className="text-[9px] font-black uppercase text-slate-400">{DOW_LETTERS[d.dow]}</div>
-                        <div className={`text-[11px] font-black tabular-nums ${d.dow === 0 || d.dow === 6 ? 'text-amber-700' : 'text-slate-700'}`}>{d.day}</div>
+                        <div className={`text-xs font-black tabular-nums ${d.dow === 0 || d.dow === 6 ? 'text-amber-700' : 'text-slate-700'}`}>{d.day}</div>
                       </th>
                     ))}
                   </tr>
@@ -558,15 +623,12 @@ function EwsRosterPage() {
                         const key = cellKey(sn, d.date);
                         const row = rowsByKey.get(key);
                         const isSel = selected.has(key);
-                        const inRect = dragSel
-                          && ri >= Math.min(dragSel.r1, dragSel.r2) && ri <= Math.max(dragSel.r1, dragSel.r2)
-                          && ci >= Math.min(dragSel.c1, dragSel.c2) && ci <= Math.max(dragSel.c1, dragSel.c2);
                         return (
                           <td key={d.date} className="p-0.5">
                             <MemoHeatmapCell
                               row={row}
                               selected={isSel}
-                              inRect={inRect}
+
                               onStart={startDrag}
                               onExtend={extendDrag}
                               ri={ri}
@@ -594,8 +656,8 @@ function EwsRosterPage() {
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-indigo-200" /> Permit</span>
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-slate-300" /> Off</span>
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-slate-100" /> No schedule</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-t-sm border-t-2 border-amber-400 bg-white" /> DAY</span>
-              <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-t-sm border-t-2 border-indigo-400 bg-white" /> NIGHT</span>
+              <span className="flex items-center gap-1"><Sun size={12} className="text-amber-500" /> DAY (garis atas kuning)</span>
+              <span className="flex items-center gap-1"><Moon size={12} className="text-indigo-500" /> NIGHT (garis biru atas+bawah)</span>
               <span className="flex items-center gap-1"><span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-black text-white">½</span> half day</span>
             </div>
           </section>

@@ -25,7 +25,7 @@ function Card({ title, subtitle, icon: Icon, accent = '#0077b6', children }) {
         )}
         <div className="min-w-0">
           <h2 className="text-sm font-extrabold text-slate-900">{title}</h2>
-          {subtitle && <p className="truncate text-[11px] font-semibold text-slate-500">{subtitle}</p>}
+          {subtitle && <p className="truncate text-xs font-semibold text-slate-500">{subtitle}</p>}
         </div>
       </header>
       <div className="p-5">{children}</div>
@@ -38,10 +38,8 @@ function EwsRosterConfigPage() {
   const [config, setConfig] = useState(null);
   const [workdays, setWorkdays] = useState([]);
   const [error, setError] = useState('');
-  const [group, setGroup] = useState('A');
   const [groupSearch, setGroupSearch] = useState('');
-  const [groupOpen, setGroupOpen] = useState(false);
-  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignmentFilter, setAssignmentFilter] = useState('unassigned');
   const [genFrom, setGenFrom] = useState(todayLocalISO());
   const [genTo, setGenTo] = useState(todayLocalISO(14));
   const [lockForm, setLockForm] = useState({ serial: '', shift: 'DAY', weeks: 2, from: todayLocalISO() });
@@ -52,21 +50,22 @@ function EwsRosterConfigPage() {
   const [preview, setPreview] = useState({ open: false, loading: false, error: '', rows: [] });
 
   const rc = config?.rotation_config;
-  const groupCounts = Object.fromEntries((config?.group_counts || []).map((g) => [g.rotation_group, g.n]));
   const groupMembers = useMemo(() => config?.group_members || [], [config]);
   const operators = useMemo(() => config?.operators || [], [config]);
   const groupBySn = useMemo(
     () => new Map(groupMembers.map((m) => [m.serialnumber, m.rotation_group])),
     [groupMembers],
   );
-  const groupResults = useMemo(() => {
+  const assignmentRows = useMemo(() => {
     const q = groupSearch.trim().toLowerCase();
-    if (!q) return [];
-    return operators
-      .filter((o) => String(o.full_name || '').toLowerCase().includes(q) || String(o.snssb).includes(q))
-      .sort((a, b) => String(a.full_name || '').localeCompare(String(b.full_name || '')))
-      .slice(0, 50);
-  }, [groupSearch, operators]);
+    return operators.filter((operator) => {
+      const current = operator.rotation_group || groupBySn.get(operator.snssb);
+      if (assignmentFilter === 'unassigned' && current) return false;
+      if (assignmentFilter === 'A' && current !== 'A') return false;
+      if (assignmentFilter === 'B' && current !== 'B') return false;
+      return !q || `${operator.full_name || ''} ${operator.snssb}`.toLowerCase().includes(q);
+    });
+  }, [assignmentFilter, groupBySn, groupSearch, operators]);
 
   const load = useCallback(async () => {
     setError('');
@@ -107,8 +106,8 @@ function EwsRosterConfigPage() {
     });
   };
 
-  const assignGroup = useCallback(async (sn, target = group) => {
-    if (!sn) { toast.error('Select an operator'); return; }
+  const assignGroup = useCallback(async (sn, target) => {
+    if (!sn || !target) { toast.error('Select an operator and a group'); return; }
     const prevMembers = config?.group_members || [];
     const operatorName = (operators.find((o) => o.snssb === sn) || {}).full_name || sn;
     // Optimistic: pindahkan operator ke group target di state lokal.
@@ -118,7 +117,6 @@ function EwsRosterConfigPage() {
         .filter((m) => m.serialnumber !== sn)
         .concat([{ serialnumber: sn, rotation_group: target, full_name: operatorName, source: 'manual' }]),
     } : c));
-    setAssignBusy(true);
     try {
       const res = await fetch(`${API_BASE}/ews/roster/group`, {
         method: 'PUT',
@@ -128,21 +126,17 @@ function EwsRosterConfigPage() {
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
       toast.success(`${operatorName} → ${target === 'A' ? 'Dayshift' : 'Nightshift'}`);
       setGroupSearch('');
-      setGroupOpen(false);
       load();
     } catch (err) {
       setConfig((c) => (c ? { ...c, group_members: prevMembers } : c));
       toast.error(err.message);
-    } finally {
-      setAssignBusy(false);
     }
-  }, [group, config, operators, load]);
+  }, [config, operators, load]);
 
   // Unassign: rotation_group kosong dihapus dari operator_rotation_group.
   const unassignMember = useCallback(async (sn) => {
     const prevMembers = config?.group_members || [];
     setConfig((c) => (c ? { ...c, group_members: prevMembers.filter((m) => m.serialnumber !== sn) } : c));
-    setAssignBusy(true);
     try {
       const res = await fetch(`${API_BASE}/ews/roster/group`, {
         method: 'PUT',
@@ -155,10 +149,23 @@ function EwsRosterConfigPage() {
     } catch (err) {
       setConfig((c) => (c ? { ...c, group_members: prevMembers } : c));
       toast.error(err.message);
-    } finally {
-      setAssignBusy(false);
     }
   }, [config, load]);
+
+  const setPermanentShift = useCallback(async (sn, fixedShift) => {
+    try {
+      const res = await fetch(`${API_BASE}/ews/roster/permanent-shift`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serialnumber: sn, fixed_shift: fixedShift || null, updated_by: 'ews-roster-ui' }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
+      toast.success(fixedShift ? `${sn} always ${fixedShift} mulai hari ini` : `${sn} follows rotation`);
+      await load();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }, [load]);
 
   const runGenerate = useCallback(async () => {
     try {
@@ -310,7 +317,7 @@ function EwsRosterConfigPage() {
                 </tbody>
               </table>
             </div>
-            <p className="mt-2 text-[11px] font-semibold text-slate-400">
+            <p className="mt-2 text-xs font-semibold text-slate-400">
               Changes save automatically. Applies to rosters generated afterwards (forward-only).
             </p>
           </Card>
@@ -327,132 +334,58 @@ function EwsRosterConfigPage() {
                 <Wand2 size={15} /> Generate
               </button>
             </div>
-            <p className="mt-2 text-[11px] font-semibold text-slate-400">
+            <p className="mt-2 text-xs font-semibold text-slate-400">
               Forward-only: existing rows (including manual foreman statuses) are never overwritten.
             </p>
           </Card>
 
           <Card title="Operator Group Assignment" icon={Users} accent="#7c3aed">
             <div className="flex flex-col gap-3">
-              {/* Segmented Dayshift / Nightshift */}
-              <div className="inline-flex w-full rounded-xl border border-slate-300 bg-slate-100 p-1" role="group" aria-label="Group">
-                {[
-                  { code: 'A', label: 'Dayshift', sub: `${groupCounts.A ?? 0}`, dot: 'bg-amber-400', active: 'bg-white text-slate-900 shadow' },
-                  { code: 'B', label: 'Nightshift', sub: `${groupCounts.B ?? 0}`, dot: 'bg-indigo-500', active: 'bg-white text-slate-900 shadow' },
-                ].map((g) => (
-                  <button
-                    key={g.code}
-                    type="button"
-                    onClick={() => setGroup(g.code)}
-                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-extrabold transition-all active:scale-95 ${
-                      group === g.code ? g.active : 'text-slate-500 hover:bg-white/60'
-                    }`}
-                  >
-                    <span className={`h-2 w-2 rounded-full ${g.dot}`} />
-                    {g.label}
-                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${group === g.code ? 'bg-slate-100 text-slate-600' : 'bg-white/70 text-slate-400'}`}>
-                      {g.sub}
-                    </span>
-                  </button>
-                ))}
-              </div>
-
-              {/* Searchable combobox operator */}
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
-                <input
-                  type="text"
-                  value={groupSearch}
-                  onChange={(event) => { setGroupSearch(event.target.value); setGroupOpen(true); }}
-                  onFocus={() => setGroupOpen(true)}
-                  onBlur={() => setTimeout(() => setGroupOpen(false), 150)}
-                  placeholder={`Search operator to add to ${group === 'A' ? 'Dayshift' : 'Nightshift'}…`}
-                  className="w-full rounded-xl border border-slate-300 bg-white py-2.5 pl-10 pr-3 text-sm font-semibold text-slate-800 shadow-sm placeholder-slate-400 transition focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-                />
-                {groupOpen && groupSearch.trim() && (
-                  <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-300 bg-white py-1 shadow-xl" style={{ animation: 'hm-fade 0.15s ease-out' }}>
-                    {groupResults.length === 0 && (
-                      <li className="px-3 py-2 text-xs font-semibold text-slate-400">No operator found.</li>
-                    )}
-                    {groupResults.map((o) => {
-                      const current = groupBySn.get(o.snssb);
-                      return (
-                        <li key={o.snssb}>
-                          <button
-                            type="button"
-                            onClick={() => assignGroup(o.snssb)}
-                            className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition hover:bg-[#e8f6fb] active:scale-[0.99]"
-                          >
-                            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white ${current === 'B' ? 'bg-indigo-500' : 'bg-[#0096c7]'}`}>
-                              {(o.full_name || o.snssb).trim().charAt(0).toUpperCase()}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-xs font-bold text-slate-800">{o.full_name || o.snssb}</span>
-                              <span className="block font-mono text-[10px] text-slate-400">{o.snssb}</span>
-                            </span>
-                            {current && (
-                              <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${current === 'B' ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-                                {current === 'B' ? 'Nightshift' : 'Dayshift'}
-                              </span>
-                            )}
-                            {!current && (
-                              <span className="shrink-0 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">Unassigned</span>
-                            )}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              {/* Member list group terpilih */}
-              <div className="overflow-hidden rounded-xl border border-slate-300 bg-slate-50">
-                <div className="flex items-center justify-between border-b border-slate-300 px-3 py-2">
-                  <span className="text-[11px] font-black uppercase tracking-wide text-slate-500">
-                    {group === 'A' ? 'Dayshift' : 'Nightshift'} members · {groupMembers.filter((m) => m.rotation_group === group).length}
-                  </span>
-                  <span className="text-[10px] font-semibold text-slate-400">
-                    {group === 'A' ? 'Group A · starts DAY' : 'Group B · starts NIGHT'}
-                  </span>
+              <div className="rounded-xl border border-slate-300 bg-slate-50 p-3">
+                <div className="flex flex-wrap gap-1.5" aria-label="Filter operator assignment">
+                  {[
+                    ['unassigned', 'Unassigned', operators.filter((o) => !(o.rotation_group || groupBySn.get(o.snssb))).length],
+                    ['A', 'Group A', operators.filter((o) => (o.rotation_group || groupBySn.get(o.snssb)) === 'A').length],
+                    ['B', 'Group B', operators.filter((o) => (o.rotation_group || groupBySn.get(o.snssb)) === 'B').length],
+                    ['all', 'All', operators.length],
+                  ].map(([key, label, count]) => (
+                    <button key={key} type="button" onClick={() => setAssignmentFilter(key)} className={`min-h-[40px] rounded-lg border px-3 text-xs font-extrabold ${assignmentFilter === key ? 'border-[#0096c7] bg-[#caf0f8] text-[#0077b6]' : 'border-slate-300 bg-white text-slate-600'}`}>
+                      {label} <span className="font-mono">{count}</span>
+                    </button>
+                  ))}
                 </div>
-                {groupMembers.filter((m) => m.rotation_group === group).length === 0 ? (
-                  <div className="px-3 py-3 text-xs font-semibold text-slate-400">No operators yet — search above to add.</div>
-                ) : (
-                  <ul className="max-h-64 divide-y divide-slate-100 overflow-y-auto">
-                    {groupMembers.filter((m) => m.rotation_group === group).map((m) => {
-                      const inactiveNow = m.inactive_from && m.inactive_from <= todayLocalISO();
-                      return (
-                        <li key={m.serialnumber} className="flex items-center gap-2.5 px-3 py-1.5" style={{ animation: 'hm-in 0.25s ease-out' }}>
-                          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-black text-white ${group === 'B' ? 'bg-indigo-500' : 'bg-amber-500'}`}>
-                            {(m.full_name || m.serialnumber).trim().charAt(0).toUpperCase()}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className={`block truncate text-xs font-bold ${inactiveNow ? 'text-slate-400 line-through' : 'text-slate-700'}`}>{m.full_name || m.serialnumber}</span>
-                            <span className="block font-mono text-[10px] text-slate-400">
-                              {m.serialnumber}
-                              {m.inactive_from ? ` · ${inactiveNow ? 'Inactive' : 'Resign'} ${m.inactive_from}` : ''}
-                            </span>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => unassignMember(m.serialnumber)}
-                            disabled={assignBusy}
-                            title="Remove from group"
-                            className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600 active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            <X size={14} />
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                <div className="relative mt-3">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="Cari nama atau SN…" className="h-10 w-full rounded-lg border border-slate-300 bg-white pl-10 pr-3 text-sm font-semibold text-slate-800" />
+                </div>
+                <div className="mt-2 max-h-72 divide-y divide-slate-200 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+                  {assignmentRows.length === 0 ? <p className="p-4 text-xs font-semibold text-slate-400">Tidak ada operator pada filter ini.</p> : assignmentRows.map((operator) => {
+                    const current = operator.rotation_group || groupBySn.get(operator.snssb);
+                    return (
+                      <div key={operator.snssb} className="grid grid-cols-[minmax(0,1fr)_110px_150px] items-center gap-2 p-2">
+                        <div className="min-w-0"><p className="truncate text-xs font-bold text-slate-800">{operator.full_name}</p><p className="font-mono text-xs text-slate-400">{operator.snssb}</p></div>
+                        <select value={current || ''} onChange={(e) => e.target.value ? assignGroup(operator.snssb, e.target.value) : unassignMember(operator.snssb)} className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-bold text-slate-700" aria-label={`Rotation group for ${operator.full_name}`}>
+                          <option value="">Unassigned</option><option value="A">Group A</option><option value="B">Group B</option>
+                        </select>
+                        <select value={operator.fixed_shift || ''} disabled={!current} onChange={(e) => setPermanentShift(operator.snssb, e.target.value)} className={`h-9 rounded-lg border px-2 text-xs font-bold ${operator.fixed_shift === 'DAY' ? 'border-amber-300 bg-amber-50 text-amber-800' : operator.fixed_shift === 'NIGHT' ? 'border-indigo-300 bg-indigo-50 text-indigo-800' : 'border-slate-300 bg-white text-slate-700'}`} aria-label={`Permanent shift for ${operator.full_name}`}>
+                          <option value="">Follow Rotation</option><option value="DAY">Always Day</option><option value="NIGHT">Always Night</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-xs font-semibold text-slate-500">Always Day/Night berlaku mulai hari ini dan tidak mengubah histori.</p>
               </div>
             </div>
           </Card>
 
-          <Card title="Shift Lock (DAY/NIGHT pin)" icon={Lock} accent="#d97706">
+          <Card title="Advanced · Temporary Shift Lock" icon={Lock} accent="#b45309">
+            <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">
+              Untuk operator yang <strong>selalu</strong> Day atau Night, pakai kolom <strong>Always Day / Always Night</strong> di kartu Operator Group Assignment di atas. Shift Lock hanya untuk pengecualian sementara yang punya tanggal mulai dan berakhir di batas minggu.
+            </p>
+            <details className="rounded-xl border border-slate-200 bg-white p-3">
+              <summary className="cursor-pointer select-none text-xs font-extrabold text-[#0077b6]">Buka form lock sementara (jarang dipakai)</summary>
+              <div className="mt-3">
             <div className="flex flex-wrap items-end gap-2">
               <div className="flex min-w-[200px] flex-1 flex-col gap-1">
                 <label htmlFor="lock-serial" className="text-xs font-bold text-slate-600">Operator</label>
@@ -502,6 +435,8 @@ function EwsRosterConfigPage() {
                 <ShieldCheck size={14} /> {lastLock.serialnumber} locked to {lastLock.locked_shift} until {lastLock.lock_end}
               </div>
             )}
+              </div>
+            </details>
 
             <div className="mt-3">
               <div className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-500">Active Locks</div>
@@ -517,7 +452,7 @@ function EwsRosterConfigPage() {
                           {lk.full_name ? (
                             <>
                               <span className="font-bold text-slate-800">{lk.full_name}</span>
-                              <span className="ml-1.5 font-mono text-[11px] text-slate-400">({lk.serialnumber})</span>
+                              <span className="ml-1.5 font-mono text-xs text-slate-400">({lk.serialnumber})</span>
                             </>
                           ) : (
                             <span className="font-mono font-bold text-slate-800">{lk.serialnumber}</span>
@@ -538,7 +473,7 @@ function EwsRosterConfigPage() {
                 </ul>
               )}
             </div>
-            <p className="mt-2 text-[11px] font-semibold text-slate-400">
+            <p className="mt-2 text-xs font-semibold text-slate-400">
               Locks are forward-only (start ≥ today) and must not overlap. They end on a week boundary
               (consistent with the crew flip). Effect on schedule &amp; adoption is active after the backend is deployed.
             </p>
@@ -573,16 +508,16 @@ function EwsRosterConfigPage() {
                         <td className="px-2 py-2 text-center tabular-nums text-slate-600">{r.total}</td>
                         <td className="px-2 py-2 text-left">
                           {r.total === 0
-                            ? <span className="text-[11px] text-slate-400">off</span>
+                            ? <span className="text-xs text-slate-400">off</span>
                             : r.hasLock
                               ? <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold text-amber-700">mixed crew (lock active)</span>
-                              : <span className="text-[11px] text-slate-400">normal</span>}
+                              : <span className="text-xs text-slate-400">normal</span>}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <p className="mt-2 text-[11px] font-semibold text-slate-400">
+                <p className="mt-2 text-xs font-semibold text-slate-400">
                   Split is computed from the effective roster. "Mixed crew" = a lock is active that day
                   (operator pinned off their crew's shift). Lock effects appear after the backend is deployed.
                 </p>

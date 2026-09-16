@@ -235,6 +235,7 @@ const MANIFEST = [
   { m: 'DELETE', p: '/ews/roster/foreman-team/member',        f: 'roster_foreman_team', a: W },
   { m: 'PUT',    p: '/ews/roster/config/workday',             f: 'roster_operator', a: W },
   { m: 'PUT',    p: '/ews/roster/group',                      f: 'roster_operator', a: W },
+  { m: 'PUT',    p: '/ews/roster/permanent-shift',            f: 'roster_operator', a: W },
   { m: 'POST',   p: '/ews/roster/generate',                   f: 'roster_operator', a: W },
   // Shift-lock R3 — pin operator DAY/NIGHT (INSERT ews.operator_shift_lock) dan
   // soft-cancel-nya. Domain sama dengan route roster lain. A-03, sebelumnya unmapped.

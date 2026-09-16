@@ -42,9 +42,15 @@ op_date AS (
   -- LEFT JOIN so operators without a usernfc row are kept (inactive_from IS NULL). Existing frozen
   -- rows are never touched (ON CONFLICT DO NOTHING below); this only stops fresh rows being added.
   SELECT g.bd, org.serialnumber,
-    CASE WHEN org.rotation_group = 'A' THEN g.group_a_shift ELSE g.group_b_shift END AS shift_code
+    COALESCE(org.fixed_shift,
+      CASE WHEN org.rotation_group = 'A' THEN g.group_a_shift ELSE g.group_b_shift END
+    ) AS shift_code
   FROM gshift g
-  CROSS JOIN ews.operator_rotation_group org
+  CROSS JOIN LATERAL (
+    SELECT base.serialnumber, base.rotation_group,
+           CASE WHEN base.fixed_shift_effective_from <= g.bd THEN base.fixed_shift END AS fixed_shift
+    FROM ews.operator_rotation_group base
+  ) org
   LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = org.serialnumber
   WHERE u.inactive_from IS NULL OR g.bd < u.inactive_from
 ),

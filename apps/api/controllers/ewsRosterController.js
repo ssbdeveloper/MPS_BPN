@@ -6,7 +6,11 @@ const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT", "SI
 const TZ = resolveTimezone();
 
 function assertIsoDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) throw new Error("Invalid date. Use YYYY-MM-DD.");
+  const text = String(value || "");
+  const parsed = new Date(`${text}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== text) {
+    throw new Error("Invalid date. Use YYYY-MM-DD.");
+  }
 }
 
 function clampText(value, fallback = "", max = 160) {
@@ -35,6 +39,7 @@ async function getRoster(req, res) {
       )
       SELECT r.serialnumber, u.full_name AS operator_name, r.eff_shift AS scheduled_shift, r.eff_std AS scheduled_standard_hours,
              r.status, r.source, r.updated_by, r.half_day,
+             r.shift_override, r.standard_hours_override, r.fixed_shift,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
              ((r.business_date + os.end_time
                + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now() AS completed,
@@ -187,17 +192,22 @@ async function getRosterMonth(req, res) {
     const result = await db.query(
       `
       WITH logged AS (
-        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op, SUM(t.duration::float) AS recorded
+        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
+               CASE WHEN (t.longdate_checkin AT TIME ZONE $2)::time < TIME '07:00'
+                    THEN (t.longdate_checkin AT TIME ZONE $2)::date - 1
+                    ELSE (t.longdate_checkin AT TIME ZONE $2)::date END AS business_date,
+               SUM(t.duration::float) AS recorded
         FROM public.timesheet_transaction t
         WHERE t.longdate_checkin >= ($1::date)::timestamp
-          AND t.longdate_checkin <  ($1::date + interval '1 month')::timestamp
+          AND t.longdate_checkin <  ($1::date + interval '1 month 7 hours')::timestamp
           AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
           AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
-        GROUP BY 1
+        GROUP BY 1, 2
       )
       SELECT r.serialnumber, u.full_name AS operator_name, r.business_date::text,
              r.eff_shift AS scheduled_shift, r.eff_std AS scheduled_standard_hours,
              r.status, r.half_day, r.shift_locked,
+             r.shift_override, r.standard_hours_override, r.fixed_shift,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
              ((r.business_date + os.end_time
                + CASE WHEN os.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now() AS completed,
@@ -208,7 +218,7 @@ async function getRosterMonth(req, res) {
       FROM ews.roster_effective r
       JOIN ews.operator_shift os ON os.shift_code = r.eff_shift
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
-      LEFT JOIN logged lg ON lg.op = r.serialnumber
+      LEFT JOIN logged lg ON lg.op = r.serialnumber AND lg.business_date = r.business_date
       WHERE r.business_date >= $1::date AND r.business_date < ($1::date + interval '1 month')::date
       ${teamFilter}
       ORDER BY u.full_name NULLS LAST, r.serialnumber, r.business_date
@@ -223,35 +233,64 @@ async function getRosterMonth(req, res) {
   }
 }
 
-// PUT /ews/roster/bulk  { serialnumbers[], business_dates[], status?, half_day? }
+// PUT /ews/roster/bulk  { serialnumbers[], business_dates[], status?, half_day?, shift_override?, standard_hours_override? }
 // Apply status/half-day ke kombinasi serialnumber × tanggal sekaligus (bulk select).
 // Forward-only: semua tanggal harus >= hari ini (guard per tanggal).
 async function bulkUpdateRoster(req, res) {
   try {
-    const serialnumbers = (req.body?.serialnumbers || []).map((s) => String(s).trim()).filter(Boolean);
-    const businessDates = (req.body?.business_dates || []).map((d) => String(d).trim()).filter(Boolean);
+    const requestedCells = req.body?.cells;
+    let cells;
+    if (requestedCells !== undefined) {
+      if (!Array.isArray(requestedCells)) return res.status(400).json({ error: "cells must be an array" });
+      cells = requestedCells.map((cell) => ({
+        serialnumber: clampText(cell?.serialnumber, "", 80),
+        business_date: String(cell?.business_date || "").trim(),
+      }));
+    } else {
+      if (!Array.isArray(req.body?.serialnumbers) || !Array.isArray(req.body?.business_dates)) {
+        return res.status(400).json({ error: "cells or serialnumbers and business_dates arrays are required" });
+      }
+      const serialnumbers = req.body.serialnumbers.map((s) => clampText(s, "", 80)).filter(Boolean);
+      const businessDates = req.body.business_dates.map((d) => String(d).trim()).filter(Boolean);
+      cells = serialnumbers.flatMap((serialnumber) => businessDates.map((business_date) => ({ serialnumber, business_date })));
+    }
+    cells = [...new Map(cells.map((cell) => [`${cell.serialnumber}\0${cell.business_date}`, cell])).values()];
     const status = String(req.body?.status || "").toUpperCase();
     const hasHalfDay = req.body?.half_day !== undefined;
     const halfDay = Boolean(req.body?.half_day);
+    const hasShiftOverride = Object.prototype.hasOwnProperty.call(req.body || {}, "shift_override");
+    const shiftOverride = req.body?.shift_override == null || req.body.shift_override === ""
+      ? null : String(req.body.shift_override).trim().toUpperCase();
+    const hasHoursOverride = Object.prototype.hasOwnProperty.call(req.body || {}, "standard_hours_override");
+    const hoursOverride = req.body?.standard_hours_override == null || req.body.standard_hours_override === ""
+      ? null : Number(req.body.standard_hours_override);
     const updated_by = clampText(req.body?.updated_by, "ews-roster-ui", 120);
 
-    if (!serialnumbers.length || !businessDates.length) {
-      return res.status(400).json({ error: "serialnumbers dan business_dates wajib diisi" });
+    if (!cells.length || cells.some((cell) => !cell.serialnumber || !cell.business_date)) {
+      return res.status(400).json({ error: "Each cell requires serialnumber and business_date" });
     }
     if (status && !VALID_STATUS.has(status)) return res.status(400).json({ error: "Invalid status" });
-    if (!status && !hasHalfDay) return res.status(400).json({ error: "status atau half_day wajib diisi" });
-    for (const d of businessDates) assertIsoDate(d);
+    if (hasShiftOverride && shiftOverride !== null && shiftOverride !== "DAY" && shiftOverride !== "NIGHT") {
+      return res.status(400).json({ error: "shift_override must be DAY, NIGHT, or null" });
+    }
+    if (hasHoursOverride && hoursOverride !== null && (!Number.isFinite(hoursOverride) || hoursOverride <= 0 || hoursOverride > 24)) {
+      return res.status(400).json({ error: "standard_hours_override must be null or a number greater than 0 and at most 24" });
+    }
+    if (!status && !hasHalfDay && !hasShiftOverride && !hasHoursOverride) {
+      return res.status(400).json({ error: "At least one roster change is required" });
+    }
+    for (const cell of cells) assertIsoDate(cell.business_date);
 
     const todayRes = await db.query(`SELECT (now() AT TIME ZONE $1)::date AS today`, [TZ]);
-    const today = todayRes.rows[0].today;
-    if (businessDates.some((d) => d < today)) {
+    const today = String(todayRes.rows[0].today).slice(0, 10);
+    if (cells.some((cell) => cell.business_date < today)) {
       return res.status(400).json({
         error: "Past dates are frozen (adoption already counted). Only today or future dates can be updated.",
       });
     }
 
     const sets = [];
-    const params = [serialnumbers, businessDates];
+    const params = [JSON.stringify(cells)];
     if (status) {
       params.push(status);
       sets.push(`status = $${params.length}`);
@@ -260,21 +299,31 @@ async function bulkUpdateRoster(req, res) {
       params.push(halfDay);
       sets.push(`half_day = $${params.length}`);
     }
+    if (hasShiftOverride) {
+      params.push(shiftOverride);
+      sets.push(`shift_override = $${params.length}`);
+    }
+    if (hasHoursOverride) {
+      params.push(hoursOverride);
+      sets.push(`standard_hours_override = $${params.length}`);
+    }
     params.push(updated_by);
     sets.push(`source = 'manual', updated_by = $${params.length}, updated_at = now()`);
 
     const result = await db.query(
-      `UPDATE ews.shift_roster SET ${sets.join(", ")}
-       WHERE serialnumber = ANY($1::text[]) AND business_date = ANY($2::date[])`,
+      `UPDATE ews.shift_roster r SET ${sets.join(", ")}
+       FROM jsonb_to_recordset($1::jsonb) AS cell(serialnumber text, business_date date)
+       WHERE r.serialnumber = cell.serialnumber AND r.business_date = cell.business_date`,
       params
     );
     res.json({
       data: {
         rows_updated: result.rowCount,
-        serialnumbers: serialnumbers.length,
-        business_dates: businessDates.length,
+        cells: cells.length,
         status: status || null,
         half_day: hasHalfDay ? halfDay : null,
+        shift_override: hasShiftOverride ? shiftOverride : undefined,
+        standard_hours_override: hasHoursOverride ? hoursOverride : undefined,
       },
     });
   } catch (err) {
@@ -391,14 +440,19 @@ async function getConfig(req, res) {
       db.query(`SELECT day_of_week, runs_day, runs_night FROM ews.roster_workday_rule ORDER BY day_of_week`),
       db.query(`SELECT id, anchor_week_start::text, anchor_group_a_shift, rotation_period_weeks, week_start_dow, effective_from::text, is_active FROM ews.rotation_config WHERE is_active ORDER BY effective_from DESC, id DESC LIMIT 1`),
       db.query(`SELECT rotation_group, COUNT(*)::int AS n FROM ews.operator_rotation_group GROUP BY rotation_group ORDER BY rotation_group`),
-      db.query(`SELECT g.serialnumber, g.rotation_group, u.full_name, u.inactive_from::text AS inactive_from
+      db.query(`SELECT g.serialnumber, g.rotation_group, g.fixed_shift, g.fixed_shift_effective_from::text, u.full_name, u.inactive_from::text AS inactive_from
                 FROM ews.operator_rotation_group g
                 LEFT JOIN usernfc u ON u.snssb = g.serialnumber
                 ORDER BY g.rotation_group, u.full_name NULLS LAST, g.serialnumber`),
-      db.query(`SELECT snssb, full_name FROM usernfc
-                WHERE snssb IS NOT NULL AND btrim(snssb) <> '' AND full_name IS NOT NULL AND btrim(full_name) <> ''
-                  AND (inactive_from IS NULL OR inactive_from > (now() AT TIME ZONE $1)::date)
-                ORDER BY lower(full_name), snssb`, [TZ]),
+      db.query(`SELECT u.snssb, u.full_name, g.rotation_group, g.fixed_shift,
+                       CASE WHEN g.fixed_shift IS NOT NULL THEN 'fixed'
+                            WHEN g.rotation_group IS NOT NULL THEN 'rotation'
+                            ELSE 'unassigned' END AS assignment_status
+                FROM usernfc u
+                LEFT JOIN ews.operator_rotation_group g ON g.serialnumber = NULLIF(BTRIM(u.snssb), '')
+                WHERE u.snssb IS NOT NULL AND btrim(u.snssb) <> '' AND u.full_name IS NOT NULL AND btrim(u.full_name) <> ''
+                  AND (u.inactive_from IS NULL OR u.inactive_from > (now() AT TIME ZONE $1)::date)
+                ORDER BY lower(u.full_name), u.snssb`, [TZ]),
     ]);
     res.json({
       data: {
@@ -462,6 +516,34 @@ async function updateGroup(req, res) {
     res.json({ data: result.rows[0] });
   } catch (err) {
     console.error("ews roster group error:", err);
+    res.status(400).json({ error: err.message });
+  }
+}
+
+// PUT /ews/roster/permanent-shift { serialnumber, fixed_shift: DAY|NIGHT|null, updated_by }
+async function updatePermanentShift(req, res) {
+  try {
+    const serialnumber = clampText(req.body?.serialnumber, "", 80);
+    const fixedShift = req.body?.fixed_shift == null || req.body.fixed_shift === ""
+      ? null : String(req.body.fixed_shift).trim().toUpperCase();
+    const updatedBy = clampText(req.body?.updated_by, "ews-roster-ui", 120);
+    if (!serialnumber) return res.status(400).json({ error: "serialnumber is required" });
+    if (fixedShift !== null && fixedShift !== "DAY" && fixedShift !== "NIGHT") {
+      return res.status(400).json({ error: "fixed_shift must be DAY, NIGHT, or null" });
+    }
+    const result = await db.query(
+      `UPDATE ews.operator_rotation_group
+       SET fixed_shift = $2,
+           fixed_shift_effective_from = CASE WHEN $2::text IS NULL THEN NULL ELSE (now() AT TIME ZONE $4)::date END,
+           source = 'manual', updated_by = $3, updated_at = now()
+       WHERE serialnumber = $1
+       RETURNING serialnumber, rotation_group, fixed_shift, fixed_shift_effective_from::text, source`,
+      [serialnumber, fixedShift, updatedBy, TZ],
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Operator is not assigned to the roster" });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    console.error("ews roster permanent shift error:", err);
     res.status(400).json({ error: err.message });
   }
 }
@@ -613,4 +695,4 @@ async function listLocks(req, res) {
   }
 }
 
-module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, updateGroup, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember };
+module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, updateGroup, updatePermanentShift, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember };
