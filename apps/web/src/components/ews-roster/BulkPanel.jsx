@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Loader2, Trash2 } from 'lucide-react';
+import { Loader2, Trash2, X } from 'lucide-react';
 import { STATUS_OPTIONS, todayLocalISO } from './rosterConstants';
 
 // Kelas label dipakai berulang di panel ini; didefinisikan sekali agar tidak duplikat.
@@ -50,7 +50,7 @@ export default function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, o
         </h3>
         <div className="flex items-center gap-1">
           <button onClick={onClear} className="min-h-[44px] rounded-lg px-2 text-xs font-bold text-slate-500 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" title="Clear selection">Clear</button>
-          <button onClick={onClose} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"><X size={15} /></button>
+          <button onClick={onClose} aria-label="Tutup panel" className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"><X size={15} /></button>
         </div>
       </div>
 
@@ -158,8 +158,8 @@ export default function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, o
               </select>
             </div>
             <div>
-              <label className={LABEL}>Shift override</label>
-              <select value={shift} onChange={(e) => setShift(e.target.value)} className={FIELD_INPUT}>
+              <label className={LABEL} htmlFor="bulk-shift">Shift override</label>
+              <select id="bulk-shift" aria-label="Shift override" value={shift} onChange={(e) => setShift(e.target.value)} className={FIELD_INPUT}>
                 <option value="">No change</option>
                 <option value="ROTATION">Use scheduled shift</option>
                 <option value="DAY">Always DAY for selected dates</option>
@@ -168,7 +168,7 @@ export default function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, o
             </div>
             <div>
               <label className={LABEL}>Target hours override</label>
-              <input type="number" min="0.01" max="24" step="0.25" value={hours === 'DEFAULT' ? '' : hours} onChange={(e) => setHours(e.target.value)} placeholder="No change" className={FIELD_INPUT} />
+              <input type="number" aria-label="Target hours override" min="0.01" max="24" step="0.25" value={hours === 'DEFAULT' ? '' : hours} onChange={(e) => setHours(e.target.value)} placeholder="No change" className={FIELD_INPUT} />
               <button type="button" onClick={() => setHours('DEFAULT')} className="mt-1 text-xs font-bold text-[#0077b6]">Use shift default</button>
             </div>
             <button
