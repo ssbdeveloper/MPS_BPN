@@ -94,9 +94,9 @@ export function RosterLegend() {
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-indigo-200" /> Permit</span>
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-slate-300" /> Off</span>
               <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded bg-slate-100" /> No schedule</span>
-              <span className="flex items-center gap-1"><Sun size={12} className="text-amber-500" /> DAY (garis atas kuning)</span>
-              <span className="flex items-center gap-1"><Moon size={12} className="text-indigo-500" /> NIGHT (garis biru atas+bawah)</span>
-              <span className="flex items-center gap-1"><span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-xs font-black text-white">½</span> half day</span>
+              <span className="flex items-center gap-1"><Sun size={12} className="text-amber-500" /> Day Shift</span>
+              <span className="flex items-center gap-1"><Moon size={12} className="text-indigo-500" /> Night Shift</span>
+              <span className="flex items-center gap-1"><span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-xs font-black text-white">½</span> Half Day</span>
             </div>
   );
 }

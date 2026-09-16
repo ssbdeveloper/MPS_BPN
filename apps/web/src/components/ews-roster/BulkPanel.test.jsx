@@ -3,115 +3,92 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 import BulkPanel from './BulkPanel';
 
-// Regresi: saat BulkPanel dipindah ke file sendiri, ikon X tertinggal dari daftar import
-// sehingga panel mati dengan "X is not defined" begitu dibuka. Test ini me-render panel,
-// jadi kesalahan import seperti itu langsung ketahuan.
-
 const ROW = {
-  serialnumber: '16502',
-  operator_name: 'ABDUL BASIR',
-  business_date: '2099-09-16',
-  status: 'SCHEDULED',
-  attendance: 'PRESENT',
-  scheduled_shift: 'NIGHT',
-  scheduled_standard_hours: '7',
-  recorded_hours: 6.5,
-  half_day: false,
-  shift_override: null,
-  standard_hours_override: null,
+  serialnumber: '16502', operator_name: 'ABDUL BASIR', business_date: '2099-09-16',
+  status: 'SCHEDULED', attendance: 'PRESENT', scheduled_shift: 'NIGHT',
+  scheduled_standard_hours: '7', recorded_hours: 6.5, half_day: false,
+  shift_override: null, standard_hours_override: null,
 };
-
 const KEY = '16502|2099-09-16';
 const baseProps = (extra = {}) => ({
-  selectedKeys: [KEY],
-  rowsByKey: { [KEY]: ROW },
-  onClose: vi.fn(),
-  onApply: vi.fn(),
-  onDeleteDay: vi.fn(),
-  onClear: vi.fn(),
-  ...extra,
+  selectedKeys: [KEY], rowsByKey: { [KEY]: ROW }, onClose: vi.fn(), onApply: vi.fn(),
+  onDeleteDay: vi.fn(), onClear: vi.fn(), ...extra,
 });
 
 describe('BulkPanel', () => {
-  it('render detail satu operator tanpa error (ikon header ikut ter-import)', () => {
+  it('renders one operator and its direct cell controls', () => {
     render(<BulkPanel {...baseProps()} />);
-    expect(screen.getByText('Operator detail')).toBeTruthy();
+    expect(screen.getByText('Operator Details')).toBeTruthy();
     expect(screen.getByText('ABDUL BASIR')).toBeTruthy();
     expect(screen.getAllByText('NIGHT').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy();
-    expect(screen.getByLabelText('Ganti shift')).toBeTruthy();
-    expect(screen.getByLabelText('Target jam khusus')).toBeTruthy();
+    expect(screen.getByLabelText('Change Shift')).toBeTruthy();
+    expect(screen.getByLabelText('Target Hours')).toBeTruthy();
   });
 
-  it('tombol silang memanggil onClose', async () => {
+  it('closes from the header button', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     render(<BulkPanel {...baseProps({ onClose })} />);
-    await user.click(screen.getByLabelText('Tutup panel'));
+    await user.click(screen.getByLabelText('Close panel'));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('satu sel: ganti shift langsung terkirim tanpa tombol simpan', async () => {
+  it('applies a one-cell shift change immediately', async () => {
     const onApply = vi.fn();
     const user = userEvent.setup();
     render(<BulkPanel {...baseProps({ onApply })} />);
-    await user.selectOptions(screen.getByLabelText('Ganti shift'), 'DAY');
+    await user.selectOptions(screen.getByLabelText('Change Shift'), 'DAY');
     expect(onApply).toHaveBeenCalledWith({
       cells: [{ serialnumber: '16502', business_date: '2099-09-16' }],
       shift_override: 'DAY',
     });
   });
 
-  it('tombol "Ikut shift" mengembalikan target jam ke nilai master', async () => {
+  it('resets target hours to the shift default', async () => {
     const onApply = vi.fn();
     const user = userEvent.setup();
     render(<BulkPanel {...baseProps({ onApply })} />);
-    await user.click(screen.getByRole('button', { name: 'Ikut shift' }));
+    await user.click(screen.getByRole('button', { name: 'Shift Default' }));
     expect(onApply).toHaveBeenCalledWith({
       cells: [{ serialnumber: '16502', business_date: '2099-09-16' }],
       standard_hours_override: null,
     });
   });
 
-  it('mode banyak sel memakai kontrol shift yang sama dan mengirim cells tepat', async () => {
+  it('applies the exact selected cells in multi-cell mode', async () => {
     const onApply = vi.fn();
     const user = userEvent.setup();
     const key2 = '16503|2099-09-17';
-    render(<BulkPanel {...baseProps({ onApply, selectedKeys: [KEY, key2], rowsByKey: { [KEY]: ROW, [key2]: { ...ROW, serialnumber: '16503', business_date: '2099-09-17' } } })} />);
-    expect(screen.getByText('2 sel dipilih')).toBeTruthy();
-    const apply = screen.getByRole('button', { name: /Terapkan ke 2 sel/i });
+    render(<BulkPanel {...baseProps({
+      onApply, selectedKeys: [KEY, key2],
+      rowsByKey: { [KEY]: ROW, [key2]: { ...ROW, serialnumber: '16503', business_date: '2099-09-17' } },
+    })} />);
+    expect(screen.getByText('2 cells selected')).toBeTruthy();
+    const apply = screen.getByRole('button', { name: 'Apply to 2 Cells' });
     expect(apply.disabled).toBe(true);
-    await user.selectOptions(screen.getByLabelText('Ganti shift'), 'DAY');
-    expect(apply.disabled).toBe(false);
+    await user.selectOptions(screen.getByLabelText('Change Shift'), 'DAY');
     await user.click(apply);
     expect(onApply).toHaveBeenCalledWith({
       cells: [{ serialnumber: '16502', business_date: '2099-09-16' }, { serialnumber: '16503', business_date: '2099-09-17' }],
-      status: undefined,
-      half_day: undefined,
-      shift_override: 'DAY',
-      standard_hours_override: undefined,
+      status: undefined, half_day: undefined, shift_override: 'DAY', standard_hours_override: undefined,
     });
   });
 
-  it('tanggal lampau: kontrol dinonaktifkan dan alasannya dijelaskan', () => {
+  it('locks past dates and explains the state', () => {
     const pastKey = '16502|2020-01-02';
-    render(<BulkPanel {...baseProps({
-      selectedKeys: [pastKey],
-      rowsByKey: { [pastKey]: { ...ROW, business_date: '2020-01-02' } },
-    })} />);
-    expect(screen.getByText(/jadwal dikunci karena kehadiran sudah dihitung/i)).toBeTruthy();
-    expect(screen.getByLabelText('Ganti shift').disabled).toBe(true);
-    // tombol hapus jadwal tidak boleh muncul untuk tanggal lampau
-    expect(screen.queryByRole('button', { name: /Hapus jadwal/i })).toBeNull();
+    render(<BulkPanel {...baseProps({ selectedKeys: [pastKey], rowsByKey: { [pastKey]: { ...ROW, business_date: '2020-01-02' } } })} />);
+    expect(screen.getByText('Past dates are locked.')).toBeTruthy();
+    expect(screen.getByLabelText('Change Shift').disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /Delete Day/i })).toBeNull();
   });
 
-  it('campuran lampau dan masa depan: sebutkan berapa sel yang bermasalah', () => {
+  it('locks a mixed past/future selection', () => {
     const pastKey = '16502|2020-01-02';
     render(<BulkPanel {...baseProps({
       selectedKeys: [KEY, pastKey],
       rowsByKey: { [KEY]: ROW, [pastKey]: { ...ROW, business_date: '2020-01-02' } },
     })} />);
-    expect(screen.getByText(/1 dari 2 sel sudah lewat tanggalnya/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Terapkan ke 2 sel/i }).disabled).toBe(true);
+    expect(screen.getByText(/1 of 2 cells are in the past/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Apply to 2 Cells' }).disabled).toBe(true);
   });
 });

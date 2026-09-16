@@ -1,5 +1,5 @@
 const db = global.pool || require("../db");
-const { generateRoster } = require("../services/rosterGenerator");
+const { generateRoster, previewRoster, applyRoster } = require("../services/rosterGenerator");
 const { resolveTimezone } = require("../config/timezone");
 
 const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT", "SITE_VISIT"]);
@@ -16,6 +16,49 @@ function assertIsoDate(value) {
 function clampText(value, fallback = "", max = 160) {
   const t = String(value ?? fallback).trim();
   return t.length > max ? t.slice(0, max) : t;
+}
+
+function isoUtc(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function resolveWeekContext(value, config) {
+  assertIsoDate(value);
+  const selected = new Date(`${value}T00:00:00Z`);
+  const internalStart = new Date(selected);
+  internalStart.setUTCDate(internalStart.getUTCDate() - ((internalStart.getUTCDay() - Number(config.week_start_dow) + 7) % 7));
+  const anchor = new Date(`${String(config.anchor_week_start).slice(0, 10)}T00:00:00Z`);
+  const weeks = Math.floor((internalStart - anchor) / 604800000);
+  const parity = ((Math.floor(weeks / Math.max(Number(config.rotation_period_weeks), 1)) % 2) + 2) % 2;
+  const aShift = parity === 0 ? config.anchor_group_a_shift : (config.anchor_group_a_shift === "DAY" ? "NIGHT" : "DAY");
+  return {
+    week_start: isoUtc(internalStart),
+    day_group: aShift === "DAY" ? "A" : "B",
+    night_group: aShift === "NIGHT" ? "A" : "B",
+  };
+}
+
+function expandDateRange(from, to = from) {
+  assertIsoDate(from);
+  assertIsoDate(to);
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  const days = Math.floor((end - start) / 86400000) + 1;
+  if (days < 1) throw new Error("to must be on or after from");
+  if (days > 62) throw new Error("Date range cannot exceed 62 days");
+  return Array.from({ length: days }, (_, i) => isoUtc(new Date(start.getTime() + i * 86400000)));
+}
+
+function exceptionState(value) {
+  const states = { BOTH: [true, true], DAY: [true, false], NIGHT: [false, true], OFF: [false, false] };
+  const state = states[String(value || "").toUpperCase()];
+  if (!state) throw new Error("state must be BOTH, DAY, NIGHT, or OFF");
+  return state;
+}
+
+function strictBoolean(value, field) {
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
 }
 
 // GET /ews/roster?date=YYYY-MM-DD — roster for a business date with attendance (present/absent).
@@ -441,7 +484,9 @@ async function removeForemanMember(req, res) {
 // GET /ews/roster/config — shift defs, workday rules, active rotation config, group counts.
 async function getConfig(req, res) {
   try {
-    const [shifts, overrides, workdays, rotation, groups, members, roster] = await Promise.all([
+    const requestedWeek = req.query?.week_start || isoUtc(new Date());
+    assertIsoDate(requestedWeek);
+    const [shifts, overrides, workdays, exceptions, rotation, groups, members, roster] = await Promise.all([
       // Master tunggal: shift yang dipakai roster, diresolusi untuk hari ini. span_minutes =
       // rentang kehadiran, standard_minutes = jam kerja bersih, selisihnya waktu istirahat.
       db.query(`SELECT sd.roster_shift_code AS shift_code, sd.shift_code AS sow_shift_code,
@@ -461,6 +506,9 @@ async function getConfig(req, res) {
                 WHERE sd.roster_shift_code IS NOT NULL AND sd.effective_date IS NOT NULL
                 ORDER BY sd.effective_date DESC, sd.shift_code`),
       db.query(`SELECT day_of_week, runs_day, runs_night FROM ews.roster_workday_rule ORDER BY day_of_week`),
+      db.query(`SELECT business_date::text, runs_day, runs_night, reason, updated_by, created_at, updated_at
+                FROM ews.roster_calendar_exception WHERE business_date >= (now() AT TIME ZONE $1)::date
+                ORDER BY business_date`, [TZ]),
       db.query(`SELECT id, anchor_week_start::text, anchor_group_a_shift, rotation_period_weeks, week_start_dow, effective_from::text, is_active FROM ews.rotation_config WHERE is_active ORDER BY effective_from DESC, id DESC LIMIT 1`),
       db.query(`SELECT rotation_group, COUNT(*)::int AS n FROM ews.operator_rotation_group GROUP BY rotation_group ORDER BY rotation_group`),
       db.query(`SELECT g.serialnumber, g.rotation_group, g.fixed_shift, g.fixed_shift_effective_from::text, u.full_name, u.inactive_from::text AS inactive_from
@@ -477,12 +525,16 @@ async function getConfig(req, res) {
                   AND (u.inactive_from IS NULL OR u.inactive_from > (now() AT TIME ZONE $1)::date)
                 ORDER BY lower(u.full_name), u.snssb`, [TZ]),
     ]);
+    const rotationConfig = rotation.rows[0] || null;
     res.json({
       data: {
         shifts: shifts.rows,
         shift_overrides: overrides.rows,
         workday_rules: workdays.rows,
-        rotation_config: rotation.rows[0] || null,
+        weekly_pattern: workdays.rows,
+        calendar_exceptions: exceptions.rows,
+        rotation_config: rotationConfig,
+        week_context: rotationConfig ? resolveWeekContext(requestedWeek, rotationConfig) : null,
         group_counts: groups.rows,
         group_members: members.rows,
         operators: roster.rows,
@@ -498,6 +550,30 @@ async function getConfig(req, res) {
 // PUT /ews/roster/config/workday  { day_of_week, runs_day, runs_night }
 async function updateWorkday(req, res) {
   try {
+    if (Array.isArray(req.body?.weekly_pattern)) {
+      const rules = req.body.weekly_pattern;
+      if (rules.length !== 7 || new Set(rules.map((r) => Number(r.day_of_week))).size !== 7 ||
+          rules.some((r) => !Number.isInteger(Number(r.day_of_week)) || Number(r.day_of_week) < 0 || Number(r.day_of_week) > 6)) {
+        return res.status(400).json({ error: "weekly_pattern must contain each day_of_week 0..6 exactly once" });
+      }
+      rules.forEach((r) => { strictBoolean(r.runs_day, "runs_day"); strictBoolean(r.runs_night, "runs_night"); });
+      const client = await (db.pool || db).connect();
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(
+          `UPDATE ews.roster_workday_rule w SET runs_day = x.runs_day, runs_night = x.runs_night, updated_at = now()
+           FROM jsonb_to_recordset($1::jsonb) x(day_of_week int, runs_day boolean, runs_night boolean)
+           WHERE w.day_of_week = x.day_of_week RETURNING w.day_of_week, w.runs_day, w.runs_night`,
+          [JSON.stringify(rules.map((r) => ({ day_of_week: Number(r.day_of_week), runs_day: r.runs_day, runs_night: r.runs_night })))],
+        );
+        if (result.rowCount !== 7) throw new Error("Weekly pattern is incomplete");
+        await client.query("COMMIT");
+        return res.json({ data: result.rows.sort((a, b) => a.day_of_week - b.day_of_week) });
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally { client.release(); }
+    }
     const dow = Number.parseInt(req.body?.day_of_week, 10);
     if (!Number.isInteger(dow) || dow < 0 || dow > 6) return res.status(400).json({ error: "day_of_week must be 0..6" });
     const result = await db.query(
@@ -511,6 +587,73 @@ async function updateWorkday(req, res) {
     console.error("ews roster workday error:", err);
     res.status(400).json({ error: err.message });
   }
+}
+
+async function putExceptions(req, res) {
+  let client;
+  try {
+    const from = req.body?.date || req.body?.from;
+    const dates = expandDateRange(from, req.body?.to || from);
+    const [runsDay, runsNight] = exceptionState(req.body?.state);
+    const reason = req.body?.reason == null || String(req.body.reason).trim() === "" ? null : String(req.body.reason).trim();
+    if (reason && reason.length > 120) return res.status(400).json({ error: "reason cannot exceed 120 characters" });
+    const updatedBy = clampText(req.body?.updated_by, "ews-roster-ui", 120);
+    client = await (db.pool || db).connect();
+    await client.query("BEGIN");
+    const today = await client.query(`SELECT (now() AT TIME ZONE $1)::date::text AS value`, [TZ]);
+    if (dates[0] < today.rows[0].value) throw new Error("Past dates are locked");
+    const result = await client.query(
+      `INSERT INTO ews.roster_calendar_exception (business_date, runs_day, runs_night, reason, updated_by)
+       SELECT d::date, $2, $3, $4, $5 FROM unnest($1::date[]) d
+       ON CONFLICT (business_date) DO UPDATE SET runs_day = EXCLUDED.runs_day,
+         runs_night = EXCLUDED.runs_night, reason = EXCLUDED.reason,
+         updated_by = EXCLUDED.updated_by, updated_at = now()
+       RETURNING business_date::text, runs_day, runs_night, reason, updated_by`,
+      [dates, runsDay, runsNight, reason, updatedBy],
+    );
+    await client.query("COMMIT");
+    res.json({ data: result.rows });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK");
+    res.status(400).json({ error: err.message });
+  } finally { if (client) client.release(); }
+}
+
+async function deleteException(req, res) {
+  try {
+    assertIsoDate(req.params.businessDate);
+    const result = await db.query(`DELETE FROM ews.roster_calendar_exception WHERE business_date = $1::date RETURNING business_date::text`, [req.params.businessDate]);
+    if (!result.rows.length) return res.status(404).json({ error: "Calendar exception not found" });
+    res.json({ data: result.rows[0] });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+}
+
+function generationRange(body) {
+  const dates = expandDateRange(body?.from, body?.to);
+  return [dates[0], dates[dates.length - 1]];
+}
+
+async function previewGenerate(req, res) {
+  try {
+    const [from, to] = generationRange(req.body);
+    res.json({ data: { from, to, ...(await previewRoster(from, to)) } });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+}
+
+async function applyGenerate(req, res) {
+  let client;
+  try {
+    const [from, to] = generationRange(req.body);
+    const updatedBy = clampText(req.body?.updated_by, "ews-roster-ui", 120);
+    client = await (db.pool || db).connect();
+    await client.query("BEGIN");
+    const counts = await applyRoster(from, to, updatedBy, client);
+    await client.query("COMMIT");
+    res.json({ data: { from, to, ...counts } });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK");
+    res.status(400).json({ error: err.message });
+  } finally { if (client) client.release(); }
 }
 
 // PUT /ews/roster/group  { serialnumber, rotation_group, updated_by }
@@ -886,4 +1029,4 @@ async function resyncFutureShifts(req, res) {
   }
 }
 
-module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, updateGroup, updatePermanentShift, updateShiftMaster, getShiftImpact, resyncFutureShifts, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember };
+module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, putExceptions, deleteException, previewGenerate, applyGenerate, updateGroup, updatePermanentShift, updateShiftMaster, getShiftImpact, resyncFutureShifts, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember, resolveWeekContext, expandDateRange, exceptionState, strictBoolean };

@@ -11,10 +11,11 @@ const heatmapBundle = () =>
 
 describe('EWS roster UX overhaul contracts', () => {
   it('shows the full assignment directory and permanent shift controls', () => {
-    const source = readPage('EwsRosterConfigPage.jsx');
+    const source = [readPage('EwsRosterConfigPage.jsx'), readPart('OperatorShiftCard.jsx')].join('\n');
     expect(source).toMatch(/Unassigned/);
-    expect(source).toMatch(/Group A/);
-    expect(source).toMatch(/Group B/);
+    expect(source).toMatch(/Day Shift/);
+    expect(source).toMatch(/Night Shift/);
+    expect(source).not.toMatch(/Group A|Group B/);
     expect(source).toMatch(/All/);
     expect(source).toMatch(/fixed_shift/);
     expect(source).toMatch(/Follow Rotation/);
@@ -23,8 +24,8 @@ describe('EWS roster UX overhaul contracts', () => {
   });
 
   it('lets the EWS config page edit shift times and standard hours', () => {
-    const source = readPage('EwsRosterConfigPage.jsx');
-    expect(source).toMatch(/Shift & Standard Hours/);
+    const source = [readPage('EwsRosterConfigPage.jsx'), readPart('ShiftSettingsCard.jsx')].join('\n');
+    expect(source).toMatch(/Shift Hours/);
     expect(source).toMatch(/standard_hours/);
     expect(source).toMatch(/\/ews\/roster\/shift/);
     expect(source).toMatch(/resync-future/);

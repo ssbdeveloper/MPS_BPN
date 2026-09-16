@@ -35,6 +35,8 @@ router.put("/roster/foreman-team/member", roster.setForemanMember);
 router.delete("/roster/foreman-team/member", roster.removeForemanMember);
 router.get("/roster/config", roster.getConfig);
 router.put("/roster/config/workday", roster.updateWorkday);
+router.put("/roster/config/exceptions", roster.putExceptions);
+router.delete("/roster/config/exceptions/:businessDate", roster.deleteException);
 router.put("/roster/group", roster.updateGroup);
 router.put("/roster/permanent-shift", roster.updatePermanentShift);
 // Master shift (single source): jam shift + jam kerja bersih + pratinjau/resync snapshot future.
@@ -42,6 +44,8 @@ router.put("/roster/shift", roster.updateShiftMaster);
 router.get("/roster/shift/impact", roster.getShiftImpact);
 router.put("/roster/shift/resync-future", roster.resyncFutureShifts);
 router.post("/roster/generate", roster.generate);
+router.post("/roster/generate/preview", roster.previewGenerate);
+router.post("/roster/generate/apply", roster.applyGenerate);
 // Shift-lock (R3 override, Phase 1): pin operator DAY/NIGHT for N weeks. Applied by VIEW
 // ews.roster_effective (readers not switched yet). set / cancel (soft, forward-only) / list.
 router.post("/roster/lock", roster.setLock);

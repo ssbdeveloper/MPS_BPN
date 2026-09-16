@@ -24,6 +24,7 @@ function importedNames(source) {
 function localNames(source) {
   const names = new Set();
   for (const m of source.matchAll(/(?:function|const|let|var|class)\s+([A-Z][A-Za-z0-9_]*)\s*[=(]/g)) names.add(m[1]);
+  for (const m of source.matchAll(/\b[a-zA-Z_$][\w$]*\s*:\s*([A-Z][A-Za-z0-9_]*)/g)) names.add(m[1]);
   return names;
 }
 
