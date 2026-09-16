@@ -20,7 +20,9 @@ function duration(minutes) {
 }
 
 function ShiftRow({ shift, draft, onChange, onSave, busy }) {
-  const value = (field) => (draft[field] !== undefined ? draft[field] : shift[field]);
+  // draft hanya terisi setelah user mengubah sesuatu, jadi WAJIB optional-chained: kalau tidak,
+  // render pertama (draft undefined) langsung mati dengan "reading 'standard_hours'".
+  const value = (field) => (draft?.[field] !== undefined ? draft[field] : shift[field]);
   const isDay = shift.shift_code === 'DAY';
   const span = Number(shift.span_minutes || 0);
   const std = Number(value('standard_hours') || 0) * 60;
