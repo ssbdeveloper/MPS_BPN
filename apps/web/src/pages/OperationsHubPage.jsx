@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardList,
   Factory,
+  HeartPulse,
   Loader2,
   LogOut,
   Settings,
@@ -77,13 +78,6 @@ function toNum(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function formatDateLabel(value) {
-  if (!value) return '-';
-  const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
 function formatTodayClock(value) {
   return value.toLocaleString('en-GB', {
     day: '2-digit',
@@ -112,9 +106,9 @@ function readSapEnv() {
   }
 }
 
-function DashboardCard({ children, className = '', style }) {
+function DashboardCard({ children, className = '', style, ...rest }) {
   return (
-    <section style={style} className={`rounded-lg border border-slate-300 bg-white shadow-sm ${className}`}>
+    <section style={style} className={`rounded-lg border border-slate-300 bg-white shadow-sm ${className}`} {...rest}>
       {children}
     </section>
   );
@@ -149,7 +143,7 @@ function useCountUp(target, duration = 900) {
   return display;
 }
 
-function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0, progress = null, chips = [] }) {
+function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#0096c7', delta, deltaLabel = '', index = 0, progress = null, chips = [], onClick }) {
   const IconComponent = icon;
   const hasDelta = Number.isFinite(Number(delta));
   const up = Number(delta) > 0;
@@ -159,8 +153,21 @@ function StatCard({ title, value, suffix = '', helper, icon, tone, accent = '#00
 
   return (
     <DashboardCard
-      className="hub-card group relative overflow-hidden p-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-200/60"
+      className={`hub-card group relative overflow-hidden p-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-200/60${
+        onClick ? ' cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0077b6]' : ''
+      }`}
       style={{ animationDelay: `${index * 70}ms` }}
+      {...(onClick ? {
+        role: 'button',
+        tabIndex: 0,
+        // Nama aksesibel eksplisit: judul kartu dirender uppercase lewat CSS dan angkanya
+        // dianimasikan, jadi nama turunan dari isi tidak stabil untuk pembaca layar/tes.
+        'aria-label': `${title} — buka detail`,
+        onClick,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(); }
+        },
+      } : {})}
     >
       {/* gradient accent top bar */}
       <span
@@ -792,6 +799,12 @@ function OperationsHubPage() {
   ));
   const isAdmin = useMemo(() => getRole() === 'administrator', []);
   const [announcements, setAnnouncements] = useState([]);
+  // Ringkasan health project (kartu Order Health). Sumbernya endpoint yang SAMA dengan
+  // halaman Order Progress supaya angkanya tidak pernah beda versi: summary dihitung
+  // backend atas SELURUH project (bukan cuma halaman yang tampil).
+  // status: 'loading' | 'ready' | 'error' — kartu wajib punya keadaan aman kalau endpoint
+  // belum tersedia di plant ini (mis. MS Project belum dipakai -> total_projects 0).
+  const [healthSummary, setHealthSummary] = useState({ status: 'loading', red: 0, yellow: 0, green: 0, unknown: 0, total: 0 });
   const [announcing, setAnnouncing] = useState(false);
   const ttsAudioRef = useRef(null);
   const ttsStopRef = useRef(false);
@@ -836,6 +849,31 @@ function OperationsHubPage() {
         setKpiStatus('error');
       });
 
+    return () => controller.abort();
+  }, [isVerified]);
+
+  // Ringkasan health project untuk kartu Order Health. limit=1 karena yang dipakai hanya
+  // `summary` + `pagination.total_projects`; daftar project-nya tidak perlu ikut ditarik.
+  useEffect(() => {
+    if (!isVerified) return undefined;
+    const controller = new AbortController();
+    fetch(`${API_BASE}/dashboard/manufacturing-order-progress?limit=1&status=active`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('health unavailable');
+        return response.json();
+      })
+      .then((payload) => {
+        const s = payload?.summary || {};
+        setHealthSummary({
+          status: 'ready',
+          red: toNum(s.red), yellow: toNum(s.yellow), green: toNum(s.green), unknown: toNum(s.unknown),
+          total: toNum(payload?.pagination?.total_projects),
+        });
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') return;
+        setHealthSummary({ status: 'error', red: 0, yellow: 0, green: 0, unknown: 0, total: 0 });
+      });
     return () => controller.abort();
   }, [isVerified]);
 
@@ -904,17 +942,32 @@ function OperationsHubPage() {
       progress: tecoPct,
     },
     {
-      title: 'Machine Productive',
-      value: toNum(kpi.machine_productive_pct),
-      suffix: '%',
-      helper: machineAvgPct != null
-        ? `7d avg ${machineAvgPct.toFixed(1)}%`
-        : (hubData.basis_dates.machine_date ? formatDateLabel(hubData.basis_dates.machine_date) : 'No date'),
-      icon: BarChart2,
-      tone: 'bg-indigo-50 text-indigo-700',
-      accent: '#4f46e5',
-      delta: productiveDelta,
-      deltaLabel: 'pt',
+      // ORDER HEALTH (menggantikan 'Machine Productive', 2026-09-16 keputusan owner 2a/3a/4c —
+      // berlaku untuk KEDUA varian). Angka besar = project Critical, karena itu yang menuntut
+      // tindakan; chip memberi konteks At risk / On track tanpa menambah tinggi kartu.
+      // Health = gap antara jam terpakai dan progres (consume% − progress%): >=3 merah,
+      // >0 kuning, selebihnya hijau; project memakai anak TERBURUK (WORST_CHILD).
+      title: 'Order Health',
+      value: healthSummary.red,
+      helper: healthSummary.status === 'error'
+        ? 'Data belum tersedia'
+        : healthSummary.status === 'loading'
+          ? 'Memuat…'
+          : `dari ${formatNumber(healthSummary.total)} project aktif`,
+      icon: HeartPulse,
+      tone: healthSummary.red > 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700',
+      // Token palet resmi (deslop C1): b45309 = amber peringatan, 047857 = emerald aman.
+      accent: healthSummary.red > 0 ? '#b45309' : '#047857',
+      progress: healthSummary.total > 0 ? (healthSummary.red / healthSummary.total) * 100 : 0,
+      chips: healthSummary.status === 'ready' && healthSummary.total > 0
+        ? [
+          { label: 'at risk', value: healthSummary.yellow, tone: 'bg-amber-50 text-amber-700' },
+          { label: 'on track', value: healthSummary.green, tone: 'bg-emerald-50 text-emerald-700' },
+        ]
+        : [],
+      onClick: healthSummary.status === 'ready' && healthSummary.total > 0
+        ? () => navigate('/order-progress-dashboard?health=red')
+        : undefined,
     },
     {
       title: 'Validation Pending',
@@ -925,10 +978,15 @@ function OperationsHubPage() {
       accent: toNum(kpi.validation_pending) > 0 ? '#d97706' : '#059669',
       progress: toNum(kpi.validation_total) > 0 ? (toNum(kpi.validation_pending) / toNum(kpi.validation_total)) * 100 : 0,
     },
-  ], [hubData.basis_dates.machine_date, kpi, machineAvgPct, productiveDelta, activePct, tecoPct]);
+  ], [kpi, activePct, tecoPct, healthSummary, navigate]);
 
   const insights = useMemo(() => {
     const list = [];
+    // Health lebih mendesak daripada tren mesin: project Critical = jam terpakai sudah
+    // melampaui progres yang dilaporkan.
+    if (healthSummary.status === 'ready' && healthSummary.red > 0) {
+      list.push({ tone: 'amber', text: `${formatNumber(healthSummary.red)} of ${formatNumber(healthSummary.total)} active projects are critical — hours consumed are ahead of reported progress.` });
+    }
     if (productiveDelta != null && productiveDelta <= -2) {
       list.push({ tone: 'amber', text: `Machine productive ${formatNumber(kpi.machine_productive_pct)}% below the 7-day average (${machineAvgPct.toFixed(1)}%).` });
     }
@@ -936,7 +994,7 @@ function OperationsHubPage() {
       list.push({ tone: 'amber', text: `${formatNumber(kpi.validation_pending)} records today awaiting foreman/supervisor validation.` });
     }
     return list.slice(0, 3);
-  }, [kpi, machineAvgPct, productiveDelta]);
+  }, [kpi, machineAvgPct, productiveDelta, healthSummary]);
 
   const handleLogout = useCallback(() => {
     sessionStorage.removeItem('isVerified');

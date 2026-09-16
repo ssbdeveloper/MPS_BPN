@@ -8,6 +8,18 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const LIMIT = 20;
 const HEALTHS = ['red', 'yellow', 'green', 'unknown'];
 
+/**
+ * Filter health boleh datang dari URL (`?health=red,yellow`) supaya kartu Order Health di
+ * Operations Hub bisa deep-link langsung ke daftar project yang bermasalah. Nilai asing
+ * diabaikan — halaman tidak boleh gagal karena URL yang diketik sembarangan.
+ */
+function healthFromSearch(search) {
+  return String(new URLSearchParams(search).get('health') || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => HEALTHS.includes(value));
+}
+
 function buildQuery(filters, page) {
   const query = new URLSearchParams({ page: String(page), limit: String(LIMIT), status: filters.status });
   if (filters.q.trim()) query.set('q', filters.q.trim());
@@ -20,7 +32,10 @@ function buildQuery(filters, page) {
 export default function ManufacturingOrderProgressDashboardPage() {
   const navigate = useNavigate();
   const verified = sessionStorage.getItem('isVerified') === 'true';
-  const [filters, setFilters] = useState({ q: '', dateFrom: '', dateTo: '', status: 'active', health: [] });
+  const [filters, setFilters] = useState(() => ({
+    q: '', dateFrom: '', dateTo: '', status: 'active',
+    health: healthFromSearch(window.location.search),
+  }));
   const [projects, setProjects] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, limit: LIMIT, total_projects: 0 });
 
