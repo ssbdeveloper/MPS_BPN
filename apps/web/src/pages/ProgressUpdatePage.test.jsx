@@ -68,6 +68,30 @@ describe('Foreman physical progress hierarchy', () => {
     expect(screen.queryByRole('button', { name: 'Deactivate sub-task' })).not.toBeInTheDocument();
   });
 
+  it('keeps hierarchy sub-tasks visible with their progress when the sub-task fetch fails', async () => {
+    // Endpoint /sow/operations/:idsow/subtasks pernah 500 (cast created_by 'sap-auto'
+    // ke integer). Saat itu panel sub-task jadi kosong total; sekarang baris dari
+    // payload hierarki tetap tampil (progress_pct dinormalkan ke progress).
+    sessionStorage.setItem('authUser', JSON.stringify({ id: 1, name: 'Foreman One', roles: 'foreman' }));
+    const withInlineSubtasks = structuredClone(hierarchy);
+    withInlineSubtasks.data[0].units[0].operations[0].subtasks = [
+      { id: 9, title: 'Fit bracket', sort_order: 1, standard_hours: 12, progress_pct: 40, status: 'IN_PROGRESS' },
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation((url) => (
+      String(url).includes('/sow/operations/21/subtasks')
+        ? Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) })
+        : response(withInlineSubtasks)
+    ));
+
+    render(<MemoryRouter><ProgressUpdatePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /ORICA ISO Tank/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Unit 01/ }));
+    fireEvent.click(screen.getByRole('button', { name: /FINAL ASSEMBLY/ }));
+
+    expect(await screen.findByText('Fit bracket')).toBeInTheDocument();
+    expect(await screen.findByText('40%')).toBeInTheDocument();
+  });
+
   it('defaults the status filter to Active and switches to Completed on click', async () => {
     sessionStorage.setItem('authUser', JSON.stringify({ id: 1, name: 'Foreman One', roles: 'foreman' }));
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => response(hierarchy));

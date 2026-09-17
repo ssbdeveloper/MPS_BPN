@@ -515,7 +515,7 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
             </span>
           )}
         </div>
-        {!loading && !error && canManage && (
+        {!loading && canManage && !(error && list.length === 0) && (
           <div className="flex items-center gap-2">
             {stdButton}
             {list.length > 0 && addButton}
@@ -528,7 +528,7 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
           <Skeleton className="h-14 rounded-xl" />
           <Skeleton className="h-14 rounded-xl" />
         </div>
-      ) : error ? (
+      ) : error && list.length === 0 ? (
         <div className="flex items-center justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2.5">
           <span className="text-xs text-red-700 font-medium">{error}</span>
           <button
@@ -546,6 +546,19 @@ export const SubOperationPanel = ({ idsow, operationNo, partNumber, operationTex
         />
       ) : (
         <div className="space-y-2">
+          {/* Refresh gagal tapi masih ada data (mis. dari payload hierarki): tampilkan
+              barisnya — jangan kosongkan panel — dengan penanda data mungkin basi. */}
+          {error && (
+            <div className="flex items-center justify-between rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+              <span className="text-xs text-amber-700 font-medium">{error} — showing last known data</span>
+              <button
+                onClick={onRefresh}
+                className="text-xs font-semibold text-amber-700 hover:text-amber-900 underline underline-offset-2"
+              >
+                Coba lagi
+              </button>
+            </div>
+          )}
           {list.map((sub) => (
             <SubTaskRow
               key={sub.id}

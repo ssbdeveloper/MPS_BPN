@@ -18,6 +18,16 @@ const STATUS_OPTIONS = [
 const collapse = { initial: { height: 0, opacity: 0 }, animate: { height: 'auto', opacity: 1 }, exit: { height: 0, opacity: 0 } };
 
 const countOperations = (project) => (project.units || []).reduce((sum, unit) => sum + (unit.operations || []).length, 0);
+
+// Sub-task dari endpoint hierarki memakai `progress_pct` + tanpa order_no/weight,
+// sedangkan /sow/operations/:idsow/subtasks memakai `progress`. SubTaskRow membaca
+// bentuk yang kedua, jadi baris fallback (sebelum fetch selesai / saat fetch gagal)
+// menampilkan progress kosong kalau tidak dinormalkan dulu.
+const normalizeSubtask = (operation) => (sub) => (
+  sub.progress === undefined
+    ? { ...sub, progress: sub.progress_pct ?? 0, order_no: sub.order_no ?? operation.order_no }
+    : sub
+);
 const number = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString('id-ID', { maximumFractionDigits: 1 }) : '—';
 const MetaText = ({ children }) => <span className="mt-0.5 block truncate text-[11px] text-slate-500 sm:text-xs">{children}</span>;
 
@@ -47,7 +57,7 @@ function OutlineButton({ expanded, icon, title, meta, progress, onClick, level }
 
 function OperationRow({ operation, expanded, state, onToggle, onRefresh }) {
   const reduce = useReducedMotion();
-  const subtasks = state?.list || operation.subtasks || [];
+  const subtasks = state?.list || (operation.subtasks || []).map(normalizeSubtask(operation));
   const loading = state?.loading;
   return (
     <div className="border-t border-slate-100 bg-white">
@@ -124,14 +134,15 @@ export default function ProgressUpdatePage() {
 
   const loadSubtasks = useCallback(async (operation) => {
     const id = operation.idsow;
-    setSubState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), list: prev[id]?.list || operation.subtasks || [], loading: true, error: '' } }));
+    const fallback = (operation.subtasks || []).map(normalizeSubtask(operation));
+    setSubState((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), list: prev[id]?.list || fallback, loading: true, error: '' } }));
     try {
       const response = await fetch(`${API_BASE}/sow/operations/${id}/subtasks`);
       if (!response.ok) throw new Error();
       const list = await response.json();
       setSubState((prev) => ({ ...prev, [id]: { list: Array.isArray(list) ? list : [], loading: false, error: '' } }));
     } catch {
-      setSubState((prev) => ({ ...prev, [id]: { list: prev[id]?.list || [], loading: false, error: 'Failed to load sub-tasks' } }));
+      setSubState((prev) => ({ ...prev, [id]: { list: prev[id]?.list || fallback, loading: false, error: 'Failed to load sub-tasks' } }));
     }
   }, []);
 

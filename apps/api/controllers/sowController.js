@@ -1734,8 +1734,11 @@ exports.getSubtasks = async (req, res) => {
               CASE WHEN s.created_by ~ '^\\d+$' THEN cu.name ELSE s.created_by END AS created_by,
               CASE WHEN s.updated_by ~ '^\\d+$' THEN uu.name ELSE s.updated_by END AS updated_by
          FROM sow_sub_operation s
-         LEFT JOIN public.users cu ON s.created_by ~ '^\\d+$' AND cu.id = s.created_by::int
-         LEFT JOIN public.users uu ON s.updated_by ~ '^\\d+$' AND uu.id = s.updated_by::int
+         -- Bandingkan sebagai TEXT, jangan cast created_by ke int: planner boleh
+         -- mengevaluasi cast sebelum penjaga regex, dan baris non-numerik seperti
+         -- 'sap-auto' membuat seluruh GET subtasks gagal 500 (22P02).
+         LEFT JOIN public.users cu ON cu.id::text = s.created_by
+         LEFT JOIN public.users uu ON uu.id::text = s.updated_by
         WHERE s.operation_id = $1 AND s.is_active = true
         ORDER BY sort_order ASC, id ASC`,
       [idsow]
