@@ -1284,6 +1284,20 @@ const SOW_COMPLETION_VALUES = new Set(["all", "unfinished", "finished"]);
 // pernah berbeda pendapat soal satu order.
 const SOW_MAPPED_VALUES = new Set(["all", "mapped", "unmapped"]);
 
+// Search order SAP numerik penuh bisa memakai expression index
+// idx_sow_order_key_operation_idsow. Bentuk lama selalu `%q%` ke ENAM kolom,
+// sehingga order yang sudah lengkap pun memaksa broad scan. Angka pendek tetap
+// broad karena planner memang mencari operation_no (mis. "120"). Nilai nonangka
+// tetap broad untuk part name/number, workcenter, dan operation text.
+function classifySowOrderSearch(input) {
+  const normalized = normalizeText(input).toLowerCase();
+  if (!normalized) return { mode: "none", value: "" };
+  if (/^\d{7,}$/.test(normalized)) {
+    return { mode: "exact_order", value: normalized };
+  }
+  return { mode: "broad", value: normalized };
+}
+
 // Task yang BISA dijadwalkan = task yang punya operation_no. Predikat ini HARUS sama persis
 // dengan yang dipakai listOrderTasks (picker reservasi /sow-scheduling/area), karena kolom
 // has_msp_task-lah yang menentukan kartu order boleh ditarik ke bay atau tidak
@@ -1352,7 +1366,7 @@ async function listSowOrders(query = {}) {
   // Predikat per-ORDER (bukan per-baris) hidup di HAVING: di WHERE ia akan dievaluasi 7.344 kali
   // (sekali per baris sow) alih-alih 115 kali (sekali per grup).
   const having = [];
-  const q = nullableText(query.q);
+  const search = classifySowOrderSearch(query.q);
 
   // --- Parameter BARU (Fase 4) — semuanya OPSIONAL ----------------------------------------
   // Tanpa satu pun parameter di bawah, jumlah baris dan urutannya WAJIB identik dengan perilaku
@@ -1448,8 +1462,11 @@ async function listSowOrders(query = {}) {
     dueByTasksSql = `bool_or(coalesce(t.plan_start, t.plan_finish)::date <= $${dueByParam}::date) as due_by_tasks`;
   }
 
-  if (q) {
-    values.push(`%${q.toLowerCase()}%`);
+  if (search.mode === "exact_order") {
+    values.push(search.value);
+    where.push(`ltrim(coalesce(s.order_no, ''), '0') = ltrim($${values.length}, '0')`);
+  } else if (search.mode === "broad") {
+    values.push(`%${search.value}%`);
     where.push(`(
       lower(coalesce(s.order_no, '')) like $${values.length}
       or lower(coalesce(s.ssbr_id, '')) like $${values.length}
@@ -1639,8 +1656,11 @@ async function listSowOrders(query = {}) {
       "trim(s.order_no) <> ''",
       "s.operation_no is not null",
     ];
-    if (q) {
-      countsValues.push(`%${q.toLowerCase()}%`);
+    if (search.mode === "exact_order") {
+      countsValues.push(search.value);
+      countsWhere.push(`ltrim(coalesce(s.order_no, ''), '0') = ltrim($${countsValues.length}, '0')`);
+    } else if (search.mode === "broad") {
+      countsValues.push(`%${search.value}%`);
       const qParam = countsValues.length;
       countsWhere.push(`(
         lower(coalesce(s.order_no, '')) like $${qParam}
@@ -5268,6 +5288,8 @@ module.exports = {
   cancelBaySchedule,
   cancelBayScheduleGroup,
   checkinProject,
+  // Diekspor untuk test kontrak fast-path pencarian order numerik penuh.
+  classifySowOrderSearch,
   checkoutProject,
   createBaySchedule,
   deactivateProjectResource,

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ChevronRight, FolderSearch, GripVertical, ListTree, Loader2,
   PackageOpen, Plus, Replace, RotateCw, Target, X,
@@ -16,6 +16,7 @@ import {
   mapSowOperationToTask,
 } from '../../../services/msProjectService';
 import { unitMismatchOf } from './unitMismatch';
+import { createLatestRequest } from './latestRequest';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -677,6 +678,14 @@ export default function MapSapOperationPage() {
   // operasi tetap jalan; ini informasi tambahan, bukan syarat kerja.
   const [orderTasksAllProjects, setOrderTasksAllProjects] = useState([]);
   const [sowLoading, setSowLoading] = useState(false);
+  // Dibuat sekali seumur page: debounce 250 ms hanya mencegah request yang BELUM mulai;
+  // request lama yang sudah terbang tetap bisa selesai belakangan dan menimpa hasil terbaru.
+  // Koordinator ini meng-abort request sebelumnya setiap pencarian/filter baru.
+  const sowOrderRequestRef = useRef(null);
+  const sowOrderRequestSeqRef = useRef(0);
+  if (!sowOrderRequestRef.current) {
+    sowOrderRequestRef.current = createLatestRequest((params, options) => fetchSowOrders(params, options));
+  }
   const [operationLoading, setOperationLoading] = useState(false);
   const [operationError, setOperationError] = useState(null);
   const [mapping, setMapping] = useState(false);
@@ -710,14 +719,23 @@ export default function MapSapOperationPage() {
   }, [loadProjects, selectedProject]);
 
   const loadSowOrders = useCallback(async () => {
+    const seq = ++sowOrderRequestSeqRef.current;
     setSowLoading(true);
     setSowError(null);
     try {
-      setSowOrders(await fetchSowOrders({ q: sowSearch, mapped: sowMappedFilter, limit: 80 }));
+      const rows = await sowOrderRequestRef.current.run({
+        q: sowSearch,
+        mapped: sowMappedFilter,
+        limit: 80,
+      });
+      if (seq === sowOrderRequestSeqRef.current) setSowOrders(rows);
     } catch (error) {
-      setSowError(error.message);
+      // AbortError = pencarian baru sudah dimulai; bukan kegagalan yang perlu ditampilkan.
+      if (error?.name !== 'AbortError' && seq === sowOrderRequestSeqRef.current) {
+        setSowError(error.message);
+      }
     } finally {
-      setSowLoading(false);
+      if (seq === sowOrderRequestSeqRef.current) setSowLoading(false);
     }
   }, [sowSearch, sowMappedFilter]);
 
@@ -725,6 +743,8 @@ export default function MapSapOperationPage() {
     const timer = setTimeout(loadSowOrders, 250);
     return () => clearTimeout(timer);
   }, [loadSowOrders]);
+
+  useEffect(() => () => sowOrderRequestRef.current?.cancel(), []);
 
   const loadProjectTasks = useCallback(async (project) => {
     setSelectedProject(project);
