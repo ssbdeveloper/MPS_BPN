@@ -15,6 +15,7 @@ import {
   fetchSowOrders,
   mapSowOperationToTask,
 } from '../../../services/msProjectService';
+import { unitMismatchOf } from './unitMismatch';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -83,7 +84,10 @@ function buildTaskTree(tasks = []) {
 
 // Satu sumber lebar kolom untuk header DAN baris. Dipisah = pasti melenceng.
 // text-xs, tanggal 'dd Mon yyyy' butuh ~70px -> kolom 88px cukup dengan padding.
-const TREE_COLS = 'grid-cols-[minmax(0,1fr)_104px_52px_104px_88px_88px]';
+// Kolom UNIT ditambah 2026-09-17: dua order bisa punya part_name & jumlah operasi
+// IDENTIK (SB10115AC: UNIT 1 vs UNIT 2), dan tanpa kolom ini planner tidak punya
+// cara melihat operasi akan mendarat di unit mana.
+const TREE_COLS = 'grid-cols-[minmax(0,1fr)_112px_104px_52px_104px_88px_88px]';
 
 // Sel kosong ditulis eksplisit '—', bukan dibiarkan kosong: justru lubang datanya yang
 // perlu terlihat (di prod, 307 task level-2 hanya 13 yang punya plan date).
@@ -204,6 +208,12 @@ function TaskTreeNode({ task, childrenByParent, expandedIds, onToggle, onDropOpe
 
         {/* Order + Op ditampilkan berdampingan: satu project bisa memuat beberapa order,
             jadi nomor operasi saja ambigu saat menyisir pohon. */}
+        <span
+          className="truncate text-xs font-semibold text-slate-600"
+          title={task.unit_name || undefined}
+        >
+          {task.unit_name || DASH}
+        </span>
         <span
           className="truncate font-mono text-xs font-semibold tabular-nums text-slate-600"
           title={task.order_no || undefined}
@@ -475,6 +485,26 @@ function mappingErrorText(error) {
   return { title: 'Mapping failed', description: text || 'Unknown error' };
 }
 
+// Operasi yang ditarik berasal dari order X; task tujuan bernaung di bawah UNIT yang
+// order_no-nya Y. Implementasi + alasannya ada di ./unitMismatch.js (dipisah karena
+// file page hanya boleh meng-export komponen).
+
+// Banner peringatan beda-unit, dipakai di ReplaceDialog DAN SummaryTargetDialog supaya
+// tidak ada jalur drop yang diam-diam melewatkannya.
+function UnitMismatchWarning({ mismatch }) {
+  if (!mismatch) return null;
+  return (
+    <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2.5">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+      <p className="text-xs font-semibold text-amber-800">
+        Beda unit — target ada di bawah <span className="font-extrabold">{mismatch.unitName}</span>{' '}
+        (order {mismatch.unitOrder}), tapi operasi ini milik order {mismatch.draggedOrder}.
+        Lanjutkan hanya kalau memang disengaja.
+      </p>
+    </div>
+  );
+}
+
 // Konfirmasi menimpa pemetaan yang sudah ada. Sengaja DIALOG, bukan action-toast: toast
 // menghilang sendiri, sedangkan ini keputusan yang menghapus pemetaan operasi lain.
 function ReplaceDialog({ prompt, busy, onCancel, onConfirm }) {
@@ -491,6 +521,11 @@ function ReplaceDialog({ prompt, busy, onCancel, onConfirm }) {
   }, [prompt, onCancel]);
 
   if (!prompt) return null;
+  // Peringatan BEDA UNIT. Audit 2026-09-12 menunjukkan dialog ini di-klik "Replace"
+  // dua kali berlawanan arah pada task yang sama: pesannya hanya menyebut order+op —
+  // angka yang tak bermakna bagi planner — dan tidak pernah menyebut bahwa operasi
+  // sedang ditaruh di rumah unit LAIN. Itu akar 22 baris mapping salah unit di prod.
+  const unitMismatch = unitMismatchOf(prompt.dragged, prompt.task);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" onClick={onCancel}>
       <div
@@ -512,6 +547,7 @@ function ReplaceDialog({ prompt, busy, onCancel, onConfirm }) {
             </p>
           </div>
         </div>
+        <UnitMismatchWarning mismatch={unitMismatch} />
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -528,7 +564,7 @@ function ReplaceDialog({ prompt, busy, onCancel, onConfirm }) {
             className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-amber-600 px-4 text-sm font-bold text-white transition hover:bg-amber-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Replace className="h-4 w-4" />}
-            Replace
+            {prompt.confirmLabel || 'Replace'}
           </button>
         </div>
       </div>
@@ -554,6 +590,7 @@ function SummaryTargetDialog({ prompt, busy, onCancel, onAssign, onCreateChild }
 
   if (!prompt) return null;
   const { dragged, task } = prompt;
+  const unitMismatch = unitMismatchOf(dragged, task);
   const hasDates = Boolean(task.plan_start || task.plan_finish);
   return (
     <div className="modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4 backdrop-blur-sm" data-modal-overlay="true">{/* deslop-allow C5: dialog overlay — pola sama dengan ReplaceDialog di file ini (C5 membaca path file, bukan baris) */}
@@ -580,6 +617,7 @@ function SummaryTargetDialog({ prompt, busy, onCancel, onAssign, onCreateChild }
             </p>
           </div>
         </div>
+        <UnitMismatchWarning mismatch={unitMismatch} />
         <div className="mt-5 flex flex-col gap-2">
           <button
             type="button"
@@ -806,6 +844,22 @@ export default function MapSapOperationPage() {
     // "buat anak" juga masih ada — tanya user, jangan menebak.
     if (hasChildren) {
       setSummaryPrompt({ dragged, task });
+      return;
+    }
+    // Daun KOSONG: dulu langsung dipetakan tanpa dialog apa pun — dan justru inilah
+    // jalur yang dipakai saat operasi UNIT 1 mendarat di subtree UNIT 2 (prod, 22 baris
+    // mapping salah unit). Kalau unit target berbeda dengan order yang ditarik, tahan
+    // dan minta konfirmasi; kalau unitnya cocok, perilaku lama dipertahankan (tanpa
+    // dialog) supaya kerja normal tidak jadi lebih lambat.
+    if (unitMismatchOf(dragged, task)) {
+      setReplacePrompt({
+        dragged,
+        task,
+        asChild: false,
+        title: 'Beda unit',
+        description: `Task ini bernaung di bawah ${task.unit_name || 'unit lain'}.`,
+        confirmLabel: 'Map anyway',
+      });
       return;
     }
     mapOneOperation(dragged, task, false, false);
@@ -1074,6 +1128,7 @@ export default function MapSapOperationPage() {
                   {!taskLoading && !taskError && taskTree.roots.length > 0 && (
                     <div className={`sticky top-0 z-10 grid ${TREE_COLS} items-center gap-2 border-b border-slate-200 bg-white px-2 py-2 text-[11px] font-extrabold uppercase tracking-wide text-slate-500`}>
                       <span>Task</span>
+                      <span>Unit</span>
                       <span>Order</span>
                       <span>Op</span>
                       <span>Workcenter</span>

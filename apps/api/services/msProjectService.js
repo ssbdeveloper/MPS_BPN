@@ -610,6 +610,53 @@ function resolveDependencyTaskId(taskId, localTaskUid, taskMap, fieldName) {
   });
 }
 
+// Identitas (order_no/operation_no) task yang SEDANG dipegang sow_operation_task_map,
+// diambil SEBELUM upsert menimpanya. Dipakai untuk melaporkan "mapping drift": sync
+// menulis Task.Text1/Text2 dari file .mpp ke kolom order_no/operation_no tanpa melihat
+// mapping, jadi identitas task bisa bergeser sementara baris mapping tetap menunjuk
+// task itu — mapping jadi menggantung tanpa ada yang protes. applyExplicitDeactivate
+// hanya melaporkan task yang DINONAKTIFKAN, bukan yang identitasnya BERUBAH; itulah
+// titik buta yang membuat 22 baris drift menumpuk diam-diam di prod (diukur 2026-09-17).
+async function snapshotMappedTaskIdentity(client, projectId) {
+  const result = await client.query(
+    `select m.task_id, m.order_key, m.operation_key,
+            t.order_no, t.operation_no, t.task_name, t.outline_number
+       from sow_operation_task_map m
+       join ms_project_task t on t.task_id = m.task_id
+      where m.project_id = $1`,
+    [projectId]
+  );
+  return new Map(result.rows.map((row) => [row.task_id, row]));
+}
+
+// Bandingkan snapshot sebelum-sync dengan keadaan sesudah-sync. Perbandingan memakai
+// kunci ternormalisasi (ltrim '0' + integer) supaya '0020' vs '20' TIDAK dilaporkan
+// sebagai drift — itu ejaan berbeda untuk operasi yang sama, bukan perubahan.
+function diffMappedTaskIdentity(before, afterRows) {
+  const drift = [];
+  for (const row of afterRows) {
+    const prev = before.get(row.task_id);
+    if (!prev) continue;
+    const orderBefore = String(prev.order_no || "").replace(/^0+/, "");
+    const orderAfter = String(row.order_no || "").replace(/^0+/, "");
+    const opBefore = String(prev.operation_no ?? "").trim().replace(/^0+(?=.)/, "");
+    const opAfter = String(row.operation_no ?? "").trim().replace(/^0+(?=.)/, "");
+    if (orderBefore === orderAfter && opBefore === opAfter) continue;
+    drift.push({
+      task_id: row.task_id,
+      task_name: row.task_name,
+      outline_number: row.outline_number,
+      order_key: prev.order_key,
+      operation_key: prev.operation_key,
+      order_no_before: prev.order_no,
+      order_no_after: row.order_no,
+      operation_no_before: prev.operation_no,
+      operation_no_after: row.operation_no,
+    });
+  }
+  return drift;
+}
+
 async function upsertTasks(client, projectId, tasks, isPublish) {
   const normalized = tasks.map((task, index) => normalizeTaskPayload(task, index, isPublish));
   const localTaskMap = new Map();
@@ -1194,8 +1241,32 @@ async function listProjectTasks(projectIdParam, query = {}) {
        t.is_summary,
        t.local_task_uid,
        t.created_at,
-       t.updated_at
+       t.updated_at,
+       -- UNIT pemilik task ini = summary terdekat ke atas yang namanya mengandung 'unit'.
+       -- Dikirim ke FE supaya planner melihat "operasi ini akan mendarat di UNIT mana"
+       -- SEBELUM menjatuhkan kartu. Dua order bisa punya part_name & jumlah operasi
+       -- identik (mis. SB10115AC: UNIT 1 vs UNIT 2), jadi tanpa kolom ini mereka tidak
+       -- terbedakan dan operasi bisa mendarat di unit yang salah tanpa disadari.
+       u.unit_name,
+       u.unit_order_no
      from ms_project_task t
+     left join lateral (
+       with recursive chain as (
+         select m.task_id, m.task_name, m.parent_task_id, m.order_no, 1 as depth
+         from ms_project_task m
+         where m.task_id = t.parent_task_id
+         union all
+         select m.task_id, m.task_name, m.parent_task_id, m.order_no, c.depth + 1
+         from ms_project_task m
+         join chain c on m.task_id = c.parent_task_id
+         where c.depth < 8
+       )
+       select c.task_name as unit_name, c.order_no as unit_order_no
+       from chain c
+       where c.task_name ilike '%unit%'
+       order by c.depth
+       limit 1
+     ) u on true
      where ${where.join(" and ")}
      order by ${TASK_OPERATION_ORDER_SQL}`,
     values
@@ -4901,6 +4972,9 @@ async function syncProject(projectIdParam, payload) {
     );
 
     const projectResourceResult = await upsertProjectResources(client, projectId, normalized.project_resources);
+    // Snapshot identitas task ber-mapping SEBELUM upsert menimpanya (lihat B2 /
+    // snapshotMappedTaskIdentity): setelah upsert, nilai lamanya sudah hilang.
+    const mappedIdentityBefore = await snapshotMappedTaskIdentity(client, projectId);
     const taskResult = await upsertTasks(client, projectId, normalized.tasks, false);
     const assignmentResult = await upsertAssignments(client, projectId, normalized.assignments, taskResult.localTaskMap, false);
     const dependencyResult = await upsertDependencies(client, projectId, normalized.dependencies, taskResult.localTaskMap, false);
@@ -4923,6 +4997,22 @@ async function syncProject(projectIdParam, payload) {
       orphanedMappings = orphanResult.rows;
     }
     deactivateSummary.orphaned_mappings = orphanedMappings;
+
+    // Mapping drift: task yang masih ber-mapping TAPI identitas order/operasinya baru saja
+    // ditimpa oleh isi file .mpp (Task.Text1/Text2). Mapping-nya TIDAK diubah di sini —
+    // memindahkan mapping otomatis berarti menebak niat planner — tapi sync wajib
+    // melaporkannya. Tanpa laporan ini drift hanya ketahuan lewat query manual.
+    let mappingDrift = [];
+    if (mappedIdentityBefore.size) {
+      const afterResult = await client.query(
+        `select t.task_id, t.order_no, t.operation_no, t.task_name, t.outline_number
+           from ms_project_task t
+          where t.project_id = $1 and t.task_id = any($2::uuid[])`,
+        [projectId, [...mappedIdentityBefore.keys()]]
+      );
+      mappingDrift = diffMappedTaskIdentity(mappedIdentityBefore, afterResult.rows).slice(0, 200);
+    }
+    deactivateSummary.mapping_drift = mappingDrift;
 
     const revisionResult = await client.query(
       `update ms_project
@@ -5181,6 +5271,8 @@ module.exports = {
   checkoutProject,
   createBaySchedule,
   deactivateProjectResource,
+  // Diekspor untuk test: logika perbandingan identitas task ber-mapping (B2).
+  diffMappedTaskIdentity,
   findBayOverlaps,
   forceCheckinProject,
   getConflicts,
