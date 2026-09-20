@@ -30,51 +30,104 @@ function daysOfMonth(month) {
 function cellKey(sn, date) {
   return `${sn}|${date}`;
 }
+
+// Mode mingguan untuk tablet: sel bulanan hanya 28×28 px, terlalu kecil sebagai target
+// sentuh. Minggu dipotong per hari Minggu supaya kolomnya sejajar dengan kalender.
+function weeksOf(days) {
+  const out = [];
+  let current = [];
+  for (const d of days) {
+    if (d.dow === 0 && current.length) {
+      out.push(current);
+      current = [];
+    }
+    current.push(d);
+  }
+  if (current.length) out.push(current);
+  return out;
+}
 function EwsRosterPage() {
   const navigate = useNavigate();
-  const [month, setMonth] = useState(monthOf(todayLocalISO()));
+  const today = todayLocalISO();
+  const [month, setMonth] = useState(monthOf(today));
   const [scope, setScope] = useState(() => {
     const u = readAuthUser();
     return String(u?.roles || '').toLowerCase().includes('foreman') ? 'team' : 'all';
   });
   const [rows, setRows] = useState([]);
+  const [operatorList, setOperatorList] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [panelOpen, setPanelOpen] = useState(false);
+  const [view, setView] = useState('month');
+  const [weekIndex, setWeekIndex] = useState(0);
   const dragSel = useRef(null);
   const dragging = useRef(false);
+  const mouseHandled = useRef(false);
+  const reqSeq = useRef(0);
+  const abortRef = useRef(null);
 
   const days = useMemo(() => daysOfMonth(month), [month]);
+  const weeks = useMemo(() => weeksOf(days), [days]);
+  const visibleDays = useMemo(() => {
+    if (view !== 'week') return days;
+    return weeks[Math.min(weekIndex, weeks.length - 1)] || days;
+  }, [view, weeks, weekIndex, days]);
 
   const load = useCallback(async (m, sc) => {
+    // Ganti bulan membatalkan request lama dan menjaga urutan respons: tanpa ini,
+    // respons bulan sebelumnya bisa mendarat setelah header sudah berganti bulan.
+    const seq = ++reqSeq.current;
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsLoading(true);
     setError('');
+    setRows([]);
+    setOperatorList([]);
     try {
-      const res = await fetch(`${API_BASE}/ews/roster/month?month=${encodeURIComponent(m)}&scope=${sc}`, { headers: authHeaders() });
+      const res = await fetch(
+        `${API_BASE}/ews/roster/month?month=${encodeURIComponent(m)}&scope=${sc}`,
+        { headers: authHeaders(), signal: controller.signal }
+      );
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `Failed (${res.status})`);
       const payload = await res.json();
+      if (seq !== reqSeq.current) return;
       setRows(Array.isArray(payload?.data) ? payload.data : []);
+      // Nama operator kini datang sekali di meta, bukan diulang pada tiap baris tanggal.
+      setOperatorList(Array.isArray(payload?.meta?.operators) ? payload.meta.operators : []);
     } catch (err) {
+      if (err.name === 'AbortError' || seq !== reqSeq.current) return;
       setError(err.message || 'Failed to load roster');
       setRows([]);
+      setOperatorList([]);
     } finally {
-      setIsLoading(false);
+      if (seq === reqSeq.current) setIsLoading(false);
     }
   }, []);
 
   useEffect(() => { load(month, scope); }, [month, scope, load]);
+  useEffect(() => () => { if (abortRef.current) abortRef.current.abort(); }, []);
+
+  // Pindah bulan mereset minggu aktif; minggu yang memuat hari ini dipilih kalau ada.
+  useEffect(() => {
+    const idx = weeks.findIndex((w) => w.some((d) => d.date === today));
+    setWeekIndex(idx >= 0 ? idx : 0);
+    setSelected(new Set());
+    setPanelOpen(false);
+  }, [weeks, today]);
 
   const operators = useMemo(() => {
-    const map = new Map();
-    for (const r of rows) {
-      if (!map.has(r.serialnumber)) map.set(r.serialnumber, r.operator_name || r.serialnumber);
-    }
+    // Daftar operator + urutannya datang dari meta; baris data hanya berisi angka.
+    // Fallback ke rows menjaga halaman tetap hidup kalau meta belum ada (API lama).
+    const list = operatorList.length
+      ? operatorList.map((o) => [o.serialnumber, o.operator_name || o.serialnumber])
+      : [...new Map(rows.map((r) => [r.serialnumber, r.operator_name || r.serialnumber])).entries()];
     const q = search.trim().toLowerCase();
-    const list = [...map.entries()];
     return q ? list.filter(([, name]) => name.toLowerCase().includes(q)) : list;
-  }, [rows, search]);
+  }, [operatorList, rows, search]);
 
   const rowsByKey = useMemo(() => {
     const m = new Map();
@@ -82,16 +135,25 @@ function EwsRosterPage() {
     return m;
   }, [rows]);
 
+  // Panel detail perlu nama operator, tapi baris data sudah tidak membawanya lagi.
+  const operatorNameMap = useMemo(() => {
+    const m = new Map();
+    for (const o of operatorList) m.set(o.serialnumber, o.operator_name || o.serialnumber);
+    return m;
+  }, [operatorList]);
+
   const counts = useMemo(() => {
-    const c = { scheduled: 0, present: 0, absent: 0, excused: 0, in_progress: 0, half_day: 0 };
+    // Hitungan mengikuti aturan warna heatmap: jam tercatat menang atas status shift,
+    // sehingga angka di tile selalu cocok dengan apa yang terlihat di sel.
+    const c = { scheduled_days: 0, recorded: 0, absent: 0, excused: 0, scheduled: 0, half_day: 0 };
     for (const r of rows) {
       if (r.half_day) c.half_day += 1;
       if (EXCUSED.includes(r.status)) c.excused += 1;
       else {
-        c.scheduled += 1;
-        if (r.attendance === 'PRESENT') c.present += 1;
+        c.scheduled_days += 1;
+        if (Number(r.recorded_hours) > 0) c.recorded += 1;
         else if (r.attendance === 'ABSENT') c.absent += 1;
-        else if (r.attendance === 'IN_PROGRESS') c.in_progress += 1;
+        else c.scheduled += 1;
       }
     }
     return c;
@@ -114,24 +176,7 @@ function EwsRosterPage() {
       dragSel.current.c2 = ci;
     }
   }, []);
-  const endDrag = () => {
-    if (!dragging.current) return;
-    dragging.current = false;
-    const s = dragSel.current;
-    dragSel.current = null;
-    if (!s) return;
-    const rMin = Math.min(s.r1, s.r2);
-    const rMax = Math.max(s.r1, s.r2);
-    const cMin = Math.min(s.c1, s.c2);
-    const cMax = Math.max(s.c1, s.c2);
-    const next = new Set();
-    for (let r = rMin; r <= rMax; r++) {
-      for (let c = cMin; c <= cMax; c++) {
-        const op = operators[r];
-        const d = days[c];
-        if (op && d) next.add(cellKey(op[0], d.date));
-      }
-    }
+  const applySelection = useCallback((next) => {
     if (next.size === 1) {
       const k = [...next][0];
       if (selected.has(k)) {
@@ -144,7 +189,43 @@ function EwsRosterPage() {
       setPanelOpen(true);
     }
     setSelected(next);
+  }, [selected]);
+
+  const endDrag = () => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    mouseHandled.current = true;
+    const s = dragSel.current;
+    dragSel.current = null;
+    if (!s) return;
+    const rMin = Math.min(s.r1, s.r2);
+    const rMax = Math.max(s.r1, s.r2);
+    const cMin = Math.min(s.c1, s.c2);
+    const cMax = Math.max(s.c1, s.c2);
+    const next = new Set();
+    for (let r = rMin; r <= rMax; r++) {
+      for (let c = cMin; c <= cMax; c++) {
+        const op = operators[r];
+        const d = visibleDays[c];
+        if (op && d) next.add(cellKey(op[0], d.date));
+      }
+    }
+    applySelection(next);
   };
+
+  // Tap (tablet) dan Enter/Space (keyboard) tidak menghasilkan mouseup drag, jadi sel
+  // diaktifkan langsung lewat jalur ini.
+  const activateCell = useCallback((ri, ci) => {
+    // Di desktop, click selalu menyusul mouseup drag — seleksi sudah ditangani di sana.
+    if (mouseHandled.current) {
+      mouseHandled.current = false;
+      return;
+    }
+    const op = operators[ri];
+    const d = visibleDays[ci];
+    if (!op || !d) return;
+    applySelection(new Set([cellKey(op[0], d.date)]));
+  }, [operators, visibleDays, applySelection]);
 
   useEffect(() => {
     const up = (e) => {
@@ -156,7 +237,7 @@ function EwsRosterPage() {
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, operators, days]);
+  }, [selected, operators, visibleDays]);
 
   const applyBulk = useCallback(async (payload) => {
     try {
@@ -285,10 +366,10 @@ function EwsRosterPage() {
           )}
 
           <section className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            <StatTile label="Scheduled days" value={counts.scheduled} tone="info" />
-            <StatTile label="Present" value={counts.present} tone="good" />
+            <StatTile label="Scheduled days" value={counts.scheduled_days} tone="info" />
+            <StatTile label="Recorded" value={counts.recorded} tone="good" />
             <StatTile label="Absent" value={counts.absent} tone={counts.absent > 0 ? 'bad' : 'good'} />
-            <StatTile label="In Progress" value={counts.in_progress} tone="neutral" />
+            <StatTile label="Scheduled" value={counts.scheduled} tone="neutral" />
             <StatTile label="Excused" value={counts.excused} tone="neutral" />
           </section>
 
@@ -307,52 +388,102 @@ function EwsRosterPage() {
                   </span>
                 )}
               </div>
-              <label className="relative">
-                <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search operator…"
-                  className="h-8 w-52 rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
-                />
-              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
+                  {[
+                    { key: 'month', label: 'Month' },
+                    { key: 'week', label: 'Week' },
+                  ].map((o) => (
+                    <button
+                      key={o.key}
+                      type="button"
+                      onClick={() => setView(o.key)}
+                      className={`rounded-md px-3 py-1.5 text-xs font-extrabold transition ${view === o.key ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                {view === 'week' && (
+                  <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white p-1">
+                    <button
+                      type="button"
+                      onClick={() => setWeekIndex((i) => Math.max(0, i - 1))}
+                      disabled={weekIndex === 0}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      aria-label="Previous week"
+                    >
+                      <ChevronLeft size={15} />
+                    </button>
+                    <span className="px-1 text-xs font-extrabold tabular-nums text-slate-700">
+                      Week {weekIndex + 1}/{weeks.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setWeekIndex((i) => Math.min(weeks.length - 1, i + 1))}
+                      disabled={weekIndex >= weeks.length - 1}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      aria-label="Next week"
+                    >
+                      <ChevronRight size={15} />
+                    </button>
+                  </div>
+                )}
+                <label className="relative">
+                  <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search operator…"
+                    className="h-8 w-52 rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                  />
+                </label>
+              </div>
             </div>
+
+            <RosterLegend />
 
             <div className="overflow-auto" style={{ maxHeight: '62vh' }}>
               {isLoading && operators.length === 0 ? (
                 <div className="p-3" aria-hidden="true">
                   <div className="flex gap-1.5 pb-3">
                     <div className="h-4 w-44 rounded bg-slate-100 animate-pulse" />
-                    {days.map((d) => (
+                    {visibleDays.map((d) => (
                       <div key={d.date} className="h-4 flex-1 rounded bg-slate-100 animate-pulse" />
                     ))}
                   </div>
                   {Array.from({ length: 8 }, (_, i) => (
                     <div key={i} className="flex items-center gap-1.5 py-0.5">
                       <div className="h-5 w-44 rounded bg-slate-100 animate-pulse" />
-                      {days.map((d) => (
-                        <div key={d.date} className="h-7 w-7 flex-none rounded-md bg-slate-100 animate-pulse" />
+                      {visibleDays.map((d) => (
+                        <div key={d.date} className={`${view === 'week' ? 'h-11 w-11' : 'h-7 w-7'} flex-none rounded-md bg-slate-100 animate-pulse`} />
                       ))}
                     </div>
                   ))}
                 </div>
               ) : (
-              <table key={`${month}|${scope}`} className="border-separate border-spacing-0 text-left text-sm" style={{ animation: 'hm-fade 0.35s ease-out' }}>
+              <table key={`${month}|${scope}|${view}|${weekIndex}`} className="border-separate border-spacing-0 text-left text-sm" style={{ animation: 'hm-fade 0.35s ease-out' }}>
                 <thead>
                   <tr>
                     <th className="sticky left-0 top-0 z-20 w-44 min-w-44 border-b border-r border-[#90e0ef] bg-[#caf0f8] px-2 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-600">Operator</th>
-                    {days.map((d) => (
-                      <th key={d.date} className={`sticky top-0 z-10 border-b border-[#90e0ef] px-0.5 py-1 text-center ${d.dow === 0 || d.dow === 6 ? 'bg-amber-50' : 'bg-[#caf0f8]'}`}>
+                    {visibleDays.map((d) => (
+                      <th
+                        key={d.date}
+                        aria-current={d.date === today ? 'date' : undefined}
+                        className={`sticky top-0 z-10 border-b border-[#90e0ef] px-0.5 py-1 text-center ${
+                          d.date === today ? 'bg-[#90e0ef]' : d.dow === 0 || d.dow === 6 ? 'bg-slate-100' : 'bg-[#caf0f8]'
+                        } ${view === 'month' && d.dow === 0 ? 'border-l-2 border-l-slate-300' : ''}`}
+                      >
                         <div className="text-[9px] font-black uppercase text-slate-400">{DOW_LETTERS[d.dow]}</div>
-                        <div className={`text-xs font-black tabular-nums ${d.dow === 0 || d.dow === 6 ? 'text-amber-700' : 'text-slate-700'}`}>{d.day}</div>
+                        <div className={`text-xs font-black tabular-nums ${d.date === today ? 'text-[#023e8a]' : d.dow === 0 || d.dow === 6 ? 'text-slate-500' : 'text-slate-700'}`}>{d.day}</div>
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {!isLoading && operators.length === 0 && (
-                    <tr><td colSpan={days.length + 1} className="px-3 py-8 text-center text-xs font-bold text-slate-500">
+                    <tr><td colSpan={visibleDays.length + 1} className="px-3 py-8 text-center text-xs font-bold text-slate-500">
                       {search ? 'No operator matches the search.' : 'No roster for this month (maybe not generated yet).'}
                     </td></tr>
                   )}
@@ -362,7 +493,7 @@ function EwsRosterPage() {
                         <div className="truncate text-xs font-bold text-slate-800 group-hover:text-[#0077b6]">{name}</div>
                         <div className="font-mono text-[10px] text-slate-400">{sn}</div>
                       </td>
-                      {days.map((d, ci) => {
+                      {visibleDays.map((d, ci) => {
                         const key = cellKey(sn, d.date);
                         const row = rowsByKey.get(key);
                         const isSel = selected.has(key);
@@ -371,13 +502,16 @@ function EwsRosterPage() {
                             <MemoHeatmapCell
                               row={row}
                               selected={isSel}
-
                               onStart={startDrag}
                               onExtend={extendDrag}
+                              onActivate={activateCell}
                               ri={ri}
                               ci={ci}
                               name={name}
                               date={d.date}
+                              size={view === 'week' ? 'lg' : 'sm'}
+                              today={d.date === today}
+                              weekStart={view === 'month' && d.dow === 0 && ci > 0}
                             />
                           </td>
                         );
@@ -388,7 +522,6 @@ function EwsRosterPage() {
               </table>
               )}
             </div>
-            <RosterLegend />
           </section>
         </div>
 
@@ -396,6 +529,7 @@ function EwsRosterPage() {
           <BulkPanel
             selectedKeys={selectedKeys}
             rowsByKey={rowsByKey}
+            operatorNames={operatorNameMap}
             onClose={() => { setPanelOpen(false); setSelected(new Set()); }}
             onClear={() => { setSelected(new Set()); setPanelOpen(false); }}
             onApply={applyBulk}

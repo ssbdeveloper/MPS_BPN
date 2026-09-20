@@ -74,6 +74,14 @@ describe('BulkPanel', () => {
     });
   });
 
+  it('reads rows from a Map, the shape the page actually passes', () => {
+    // Halaman menyimpan rowsByKey sebagai Map; membacanya dengan rowsByKey[key]
+    // membuat detail operator hilang pada seleksi satu sel.
+    render(<BulkPanel {...baseProps({ rowsByKey: new Map([[KEY, ROW]]) })} />);
+    expect(screen.getByText('Operator Details')).toBeTruthy();
+    expect(screen.getByText('ABDUL BASIR')).toBeTruthy();
+  });
+
   it('locks past dates and explains the state', () => {
     const pastKey = '16502|2020-01-02';
     render(<BulkPanel {...baseProps({ selectedKeys: [pastKey], rowsByKey: { [pastKey]: { ...ROW, business_date: '2020-01-02' } } })} />);

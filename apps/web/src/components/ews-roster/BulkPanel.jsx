@@ -31,14 +31,23 @@ function ShiftSection({ count, scheduledLabel, currentValue, onPick, disabled })
 }
 
 
-export default function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, onDeleteDay, onClear }) {
+// Halaman menyimpan rowsByKey sebagai Map (lookup O(1) untuk ribuan sel), sementara test
+// dan pemanggil lain memakai object biasa. Baca lewat satu helper supaya detail operator
+// tidak pernah hilang hanya karena bentuk containernya berbeda.
+function lookupRow(rowsByKey, key) {
+  if (!rowsByKey || !key) return null;
+  if (typeof rowsByKey.get === 'function') return rowsByKey.get(key) || null;
+  return rowsByKey[key] || null;
+}
+
+export default function BulkPanel({ selectedKeys, rowsByKey, operatorNames, onClose, onApply, onDeleteDay, onClear }) {
   const [status, setStatus] = useState('');
   const [half, setHalf] = useState('');
   const [shift, setShift] = useState('');
   const [hours, setHours] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const single = selectedKeys.length === 1 ? rowsByKey[selectedKeys[0]] : null;
+  const single = selectedKeys.length === 1 ? lookupRow(rowsByKey, selectedKeys[0]) : null;
 
   const cellsOf = (keys) => keys.map((key) => {
     const [serialnumber, business_date] = key.split('|');
@@ -100,7 +109,11 @@ export default function BulkPanel({ selectedKeys, rowsByKey, onClose, onApply, o
         {single ? (
           <div className="space-y-3">
             <div>
-              <div className="text-sm font-extrabold text-slate-800">{single.operator_name || single.serialnumber}</div>
+              <div className="text-sm font-extrabold text-slate-800">
+                {single.operator_name
+                  || (operatorNames && operatorNames.get(single.serialnumber))
+                  || single.serialnumber}
+              </div>
               <div className="font-mono text-xs text-slate-400">{single.serialnumber} · {single.business_date}</div>
             </div>
             <div className="flex items-center gap-2">
