@@ -7,7 +7,17 @@
 // Aturan file ini: tidak boleh meng-import React dan tidak boleh melakukan fetch.
 // Semuanya deterministik dari argumen -> aman dipakai di dalam useMemo.
 
-import { areaDef, bayCodesOf as bayCodesOfRaw } from '../../config/manufacturingAreas';
+// Helper zona di file ini di-re-export di bagian bawah (baris ~60). Karena itu
+// impor lokal memakai ALIAS: `import { X }` berdampingan dengan
+// `export { X } from '...'` adalah duplicate export, bukan sekadar duplikasi
+// yang tidak berbahaya.
+import {
+  areaDef,
+  bayCodesOf as bayCodesOfRaw,
+  BAY_ZONES as BAY_ZONES_RAW,
+  isZonedArea as isZonedAreaCode,
+  splitBayCode as splitBayCodeRaw,
+} from '../../config/manufacturingAreas';
 
 export const bayCodesOf = bayCodesOfRaw;
 
@@ -52,6 +62,326 @@ export function groupAreaOrders(reservations) {
     }
   }
   return [...map.values()].sort((a, b) => a.start_date.localeCompare(b.start_date));
+}
+
+/* ── Grouping per PROJECT (PLAN §3) ──────────────────────────────────────────
+   Kartu area menampilkan PROJECT, bukan order: satu project bisa memegang
+   beberapa order di beberapa bay sekaligus. Nomor order tidak dihapus, hanya
+   turun satu tingkat (chip di panel detail area).
+
+   Kunci group (PLAN §3.1), berurutan:
+     project_id   -> kalau ada
+     project_name -> kalau project_id kosong
+     purpose      -> untuk booking non-job
+
+   Booking non-job SENGAJA tidak dipaksa masuk project. Baris seperti
+   `PAINTING ROOM`, `JIG MAIN RUNNER`, `Parking unit FT100KL`, `Bucket 6020`,
+   `Unit Dump Body Epiroc MT65` punya order_no NULL dan berdiri sebagai group
+   tersendiri bertanda non-job.                                                        */
+
+export function projectNameOf(schedule) {
+  if (!schedule) return '';
+  for (const candidate of [schedule.project_name, schedule.part_name, schedule.purpose]) {
+    if (hasText(candidate)) return String(candidate).trim();
+  }
+  return '';
+}
+
+export function projectKeyOf(schedule) {
+  if (!schedule) return '';
+  const pid = hasText(schedule.project_id) ? String(schedule.project_id).trim() : '';
+  if (pid) return `pid:${pid}`;
+  if (isNonJob(schedule)) {
+    const label = projectNameOf(schedule);
+    return label ? `nj:${label}` : '';
+  }
+  const name = projectNameOf(schedule);
+  return name ? `name:${name}` : '';
+}
+
+// Satu entri = satu PROJECT di satu area. `orders` = jumlah order_no UNIK
+// (bukan jumlah baris jadwal: satu order di-booking di banyak bay tetap 1).
+export function groupAreaProjects(reservations) {
+  const map = new Map();
+
+  for (const row of reservations || []) {
+    if (!row) continue;
+    if (row.status === 'CANCELLED') continue;
+    const key = projectKeyOf(row);
+    if (!key) continue;
+
+    const start = dateKey(row.start_date);
+    const end = dateKey(row.end_date);
+    const bays = Array.isArray(row.bay_codes) ? row.bay_codes : [];
+
+    let group = map.get(key);
+    if (!group) {
+      group = {
+        key,
+        project_id: row.project_id ?? null,
+        project: projectNameOf(row),
+        purpose: row.purpose ?? null,
+        nonJob: isNonJob(row),
+        reservations: 0,
+        orderKeys: new Set(),
+        baySet: new Set(),
+        start_date: start,
+        end_date: end,
+      };
+      map.set(key, group);
+    }
+
+    group.reservations += 1;
+    if (hasText(row.order_no)) group.orderKeys.add(String(row.order_no).trim());
+    bays.forEach((bay) => { if (hasText(bay)) group.baySet.add(String(bay).trim()); });
+    // Rentang tanggal = gabungan seluruh booking project itu.
+    if (start && (!group.start_date || start < group.start_date)) group.start_date = start;
+    if (end && (!group.end_date || end > group.end_date)) group.end_date = end;
+  }
+
+  return [...map.values()]
+    .map((group) => ({
+      key: group.key,
+      project_id: group.project_id,
+      project: group.project,
+      name: group.project,
+      purpose: group.purpose,
+      nonJob: group.nonJob,
+      reservations: group.reservations,
+      orders: group.orderKeys.size,
+      bays: [...group.baySet].sort(),
+      start_date: group.start_date,
+      end_date: group.end_date,
+    }))
+    // Non-job di bawah (job dulu), lalu project yang memakai bay terbanyak.
+    .sort((a, b) => {
+      if (a.nonJob !== b.nonJob) return a.nonJob ? 1 : -1;
+      return b.bays.length - a.bays.length || b.orders - a.orders;
+    });
+}
+
+/* ── Model zona E/C (PLAN §3.2) ──────────────────────────────────────────────
+   Satu bay fisik punya dua zona: EDGE (ujung/luar) dan CENTER (tengah/dalam).
+   Kode dari database sudah berzona ('A38E'/'A38C').
+
+   Dua kesalahan yang dihindari di sini:
+   1. menormalkan 'A38E' dan 'A38C' jadi 'A38' -> dua reservasi berbeda di satu
+      bay saling menimpa dan hanya satu yang terlihat;
+   2. menyimpan SATU reservasi per sel -> reservasi kedua hilang tanpa jejak.
+   Jadi tiap sel menyimpan DAFTAR group, dan overlap bisa dihitung dari situ.  */
+
+export const ZONE_KEYS = BAY_ZONES_RAW.map((zone) => zone.key);
+
+// -> { zoned, bays: [base...], byBay: { A38: { EDGE: [g...], CENTER: [g...] } } }
+// Area tak berzona (Blasting & Painting) memakai satu bucket per booth.
+export function buildZoneOccupancy(areaCode, groups) {
+  const zoned = isZonedAreaCode(areaCode);
+  const byBay = {};
+  const bays = zoned
+    ? [...new Set(bayCodesOf(areaCode).map((code) => splitBayCodeRaw(code).base))]
+    : bayCodesOf(areaCode);
+
+  bays.forEach((base) => {
+    byBay[base] = zoned ? { EDGE: [], CENTER: [] } : [];
+  });
+
+  (groups || []).forEach((group) => {
+    (group?.bays || []).forEach((raw) => {
+      const { base, zoneKey } = splitBayCodeRaw(raw);
+      const cell = byBay[base];
+      if (!cell) return;                       // bay di luar area ini -> abaikan
+      if (!zoned) {
+        if (cell.indexOf(group) < 0) cell.push(group);
+        return;
+      }
+      if (zoneKey) {
+        if (cell[zoneKey].indexOf(group) < 0) cell[zoneKey].push(group);
+      } else {
+        // Reservasi tanpa sufiks zona menempati SELURUH bay.
+        ZONE_KEYS.forEach((key) => { if (cell[key].indexOf(group) < 0) cell[key].push(group); });
+      }
+    });
+  });
+
+  return { zoned, bays, byBay };
+}
+
+// Sel yang dihuni lebih dari satu reservasi. `zone` null untuk area tak berzona.
+export function zoneOverlaps(occupancy) {
+  const out = [];
+  if (!occupancy) return out;
+  const { zoned, byBay } = occupancy;
+
+  Object.keys(byBay).forEach((base) => {
+    if (!zoned) {
+      if (byBay[base].length > 1) out.push({ bay: base, zone: null, groups: byBay[base] });
+      return;
+    }
+    ZONE_KEYS.forEach((key) => {
+      const cell = byBay[base][key];
+      if (cell.length > 1) out.push({ bay: base, zone: key, groups: cell });
+    });
+  });
+
+  return out;
+}
+
+// Utilitas kartu: `zona terpakai / total zona` (PLAN §3.2 butir 1).
+export function zoneUsage(occupancy) {
+  if (!occupancy) return { used: 0, total: 0 };
+  const { zoned, byBay } = occupancy;
+  let used = 0;
+  let total = 0;
+  Object.keys(byBay).forEach((base) => {
+    if (!zoned) {
+      total += 1;
+      if (byBay[base].length > 0) used += 1;
+      return;
+    }
+    ZONE_KEYS.forEach((key) => {
+      total += 1;
+      if (byBay[base][key].length > 0) used += 1;
+    });
+  });
+  return { used, total };
+}
+
+/* ── Warna per project (PLAN §3.3) ───────────────────────────────────────────
+   Warna = encoding data, bukan dekorasi: diturunkan dari hash nama project,
+   jadi satu project punya warna yang SAMA di Area 1 sampai Area 18 dan
+   scheduler bisa melacak project lintas area dari warna.
+
+   Palet dikurasi (bukan hue acak) supaya 10 warna ini tetap terbedakan saat
+   berdampingan. Daftar gelap adalah versi terang dari warna yang sama, bukan
+   hasil pembalikan.                                                          */
+
+export const PROJECT_COLORS = [
+  '#4769e8', '#148a84', '#c17824', '#9a5ac7', '#d15c68',
+  '#5b7e3f', '#3f83a8', '#b25f38', '#6874b9', '#5f8176',
+];
+
+export const PROJECT_COLORS_DARK = [
+  '#7d97f2', '#4bb3ad', '#dda05a', '#bb8ade', '#e58a93',
+  '#8dab73', '#74aacb', '#d18e6d', '#9aa4d6', '#8faba1',
+];
+
+export function hashProjectName(name) {
+  const text = String(name ?? '');
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  return hash;
+}
+
+export function projectColor(name, dark = false) {
+  if (!hasText(name)) return '';
+  const palette = dark ? PROJECT_COLORS_DARK : PROJECT_COLORS;
+  return palette[hashProjectName(name) % palette.length];
+}
+
+// Prefix seragam ("MPS - ", "R1_MPS - ", "PO - ") membuat semua kartu terpotong
+// di titik yang sama dan tidak terbedakan. Token pembeda didahulukan.
+export function shortProjectName(name) {
+  const raw = String(name ?? '');
+  if (!raw) return '';
+  const stripped = raw
+    .replace(/^R1_MPS\s*-\s*/i, 'R1 ')
+    .replace(/^MPS\s*-\s*/i, '')
+    .replace(/^PO\s*-\s*/i, '');
+  return stripped.trim() || raw;
+}
+
+/* ── Blasting & Painting: kelompok slot (PLAN §4.3) ──────────────────────────
+   AREA-18 disusun vertikal: tiga slot Painting, pemisah, dua slot Blasting.
+   Jenis dibaca dari PREFIKS KODE ('PT*' = painting, 'BL*' = blasting), bukan
+   dari indeks posisi: kalau suatu saat bay ditambah/diurut ulang di
+   manufacturingAreas.js, pengelompokan ikut benar dengan sendirinya. Urutan
+   kelompok tetap Painting dulu, lalu Blasting, sesuai PLAN.                   */
+
+export const BP_KIND_LABEL = { painting: 'Painting', blasting: 'Blasting' };
+
+// Jenis satu kode bay AREA-18. Kode tak dikenal -> 'blasting' (tetap tampil,
+// tidak boleh hilang diam-diam dari peta).
+export function bpKindOf(bayCodeText) {
+  return /^PT/i.test(String(bayCodeText ?? '').trim()) ? 'painting' : 'blasting';
+}
+
+// Bay AREA-18 -> [{ kind, label, bays: [...] }], hanya kelompok yang ADA isinya.
+export function bpSlotGroups(bays) {
+  const list = Array.isArray(bays) ? bays.filter((bay) => hasText(bay)) : [];
+  return ['painting', 'blasting']
+    .map((kind) => ({
+      kind,
+      label: BP_KIND_LABEL[kind],
+      bays: list.filter((bay) => bpKindOf(bay) === kind),
+    }))
+    .filter((group) => group.bays.length > 0);
+}
+
+/* ── Bar rentang tanggal panel detail (PLAN §5.4) ────────────────────────────
+   Posisi hari ini di dalam periode reservasi, sebagai persen 0..100. Dipakai
+   panel detail untuk menggambar penanda "sekarang" di atas bar periode.
+   Mengembalikan null kalau rentangnya tidak masuk akal (tanggal hilang/terbalik)
+   supaya panel memilih TIDAK menggambar bar, bukan menggambar bar yang bohong. */
+
+export function rangeProgress(startDate, endDate, cursorDate) {
+  const start = dateKey(startDate);
+  const end = dateKey(endDate);
+  const now = dateKey(cursorDate);
+  if (!start || !end || !now) return null;
+
+  const startMs = new Date(`${start}T00:00:00`).getTime();
+  const endMs = new Date(`${end}T00:00:00`).getTime();
+  const nowMs = new Date(`${now}T00:00:00`).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(nowMs)) return null;
+  if (endMs < startMs) return null;
+
+  // Reservasi satu hari: rentangnya nol, jadi persen dibuat 0 kalau hari ini
+  // di dalam rentang. Membagi dengan nol akan menghasilkan NaN/Infinity.
+  if (endMs === startMs) {
+    return { percent: 0, before: nowMs < startMs, after: nowMs > endMs, days: 1 };
+  }
+
+  const ratio = (nowMs - startMs) / (endMs - startMs);
+  return {
+    percent: Math.min(100, Math.max(0, ratio * 100)),
+    before: nowMs < startMs,
+    after: nowMs > endMs,
+    days: Math.round((endMs - startMs) / 86400000) + 1,
+  };
+}
+
+/* ── Isi panel detail: reservasi pada sel yang dipilih (PLAN §9 butir 6 & 12) ──
+   Mengembalikan SELURUH group pada sel terpilih, termasuk overlap — reservasi
+   kedua pada zona yang sama tidak boleh hilang dari tampilan. Tanpa `selection`
+   (user hanya memilih kartu area), yang dikembalikan adalah seluruh group area
+   supaya panel tidak pernah kosong saat kartu dibuka.                         */
+
+export function zoneSelectionGroups(occupancy, selection) {
+  if (!occupancy) return [];
+  const { zoned, byBay } = occupancy;
+  const bay = selection?.bay;
+
+  if (!bay) {
+    // Seluruh area: dedupe karena satu group bisa menempati banyak bay/zona.
+    const seen = new Set();
+    const out = [];
+    Object.keys(byBay).forEach((base) => {
+      const cells = zoned ? ZONE_KEYS.map((key) => byBay[base][key]) : [byBay[base]];
+      cells.forEach((cell) => (cell || []).forEach((group) => {
+        if (group && !seen.has(group.key)) { seen.add(group.key); out.push(group); }
+      }));
+    });
+    return out;
+  }
+
+  const cell = byBay[bay];
+  if (!cell) return [];
+  if (!zoned) return [...cell];
+  if (selection.zone) return [...(cell[selection.zone] || [])];
+  // Bay dipilih tanpa zona -> gabungan kedua zona, tanpa duplikat.
+  const seen = new Set();
+  return ZONE_KEYS.flatMap((key) => cell[key] || [])
+    .filter((group) => group && !seen.has(group.key) && seen.add(group.key));
 }
 
 // Helper zona bay (Edge/Center) di-re-export dari topologi supaya komponen fitur ini

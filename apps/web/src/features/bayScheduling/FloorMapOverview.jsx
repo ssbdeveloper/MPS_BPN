@@ -1,157 +1,67 @@
-// FloorMapOverview — TINGKAT 1 peta lantai area (perombakan 2026-08-25).
+// FloorMapOverview — TINGKAT 1 peta lantai area (PLAN §3–§4, 2026-09-21).
 //
-// Perubahan 2026-08-25 (keputusan user 1a/2a/4a/5a/6a + umpan balik visual):
-//  - Label area = CAKUPAN bay (AREA-01 -> "A38-A35"; AREA-18 -> "Blasting & Painting").
-//  - Isi area = CARD DISTINCT ORDER (order_no + project name + rentang tanggal),
-//    BUKAN kotak angka okupansi per bay — angka tidak informatif dan membingungkan.
-//  - Satu order yang di-booking di banyak bay/tanggal TIDAK boleh berulang
-//    (groupAreaOrders). Maks 3 card + "+N more" expand.
-//  - Search project/order_no (prop `orderFilter`) -> area tanpa reservasi order itu
-//    di-HIDE total; kalau semua area hidden -> empty state.
-//  - Container area LEBAR STATIK (w-60); lane flex row + horizontal scroll.
+// Arah visual yang menggantikan perombakan 2026-08-25:
+//  - Kartu area menampilkan PROJECT, bukan order (groupAreaProjects): satu
+//    project bisa memegang beberapa order di beberapa bay. Nomor order turun
+//    tingkat ke chip di panel detail area.
+//  - Peta zona E/C per bay fisik: EDGE di atas, CENTER di bawah. C dan E
+//    disimpan TERPISAH sehingga dua project pada satu bay tidak saling menimpa,
+//    dan zona kosong tetap terlihat.
+//  - Grid fit-width (`auto-fill` + `1fr`), BUKAN lebar statik + scroll
+//    horizontal: kartu kini mengisi lebar container.
+//  - PENCARIAN TIDAK MENGHAPUS OKUPANSI. Kapasitas dan peta zona selalu berasal
+//    dari SELURUH reservasi aktif; hasil pencarian dinaikkan urutannya dan
+//    sisanya diredupkan. Versi lama menyembunyikan area yang tidak cocok,
+//    sehingga peta okupansi tampak kosong saat user mengetik.
+//  - Tab `Lane A` / `Lane B` / `Blasting/Painting` menjadi navigasi OTORITATIF
+//    pada ≤1180px: hanya satu bagian lantai yang tampil (§4.4).
+//
+// Container query dipasang di floorLayout.css (`.floor-frame`), bukan media
+// query: halaman nyata punya sidebar, jadi lebar viewport bukan lebar yang
+// tersedia di sini.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, MapPin, Warehouse } from 'lucide-react';
 import {
-  ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B, areaRangeLabel,
-  buildAreaReservations, formatDate, groupAreaOrders, plural,
+  ALL_AREAS, BLASTING_AREA, LANE_A, LANE_B,
+  buildAreaReservations, groupAreaProjects,
 } from './constants';
+import AreaCard, { BlastingPaintingPane, FloorHeader } from './AreaCard';
+import './floorLayout.css';
 
-const MAX_STACK = 3;
-
-function OrderCard({ order }) {
-  const isNonJob = !order.order_no;
-  return (
-    <div className="group flex items-stretch gap-1.5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow">
-      <span
-        aria-hidden="true"
-        className={`w-1 shrink-0 rounded-l-lg ${isNonJob ? 'bg-amber-400' : 'bg-[#0077b6]'}`}
-      />
-      <div className="min-w-0 flex-1 px-1 py-1">
-        <div className="truncate text-[11px] font-extrabold tabular-nums text-slate-800">
-          {order.order_no || order.purpose || '—'}
-        </div>
-        <div className="truncate text-[10px] font-semibold text-slate-500">
-          {order.project_name || ''}
-        </div>
-        <div className="truncate font-mono text-[9px] text-slate-400">
-          {order.count > 1 ? `${order.count} bookings · ` : ''}
-          {formatDate(order.start_date)}–{formatDate(order.end_date)}
-        </div>
-      </div>
-    </div>
-  );
+// Item non-area di daftar lane (gudang kosmetik / lorong) diabaikan: hanya
+// `type === 'area'` yang menghasilkan kartu.
+function areaItems(items) {
+  return items.filter((item) => item.type === 'area');
 }
 
-const AreaBlock = React.memo(function AreaBlock({
-  area, cursorDate, selected, onSelect, reservations = [],
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const orders = useMemo(() => groupAreaOrders(reservations), [reservations]);
-  const shown = expanded ? orders : orders.slice(0, MAX_STACK);
-  const hiddenCount = orders.length - shown.length;
-  const handleClick = useCallback(() => onSelect(area.areaCode), [onSelect, area.areaCode]);
-  const handleKey = useCallback((e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onSelect(area.areaCode);
-    }
-  }, [onSelect, area.areaCode]);
-
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={handleClick}
-      onKeyDown={handleKey}
-      aria-pressed={selected}
-      title={`${area.areaName}: ${plural(orders.length, 'order')} reserved on ${formatDate(cursorDate)}`}
-      className={`flex w-60 shrink-0 cursor-pointer flex-col overflow-hidden rounded-xl border bg-white text-left shadow-sm outline-none transition-all focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${
-        selected
-          ? 'border-[#0077b6] ring-2 ring-[#90e0ef] shadow-md'
-          : 'border-slate-300 hover:border-[#90e0ef] hover:shadow-md'
-      }`}
-    >
-      <span
-        className={`block bg-gradient-to-r px-2 py-1 text-[11px] font-extrabold uppercase tracking-wide text-white ${
-          selected ? 'from-[#0077b6] to-[#00b4d8]' : 'from-[#023e8a] to-[#0096c7]'
-        }`}
-      >
-        {areaRangeLabel(area)}
-      </span>
-
-      <div className="flex flex-col gap-1 p-1.5">
-        {orders.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-300 px-1.5 py-2 text-center text-[10px] font-semibold text-slate-400">
-            No reservations
-          </div>
-        ) : (
-          <>
-            {shown.map((order) => (
-              <OrderCard key={order.key} order={order} />
-            ))}
-            {hiddenCount > 0 && (
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-                className="flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-[#90e0ef] bg-[#f0faff] py-1 text-[10px] font-bold text-[#0077b6] transition hover:border-[#0096c7] hover:bg-[#e6f6fd]"
-              >
-                {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                {expanded ? 'Show less' : `+${hiddenCount} more`}
-              </button>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-});
-
-const WarehouseBlock = React.memo(function WarehouseBlock() {
-  return (
-    <div className="flex w-60 shrink-0 flex-col justify-end gap-1 rounded-lg border border-transparent p-1">
-      <div className="flex h-7 min-w-0 items-center justify-center gap-1 rounded border border-slate-200 bg-slate-100 px-1">
-        <Warehouse className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
-        <span className="truncate text-[11px] font-semibold uppercase tracking-wide tabular-nums text-slate-500">
-          Warehouse B1–B8
-        </span>
-      </div>
-    </div>
-  );
-});
-
-function AisleGap() {
-  return (
-    <div className="flex w-8 shrink-0 items-stretch justify-center self-stretch" aria-hidden="true">
-      <div className="my-1 w-px bg-slate-200" />
-    </div>
-  );
+// Pencocokan pencarian. Dikerjakan per PROJECT (bukan per order) supaya kartu
+// bisa diredupkan tanpa menambah/menghapus isi peta. Nomor order ikut dicari
+// walau tidak lagi ditampilkan di kartu — itu satu-satunya cara user bisa
+// menemukan order lewat pencarian.
+function matchesQuery(group, query) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  const qNorm = q.replace(/^0+(?=\d)/, '');
+  if (String(group.project || '').toLowerCase().includes(q)) return true;
+  if (String(group.purpose || '').toLowerCase().includes(q)) return true;
+  if ((group.bays || []).some((bay) => String(bay).toLowerCase().includes(q))) return true;
+  if ((group.orderNumbers || []).some((orderNo) => {
+    const on = String(orderNo).toLowerCase();
+    return on.includes(q) || on.replace(/^0+(?=\d)/, '').includes(qNorm);
+  })) return true;
+  return false;
 }
-
-const Lane = React.memo(function Lane({ items, areaReservations, cursorDate, selectedAreaCode, onSelectArea, hiddenAreas }) {
-  return (
-    <div className="flex min-w-0 items-start gap-1.5 overflow-x-auto pb-1">
-      {items.map((item) => {
-        if (item.type === 'warehouse') return <WarehouseBlock key="warehouse" />;
-        if (item.type !== 'area') return <AisleGap key={`aisle-${item.code}`} />;
-        if (hiddenAreas.has(item.areaCode)) return null;
-        return (
-          <AreaBlock
-            key={item.areaCode}
-            area={item}
-            cursorDate={cursorDate}
-            selected={selectedAreaCode === item.areaCode}
-            onSelect={onSelectArea}
-            reservations={areaReservations.get(item.areaCode) || []}
-          />
-        );
-      })}
-    </div>
-  );
-});
 
 export default function FloorMapOverview({
-  schedulesByBay, cursorDate, selectedAreaCode, onSelectArea, orderFilter = '', onClearFilter,
+  schedulesByBay,
+  cursorDate,
+  selectedAreaCode,
+  onSelectArea,
+  onSelectZone,
+  orderFilter = '',
+  onClearFilter,
+  readout = null,
+  detailPanel = null,
 }) {
   const selectRef = useRef(onSelectArea);
   useEffect(() => {
@@ -161,6 +71,17 @@ export default function FloorMapOverview({
     if (typeof selectRef.current === 'function') selectRef.current(areaCode);
   }, []);
 
+  // Sama seperti onSelectArea: disimpan di ref supaya handler tetap STABIL dan
+  // React.memo pada kartu tidak batal setiap render induk.
+  const zoneRef = useRef(onSelectZone);
+  useEffect(() => {
+    zoneRef.current = onSelectZone;
+  });
+  const handleSelectZone = useCallback((areaCode, cell) => {
+    if (typeof zoneRef.current === 'function') zoneRef.current(areaCode, cell);
+  }, []);
+
+  // Reservasi aktif per area pada tanggal kursor — sumber tunggal untuk kartu.
   const areaReservations = useMemo(() => {
     const map = new Map();
     for (const area of ALL_AREAS) {
@@ -169,107 +90,188 @@ export default function FloorMapOverview({
     return map;
   }, [schedulesByBay]);
 
-  const hiddenAreas = useMemo(() => {
-    const hidden = new Set();
-    const q = String(orderFilter || '').trim();
-    if (!q) return hidden;
-    const qNorm = q.replace(/^0+(?=\d)/, '');
+  // Project per area, dengan daftar nomor order untuk pencarian. Dihitung SEKALI
+  // di sini (bukan di dalam tiap kartu) supaya setiap kartu menerima array yang
+  // stabil dan React.memo-nya tetap bekerja.
+  const areaProjects = useMemo(() => {
+    const map = new Map();
     for (const area of ALL_AREAS) {
-      const has = (areaReservations.get(area.areaCode) || []).some((r) => {
-        const on = String(r.order_no || '').replace(/^0+(?=\d)/, '');
-        return on.includes(qNorm) || String(r.project_name || '').toLowerCase().includes(q.toLowerCase());
-      });
-      if (!has) hidden.add(area.areaCode);
+      const reservations = areaReservations.get(area.areaCode) || [];
+      const groups = groupAreaProjects(reservations).map((group) => ({
+        ...group,
+        orderNumbers: reservations
+          .filter((r) => String(r.project_name || r.part_name || r.purpose || '') === group.project
+            && r.order_no)
+          .map((r) => r.order_no),
+      }));
+      map.set(area.areaCode, groups);
     }
-    return hidden;
-  }, [orderFilter, areaReservations]);
+    return map;
+  }, [areaReservations]);
 
-  const allHidden = hiddenAreas.size === ALL_AREAS.length && orderFilter.trim() !== '';
+  // Baris pencarian: dipakai untuk meredupkan kartu, TIDAK untuk menyembunyikan
+  // okupansi. Kartu tanpa hasil tetap tampil beserta peta zonanya.
+  const hits = useMemo(() => {
+    const out = new Map();
+    const q = String(orderFilter || '').trim();
+    if (!q) return out;
+    for (const area of ALL_AREAS) {
+      const groups = areaProjects.get(area.areaCode) || [];
+      out.set(area.areaCode, groups.filter((group) => matchesQuery(group, q)).length);
+    }
+    return out;
+  }, [orderFilter, areaProjects]);
 
+  const groupsOf = useCallback(
+    (areaCode) => areaProjects.get(areaCode) || [],
+    [areaProjects],
+  );
+
+  const query = String(orderFilter || '').trim();
+  const totalHits = query
+    ? [...hits.values()].reduce((sum, count) => sum + count, 0)
+    : null;
+
+  // Tab aktif = state user, TAPI area terpilih selalu menang. Ini turunan
+  // langsung dari props, bukan efek: menulisnya lewat useEffect akan memicu
+  // cascading render (dilarang oleh aturan lint repo) dan membuat tab
+  // "tertinggal satu frame" saat area dibuka dari URL.
+  const [laneChoice, setLaneChoice] = useState('A');
+  const laneOfArea = useCallback((areaCode) => {
+    if (!areaCode) return null;
+    if (areaCode === BLASTING_AREA.areaCode) return 'BP';
+    if (areaItems(LANE_A).some((item) => item.areaCode === areaCode)) return 'A';
+    if (areaItems(LANE_B).some((item) => item.areaCode === areaCode)) return 'B';
+    return null;
+  }, []);
+  const lane = laneOfArea(selectedAreaCode) || laneChoice;
+
+  // Pembungkus kartu: peredupan filter harus SERAGAM di semua pane. Kalau hanya
+  // kartu lane yang diredupkan sementara Blasting/Painting tidak, user membaca
+  // pane yang tidak diredupkan sebagai "ini hasil pencarian" — padahal peta
+  // okupansi sengaja tidak pernah ikut disaring.
+  const wrapCard = (areaCode, node) => {
+    const dim = Boolean(query) && (hits.get(areaCode) || 0) === 0;
+    return (
+      <div
+        key={areaCode}
+        className={dim ? 'opacity-45 transition-opacity' : 'transition-opacity'}
+        data-dimmed={dim ? 'true' : undefined}
+      >
+        {node}
+      </div>
+    );
+  };
+
+  // Satu lane = satu bagian lantai. Header lane tetap, ISI-nya digulir
+  // (`.lane-scroll`) sehingga kartu tidak pernah terpotong tanpa bisa dijangkau.
+  const renderLane = (items, laneKey) => (
+    <div className="lane-pane" data-lane={laneKey}>
+      <div className="lane-scroll">
+        <div className="lane-grid">
+          {areaItems(items).map((area) => wrapCard(area.areaCode, (
+            <AreaCard
+              area={area}
+              groups={groupsOf(area.areaCode)}
+              cursorDate={cursorDate}
+              selected={selectedAreaCode === area.areaCode}
+              onSelect={handleSelectArea}
+              onSelectZone={handleSelectZone}
+            />
+          )))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const laneColumn = (items, laneKey) => (
+    <div className="lane-column" data-lane={laneKey}>
+      {renderLane(items, laneKey)}
+    </div>
+  );
+
+  // data-lane WAJIB ada di .floor-frame: seluruh selector tab di floorLayout.css
+  // berbentuk `.floor-frame[data-lane='A'] .lane-pane[data-lane='A']`.
   return (
     <section
-      aria-label="Floor map"
-      className="flex min-h-0 flex-1 flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+      aria-label="Peta lantai"
+      className="floor-frame"
+      data-lane={lane}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            aria-hidden="true"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white shadow-sm"
-            style={{ background: 'linear-gradient(135deg,#023e8a,#0077b6)' }}
-          >
-            <MapPin className="h-4 w-4" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#0077b6]">Cikupa Layout</p>
-            <h3 className="truncate text-sm font-extrabold text-slate-800">Area summary</h3>
-          </div>
-        </div>
-        <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#90e0ef] bg-[#caf0f8] px-2 py-1 text-xs font-bold tabular-nums text-[#023e8a]">
-          As of {formatDate(cursorDate)}
-        </span>
-      </div>
+      <FloorHeader
+        cursorDate={cursorDate}
+        readout={readout}
+      />
 
-      {orderFilter.trim() ? (
-        <p className="text-xs font-semibold text-[#0077b6]">
-          Filtered by "{orderFilter.trim()}" — {ALL_AREAS.length - hiddenAreas.size} area shown
+      {query ? (
+        <p className="text-xs font-semibold text-[#0077b6]" data-testid="floor-filter-note">
+          Filter “{query}” — {totalHits ?? 0} project(s) matched, all {ALL_AREAS.length} areas still shown.
+          Search never changes map occupancy.
           <button
             type="button"
             onClick={() => typeof onClearFilter === 'function' && onClearFilter()}
-            className="ml-2 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-500 hover:border-red-300 hover:text-red-600"
+            className="ml-2 min-h-[32px] rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-500 hover:border-red-300 hover:text-red-600"
           >
             Clear filter
           </button>
         </p>
       ) : null}
 
-      {allHidden ? (
-        <div className="flex flex-1 items-center justify-center py-12 text-center">
-          <p className="text-sm font-semibold text-slate-400">
-            No reservations for "{orderFilter.trim()}" in this period.
-          </p>
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
-          <div className="flex min-w-0 items-start gap-1.5">
-            {!hiddenAreas.has(BLASTING_AREA.areaCode) && (
-              <div className="w-60 shrink-0">
-                <AreaBlock
-                  area={BLASTING_AREA}
-                  cursorDate={cursorDate}
-                  selected={selectedAreaCode === BLASTING_AREA.areaCode}
-                  onSelect={handleSelectArea}
-                  reservations={areaReservations.get(BLASTING_AREA.areaCode) || []}
-                />
-              </div>
-            )}
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <Lane
-                items={LANE_A}
-                areaReservations={areaReservations}
+      <div
+        className="floor-tabs"
+        role="tablist"
+        aria-label="Bagian lantai"
+      >
+        {[
+          { key: 'A', label: `Lane A · ${areaItems(LANE_A).length}` },
+          { key: 'B', label: `Lane B · ${areaItems(LANE_B).length}` },
+          { key: 'BP', label: 'Blasting/Painting' },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            role="tab"
+            aria-selected={lane === tab.key}
+            data-lane-tab={tab.key}
+            onClick={() => setLaneChoice(tab.key)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div
+        className="floor-grid"
+        data-detail={detailPanel ? 'docked' : 'none'}
+        data-lane={lane}
+      >
+        {/* Blasting/Painting: pane-nya sendiri juga digulir, sama seperti lane. */}
+        <div className="floor-pane" data-pane="BP">
+          <div className="lane-scroll">
+            {wrapCard(BLASTING_AREA.areaCode, (
+              <BlastingPaintingPane
+                area={BLASTING_AREA}
+                groups={groupsOf(BLASTING_AREA.areaCode)}
                 cursorDate={cursorDate}
-                selectedAreaCode={selectedAreaCode}
-                onSelectArea={handleSelectArea}
-                hiddenAreas={hiddenAreas}
+                selected={selectedAreaCode === BLASTING_AREA.areaCode}
+                onSelect={handleSelectArea}
+                onSelectZone={handleSelectZone}
               />
-              <div className="flex items-center gap-3" aria-hidden="true">
-                <div className="h-px flex-1 bg-slate-200" />
-                <span className="text-[11px] font-medium uppercase tracking-[0.2em] text-slate-300">Aisle</span>
-                <div className="h-px flex-1 bg-slate-200" />
-              </div>
-              <Lane
-                items={LANE_B}
-                areaReservations={areaReservations}
-                cursorDate={cursorDate}
-                selectedAreaCode={selectedAreaCode}
-                onSelectArea={handleSelectArea}
-                hiddenAreas={hiddenAreas}
-              />
-            </div>
+            ))}
           </div>
         </div>
-      )}
 
+        {/* Desktop: kedua lane di dalam satu wadah agar penempatan grid bisa
+            eksplisit dan Lane B tidak jatuh ke kolom Blasting/Painting. */}
+        <div className="lane-stack">
+          {laneColumn(LANE_A, 'A')}
+          {laneColumn(LANE_B, 'B')}
+        </div>
+
+        {detailPanel ? (
+          <div className="floor-detail-pane" data-pane="detail">{detailPanel}</div>
+        ) : null}
+      </div>
     </section>
   );
 }

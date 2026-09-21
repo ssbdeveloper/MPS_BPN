@@ -82,6 +82,27 @@ describe('BulkPanel', () => {
     expect(screen.getByText('ABDUL BASIR')).toBeTruthy();
   });
 
+  it('shows overtime as part of the recorded total, not an amount to add again', () => {
+    const row = { ...ROW, recorded_hours: 10, overtime_hours: 2, overtime_record_count: 3 };
+    const { container } = render(<BulkPanel {...baseProps({ rowsByKey: { [KEY]: row } })} />);
+    const text = container.textContent;
+    expect(text).toMatch(/10\.0h recorded/i);
+    expect(text).toMatch(/includes 2\.0h overtime/i);
+    expect(text).toMatch(/3 OV transactions/i);
+    expect(text).not.toMatch(/10\.0h \+ 2\.0h/i);
+  });
+
+  it('shows pending overtime without inventing hours', () => {
+    const row = { ...ROW, overtime_hours: 0, overtime_record_count: 0, overtime_pending_count: 2 };
+    render(<BulkPanel {...baseProps({ rowsByKey: { [KEY]: row } })} />);
+    expect(screen.getByText(/overtime hours not yet available/i)).toBeTruthy();
+  });
+
+  it('does not claim the absence of an OV field proves there was no overtime', () => {
+    render(<BulkPanel {...baseProps()} />);
+    expect(screen.queryByText(/no overtime/i)).toBeNull();
+  });
+
   it('locks past dates and explains the state', () => {
     const pastKey = '16502|2020-01-02';
     render(<BulkPanel {...baseProps({ selectedKeys: [pastKey], rowsByKey: { [pastKey]: { ...ROW, business_date: '2020-01-02' } } })} />);

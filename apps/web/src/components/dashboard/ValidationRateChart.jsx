@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLine, ResponsiveContainer,
 } from "recharts";
@@ -7,10 +7,18 @@ function ChartSkeleton() {
   return <div className="h-56 bg-slate-50 animate-pulse rounded-lg" />;
 }
 
-export default function ValidationRateChart({ workcenter = "all" }) {
+export default function ValidationRateChart({ workcenter = "all", onData }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Held in a ref so an inline callback from the caller cannot retrigger the fetch. Assigned in
+  // an effect, not during render; this effect is declared first so the ref is current before the
+  // fetch effect below runs.
+  const onDataRef = useRef(onData);
+  useEffect(() => {
+    onDataRef.current = onData;
+  }, [onData]);
 
   useEffect(() => {
     setLoading(true);
@@ -21,8 +29,15 @@ export default function ValidationRateChart({ workcenter = "all" }) {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((json) => setData(json.data || []))
-      .catch((e) => setError(e.message))
+      .then((json) => {
+        const rows = json.data || [];
+        setData(rows);
+        onDataRef.current?.(rows, null);
+      })
+      .catch((e) => {
+        setError(e.message);
+        onDataRef.current?.([], e.message);
+      })
       .finally(() => setLoading(false));
   }, [workcenter]);
 

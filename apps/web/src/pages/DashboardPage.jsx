@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { goBackOrFallback } from '../utils/navigation';
-import { BarChart2, Package, AlertTriangle, Clock, TrendingUp } from "lucide-react";
-import { PageContainer, AppHeader, Button } from "../components";
-import KpiCard from "../components/dashboard/KpiCard";
+import { WifiOff } from "lucide-react";
+import PageHeader from "../components/layout/PageHeader";
+import ConditionReadout from "../components/dashboard/ConditionReadout";
+import DashboardSection from "../components/dashboard/DashboardSection";
+import ExceptionPanel from "../components/dashboard/ExceptionPanel";
+import deriveExceptions from "../components/dashboard/deriveExceptions";
 import DashboardFilters from "../components/dashboard/DashboardFilters";
 import ChartErrorBoundary from "../components/dashboard/ChartErrorBoundary";
 import OrderStatusChart from "../components/dashboard/OrderStatusChart";
@@ -26,122 +29,146 @@ function defaultFilters() {
   return { from: toDateStr(from), to: toDateStr(to), workcenter: "all" };
 }
 
+const PAIR_GRID = "grid grid-cols-1 gap-3 xl:grid-cols-2";
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [filters, setFilters] = useState(defaultFilters);
   const [kpi, setKpi] = useState(null);
   const [kpiLoading, setKpiLoading] = useState(true);
+  const [kpiFailed, setKpiFailed] = useState(false);
+  // Only the KPI request is retried, and only after it failed: a page-wide reload button would
+  // multiply the request count on every press, which is exactly the network change Track A forbids.
+  const [kpiAttempt, setKpiAttempt] = useState(0);
+  const [sources, setSources] = useState({ validation: [], workload: [], failed: false });
+  const [offline, setOffline] = useState(() => typeof navigator !== "undefined" && navigator.onLine === false);
 
   useEffect(() => {
     setKpiLoading(true);
+    setKpiFailed(false);
     fetch("/api/dashboard/kpi")
       .then((r) => r.json())
       .then((json) => setKpi(json.data))
-      .catch(() => setKpi(null))
+      .catch(() => {
+        setKpi(null);
+        setKpiFailed(true);
+      })
       .finally(() => setKpiLoading(false));
+  }, [kpiAttempt]);
+
+  useEffect(() => {
+    const sync = () => setOffline(navigator.onLine === false);
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", sync);
+    return () => {
+      window.removeEventListener("online", sync);
+      window.removeEventListener("offline", sync);
+    };
   }, []);
 
+  const retryKpi = useCallback(() => {
+    setKpiAttempt((n) => n + 1);
+  }, []);
+
+  const onValidation = useCallback((rows, error) => {
+    setSources((s) => ({ ...s, validation: rows, failed: s.failed || Boolean(error) }));
+  }, []);
+
+  const onWorkload = useCallback((rows, error) => {
+    setSources((s) => ({ ...s, workload: rows, failed: s.failed || Boolean(error) }));
+  }, []);
+
+  const exceptions = useMemo(
+    () => deriveExceptions({ kpi, validation: sources.validation, workload: sources.workload }),
+    [kpi, sources.validation, sources.workload]
+  );
+
   return (
-    <PageContainer>
-      <AppHeader
-        title={
-          <>
-            <BarChart2 className="inline w-5 h-5 mr-1.5" />
-            Dashboard
-          </>
-        }
-        rightContent={
-          <Button variant="secondary" size="small" onClick={() => goBackOrFallback(navigate)}>
-            ← Back
-          </Button>
-        }
+    <div className="flex min-h-dvh flex-col bg-slate-50">
+      <PageHeader
+        eyebrow="Command center"
+        title="Production dashboard"
+        onBack={() => goBackOrFallback(navigate)}
       />
 
-      {/* Global Filters */}
       <DashboardFilters filters={filters} onChange={setFilters} />
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KpiCard
-          title="Active Orders"
-          value={kpi ? kpi.active_orders.toLocaleString() : "—"}
-          icon={Package}
-          color="#0096c7"
+      <main className="flex flex-1 flex-col gap-5 px-4 py-4 md:px-6">
+        {offline && (
+          <p className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-status-late md:text-sm">
+            <WifiOff size={15} />
+            Offline — figures below are the last values loaded.
+          </p>
+        )}
+
+        <ConditionReadout
+          kpi={kpi}
           loading={kpiLoading}
+          error={kpiFailed}
+          onRetry={retryKpi}
         />
-        <KpiCard
-          title="Overdue Orders"
-          value={kpi ? kpi.overdue_orders.toLocaleString() : "—"}
-          icon={AlertTriangle}
-          color="#f87171"
+
+        <ExceptionPanel
+          rows={exceptions}
           loading={kpiLoading}
+          error={sources.failed}
+          onOpen={(href) => navigate(href)}
         />
-        <KpiCard
-          title="Hours Today"
-          value={kpi ? kpi.today_hours.toLocaleString() : "—"}
-          unit="hrs"
-          icon={Clock}
-          color="#023e8a"
-          loading={kpiLoading}
-        />
-        <KpiCard
-          title="Avg Progress"
-          value={kpi ? kpi.avg_progress.toLocaleString() : "—"}
-          unit="%"
-          icon={TrendingUp}
-          color="#0077b6"
-          loading={kpiLoading}
-        />
-      </div>
 
-      {/* Charts — 2-column grid on desktop */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="flex flex-col gap-5">
+          <DashboardSection label="Order condition" hint="Where the order book stands right now">
+            <div className={PAIR_GRID}>
+              <ChartErrorBoundary>
+                <OrderStatusChart />
+              </ChartErrorBoundary>
 
-        {/* Chart 1 — Order Status Donut */}
-        <ChartErrorBoundary>
-          <OrderStatusChart />
-        </ChartErrorBoundary>
+              <ChartErrorBoundary>
+                <ProgressHistogramChart />
+              </ChartErrorBoundary>
+            </div>
+          </DashboardSection>
 
-        {/* Chart 6 — Progress Distribution */}
-        <ChartErrorBoundary>
-          <ProgressHistogramChart />
-        </ChartErrorBoundary>
+          <DashboardSection label="Capacity and delivery" hint="Load per workcenter against the plan">
+            <div className={PAIR_GRID}>
+              <ChartErrorBoundary>
+                <WorkloadChart onData={onWorkload} />
+              </ChartErrorBoundary>
 
-        {/* Chart 2 — Workload per Workcenter */}
-        <ChartErrorBoundary>
-          <WorkloadChart />
-        </ChartErrorBoundary>
+              <ChartErrorBoundary>
+                <OnTimeChart />
+              </ChartErrorBoundary>
+            </div>
+          </DashboardSection>
 
-        {/* Chart 5 — On-Time vs Overdue */}
-        <ChartErrorBoundary>
-          <OnTimeChart />
-        </ChartErrorBoundary>
+          <DashboardSection label="Execution trend" hint="Recorded hours over the filtered period">
+            <div className={PAIR_GRID}>
+              <ChartErrorBoundary>
+                <DailyHoursChart workcenter={filters.workcenter} days={30} />
+              </ChartErrorBoundary>
 
-        {/* Chart 3 — Daily Hours Trend (filter-aware) */}
-        <ChartErrorBoundary>
-          <DailyHoursChart workcenter={filters.workcenter} days={30} />
-        </ChartErrorBoundary>
+              <ChartErrorBoundary>
+                <OperatorEfficiencyChart
+                  from={filters.from}
+                  to={filters.to}
+                  workcenter={filters.workcenter}
+                />
+              </ChartErrorBoundary>
+            </div>
+          </DashboardSection>
 
-        {/* Chart 4 — Operator Efficiency (filter-aware) */}
-        <ChartErrorBoundary>
-          <OperatorEfficiencyChart
-            from={filters.from}
-            to={filters.to}
-            workcenter={filters.workcenter}
-          />
-        </ChartErrorBoundary>
+          <DashboardSection label="Quality and activity" hint="Process control and when the work happens">
+            <div className={PAIR_GRID}>
+              <ChartErrorBoundary>
+                <ValidationRateChart workcenter={filters.workcenter} onData={onValidation} />
+              </ChartErrorBoundary>
 
-        {/* Chart 7 — Process Control Validation Rate (filter-aware) */}
-        <ChartErrorBoundary>
-          <ValidationRateChart workcenter={filters.workcenter} />
-        </ChartErrorBoundary>
-
-        {/* Chart 8 — Operator Heatmap (full-width) */}
-        <ChartErrorBoundary>
-          <OperatorHeatmap days={30} />
-        </ChartErrorBoundary>
-
-      </div>
-    </PageContainer>
+              <ChartErrorBoundary>
+                <OperatorHeatmap days={30} />
+              </ChartErrorBoundary>
+            </div>
+          </DashboardSection>
+        </div>
+      </main>
+    </div>
   );
 }

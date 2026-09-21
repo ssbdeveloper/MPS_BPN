@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
@@ -13,10 +13,18 @@ function ChartSkeleton() {
   );
 }
 
-export default function WorkloadChart() {
+export default function WorkloadChart({ onData }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // The callback lives in a ref so the fetch runs exactly once per mount: a caller passing an
+  // inline arrow would otherwise refetch on every render. Assigned inside an effect, not during
+  // render.
+  const onDataRef = useRef(onData);
+  useEffect(() => {
+    onDataRef.current = onData;
+  }, [onData]);
 
   useEffect(() => {
     fetch("/api/dashboard/workload")
@@ -24,8 +32,15 @@ export default function WorkloadChart() {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((json) => setData(json.data || []))
-      .catch((e) => setError(e.message))
+      .then((json) => {
+        const rows = json.data || [];
+        setData(rows);
+        onDataRef.current?.(rows, null);
+      })
+      .catch((e) => {
+        setError(e.message);
+        onDataRef.current?.([], e.message);
+      })
       .finally(() => setLoading(false));
   }, []);
 

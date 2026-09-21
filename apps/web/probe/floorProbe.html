@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>Probe layout lantai area (Tahap 2)</title>
+  <style>
+    /* Animasi/transisi DIMATIKAN TOTAL. Ini pelajaran dari probe mockup: dengan
+       `--virtual-time-budget`, Chrome headless membekukan animasi di keyframe
+       awal, sehingga elemen terukur pada posisi transform antara (mis. 6% =
+       28.08px) dan probe melaporkan cacat layout yang sebenarnya tidak ada. */
+    *, *::before, *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #f1f5f9; }
+    /* Stage mengisi viewport TETAP. Tanpa tinggi eksplisit, pertumbuhan blok
+       output akan mengubah tinggi kontainer di tengah probe dan pengukuran
+       tinggi (rasio panel, bottom sheet) jadi tidak bisa dibandingkan antar
+       langkah. */
+    #stage { display: flex; flex-direction: column; background: #f8fafc; height: 100vh; }
+    #out { white-space: pre; font-family: ui-monospace, monospace; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <div id="stage"></div>
+  <script type="module" src="./floorProbe.jsx"></script>
+</body>
+</html>

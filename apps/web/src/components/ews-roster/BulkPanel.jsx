@@ -86,7 +86,9 @@ export default function BulkPanel({ selectedKeys, rowsByKey, operatorNames, onCl
   };
 
   return (
-    <div className="flex w-full flex-col border-l border-slate-300 bg-white md:w-80">
+    // A tablet side panel would squeeze the heatmap below its minimum width. Below lg,
+    // use a bottom sheet so the heatmap keeps the full viewport width.
+    <div className="fixed inset-x-0 bottom-0 z-30 flex max-h-[60vh] w-full flex-col rounded-t-2xl border-t border-slate-300 bg-white shadow-md lg:static lg:z-auto lg:max-h-none lg:w-80 lg:flex-shrink-0 lg:rounded-none lg:border-l lg:border-t-0 lg:shadow-none">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <h3 className="text-sm font-extrabold text-slate-900">
           {single ? 'Operator Details' : `${selectedKeys.length} cells selected`}
@@ -124,8 +126,24 @@ export default function BulkPanel({ selectedKeys, rowsByKey, operatorNames, onCl
               {single.half_day && <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-extrabold text-amber-700">½ Half Day</span>}
               {single.shift_override && <span className="rounded-full border border-[#0077b6] bg-[#caf0f8] px-2 py-0.5 text-xs font-extrabold text-[#023e8a]">Changed</span>}
             </div>
-            <div className={NOTE}>
-              Hours <b className="tabular-nums">{Number(single.recorded_hours || 0).toFixed(1)}</b> / <b className="tabular-nums">{Number(single.scheduled_standard_hours || 0).toFixed(0)}h</b> target
+            <div className={`${NOTE} space-y-1`}>
+              <div>
+                <b className="tabular-nums">{Number(single.recorded_hours || 0).toFixed(1)}h</b> recorded
+                {' · '}{Number(single.scheduled_standard_hours || 0).toFixed(0)}h target
+              </div>
+              {(Number(single.overtime_record_count) > 0 || Number(single.overtime_hours) > 0) && (
+                <div className="font-semibold text-violet-700">
+                  Includes <b className="tabular-nums">{Number(single.overtime_hours || 0).toFixed(1)}h</b> overtime
+                  {Number(single.overtime_record_count) > 0
+                    ? ` · ${Number(single.overtime_record_count)} OV transactions`
+                    : ''}
+                </div>
+              )}
+              {Number(single.overtime_pending_count) > 0 && (
+                <div className="font-semibold text-violet-700">
+                  Overtime hours not yet available · {Number(single.overtime_pending_count)} pending OV transactions
+                </div>
+              )}
             </div>
             <div>
               <label className={LABEL_TOP}>Status</label>

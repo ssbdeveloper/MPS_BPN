@@ -9,6 +9,8 @@
 //   useBaySchedules.js       fetch reservasi + kursor tanggal + Map bay -> reservasi
 //   useSowOrders.js          pool order: tab, pencarian ter-debounce, paginasi
 //   FloorMapOverview.jsx     tingkat 1 — seluruh bay, fit-width, isi sel angka saja
+//   AreaDetailPanel.jsx      panel detail area/zona non-modal (overlay / terdok 29% /
+//                            bottom sheet) yang muncul DI SAMPING peta tingkat 1
 //   BayAreaDetail.jsx        tingkat 2 — satu area, badge kaya, drop-zone drag & drop
 //   OrderPanel.jsx           daftar order yang bisa ditarik ke bay
 //   ReservationPanel.jsx     form reservasi (mode ORDER & NONJOB)
@@ -44,6 +46,25 @@ export {
   orderKeyOf,
   isUnknownOrder,
   areaDot,
+  // Grouping per project (PLAN §3) + model zona & warna
+  projectKeyOf,
+  projectNameOf,
+  buildAreaReservations,
+  groupAreaProjects,
+  buildZoneOccupancy,
+  zoneOverlaps,
+  zoneUsage,
+  ZONE_KEYS,
+  projectColor,
+  hashProjectName,
+  // Panel detail area/zona (PLAN §4.4, Tahap 5)
+  zoneSelectionGroups,
+  rangeProgress,
+  bpSlotGroups,
+  bpKindOf,
+  shortProjectName,
+  PROJECT_COLORS,
+  PROJECT_COLORS_DARK,
 } from './constants';
 
 export { default as useBaySchedules } from './useBaySchedules';
@@ -51,6 +72,7 @@ export { default as useSowOrders, ORDER_TABS, DEFAULT_ORDER_TAB } from './useSow
 export { default as useDialogA11y, FOCUSABLE } from './useDialogA11y';
 
 export { default as FloorMapOverview } from './FloorMapOverview';
+export { default as AreaDetailPanel } from './AreaDetailPanel';
 export { default as BayAreaDetail } from './BayAreaDetail';
 export { default as OrderPanel } from './OrderPanel';
 export { default as ReservationPanel } from './ReservationPanel';

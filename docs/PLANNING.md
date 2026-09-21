@@ -17,6 +17,87 @@ updated: 2026-07-28
 
 ## 👀 Menunggu review / keputusan
 
+- 🎨 **[[design/sow-area-tablet/PLAN]] — arah visual tablet landscape: TAHAP 1 & 2 SUDAH MASUK APLIKASI 2026-09-21**
+  ([[log/2026-09-21-sow-area-tablet-visual-direction]], [[log/2026-09-21-cors-localhost-3001-dan-area-tahap1]]):
+  tab lane sebagai navigasi otoritatif, grid kartu area sebagai peta kerja, panel detail zona
+  terdok ~29% di tablet landscape dan bottom sheet ≤900px. Overlap terbaca lewat jumlah (bukan
+  warna saja); pencarian hanya meredupkan, okupansi tetap utuh. Mockup terukur di 7 ukuran
+  (0 error JS / 0 teks terpotong / 0 target <44px / 0 kartu terpotong) — 7 bug ditemukan &
+  diperbaiki, termasuk tab lane yang tidak berefek pada tablet dan satu klaim salah yang dicabut
+  (artefak animasi di probe).
+  **Implementasi:** Tahap 1 (`constants.js` grouping per project + 24 test) dan Tahap 2
+  (`FloorMapOverview.jsx` + `AreaCard.jsx` + `floorLayout.css`: grid dua kolom, tab lane
+  otoritatif, panel tiga mode) **selesai & terverifikasi** — 198 test web hijau, probe Chrome
+  headless 45/45 lulus di 5 ukuran, `vite build` hijau; 4 cacat nyata ditemukan pengukuran &
+  diperbaiki (PLAN §7.3).
+  **Perbaikan UI terpotong (2026-09-21, keluhan user):** keluhan "UI masih berantakan dan banyak
+  terpotong" **benar** walau probe saat itu sudah 34/34 lulus. `.lane-scroll` tak pernah dirender
+  JSX sehingga `.lane-column` memotong 313–1148px isi tanpa jalan keluar, dan `.lane-stack` selalu
+  dua baris `1fr 1fr` sehingga lane bertab hanya dapat ~49% tinggi lantai. Sesudah perbaikan: lane
+  **100%** tinggi (1024/402), 0 isi terpotong, 0 teks dipangkas, kartu tidak lagi tertutup panel;
+  probe dinaikkan ke 45 assertion dan **dibuktikan bisa GAGAL** (revert CSS → 40/45, pulih → 45/45,
+  PLAN §7.5).
+  **Tahap 3 selesai (2026-09-21):** blok Blasting/Painting vertikal — slot dikelompokkan
+  Painting `PT1–PT3` lalu Blasting `BL1–BL2` lewat prefiks kode (`bpSlotGroups`, fungsi murni
+  + 6 test), header kelompok sticky, pita warna project 3px di sisi kode bay. Probe naik ke
+  **50 assertion** (208 test web hijau, build hijau); uji-merah membongkar lubang assertion
+  `every()` pada array kosong — lulus padahal header hilang — kini diperketat cek jumlah.
+  **Tahap 4 selesai (2026-09-21):** skala §5.2 dikunci lewat token CSS (`--t-code` 17 /
+  `--t-title` 19 / `--t-pname` 14.5 / `--t-meta` 11.5 / `--t-btn` 15.5), menggantikan nilai
+  Tailwind arbitrer yang tersebar di 3 berkas (terukur sebelumnya: 16/16/11.5/10/13–14).
+  Target sentuh §5.1 ternyata sudah terpenuhi sejak perbaikan UI terpotong — 16 interaktif,
+  0 di bawah 44px, diverifikasi bukan diasumsikan. Probe naik ke **62/62 di kelima ukuran**
+  (font lebih besar tidak memotong apa pun); uji-merah menghasilkan 7 FAIL.
+  **Bug user 2026-09-21 (AREA-02/AREA-12) diperbaiki:** tombol "Manage reservations"
+  setinggi 361px. Akarnya bukan kedua area itu — `.detail-panel` memakai grid 4 baris tetap
+  padahal banner overlap dirender kondisional, jadi tanpa banner footer jatuh ke baris `1fr`
+  dan tombolnya melar; terukur di SEMUA area tanpa overlap (AREA-11 261px, AREA-18 281px).
+  Panel kini kolom flex, tombol 44px di 18 area, assertion probe baru diuji-merah.
+  **UI kini English** (konvensi repo memang English): Manage reservations, Close, No
+  reservations, Empty, Whole area, Overlap N zone(s) × M reservations, N zones used,
+  Clear filter. Probe 63/63 di 5 ukuran; suite 227 test hijau; build hijau.
+  **Tahap 5 selesai (2026-09-21):** panel detail area/zona non-modal akhirnya TERSAMBUNG ke
+  `SchedulingAreaPage` (prop `detailPanel` sebelumnya selalu kosong, jadi panel tidak pernah
+  muncul di layar nyata). Klik kartu/sel zona/slot bay membuka panel berkonteks, peta tetap
+  terbaca, daftar memuat SEMUA reservasi sel termasuk overlap, footer aksi tetap terlihat,
+  "Kelola reservasi" meneruskan area+bay+zona ke alur tingkat 2 — drag-drop order lama utuh.
+  Probe **56/56**, bayScheduling 69 test, build hijau. Dua bug nyata ditemukan pengukuran:
+  bottom sheet 834 membengkak jadi 83.6% tinggi (lane sisa 14%) karena baris grid `auto` +
+  `82vh` mengukur viewport bukan kontainer; dan `buildAreaReservations` tak di-re-export
+  sehingga vitest lolos tapi `vite build` gagal. Uji-merah juga membongkar assertion NON-MODAL
+  palsu: memindai elemen `position:absolute` tidak melihat scrim `::after` — diganti hit test.
+
+- **[[timesheet/CONFIRMATION_NUMBER_PLAN]] — checkout atomik lokal 2026-09-21:** backfill
+  historis sudah tercatat; writer `checkout`/`checkoutid` kini mengisi confirmation dan split
+  OV–RG–OV dalam satu transaksi, tetapi belum deploy. Implementasi permanen belum selesai:
+  admin edit, parser suffix seluruh jalur SAP, family cap/lineage, freeze, dan repair historis.
+  Hardening script manual selesai: guard timezone/plant, clock/overlap/multi-boundary
+  fail-closed, recheck exposure, konservasi detik, manifest, dan `--through-today`.
+  Pending keputusan D1–D7 + implementasi permanen/repair historis; prompt agent di §13.
+  [[planning/confirmation-overtime-review]] · [[concepts/timesheet-confirmation-overtime]] ·
+  [[planning/timesheet-confirmation-backfill-hardening]] · [[planning/timesheet-checkout-confirmation]] ·
+  [[log/2026-09-21-confirmation-overtime-review]] ·
+  [[log/2026-09-21-timesheet-confirmation-backfill-hardening]] ·
+  [[log/2026-09-21-timesheet-checkout-confirmation]].
+
+- 🎨 **[[planning/mps-dashboard-command-center]] — pilot F2 sistem visual, KODE SELESAI (uncommitted)**
+  ([[log/2026-09-19-mps-dashboard-visual-pilot]], 2026-09-19). `DashboardPage` berubah dari
+  "header + filter + 4 kartu + grid chart" jadi archetype command center: condition readout
+  menggantikan 4 KPI card kembar, **exception panel jadi focal point tunggal** (overdue / pass rate
+  validasi < 80% / workcenter lewat plan, urut severity lalu magnitude, tiap baris satu aksi), chart
+  dikelompokkan dalam section berlabel. Derivasi exception dipisah ke `deriveExceptions.js` (murni,
+  tanpa fetch). **Kontrak network tidak berubah — dibuktikan, bukan diklaim**: test mengunci 10
+  request sekali masing-masing dalam urutan sama (urutan diverifikasi terhadap halaman *sebelum*
+  redesign), dan diukur ulang di browser. Tombol "Reload" global sempat ditulis lalu dibatalkan
+  karena akan memicu 10 request sekaligus; retry dipersempit ke KPI (terukur: +1 request, bukan +10).
+  Gate hijau: 115/115 test, build, `deslop --staged`, `--track-a`, `lint-gate`, `mirror`, `diff --check`.
+  Diukur di browser 768×1024 & 960×600: tanpa overflow horizontal, reduced-motion nol transform,
+  focus ring nyata via Tab, empty & error state terverifikasi. **Temuan jujur:** tombol Back
+  `PageHeader` 30px (< 44px, dipakai 13 halaman → [[planning/UI-DEBT]]); `KpiCard.jsx` jadi mati tapi
+  tidak dihapus (STOP list); 4 error deslop warisan di chart; dua perubahan di luar scope
+  (`PageContainer.jsx`, `schema_prod.sql`) **dikembalikan** setelah audit `git status`.
+  **Pending: review owner → commit.** Kalau archetype diterima, F3 dst. memakainya sebagai rujukan.
+
 - 🔴 **[[planning/mapping-operasi-sap-tahan-sync]]** — mapping operasi SAP hilang diam-diam saat sync MS Project. Terukur 2026-09-07: **40 mapping mati** di 15 order / 7 project, plus 121 task summary ber-`operation_no` yang tak pernah bisa dijadwalkan. Akar: mapping disimpan sebagai kolom di `ms_project_task`, baris milik file .mpp yang dinonaktifkan sync tanpa menyentuh `updated_at`. Usul: pindahkan ke tabel PPC ber-kunci `(order_no, operation_no)`, picker area baca daftar operasi dari `sow` (read-only — `sow` cermin ETL, lihat keputusan D4). Reservasi TETAP task-level (D2 tak diubah). ~~**Menyentuh 3 butir STOP list (apps/api, kontrak API, migrasi). Blocker: 4 keputusan owner di §8**~~ → **DIKERJAKAN 2026-09-05** (keputusan 1a 2a 3b 4a, lihat [[log/2026-09-05-mapping-operasi-tahan-sync]]): tabel `sow_operation_task_map` + backfill dua populasi (1.689 kunci) applied CKP & BPN; `listOrderTasks` baca sow + 3 status (verifikasi live order 1000131015 = 19 READY / 3 TASK_LOST / 92 NEEDS_MAPPING); map tulis tabel baru (kunci int, 400 utk non-integer); sync lapor orphaned_mappings; FE panel + map page render 3 status. Build/lint OK. **Pending: cek browser 768×1024/960×600 + UAT scheduler; docs/ & database/ belum ter-commit (blocker penyaringan push)** → **REVISI-2 2026-09-07 (1b 2a 3b, lihat [[log/2026-09-07-mapping-reservasi-summary]])**: reservasi boleh nempel di task mana pun (summary/leaf), jadwal ikut task; drop-ke-summary = dialog assign/buat-anak; layar operator = task ber-op+order; backfill follow-schedule applied CKP (1.787 mapping: op 70→FRAME ASSY READY 18/8–21/9; TASK_LOST order kasus 3→0).
 
 - 🔴 **Kontrak agen + gate T0 dirombak** ([[log/2026-09-05-kontrak-agen-dan-gate-t0]], 2026-09-05) — audit menemukan T0 tidak pernah ditegakkan (hook tak terpasang, tak ada CI, `eslint .` gagal 105 error, gate memeriksa file utuh sehingga memblokir 65% file). Sudah diperbaiki: `deslop` jadi diff-aware, ratchet ESLint ([[planning/UI-DEBT]]), `mirror.mjs` mengunci duplikasi AGENTS.md, test masuk gate, hook terpasang, `gate.yml` dibuat. **Blocker owner: (1) `scripts/` (0 file ter-track, dihapus di `65e5afc`) dan `docs/` (4 dari ratusan) harus di-commit — tanpa itu gate tidak ada di clone lain dan CI gagal; perlu penyaringan sebelum push ke remote publik. (2) hapus `OperationsHubIcon.jsx` yang tak bisa di-parse? (3) duplikat travel card HTML.**
@@ -84,6 +165,8 @@ updated: 2026-07-28
 
 ## ✅ Done
 
+- 2026-09-21 — **Attendance Heatmap EWS — indikator overtime (OV)** ([[planning/heatmap-ui-3-overtime]] · [[log/2026-09-21-heatmap-ui-3-overtime-spec]]): transaksi dengan `confirmationnumber` mengandung `OV` kini diagregasi per operator + `business_date` tanpa double-count terhadap `recorded_hours`. Month memakai titik violet, Week badge `OV`; warna status, D/N, half-day, selection, dan focus tetap terpisah. Payload menambah `overtime_hours`, `overtime_record_count`, `overtime_pending_count`, dan `has_roster`. **91** operator-hari OV tanpa roster (83 Sabtu) tampil read-only sebagai `— · OV`, bukan status OFF palsu; **7** pending-only tampil outline tanpa mengarang jam. September: **3.117 sel**, **1.264 bertanda OV**, **4.093,77 jam OV** dari **13.445,72 jam recorded** dalam payload. Existing 3.026 sel mempertahankan recorded total identik **12.836,64**; 91 sel baru menambah 609,08 jam aktivitas. Endpoint 3×: 0,626/0,667/0,601 s, 1.079.307 B (baseline 0,613/0,590/0,592 s, 1.027.132 B). API 79/79, web 158/158, build 3.240 modul, gate full-stack lulus; browser Month/Week × desktop/tablet/960×600 terverifikasi.
+- 2026-09-20 — **Attendance Heatmap EWS — komposisi Week dan kegunaan tablet** ([[planning/heatmap-ui-2-komposisi]] · [[log/2026-09-20-heatmap-ui-2-komposisi]]): bidang kosong kanan Week terukur **656 px/55%** di desktop dan 352 px/40% di 960×600 diperbaiki dengan `table-fixed w-full`, kolom operator 176 px, dan tujuh tanggal membagi sisa lebar. Month tetap minimum 1.168 px + horizontal scroll. Today/selection/focus dipisahkan, pemisah minggu sejajar, No schedule memakai border dashed, teks ≥11 px, kontrol ≥44 px + `aria-pressed`, detail tablet jadi bottom sheet. Uji urutan drag→keyboard menemukan dan memperbaiki Enter/Space pertama yang tertelan flag pointer. Browser sesudah: Week table=scroller persis di 1.184/880/688 px (desktop/960/768). Screenshot before/after 12 file di `docs/design/heatmap-ui-2/`. Gate Track A lulus; 143/143 test; build sukses; staging pengguna tidak disentuh.
 - 2026-09-07 — **RBAC Role sebagai Paket Akses di Manage Users** ([[planning/rbac-role-paket]] · [[log/2026-09-07-rbac-role-paket]]): role dinamis = paket akses (dibuat/diedit/di-clone dari UI, ditempel ke banyak user). Tabel `rbac.roles/role_permissions/user_roles` + seed 5 role sistem + backfill 33 user (migration `20260907_rbac_roles.sql`). Resolver: override per-user → max-level role DB → fallback matrix kode. Keputusan owner: **1a** (banyak role, gabungan tertinggi) **2a** (override per-user lapisan teratas) **3b** (role sistem jadi baris DB) **4a** (hapus diblokir saat dipakai) **5a** (di ManageUsersPage: tab Users | Roles). FE `features/rbac/*` + API `/auth/roles` & `/auth/users/:id/roles` (manifest +4). Commit `80a891d` `8702ee5`; revisi UI full-width + animasi `06c716e`; revisi v2 murni role-packages + key otomatis `fa943ee` `5393589`; revisi v3 drawer lebar + username-otomatis `58c9341` (2026-09-07). Gate lulus; 2 anomali dashboard di check_rbac_manifest tetap pra-ada.
 - 2026-09-04 — [[SOW_SCHEDULING_UI_FOUNDATION_DESIGN]] — fondasi visual & motion SOW Scheduling, **Proyek A** dari dekomposisi A/B/C/D selesai (14 task, TDD; `apps/web` sebelumnya tanpa test runner, Task 1 memasang Vitest + Testing Library). Lanjutan [[SOW_SCHEDULING_MFG_UI_REDESIGN_PLAN]] (Fase 0–3). Keputusan owner 2026-09-04: transisi slide-berarah (bukan tile-expand — `layoutId` shared-layout morphing dicoba lalu **direvert**, tak kompatibel dengan `AnimatePresence mode="wait"` yang unmount halaman keluar sebelum halaman masuk ter-mount) · arah visual "layered + tepi status" · palet ditambah `--canvas` + tiga `--status-*` · blast radius **hanya `/sow-scheduling`**. Membalik sebagian keputusan "desktop-only" 2026-07-30: `/area` kini adaptif desktop+tablet. Memaksa revisi CLAUDE.md (aturan shadow + palet + status implementasi) — dicatat eksplisit di Task 14, bukan dibiarkan jadi pelanggaran diam-diam. **Density toggle TIDAK di-ship**: `DensityProvider`/`useDensity` ada dan teruji tapi tidak dipasang di header manapun — kontrol yang tidak mengubah apa-apa lebih buruk daripada tidak ada; menunggu Proyek B/C mengaitkan density ke rendering baris dulu. **Proyek B, C, dan D BELUM DIMULAI.** **Utang verifikasi:** tidak ada satupun task di rencana ini yang diverifikasi lewat browser sungguhan — font stack di keempat halaman `/sow-scheduling*`, penggantian segmented control, transisi rute, perilaku `prefers-reduced-motion`, dan visual berlapis (shadow-card di atas canvas) semuanya baru lulus test unit/lint/build, belum dilihat mata di browser. Ini tanggung jawab owner sebelum rilis.
 - 2026-09-02 — **Auto staging TIMESHEET BPN** ([[log/2026-09-02-sap-stage-timesheet-worker]] · gap dicatat di [[log/2026-08-31-aws-staging-reset-1b-26plus]]): service `sap-stage-ts-worker` di docker-compose (cursor mode, `--loop 10` tiap 15 mnt) + 3 env anchor (`SAP_STAGE_INITIAL_FROM_TS` dkk). Commit `9b34504`. Hasil: backlog 28-08..02-09 bersih (belum=0), cursor TIMESHEET 5051 27-08 → 02-09 13:17, POSTED tetap 742. **Backfill 26-08 dibatalkan**: seluruh barisnya di-exclude reset-1b ("posted 26-08, jangan dikirim ulang", 1.266 exclusion) — bukan backlog. Investigasi: CKP tidak punya scheduler TIMESHEET (manual terakhir 22-08) — usul service sama, belum di-deploy

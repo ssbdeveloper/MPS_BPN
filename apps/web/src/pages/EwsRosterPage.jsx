@@ -12,6 +12,20 @@ import { EXCUSED, todayLocalISO } from '../components/ews-roster/rosterConstants
 import { MemoHeatmapCell, RosterLegend, StatTile } from '../components/ews-roster/rosterVisuals';
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const DOW_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+// Keep the operator column bounded so long names cannot take space from date columns,
+// and so table-fixed has a predictable anchor.
+const OPERATOR_COL_PX = 176;
+// Minimum date-column widths. Above these values columns stretch to fill the container;
+// below them the table scrolls horizontally instead of squeezing unreadably.
+const MIN_CELL_PX = { week: 56, month: 32 };
+
+// Apply the week divider to both th and td so one line runs from the header through
+// the final row instead of offsetting individual buttons.
+function weekDivider(d, view) {
+  return view === 'month' && d.dow === 0;
+}
+
 function monthOf(dateStr) {
   return dateStr.slice(0, 7);
 }
@@ -75,6 +89,7 @@ function EwsRosterPage() {
     if (view !== 'week') return days;
     return weeks[Math.min(weekIndex, weeks.length - 1)] || days;
   }, [view, weeks, weekIndex, days]);
+  const minCellPx = view === 'week' ? MIN_CELL_PX.week : MIN_CELL_PX.month;
 
   const load = useCallback(async (m, sc) => {
     // Ganti bulan membatalkan request lama dan menjaga urutan respons: tanpa ini,
@@ -215,12 +230,14 @@ function EwsRosterPage() {
 
   // Tap (tablet) dan Enter/Space (keyboard) tidak menghasilkan mouseup drag, jadi sel
   // diaktifkan langsung lewat jalur ini.
-  const activateCell = useCallback((ri, ci) => {
-    // Di desktop, click selalu menyusul mouseup drag — seleksi sudah ditangani di sana.
-    if (mouseHandled.current) {
+  const activateCell = useCallback((ri, ci, source = 'pointer') => {
+    // On desktop a pointer click follows mouseup after a drag, whose selection is already
+    // applied. The pointer guard must never swallow the next Enter/Space action.
+    if (source === 'pointer' && mouseHandled.current) {
       mouseHandled.current = false;
       return;
     }
+    mouseHandled.current = false;
     const op = operators[ri];
     const d = visibleDays[ci];
     if (!op || !d) return;
@@ -238,6 +255,19 @@ function EwsRosterPage() {
     return () => window.removeEventListener('mouseup', up);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, operators, visibleDays]);
+
+  // The tablet detail panel is a bottom sheet, so Escape must close it.
+  useEffect(() => {
+    if (!panelOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setPanelOpen(false);
+        setSelected(new Set());
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panelOpen]);
 
   const applyBulk = useCallback(async (payload) => {
     try {
@@ -300,18 +330,19 @@ function EwsRosterPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white p-1 shadow-sm">
-              <button type="button" onClick={() => changeMonth(-1)} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100" aria-label="Previous month">
-                <ChevronLeft size={15} />
+            <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white p-1">
+              <button type="button" onClick={() => changeMonth(-1)} className="flex h-11 w-11 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" aria-label="Previous month">
+                <ChevronLeft size={17} />
               </button>
               <input
                 type="month"
                 value={month}
                 onChange={(e) => e.target.value && setMonth(e.target.value)}
-                className="w-36 bg-transparent px-1 text-sm font-bold text-slate-800 focus:outline-none"
+                aria-label="Month"
+                className="h-11 w-36 bg-transparent px-1 text-sm font-bold text-slate-800 focus:outline-none"
               />
-              <button type="button" onClick={() => changeMonth(1)} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100" aria-label="Next month">
-                <ChevronRight size={15} />
+              <button type="button" onClick={() => changeMonth(1)} className="flex h-11 w-11 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]" aria-label="Next month">
+                <ChevronRight size={17} />
               </button>
             </div>
 
@@ -323,8 +354,9 @@ function EwsRosterPage() {
                 <button
                   key={o.key}
                   type="button"
+                  aria-pressed={scope === o.key}
                   onClick={() => setScope(o.key)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-extrabold transition ${scope === o.key ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  className={`min-h-[44px] rounded-md px-3 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${scope === o.key ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 >
                   {o.label}
                 </button>
@@ -334,7 +366,7 @@ function EwsRosterPage() {
             <button
               type="button"
               onClick={() => load(month, scope)}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-700 shadow-sm transition hover:bg-slate-50 active:scale-95"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95"
             >
               <RefreshCw size={14} />
               Refresh
@@ -342,7 +374,7 @@ function EwsRosterPage() {
             <button
               type="button"
               onClick={() => navigate('/ews/foreman-team')}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-700 shadow-sm transition hover:border-[#90e0ef] hover:text-[#0077b6]"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-[#90e0ef] hover:text-[#0077b6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
             >
               <Users size={14} />
               Foreman Team
@@ -350,7 +382,7 @@ function EwsRosterPage() {
             <button
               type="button"
               onClick={() => navigate('/ews/roster/config')}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-700 shadow-sm transition hover:border-[#90e0ef] hover:text-[#0077b6]"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:border-[#90e0ef] hover:text-[#0077b6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
             >
               <Settings size={14} />
               Config
@@ -359,7 +391,7 @@ function EwsRosterPage() {
         </div>
       </header>
 
-      <main className="flex gap-4 px-4 py-4 md:px-6">
+      <main className={`flex gap-4 px-4 py-4 md:px-6 ${panelOpen && selectedKeys.length > 0 ? 'pb-[60vh] lg:pb-4' : ''}`}>
         <div className="min-w-0 flex-1 space-y-4">
           {error && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</div>
@@ -397,8 +429,9 @@ function EwsRosterPage() {
                     <button
                       key={o.key}
                       type="button"
+                      aria-pressed={view === o.key}
                       onClick={() => setView(o.key)}
-                      className={`rounded-md px-3 py-1.5 text-xs font-extrabold transition ${view === o.key ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`min-h-[44px] rounded-md px-3 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] ${view === o.key ? 'bg-white text-[#0077b6] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                     >
                       {o.label}
                     </button>
@@ -410,22 +443,22 @@ function EwsRosterPage() {
                       type="button"
                       onClick={() => setWeekIndex((i) => Math.max(0, i - 1))}
                       disabled={weekIndex === 0}
-                      className="flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      className="flex h-11 w-11 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-40"
                       aria-label="Previous week"
                     >
-                      <ChevronLeft size={15} />
+                      <ChevronLeft size={17} />
                     </button>
-                    <span className="px-1 text-xs font-extrabold tabular-nums text-slate-700">
+                    <span className="px-1 text-xs font-bold tabular-nums text-slate-700">
                       Week {weekIndex + 1}/{weeks.length}
                     </span>
                     <button
                       type="button"
                       onClick={() => setWeekIndex((i) => Math.min(weeks.length - 1, i + 1))}
                       disabled={weekIndex >= weeks.length - 1}
-                      className="flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      className="flex h-11 w-11 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] disabled:opacity-40"
                       aria-label="Next week"
                     >
-                      <ChevronRight size={15} />
+                      <ChevronRight size={17} />
                     </button>
                   </div>
                 )}
@@ -436,7 +469,8 @@ function EwsRosterPage() {
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder="Search operator…"
-                    className="h-8 w-52 rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
+                    aria-label="Search operator"
+                    className="h-11 w-52 rounded-lg border border-slate-300 bg-white pl-8 pr-3 text-xs font-semibold text-slate-800 placeholder-slate-400 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]"
                   />
                 </label>
               </div>
@@ -457,26 +491,37 @@ function EwsRosterPage() {
                     <div key={i} className="flex items-center gap-1.5 py-0.5">
                       <div className="h-5 w-44 rounded bg-slate-100 animate-pulse" />
                       {visibleDays.map((d) => (
-                        <div key={d.date} className={`${view === 'week' ? 'h-11 w-11' : 'h-7 w-7'} flex-none rounded-md bg-slate-100 animate-pulse`} />
+                        <div key={d.date} className={`${view === 'week' ? 'h-11' : 'h-7'} flex-1 rounded-md bg-slate-100 animate-pulse`} />
                       ))}
                     </div>
                   ))}
                 </div>
               ) : (
-              <table key={`${month}|${scope}|${view}|${weekIndex}`} className="border-separate border-spacing-0 text-left text-sm" style={{ animation: 'hm-fade 0.35s ease-out' }}>
+              // w-full + table-fixed makes date columns share the remaining width evenly.
+              // minWidth keeps them readable and switches to horizontal scrolling instead
+              // of squeezing when the viewport is narrower.
+              <table
+                key={`${month}|${scope}|${view}|${weekIndex}`}
+                className="w-full table-fixed border-separate border-spacing-0 text-left text-sm"
+                style={{ animation: 'hm-fade 0.35s ease-out', minWidth: OPERATOR_COL_PX + visibleDays.length * minCellPx }}
+              >
+                <colgroup>
+                  <col style={{ width: OPERATOR_COL_PX }} />
+                  {visibleDays.map((d) => <col key={d.date} />)}
+                </colgroup>
                 <thead>
                   <tr>
-                    <th className="sticky left-0 top-0 z-20 w-44 min-w-44 border-b border-r border-[#90e0ef] bg-[#caf0f8] px-2 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-600">Operator</th>
+                    <th className="sticky left-0 top-0 z-20 border-b border-r border-[#90e0ef] bg-[#caf0f8] px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-600">Operator</th>
                     {visibleDays.map((d) => (
                       <th
                         key={d.date}
                         aria-current={d.date === today ? 'date' : undefined}
                         className={`sticky top-0 z-10 border-b border-[#90e0ef] px-0.5 py-1 text-center ${
                           d.date === today ? 'bg-[#90e0ef]' : d.dow === 0 || d.dow === 6 ? 'bg-slate-100' : 'bg-[#caf0f8]'
-                        } ${view === 'month' && d.dow === 0 ? 'border-l-2 border-l-slate-300' : ''}`}
+                        } ${weekDivider(d, view) ? 'border-l border-l-slate-300' : ''}`}
                       >
-                        <div className="text-[9px] font-black uppercase text-slate-400">{DOW_LETTERS[d.dow]}</div>
-                        <div className={`text-xs font-black tabular-nums ${d.date === today ? 'text-[#023e8a]' : d.dow === 0 || d.dow === 6 ? 'text-slate-500' : 'text-slate-700'}`}>{d.day}</div>
+                        <div className="text-[11px] font-bold uppercase leading-none text-slate-500">{DOW_LETTERS[d.dow]}</div>
+                        <div className={`text-xs font-extrabold tabular-nums ${d.date === today ? 'text-[#023e8a]' : d.dow === 0 || d.dow === 6 ? 'text-slate-500' : 'text-slate-700'}`}>{d.day}</div>
                       </th>
                     ))}
                   </tr>
@@ -491,14 +536,19 @@ function EwsRosterPage() {
                     <tr key={sn} className="group">
                       <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-2 py-1">
                         <div className="truncate text-xs font-bold text-slate-800 group-hover:text-[#0077b6]">{name}</div>
-                        <div className="font-mono text-[10px] text-slate-400">{sn}</div>
+                        <div className="truncate font-mono text-[11px] text-slate-400">{sn}</div>
                       </td>
                       {visibleDays.map((d, ci) => {
                         const key = cellKey(sn, d.date);
                         const row = rowsByKey.get(key);
                         const isSel = selected.has(key);
                         return (
-                          <td key={d.date} className="p-0.5">
+                          <td
+                            key={d.date}
+                            className={`p-0.5 ${weekDivider(d, view) ? 'border-l border-l-slate-300' : ''} ${
+                              d.date === today ? 'bg-[#caf0f8]/60' : ''
+                            }`}
+                          >
                             <MemoHeatmapCell
                               row={row}
                               selected={isSel}
@@ -510,8 +560,6 @@ function EwsRosterPage() {
                               name={name}
                               date={d.date}
                               size={view === 'week' ? 'lg' : 'sm'}
-                              today={d.date === today}
-                              weekStart={view === 'month' && d.dow === 0 && ci > 0}
                             />
                           </td>
                         );

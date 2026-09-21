@@ -37,8 +37,30 @@ describe('EWS roster UX overhaul contracts', () => {
     expect(source).toMatch(/cells/);
     expect(source).toMatch(/shift_override/);
     expect(source).toMatch(/standard_hours_override/);
-    expect(source).toMatch(/Sun/);
-    expect(source).toMatch(/Moon/);
+  });
+
+  it('keys the legend with the same D/N letters printed inside the cells', () => {
+    // Ikon Sun/Moon diganti huruf D/N pada 2026-09-19: legenda hanya berguna kalau
+    // penandanya sama persis dengan yang tercetak di sel.
+    const visuals = readPart('rosterVisuals.jsx');
+    expect(visuals).toMatch(/Day Shift/);
+    expect(visuals).toMatch(/Night Shift/);
+    expect(visuals).not.toMatch(/\bSun\b|\bMoon\b/);
+    expect(visuals).toMatch(/letter="D"/);
+    expect(visuals).toMatch(/letter="N"/);
+  });
+
+  it('colours cells by recorded/not-recorded without computing hour ratios', () => {
+    // Persentase jam dihapus 2026-09-19: heatmap sebulan penuh menghitungnya ribuan kali
+    // per render untuk memilih satu dari tiga warna. Tidak ada jam = absent, dan itu
+    // sudah ditentukan API.
+    const visuals = readPart('rosterVisuals.jsx');
+    expect(visuals).not.toMatch(/toFixed/);
+    expect(visuals).not.toMatch(/ratio/);
+    expect(visuals).not.toMatch(/scheduled_standard_hours/);
+    expect(visuals).not.toMatch(/IN_PROGRESS|In progress/);
+    expect(visuals).toMatch(/Scheduled/);
+    expect(visuals).toMatch(/recorded_hours/);
   });
 
   it('keeps roster state in the page while the heatmap parts stay presentational', () => {
@@ -49,5 +71,36 @@ describe('EWS roster UX overhaul contracts', () => {
     expect(panel).not.toMatch(/useEffect/);
     expect(visuals).toMatch(/export const MemoHeatmapCell/);
     expect(readPage('EwsRosterPage.jsx')).toMatch(/from '\.\.\/components\/ews-roster\/rosterVisuals'/);
+  });
+
+  it('lets the heatmap table fill its container instead of leaving dead space', () => {
+    // Root cause: a table without w-full plus fixed-width cells left 656 px empty
+    // on the right in Week mode at a 1264 px viewport.
+    const page = readPage('EwsRosterPage.jsx');
+    expect(page).toMatch(/w-full table-fixed/);
+    expect(page).toMatch(/<colgroup>/);
+    expect(page).toMatch(/minWidth: OPERATOR_COL_PX/);
+  });
+
+  it('draws the week divider on header and body with the same rule', () => {
+    // The week divider must align through header and body instead of offsetting buttons.
+    const page = readPage('EwsRosterPage.jsx');
+    expect(page).toMatch(/function weekDivider/);
+    expect(page.match(/\$\{weekDivider\(d, view\)/g) || []).toHaveLength(2);
+    expect(page).not.toMatch(/weekStart=/);
+  });
+
+  it('gives month/week and scope toggles a pressed state', () => {
+    const page = readPage('EwsRosterPage.jsx');
+    expect(page).toMatch(/aria-pressed=\{view === o\.key\}/);
+    expect(page).toMatch(/aria-pressed=\{scope === o\.key\}/);
+  });
+
+  it('keeps the detail panel out of the heatmap width on tablets', () => {
+    // A 320 px side panel at 768 px leaves less than the Week table minimum width.
+    const panel = readPart('BulkPanel.jsx');
+    expect(panel).toMatch(/fixed inset-x-0 bottom-0/);
+    expect(panel).toMatch(/lg:static/);
+    expect(panel).not.toMatch(/md:w-80/);
   });
 });

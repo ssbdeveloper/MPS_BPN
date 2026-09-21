@@ -1,4 +1,8 @@
 const db = global.pool || require("../db");
+const {
+  ConfirmationCheckoutError,
+  createTimesheetConfirmationService,
+} = require("../services/timesheetConfirmationService");
 // ============================================
 // DEPENDENCIES
 // ============================================
@@ -9,6 +13,31 @@ const ExcelJS = require('exceljs');
 // Configuration from environment variables
 const PLANT_SSB = process.env.PLANT_SSB;  // ✅ Nama var sesuai .env
 const TIMEZONE = process.env.TIMEZONE;  // ✅ Fallback default
+
+let timesheetConfirmationService;
+
+const getTimesheetConfirmationService = () => {
+  if (!timesheetConfirmationService) {
+    timesheetConfirmationService = createTimesheetConfirmationService({
+      pool: db.pool || db,
+      timezone: TIMEZONE,
+      plant: PLANT_SSB,
+    });
+  }
+  return timesheetConfirmationService;
+};
+
+const respondCheckoutError = (res, error, label) => {
+  console.error(`${label} error:`, error);
+  if (error instanceof ConfirmationCheckoutError) {
+    return res.status(error.statusCode).json({
+      error: error.message,
+      code: error.code,
+      details: error.details,
+    });
+  }
+  return res.status(500).json({ error: `Error updating data: ${error.message}` });
+};
 
 // AUTO-EXCLUDE record yang DIHAPUS (state_flag = 5) — 2026-09-15, keputusan owner 3b.
 // Sebab: stager TIMESHEET mengambil record segera setelah checkout (siklus ~15 menit) dan
@@ -599,31 +628,18 @@ exports.checkout = async (req, res) => {
     // umum tidak menyisakan record istirahat yang menggantung.
     const closedMeal = await closeStaleMealBreaks(serialnumber);
 
-    const result = await db.query(
-      `UPDATE timesheet_transaction
-       SET longdate_checkout = NOW(),
-           date_checkout = to_char(NOW(), 'DD/MM/YYYY'),
-           hour_checkout = to_char(NOW(), 'HH24:MI'),
-           duration = ROUND(
-             EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2
-           )
-       WHERE serialnumber = $1
-         AND date_checkout IS NULL
-       RETURNING *`,
-      [serialnumber]
-    );
+    const rows = await getTimesheetConfirmationService().checkoutBySerial(serialnumber);
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       if (closedMeal.length > 0) {
         return res.json({ auto_closed_meal_break: closedMeal.length });
       }
       return res.status(404).json({ error: "Data tidak ditemukan atau sudah checkout" });
     }
 
-    res.json(result.rows[0]);
+    res.json(rows[0]);
   } catch (err) {
-    console.error('checkout error:', err);
-    res.status(500).json({ error: 'Error updating data: ' + err.message });
+    return respondCheckoutError(res, err, 'checkout');
   }
 };
 
@@ -695,28 +711,15 @@ exports.checkoutid = async (req, res) => {
       return res.status(400).json({ error: 'tsnumber is required' });
     }
 
-    const result = await db.query(
-      `UPDATE timesheet_transaction
-       SET longdate_checkout = NOW(),
-           date_checkout = to_char(NOW(), 'DD/MM/YYYY'),
-           hour_checkout = to_char(NOW(), 'HH24:MI'),
-           duration = ROUND(
-             EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2
-           )
-       WHERE tsnumber = $1
-         AND date_checkout IS NULL
-       RETURNING *`,
-      [tsnumber]
-    );
+    const rows = await getTimesheetConfirmationService().checkoutById(tsnumber);
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'Data tidak ditemukan atau sudah checkout' });
     }
 
-    res.json(result.rows[0]);
+    res.json(rows[0]);
   } catch (err) {
-    console.error('checkoutid error:', err);
-    res.status(500).json({ error: 'Error updating data: ' + err.message });
+    return respondCheckoutError(res, err, 'checkoutid');
   }
 };
 

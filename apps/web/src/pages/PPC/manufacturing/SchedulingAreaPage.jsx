@@ -25,9 +25,9 @@ import {
 } from '../../../services/msProjectService';
 import { Skeleton } from '../../../components';
 import {
-  AREA_BY_CODE, BayAreaDetail, FloorMapOverview, OrderPanel, ReservationDetailModal,
-  ReservationPanel, addDaysText, bookingTypeOf, dateKey, dedupeByGroup,
-  groupKeyOf, todayText, useBaySchedules, useSowOrders,
+  AREA_BY_CODE, AreaDetailPanel, BayAreaDetail, FloorMapOverview, OrderPanel, ReservationDetailModal,
+  ReservationPanel, addDaysText, bookingTypeOf, buildAreaReservations, dateKey, dedupeByGroup,
+  groupAreaProjects, groupKeyOf, todayText, useBaySchedules, useSowOrders,
 } from '../../../features/bayScheduling';
 import BayReservationTimeline from './BayReservationTimeline';
 
@@ -179,6 +179,9 @@ export default function SchedulingAreaPage() {
   const [detail, setDetail] = useState(null);
   const [saving, setSaving] = useState(false);
   const [areaFilter, setAreaFilter] = useState('');
+  // Tahap 5 — panel detail area/zona di peta tingkat 1. NON-MODAL: peta tetap
+  // terbaca. `null` = tertutup; { areaCode, bay, zone } = terbuka.
+  const [detailSel, setDetailSel] = useState(null);
   const poolSearchRef = useRef(null);
   const registerPoolSearch = useCallback((fn) => {
     poolSearchRef.current = fn;
@@ -223,6 +226,14 @@ export default function SchedulingAreaPage() {
   }, [setHeaderRight, reload, loading]);
 
   const area = selectedAreaCode ? AREA_BY_CODE[selectedAreaCode] : null;
+
+  // Isi panel detail. Dihitung dari `detailSel` (bukan `selectedAreaCode`) supaya
+  // panel hanya hidup selama benar-benar dibuka, dan memakai grouping per PROJECT
+  // yang sama dengan kartu peta — satu sumber angka, tidak ada dua versi.
+  const detailArea = detailSel?.areaCode ? AREA_BY_CODE[detailSel.areaCode] : null;
+  const detailGroups = useMemo(() => (
+    detailArea ? groupAreaProjects(buildAreaReservations(byBay, detailArea)) : []
+  ), [byBay, detailArea]);
   // Area untuk panel reservasi. Mode EDIT memakai area dari DETAIL reservasi
   // (fallback ke objek minimal bila area_code tidak dikenal FE) — bukan area
   // yang sedang terpilih di peta, karena edit bisa dibuka dari Timeline.
@@ -252,9 +263,33 @@ export default function SchedulingAreaPage() {
   useEffect(() => { selectedOrderRef.current = selectedOrder; }, [selectedOrder]);
 
   /* ── Handler peta: WAJIB stabil ─────────────────────────────────────────── */
+  // Klik kartu area membuka PANEL DETAIL, tidak langsung mengganti peta dengan
+  // halaman tingkat 2 (PLAN §4.4: peta okupansi wajib tetap terbaca). Alur
+  // reservasi lama tetap utuh, dicapai lewat "Kelola reservasi" di panel.
   const handleSelectArea = useCallback((areaCode) => {
     setSelectedAreaCode(areaCode);
     setSelectedBay(null);
+    setDetailSel((prev) => (
+      // Klik kartu yang sama = toggle tutup, supaya panel tidak "nyangkut".
+      prev && prev.areaCode === areaCode && !prev.bay ? null : { areaCode, bay: null, zone: null }
+    ));
+  }, []);
+
+  // Klik sel zona / slot bay: panel terbuka dengan konteks sel itu.
+  const handleSelectZone = useCallback((areaCode, cell) => {
+    setSelectedAreaCode(areaCode);
+    setDetailSel({ areaCode, bay: cell?.bay || null, zone: cell?.zone || null });
+  }, []);
+
+  const closeAreaDetail = useCallback(() => setDetailSel(null), []);
+
+  // "Kelola reservasi" = masuk ke halaman tingkat 2 dengan konteks terpilih
+  // (PLAN §9 butir 14: editor tidak boleh selalu membuka area contoh tetap).
+  const handleManageArea = useCallback((ctx) => {
+    if (!ctx?.areaCode) return;
+    setSelectedAreaCode(ctx.areaCode);
+    setSelectedBay(ctx.bay || null);
+    setDetailSel(null);
     setLevel('area');
   }, []);
   const handleBack = useCallback(() => { setLevel('overview'); setSelectedBay(null); }, []);
@@ -469,6 +504,17 @@ export default function SchedulingAreaPage() {
         cursorDate={cursorDate}
         selectedAreaCode={selectedAreaCode}
         onSelectArea={handleSelectArea}
+        onSelectZone={handleSelectZone}
+        detailPanel={detailArea ? (
+          <AreaDetailPanel
+            area={detailArea}
+            groups={detailGroups}
+            cursorDate={cursorDate}
+            selection={detailSel}
+            onClose={closeAreaDetail}
+            onManage={handleManageArea}
+          />
+        ) : null}
         orderFilter={areaFilter}
         onClearFilter={() => {
           setAreaFilter('');

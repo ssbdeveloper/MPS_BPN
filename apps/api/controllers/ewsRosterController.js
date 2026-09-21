@@ -5,6 +5,20 @@ const { resolveTimezone } = require("../config/timezone");
 const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT", "SITE_VISIT"]);
 const TZ = resolveTimezone();
 
+// Overtime classification for the attendance heatmap.
+//
+// Source of truth is public.timesheet_transaction.confirmationnumber. A value CONTAINING "OV"
+// after trimming and upper-casing counts as overtime, per docs/planning/heatmap-ui-3-overtime.md.
+// The older docs/timesheet/CONFIRMATION_NUMBER_PLAN.md describes a trailing "OV" suffix; measured
+// on the whole table both rules select the same 3.988 rows (no edge whitespace, no lowercase
+// "ov", no "OV" in the middle of a value), so this is a documented difference, not a silent
+// rule change. NULL/empty is never evidence of overtime.
+//
+// This is a display classification only. It does not change payroll, overtime approval, or SAP
+// eligibility, and it never infers overtime from an OFF roster, hours above target, or a
+// workcenter ending in OT.
+const IS_OVERTIME_SQL = `UPPER(BTRIM(t.confirmationnumber)) LIKE '%OV%'`;
+
 function assertIsoDate(value) {
   const text = String(value || "");
   const parsed = new Date(`${text}T00:00:00Z`);
@@ -69,7 +83,10 @@ async function getRoster(req, res) {
     const result = await db.query(
       `
       WITH logged AS (
-        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op, SUM(t.duration::float) AS recorded
+        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
+               SUM(t.duration::float) AS recorded,
+               COALESCE(SUM(t.duration::float) FILTER (WHERE ${IS_OVERTIME_SQL}), 0) AS overtime,
+               COUNT(*) FILTER (WHERE ${IS_OVERTIME_SQL})::int AS overtime_records
         FROM public.timesheet_transaction t
         WHERE t.longdate_checkin >= ($1::date)::timestamp
           AND t.longdate_checkin <  ($1::date + 2)::timestamp
@@ -79,11 +96,27 @@ async function getRoster(req, res) {
                     THEN (t.longdate_checkin AT TIME ZONE $2)::date - 1
                     ELSE (t.longdate_checkin AT TIME ZONE $2)::date END) = $1::date
         GROUP BY 1
+      ),
+      ov_pending AS (
+        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op, COUNT(*)::int AS pending_records
+        FROM public.timesheet_transaction t
+        WHERE t.longdate_checkin >= ($1::date)::timestamp
+          AND t.longdate_checkin <  ($1::date + 2)::timestamp
+          AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) <= 0
+          AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+          AND ${IS_OVERTIME_SQL}
+          AND (CASE WHEN (t.longdate_checkin AT TIME ZONE $2)::time < TIME '07:00'
+                    THEN (t.longdate_checkin AT TIME ZONE $2)::date - 1
+                    ELSE (t.longdate_checkin AT TIME ZONE $2)::date END) = $1::date
+        GROUP BY 1
       )
       SELECT r.serialnumber, u.full_name AS operator_name, r.eff_shift AS scheduled_shift, r.eff_std AS scheduled_standard_hours,
              r.status, r.source, r.updated_by, r.half_day,
              r.shift_override, r.standard_hours_override, r.fixed_shift,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
+             COALESCE(lg.overtime, 0)::float AS overtime_hours,
+             COALESCE(lg.overtime_records, 0)::int AS overtime_record_count,
+             COALESCE(pd.pending_records, 0)::int AS overtime_pending_count,
              CASE WHEN r.end_time IS NULL THEN NULL ELSE
                ((r.business_date + r.end_time
                  + CASE WHEN r.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) <= now()
@@ -97,6 +130,7 @@ async function getRoster(req, res) {
       FROM ews.roster_effective r
       LEFT JOIN public.usernfc u ON NULLIF(BTRIM(u.snssb), '') = r.serialnumber
       LEFT JOIN logged lg ON lg.op = r.serialnumber
+      LEFT JOIN ov_pending pd ON pd.op = r.serialnumber
       WHERE r.business_date = $1::date
       ORDER BY r.eff_shift, u.full_name NULLS LAST, r.serialnumber
       `,
@@ -227,12 +261,15 @@ async function getRosterMonth(req, res) {
     const scope = String(req.query.scope || "all") === "team" ? "team" : "all";
     const userId = String(req.headers["x-user-id"] || "");
     const params = [`${month}-01`, TZ];
-    let teamFilter = "";
+    // The team filter must apply to every key source, not just the roster, otherwise
+    // activity-only overtime cells would bypass the foreman scope.
+    let teamFilter = () => "";
     if (scope === "team") {
       if (!/^\d+$/.test(userId)) return res.json({ data: [], meta: { month, scope } });
       params.push(userId);
-      teamFilter = ` AND r.serialnumber IN (
-        SELECT member_serialnumber FROM ews.foreman_team WHERE foreman_user_id = $${params.length}
+      const idx = params.length;
+      teamFilter = (col) => ` AND ${col} IN (
+        SELECT member_serialnumber FROM ews.foreman_team WHERE foreman_user_id = $${idx}
       )`;
     }
     const result = await db.query(
@@ -242,30 +279,77 @@ async function getRosterMonth(req, res) {
                CASE WHEN (t.longdate_checkin AT TIME ZONE $2)::time < TIME '07:00'
                     THEN (t.longdate_checkin AT TIME ZONE $2)::date - 1
                     ELSE (t.longdate_checkin AT TIME ZONE $2)::date END AS business_date,
-               SUM(t.duration::float) AS recorded
+               SUM(t.duration::float) AS recorded,
+               -- Overtime is PART OF recorded, not a figure to add on top: it is summed from the
+               -- same rows under the same duration filter. Naming (recorded - overtime)
+               -- "regular" would be wrong — the remainder also holds RG and unclassified rows.
+               COALESCE(SUM(t.duration::float) FILTER (WHERE ${IS_OVERTIME_SQL}), 0) AS overtime,
+               COUNT(*) FILTER (WHERE ${IS_OVERTIME_SQL})::int AS overtime_records
         FROM public.timesheet_transaction t
         WHERE t.longdate_checkin >= ($1::date)::timestamp
           AND t.longdate_checkin <  ($1::date + interval '1 month 7 hours')::timestamp
           AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
           AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
         GROUP BY 1, 2
+      ),
+      -- Overtime rows that exist but carry no usable duration yet. Counted separately so the
+      -- cell can say "OV, duration not available" instead of inventing hours or, worse,
+      -- looking identical to a day with no overtime at all.
+      ov_pending AS (
+        SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
+               CASE WHEN (t.longdate_checkin AT TIME ZONE $2)::time < TIME '07:00'
+                    THEN (t.longdate_checkin AT TIME ZONE $2)::date - 1
+                    ELSE (t.longdate_checkin AT TIME ZONE $2)::date END AS business_date,
+               COUNT(*)::int AS pending_records
+        FROM public.timesheet_transaction t
+        WHERE t.longdate_checkin >= ($1::date)::timestamp
+          AND t.longdate_checkin <  ($1::date + interval '1 month 7 hours')::timestamp
+          AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) <= 0
+          AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+          AND ${IS_OVERTIME_SQL}
+        GROUP BY 1, 2
+      ),
+      -- Roster rows alone would hide overtime worked on dates with no roster at all: Saturday
+      -- and Sunday are switched off in roster_workday_rule, so the generator writes no row
+      -- rather than an OFF row. Those cells are added here as activity-only keys; no roster row
+      -- is created anywhere, and the response marks them has_roster = false so the UI can keep
+      -- them read-only.
+      keys AS (
+        SELECT r.serialnumber, r.business_date
+        FROM ews.roster_effective r
+        WHERE r.business_date >= $1::date AND r.business_date < ($1::date + interval '1 month')::date
+        ${teamFilter("r.serialnumber")}
+        UNION
+        SELECT a.op, a.business_date
+        FROM (
+          SELECT op, business_date FROM logged WHERE overtime_records > 0
+          UNION
+          SELECT op, business_date FROM ov_pending
+        ) a
+        WHERE a.business_date >= $1::date AND a.business_date < ($1::date + interval '1 month')::date
+        ${teamFilter("a.op")}
       )
-      SELECT r.serialnumber, r.business_date::text,
+      SELECT k.serialnumber, k.business_date::text,
              r.eff_shift AS scheduled_shift, r.eff_std AS scheduled_standard_hours,
              r.status, r.half_day,
              r.shift_override, r.standard_hours_override,
+             (r.serialnumber IS NOT NULL) AS has_roster,
              COALESCE(lg.recorded, 0)::float AS recorded_hours,
-             CASE WHEN r.status <> 'SCHEDULED' THEN r.status
+             COALESCE(lg.overtime, 0)::float AS overtime_hours,
+             COALESCE(lg.overtime_records, 0)::int AS overtime_record_count,
+             COALESCE(pd.pending_records, 0)::int AS overtime_pending_count,
+             CASE WHEN r.serialnumber IS NULL THEN NULL
+                  WHEN r.status <> 'SCHEDULED' THEN r.status
                   WHEN r.end_time IS NULL THEN
                     (CASE WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT' ELSE 'IN_PROGRESS' END)
                   WHEN ((r.business_date + r.end_time + CASE WHEN r.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END) AT TIME ZONE $2) > now() THEN 'IN_PROGRESS'
                   WHEN COALESCE(lg.recorded, 0) > 0 THEN 'PRESENT'
                   ELSE 'ABSENT' END AS attendance
-      FROM ews.roster_effective r
-      LEFT JOIN logged lg ON lg.op = r.serialnumber AND lg.business_date = r.business_date
-      WHERE r.business_date >= $1::date AND r.business_date < ($1::date + interval '1 month')::date
-      ${teamFilter}
-      ORDER BY r.serialnumber, r.business_date
+      FROM keys k
+      LEFT JOIN ews.roster_effective r ON r.serialnumber = k.serialnumber AND r.business_date = k.business_date
+      LEFT JOIN logged lg ON lg.op = k.serialnumber AND lg.business_date = k.business_date
+      LEFT JOIN ov_pending pd ON pd.op = k.serialnumber AND pd.business_date = k.business_date
+      ORDER BY k.serialnumber, k.business_date
       `,
       params
     );

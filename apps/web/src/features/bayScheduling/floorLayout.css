@@ -1,0 +1,622 @@
+/* features/bayScheduling/floorLayout.css
+ *
+ * Layout lantai area (PLAN §4). Ditulis sebagai CSS native, BUKAN utilitas
+ * Tailwind, karena dua alasan:
+ *   1. Breakpoint di sini memakai CONTAINER QUERY. `@container` butuh
+ *      `container-type`, dan Tailwind 3.4 tanpa plugin tidak punya utilitasnya.
+ *   2. `@container` di dalam file CSS tidak diproses sebagai kelas dinamis,
+ *      jadi tidak ada risiko kelas ter-purge.
+ *
+ * Container query, bukan media query: halaman nyata punya sidebar, jadi lebar
+ * VIEWPORT bukan lebar yang tersedia untuk komponen ini. Media query akan
+ * memilih breakpoint yang salah begitu sidebar muncul.
+ *
+ * ── PELAJARAN WAJIB (2026-09-21, dari laporan user "UI berantakan dan banyak
+ *    terpotong") ────────────────────────────────────────────────────────────
+ * Probe sebelumnya hanya memverifikasi bahwa pintu bergerak sesuai kontrak —
+ * bukan bahwa isi di balik pintu BISA DILIHAT. Akibatnya `overflow: hidden` pada
+ * kolom lane lolos semua pemeriksaan padahal memotong 313px isi di 1440 (dan
+ * 1148px di 402) tanpa cara apa pun menjangkaunya.
+ *
+ * Aturan yang berlaku sejak sekarang:
+ *   1. Setiap wadah yang tingginya dibatasi dan memotong isinya WAJIB memakai
+ *      `overflow: auto` — memotong sambil MENYEDIAKAN gulir. `overflow: hidden`
+ *      hanya untuk elemen yang memang tidak boleh digulir.
+ *   2. Setiap probe wajib menyatakan "isi bisa dijangkau", bukan hanya "layout
+ *      sesuai kontrak": untuk tiap wadah, `scrollHeight - clientHeight` harus 0,
+ *      ATAU selisihnya benar-benar tercapai lewat gulir.
+ */
+
+.floor-frame {
+  container-type: inline-size;
+  container-name: floor;
+  position: relative;          /* jangkar overlay panel detail di >1180 (PLAN §4.4) */
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.floor-grid {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+  /* Baris juga WAJIB dibatasi (`minmax(0, 1fr)`), bukan `auto`. Dengan `auto`
+     baris tumbuh mengikuti tinggi isi (terukur 1685px di 402px), sehingga lane
+     meluber keluar kontainer dan tidak ada gulir yang bisa menjangkaunya. */
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.floor-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.375rem;
+  overflow: hidden;
+}
+
+.lane-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.375rem;
+  overflow: hidden;
+}
+
+/* Kolom lane: pembungkus untuk penempatan grid desktop (§4.1). Lane A dan Lane B
+   ditumpuk di SATU kolom grid kanan; sebagai anak `.floor-grid` langsung, Lane B
+   jatuh ke baris kedua kolom PERTAMA dan bertumpuk dengan Blasting/Painting. */
+.lane-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Wadah kedua lane. DEFAULT-nya transparan (`display: contents`): di ≤1180 lane
+   bersifat bertab dan hanya SATU yang tampil, sehingga kalau wadah ini tetap
+   grid dua baris maka baris kedua yang kosong tetap menahan separuh tinggi dan
+   lane aktif cuma dapat 50%. Terukur di aplikasi nyata (1024px): lane 227px dari
+   466px tersedia, sisa 227px hilang sebagai baris kosong.
+   Bentuk grid DUA BARIS SAMA TINGGI hanya dipasang di >1180 (§4.1) lewat blok
+   container di bawah — di sana kedua lane memang tampil bersamaan. */
+.lane-stack {
+  display: contents;
+}
+
+/* Lane yang tidak aktif disembunyikan HANYA oleh aturan container di ≤1180. */
+.lane-column .lane-pane {
+  flex: 1 1 0;
+}
+
+/* Wilayah GULIR lane. Inilah satu-satunya elemen yang memotong isi kartu, dan ia
+   memotong sambil MENYEDIAKAN gulir. Tanpa kelas ini, `overflow: hidden` di
+   `.lane-column`/`.lane-pane` memotong kartu tanpa cara menjangkaunya — persis
+   keluhan "UI banyak terpotong". */
+.lane-scroll {
+  min-height: 0;
+  flex: 1 1 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/* Slot panel detail saat panel terdok (kolom kedua grid lantai). Sengaja TIDAK
+   memakai `.floor-pane`: kelas itu dimatikan di ≤1180 untuk menyembunyikan pane
+   yang tidak aktif, dan panel detail tidak boleh ikut tersembunyi. */
+.floor-detail-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Kartu area ─────────────────────────────────────────────────────────────
+   Kartu TIDAK boleh memotong label. Karena itu label memakai `white-space:
+   normal` + `overflow-wrap: anywhere` (lihat AreaCard.jsx): teks dibungkus ke
+   baris berikutnya, bukan dipangkas ellipsis. Baris dijaga rapat supaya kartu
+   tetap ringkas walau label jadi 2 baris, dan kartu tumbuh mengikuti isi karena
+   grid memakai `grid-auto-rows: max-content` (§4.2) — jadi ada ruangnya. */
+.lane-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  /* `grid-auto-rows: max-content` WAJIB — tanpa ini baris grid menyusut ke
+     min-content dan kartu memotong isinya sendiri (terukur: isi 213px dipaksa
+     jadi 140px). Jangan diganti `auto`. */
+  grid-auto-rows: max-content;
+  align-content: start;
+  align-items: start;
+}
+
+/* ── Tab lane: navigasi otoritatif pada tablet (PLAN §4.4) ──────────────────
+   Disembunyikan di desktop lebar karena di sana kedua kolom tampil bersamaan. */
+.floor-tabs {
+  display: none;
+  gap: 0.25rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.25rem;
+}
+
+.floor-tabs button {
+  min-height: 44px;            /* target sentuh tablet (PLAN §5.1) */
+  flex: 1 1 8rem;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  padding: 0 0.75rem;
+  font-size: var(--t-btn);   /* §5.2 teks tombol */
+  font-weight: 700;
+  color: #475569;
+  transition: background-color 150ms, border-color 150ms, color 150ms;
+}
+
+.floor-tabs button[aria-selected='true'] {
+  border-color: #0077b6;
+  background: #0077b6;
+  color: #fff;
+}
+
+.floor-tabs button:focus-visible {
+  outline: 2px solid #00b4d8;
+  outline-offset: 1px;
+}
+
+/* ── Peta zona E/C ─────────────────────────────────────────────────────────
+   Satu kolom per bay FISIK, EDGE di atas dan CENTER di bawah. C dan E disimpan
+   terpisah sehingga dua project pada bay yang sama tidak saling menimpa, dan
+   zona kosong tetap terlihat. Amber = overlap; warna lain tidak dipakai untuk
+   keadaan ini supaya artinya tidak kabur. */
+.zone-map {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 3px;
+  align-items: center;
+}
+
+/* Kolom bay fisik: dibingkai supaya E dan C terbaca sebagai satu kesatuan bay. */
+.zone-col {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  background: #eef2f6;
+  overflow: hidden;
+}
+
+.zone-col-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  color: #64748b;
+  line-height: 1.2;
+  padding-bottom: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zone-cell {
+  /* 13px terlalu pendek untuk dibaca di tablet: sel adalah SATU-SATUNYA penanda
+     okupansi zona, dan label huruf di dalamnya jatuh ke ukuran tak terbaca.
+     Dinaikkan ke 16px + huruf zona 9px. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  border-radius: 2px;
+  background: #f1f5f9;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: rgb(255 255 255 / 0.9);
+}
+
+.zone-cell.is-empty {
+  background: #f8fafc;
+  box-shadow: inset 0 0 0 1px #e2e8f0;
+}
+
+/* Overlap: amber + jumlah reservasi TERBACA di badge bawah peta, bukan di sel. */
+.zone-cell.is-over {
+  background: #fdf4e3;
+  box-shadow: inset 0 0 0 1.5px #dcae5c;
+  color: #92400e;
+}
+
+/* Blasting & Painting: slot disusun vertikal (PLAN §4.3). Slot kosong memakai
+   pola garis, bukan sekadar teks "Kosong". */
+/* Header kelompok slot BP: "Painting" lalu "Blasting" (PLAN §4.3). Sticky supaya
+   saat daftar slot digulir, user tetap tahu sedang melihat kelompok yang mana. */
+.bp-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0.25rem 0 0;
+  padding: 0.125rem 0.125rem 0.1875rem;
+  background: #fff;
+  font-size: var(--t-meta);   /* §5.2 metadata */
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.bp-group:first-child { margin-top: 0; }
+
+.slot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #fff;
+  padding: 0.375rem 0.5rem;
+  min-height: 44px;
+}
+
+.slot-row.is-empty {
+  background: repeating-linear-gradient(135deg, #f8fafc 0 6px, #f1f5f9 6px 12px);
+}
+
+.slot-row.is-over {
+  border-color: #dcae5c;
+  background: #fdf4e3;
+}
+
+/* Pita petak bay: batang warna project di sisi kode bay, jadi satu project bisa
+   dilacak lintas slot tanpa membaca teksnya. Warna datang dari --pc (diset
+   inline per slot); tanpa reservasi jatuh ke abu-abu netral. */
+.slot-code {
+  display: grid;
+  grid-template-columns: 3px auto;
+  align-items: center;
+  gap: 0.375rem;
+  align-self: stretch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--t-code);   /* §5.2 kode bay */
+  font-weight: 700;
+  color: #334155;
+}
+
+.slot-code::before {
+  content: '';
+  align-self: stretch;
+  min-height: 1.25rem;
+  border-radius: 2px;
+  background: var(--pc, #cbd5e1);
+}
+
+.slot-row.is-empty .slot-code { color: #94a3b8; }
+.slot-row.is-empty .slot-code::before { background: #e2e8f0; }
+
+/* ── Skala tipografi (PLAN §5.2, Tahap 4) ────────────────────────────────────
+   Satu sumber angka untuk seluruh fitur. Sebelumnya ukuran bertebaran sebagai
+   nilai Tailwind arbitrer (`text-[11.5px]`, `text-[10px]`, ...) di tiga berkas,
+   sehingga tidak ada yang bisa mengubah skala tanpa memburu belasan tempat.
+   Angka diambil PERSIS dari kontrak §5.2; terukur sebelum perubahan: kode 16,
+   judul panel 16, nama project 11.5, metadata 10, tombol 13–14. */
+:root {
+  --t-code: 17px;      /* kode bay / area — Archivo Narrow 700 */
+  --t-title: 19px;     /* judul panel detail */
+  --t-pname: 14.5px;   /* nama project */
+  --t-meta: 11.5px;    /* metadata & tanggal — IBM Plex Mono */
+  --t-btn: 15.5px;     /* teks tombol */
+}
+
+.t-code { font-size: var(--t-code); }
+.t-title { font-size: var(--t-title); }
+.t-pname { font-size: var(--t-pname); }
+.t-meta { font-size: var(--t-meta); }
+.t-btn { font-size: var(--t-btn); }
+
+/* Label kolom zona tidak diatur §5.2 dan sengaja TETAP kecil: ia hanya penanda
+   E/C di atas petak 16px — menaikkannya ke skala metadata akan melebarkan peta
+   dan memotong kartu, yang justru dilarang §9. */
+
+
+/* ── Isi panel detail area/zona (PLAN §4.4, §9 butir 8/11/16) ───────────────
+   Panel dibagi tiga: kepala tetap, daftar reservasi yang DIGULIR, dan footer
+   aksi yang tetap terlihat. Grid `auto auto 1fr auto` yang memaksa hanya baris
+   daftar yang boleh tumbuh — footer tidak pernah ikut ter-scroll. */
+/* Panel = kolom flex, BUKAN grid baris tetap. Grid 4 baris
+   (`auto auto minmax(0,1fr) auto`) mengasumsikan banner overlap SELALU ada,
+   padahal banner dirender kondisional — saat tidak ada overlap kontennya jadi
+   3 anak dan `.detail-foot` jatuh ke baris `minmax(0, 1fr)`, sehingga TOMBOL
+   ikut melar setinggi sisa panel (terukur 361px) dan daftar reservasi terhimpit
+   jadi 53px. Dengan flex, berapa pun anaknya yang tumbuh hanya `.detail-scroll`. */
+.detail-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.detail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.detail-close:hover { border-color: #cbd5e1; color: #0f172a; }
+
+.detail-overlap {
+  margin: 0;
+  border: 1px solid #fcd34d;
+  border-radius: 0.375rem;
+  background: #fffbeb;
+  padding: 0.25rem 0.5rem;
+  font-size: var(--t-meta);   /* §5.2 metadata */
+  font-weight: 700;
+  line-height: 1.3;
+  color: #92400e;
+}
+
+/* Satu-satunya wilayah gulir di dalam panel. */
+/* Hanya daftar yang boleh tumbuh. `flex: 1 1 auto` membuatnya mengisi sisa
+   tinggi panel, sementara kepala/banner/footer tetap setinggi isinya. */
+.detail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.detail-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #fff;
+  padding: 0.5rem;
+}
+
+/* Bar rentang: periode reservasi + penanda posisi hari ini (PLAN §5.4). */
+.detail-range {
+  position: relative;
+  margin-top: 0.375rem;
+  height: 6px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.detail-range-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #90e0ef;
+}
+
+.detail-range-now {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 10px;
+  border-radius: 1px;
+  background: #023e8a;
+}
+
+.detail-foot {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.detail-manage,
+.detail-dismiss {
+  min-height: 44px;
+  border-radius: 0.5rem;
+  font-size: var(--t-btn);   /* §5.2: teks tombol 15.5px (sebelumnya 13px) */
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.detail-manage {
+  flex: 1 1 auto;
+  border: 1px solid #0077b6;
+  background: #0077b6;
+  color: #fff;
+}
+
+.detail-manage:hover { background: #023e8a; border-color: #023e8a; }
+
+.detail-dismiss {
+  flex: 0 0 auto;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  padding: 0 0.875rem;
+  color: #475569;
+}
+
+.detail-dismiss:hover { border-color: #94a3b8; color: #0f172a; }
+
+/* ── Breakpoint (container) ───────────────────────────────────────────────
+   >1180 : dua kolom penuh — Blasting/Painting kiri, Lane A+B kanan; tab mati.
+           Tinggi kolom DIBATASI, tiap lane menggulir sendiri di dalamnya.
+   ≤1180 : tab lane otoritatif, hanya satu bagian lantai tampil penuh tinggi.
+           Kartu minimum 212px karena panel terdok mengambil 29%.
+   ≤900  : tetap bertab; panel detail menjadi bottom sheet.
+   ≤700  : satu kolom; kartu lebih ramping.                                */
+
+@container floor (min-width: 1181px) {
+  .floor-tabs { display: none; }
+
+  /* Desktop: Blasting/Painting kolom kiri penuh tinggi; Lane A dan Lane B
+     ditumpuk di kolom kanan. Penempatan EKSPLISIT wajib: dengan auto-placement,
+     Lane B jatuh ke baris kedua kolom PERTAMA dan bertumpuk dengan
+     Blasting/Painting (kolom kiri hanya 226px, terukur di probe). */
+  .floor-grid {
+    grid-template-columns: minmax(226px, 20%) minmax(0, 1fr);
+  }
+
+  /* Penempatan EKSPLISIT: Blasting/Painting kolom kiri penuh tinggi, dan
+     KEDUA lane berada di dalam satu wadah `.lane-stack` di kolom kanan.
+     Tanpa wadah ini, Lane B ter-auto-place ke baris kedua kolom PERTAMA dan
+     bertumpuk dengan Blasting/Painting (terukur di probe). */
+  .floor-grid > .floor-pane[data-pane='BP'] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .floor-grid > .lane-stack {
+    grid-column: 2;
+    grid-row: 1;
+    /* Desktop: kedua lane tampil bersamaan sebagai DUA BARIS SAMA TINGGI (§4.1).
+       `display: contents` default diganti grid di sini saja. */
+    display: grid;
+    min-height: 0;
+    gap: 0.75rem;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  /* Tinggi tiap lane mengikuti baris grid (`minmax(0, 1fr)`), jadi bukan tinggi
+     isi. `min-height: 0` wajib: tanpa itu lane menolak menyusut lebih pendek
+     dari isinya dan kolom jadi lebih tinggi dari kontainer. */
+  .lane-column { min-height: 0; }
+  .lane-pane { min-height: 0; }
+
+  /* Panel detail = OVERLAY berjangkar ke lantai (PLAN §4.4), BUKAN kolom grid.
+     Sebagai overlay lebar panel 29% dari frame, dan area kerja tetap 71%.
+
+     Panel TIDAK memakai scrim: peta okupansi wajib tetap terbaca saat panel
+     dibuka (syarat user, pelajaran bug `syncScrim()` di mockup). */
+  .floor-grid[data-detail='docked'] > .floor-detail-pane {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: 29%;
+    min-width: 300px;
+    max-width: 460px;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    background: #fff;
+    box-shadow: 0 10px 30px -12px rgb(15 23 42 / 0.28);
+  }
+
+  /* Isi yang digulir tidak boleh berakhir di BAWAH panel: ruang yang ditempati
+     panel diberikan sebagai padding pada kolom lane. `cqw`, bukan `%` —
+     persentase padding dihitung terhadap lebar KOLOM, bukan kontainer, sehingga
+     ruang cadangannya melenceng dan panel tidak pernah pas tertutup.
+
+     CATATAN: sasarannya `.lane-stack` (anak langsung `.floor-grid` di >1180),
+     BUKAN `.lane-column`. Sejak kedua lane dibungkus `.lane-stack`, selector
+     `> .lane-column` TIDAK LAGI cocok — padding jadi 0 dan kartu tertutup panel
+     (terukur: kartu berakhir 1265px sedangkan panel mulai 907px). Ditemukan
+     probe, bukan mata. */
+  .floor-grid[data-detail='docked'] > .lane-stack {
+    padding-right: calc(29cqw + 0.75rem);
+  }
+}
+
+@container floor (max-width: 1180px) {
+  .floor-tabs { display: flex; }
+
+  /* Tab HARUS benar-benar menyembunyikan bagian lantai lain. Versi lama hanya
+     mengubah gaya tombol sehingga tab tidak berefek pada tablet. */
+  .floor-pane { display: none; }
+  .lane-pane { display: none; }
+  .lane-column { display: none; }
+
+  .floor-frame[data-lane='BP'] .floor-pane[data-pane='BP'] { display: flex; }
+  .floor-frame[data-lane='A'] .floor-pane[data-pane='lanes'],
+  .floor-frame[data-lane='B'] .floor-pane[data-pane='lanes'] { display: flex; }
+  .floor-frame[data-lane='A'] .lane-column[data-lane='A'],
+  .floor-frame[data-lane='B'] .lane-column[data-lane='B'] { display: flex; }
+  .floor-frame[data-lane='A'] .lane-pane[data-lane='A'],
+  .floor-frame[data-lane='B'] .lane-pane[data-lane='B'] { display: flex; }
+
+  .lane-grid { grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); }
+
+  /* Satu bagian lantai tampil PENUH TINGGI: lane mengisi seluruh kolom dan
+     menggulir di dalamnya. Sebelumnya lane hanya mengisi setengah tinggi lantai
+     (§7.2 butir 2). */
+  .lane-column { min-height: 0; }
+  .lane-pane { min-height: 0; }
+
+  /* Panel detail terdok: 71% area kerja : 29% detail zona. */
+  .floor-grid[data-detail='docked'] {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 29%);
+  }
+
+  /* Panel detail kembali ke aliran normal sebagai kolom kedua. Tanpa reset ini
+     panel masih membawa posisi overlay dari >1180 dan menutupi lantai. */
+  .floor-grid[data-detail='docked'] > .floor-detail-pane {
+    position: static;
+    width: auto;
+    box-shadow: none;
+    border-radius: 0;
+    z-index: auto;
+  }
+}
+
+@container floor (max-width: 900px) {
+  /* Panel detail berhenti terdok dan menjadi bottom sheet (PLAN §4.4): grid
+     kembali satu kolom supaya peta tetap selebar kontainer, panel muncul di
+     bawah. TIDAK boleh dibiarkan 29% di sini — pada 900px kolom lantai tinggal
+     ~640px dan kartu jadi terpotong. */
+  /* Baris kedua TIDAK boleh `auto`: panel detail berisi (kepala + daftar
+     reservasi + footer) tumbuh setinggi isinya dan menghimpit peta — terukur
+     panel 83.6% tinggi kontainer, lane sisa 14%. Batas 82% dipasang di BARIS
+     grid supaya relatif terhadap kontainer lantai, bukan viewport, dan lane
+     dijamin kebagian minimal 18%. */
+  .floor-grid[data-detail='docked'] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(18%, 1fr) minmax(0, 82%);
+  }
+
+  .floor-grid[data-detail='docked'] > .lane-column {
+    padding-right: 0;
+  }
+
+  /* `.lane-stack` di ≤1180 sudah `display: contents` dari aturan dasarnya
+     (dipasang di >1180 saja), jadi tidak perlu diulang di sini. */
+
+  /* Bottom sheet = 100% lebar. Batas tinggi 82% sudah dipasang di BARIS grid
+     di atas (relatif kontainer). `82vh` dihapus: itu mengukur VIEWPORT, bukan
+     kontainer lantai, jadi meleset saat lantai bukan setinggi layar. */
+  .floor-detail-pane {
+    min-height: 0;
+    border-top: 1px solid #e2e8f0;
+    background: #fff;
+    border-radius: 0.75rem 0.75rem 0 0;
+    /* BUKAN `overflow-y: auto`: menggulirkan pane ikut menggulirkan footer aksi
+       keluar layar, padahal PLAN §9 butir 11 mewajibkan footer tetap terlihat.
+       Yang menggulir adalah `.detail-scroll` di dalam panel. */
+    overflow: hidden;
+  }
+}
+
+@container floor (max-width: 700px) {
+  .lane-grid { grid-template-columns: minmax(0, 1fr); }
+  .floor-tabs button { flex: 1 1 auto; padding: 0 0.5rem; }   /* ukuran teks ikut --t-btn */
+}

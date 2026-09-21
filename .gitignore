@@ -7,6 +7,9 @@
 *.pyc
 *.pyo
 *.pyd
+reports
+mpp
+docs
 __pycache__/
 venv/
 ENV/

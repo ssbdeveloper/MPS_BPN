@@ -70,6 +70,14 @@ Angka = error deslop pada 2026-09-05.
   keputusannya di manusia. Rekomendasi: hapus.
 - **`assets/travelcard.html` vs `templates/travel-card.html`** — dua file HTML travel card.
   Perlu dicek apakah salah satunya mati.
+- **Tombol Back `PageHeader` = 30px**, di bawah minimum 44px (C8). Ditemukan saat pilot dashboard
+  F2 lewat pengukuran browser di 768×1024 dan 960×600. Komponen dipakai 13 halaman, jadi
+  memperbaikinya adalah pekerjaan tersendiri, bukan sisipan di pilot satu halaman.
+- **`components/dashboard/KpiCard.jsx` tidak lagi dipakai** sejak DashboardPage memakai
+  `ConditionReadout` (pilot F2). Menghapus file ada di STOP list. Rekomendasi: hapus setelah
+  archetype command center diterima.
+- **4 error deslop warisan di chart dashboard** — `ValidationRateChart.jsx` (3), `WorkloadChart.jsx`
+  (1), pada baris yang tidak disentuh pilot F2. Gate `--staged` lulus; dicatat agar tidak hilang.
 
 ## Cara membayar
 
