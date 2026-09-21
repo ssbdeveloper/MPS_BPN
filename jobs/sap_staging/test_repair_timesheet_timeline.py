@@ -106,6 +106,92 @@ def test_frozen_and_pending_guards_fail_closed():
     assert excluded_pending.blocked_reason is None
 
 
+def test_extend_horizon_allows_push_into_free_gap():
+    # Tanpa horizon: 2 didorong melewati akhir component -> NO_SPACE.
+    rows = [
+        row(1, "2026-09-17T08:00:00", "2026-09-17T09:00:00", old_start="2026-09-17T07:00:00", old_end="2026-09-17T08:00:00"),
+        row(2, "2026-09-17T08:00:00", "2026-09-17T08:30:00"),
+    ]
+    assert build_component_plans(rows)[0].blocked_reason == "NO_SPACE"
+
+    plan = build_component_plans(rows, extend_horizon=True)[0]
+    assert plan.blocked_reason is None
+    actual = {
+        item.source.tsnumber: (
+            item.new_start.astimezone(TZ).strftime("%H:%M"),
+            item.new_end.astimezone(TZ).strftime("%H:%M"),
+        )
+        for item in plan.rows
+    }
+    assert actual == {1: ("08:00", "09:00"), 2: ("09:00", "09:30")}
+
+
+def test_extend_horizon_blocks_when_next_record_leaves_no_room():
+    rows = [
+        row(1, "2026-09-17T08:00:00", "2026-09-17T09:00:00", old_start="2026-09-17T07:00:00", old_end="2026-09-17T08:00:00"),
+        row(2, "2026-09-17T08:00:00", "2026-09-17T08:30:00"),
+        # record berikutnya mulai 09:10 -> segmen 30 menit tidak muat
+        row(3, "2026-09-17T09:10:00", "2026-09-17T10:00:00"),
+    ]
+    plans = build_component_plans(rows, extend_horizon=True)
+    blocked = [p for p in plans if p.blocked_reason]
+    assert blocked and all(p.blocked_reason == "NO_SPACE" for p in blocked)
+
+
+def test_extend_horizon_never_collides_with_outside_record():
+    rows = [
+        row(1, "2026-09-17T08:00:00", "2026-09-17T09:00:00", old_start="2026-09-17T07:00:00", old_end="2026-09-17T08:00:00"),
+        row(2, "2026-09-17T08:00:00", "2026-09-17T08:30:00"),
+        row(3, "2026-09-17T09:15:00", "2026-09-17T10:00:00"),
+    ]
+    for plan in build_component_plans(rows, extend_horizon=True):
+        if plan.blocked_reason:
+            continue
+        member_ids = {m.tsnumber for m in plan.members}
+        outsiders = [r for r in rows if r.tsnumber not in member_ids]
+        for planned in plan.rows:
+            for other in outsiders:
+                assert not (planned.new_start < other.base_end and other.base_start < planned.new_end)
+
+
+def test_horizon_prefers_push_over_destructive_trim():
+    # Row 2 kehilangan 55 menit bila di-TRIM; horizon harus menggesernya utuh.
+    rows = [
+        row(1, "2026-09-17T08:00:00", "2026-09-17T09:00:00", old_start="2026-09-17T07:00:00", old_end="2026-09-17T08:00:00"),
+        row(2, "2026-09-17T08:05:00", "2026-09-17T09:05:00"),
+    ]
+    plan = build_component_plans(rows, extend_horizon=True)[0]
+    assert plan.blocked_reason is None
+    by_id = {item.source.tsnumber: item for item in plan.rows}
+    assert by_id[2].mode == "PUSH"
+    assert (by_id[2].new_end - by_id[2].new_start).total_seconds() == 3600
+
+
+def test_horizon_still_trims_tiny_overlap():
+    rows = [
+        row(1, "2026-09-17T08:00:00", "2026-09-17T09:00:00", old_start="2026-09-17T07:00:00", old_end="2026-09-17T08:00:00"),
+        row(2, "2026-09-17T08:59:00", "2026-09-17T10:00:00"),
+    ]
+    plan = build_component_plans(rows, extend_horizon=True)[0]
+    by_id = {item.source.tsnumber: item for item in plan.rows}
+    assert by_id[2].mode == "TRIM"
+    assert by_id[2].new_start.astimezone(TZ).strftime("%H:%M") == "09:00"
+
+
+def test_context_row_outside_window_blocks_push():
+    inside = row(1, "2026-09-17T23:00:00", "2026-09-18T00:00:00", old_start="2026-09-17T22:00:00", old_end="2026-09-17T23:00:00")
+    inside2 = row(2, "2026-09-17T23:10:00", "2026-09-17T23:40:00")
+    outside = row(3, "2026-09-18T00:05:00", "2026-09-18T00:40:00")
+    outside = TimelineRow(**{**outside.__dict__, "in_scope": False})
+    plans = build_component_plans([inside, inside2, outside], extend_horizon=True)
+    for plan in plans:
+        assert all(m.tsnumber != 3 for m in plan.members), "context row tidak boleh direpair"
+        if plan.blocked_reason:
+            continue
+        for planned in plan.rows:
+            assert not (planned.new_start < outside.base_end and outside.base_start < planned.new_end)
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
     for test in tests:

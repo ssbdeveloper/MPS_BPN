@@ -35,6 +35,9 @@ DEFAULT_FROM = date(2026, 8, 31)
 DEFAULT_THROUGH = date(2026, 9, 17)
 FROZEN_STATUSES = {"POSTING", "POSTED", "FAILED", "SKIPPED"}
 BUSINESS_DAY_CUTOFF_HOURS = 7
+# Batas kehilangan durasi yang boleh diselesaikan dengan TRIM pada mode horizon.
+# Di atas ini record digeser penuh agar jam kerja operator tidak hilang.
+MAX_TRIM_LOSS = timedelta(minutes=2)
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,7 @@ class TimelineRow:
     base_start: datetime
     base_end: datetime
     business_date: date
+    in_scope: bool = True
 
     @property
     def operator_key(self) -> str:
@@ -127,10 +131,30 @@ def _component_key(operator_key: str, business_date: date, sequence: int) -> str
     return f"{operator_key}|{business_date.isoformat()}|{sequence:04d}"
 
 
-def build_component_plans(rows: list[TimelineRow]) -> list[ComponentPlan]:
+def build_component_plans(
+    rows: list[TimelineRow], extend_horizon: bool = False
+) -> list[ComponentPlan]:
+    # Row konteks (in_scope=False) hanya dipakai sebagai penghalang: tidak pernah
+    # direpair, tetapi harus membatasi horizon dan memblokir bentrokan.
+    context_rows = [row for row in rows if not row.in_scope]
+    rows = [row for row in rows if row.in_scope]
+
     grouped: dict[tuple[str, date], list[TimelineRow]] = {}
     for row in rows:
         grouped.setdefault((row.operator_key, row.business_date), []).append(row)
+
+    # Horizon packing memakai seluruh interval milik operator (lintas business
+    # date) supaya batas dorongan adalah record nyata berikutnya, bukan akhir
+    # component. Tanpa ini sebuah component yang seluruh isinya mundur 1 jam
+    # selalu ditolak NO_SPACE walau di lapangan masih ada ruang kosong.
+    operator_starts: dict[str, list[tuple[datetime, int]]] = {}
+    if extend_horizon:
+        for row in rows + context_rows:
+            operator_starts.setdefault(row.operator_key, []).append(
+                (min(row.base_start, row.old_start), row.tsnumber)
+            )
+        for values in operator_starts.values():
+            values.sort()
 
     plans: list[ComponentPlan] = []
     for (operator_key, business_day), group in sorted(grouped.items()):
@@ -165,6 +189,26 @@ def build_component_plans(rows: list[TimelineRow]) -> list[ComponentPlan]:
                 members=members,
             )
             component_end = max(row.base_end for row in members)
+            if extend_horizon:
+                member_ids = {row.tsnumber for row in members}
+                nexts = [
+                    start
+                    for start, ts in operator_starts.get(operator_key, [])
+                    if ts not in member_ids and start >= component_end
+                ]
+                # Batas atas: awal record berikutnya milik operator yang sama.
+                # Bila tidak ada, pakai akhir business day (cutoff 07:00 besok).
+                if nexts:
+                    component_end = min(nexts)
+                else:
+                    component_end = max(
+                        component_end,
+                        datetime.combine(
+                            business_day + timedelta(days=1),
+                            time(hour=BUSINESS_DAY_CUTOFF_HOURS),
+                            tzinfo=members[0].base_start.tzinfo,
+                        ),
+                    )
             cursor: datetime | None = None
             packing_order = sorted(
                 members,
@@ -180,8 +224,22 @@ def build_component_plans(rows: list[TimelineRow]) -> list[ComponentPlan]:
                     break
                 if cursor is not None and new_start < cursor:
                     if new_end > cursor:
-                        new_start = cursor
-                        mode = "TRIM"
+                        # Horizon mode mempertahankan durasi kerja: potongan yang
+                        # menghilangkan lebih dari MAX_TRIM_LOSS digeser penuh,
+                        # bukan dipangkas (60 menit kerja pernah menjadi 1,5 menit).
+                        loss = cursor - new_start
+                        if extend_horizon and loss > MAX_TRIM_LOSS:
+                            interval = new_end - new_start
+                            new_start = cursor
+                            new_end = cursor + interval
+                            mode = "PUSH"
+                            if new_end > component_end:
+                                plan.blocked_reason = "NO_SPACE"
+                                plan.blocked_detail = f"tidak muat tsnumber={row.tsnumber}"
+                                break
+                        else:
+                            new_start = cursor
+                            mode = "TRIM"
                     else:
                         interval = new_end - new_start
                         new_start = cursor
@@ -212,15 +270,54 @@ def build_component_plans(rows: list[TimelineRow]) -> list[ComponentPlan]:
                 plan.blocked_reason = "NO_SPACE"
                 plan.blocked_detail = "packing masih menghasilkan overlap"
             plans.append(plan)
+
+    if extend_horizon:
+        _block_cross_component_overlap(plans, rows + context_rows)
     return plans
 
 
-def load_rows(cur, start: date, through: date, tz: ZoneInfo) -> tuple[list[TimelineRow], list[dict]]:
+def _block_cross_component_overlap(plans: list[ComponentPlan], rows: list[TimelineRow]) -> None:
+    """Fail-closed: hasil packing tidak boleh menabrak record lain milik operator
+    yang sama di luar component (termasuk record yang tidak ikut direpair)."""
+
+    by_operator: dict[str, list[TimelineRow]] = {}
+    for row in rows:
+        by_operator.setdefault(row.operator_key, []).append(row)
+
+    for plan in plans:
+        if plan.blocked_reason:
+            continue
+        member_ids = {row.tsnumber for row in plan.members}
+        outsiders = [row for row in by_operator.get(plan.operator_key, []) if row.tsnumber not in member_ids]
+        for planned in plan.rows:
+            for other in outsiders:
+                # Konservatif: bandingkan terhadap gabungan interval lama DAN
+                # hasil rekonstruksi, karena row luar bisa ikut berubah pada
+                # component lain atau tetap memakai nilai lamanya.
+                other_start = min(other.base_start, other.old_start)
+                other_end = max(other.base_end, other.old_end)
+                if planned.new_start < other_end and other_start < planned.new_end:
+                    plan.blocked_reason = "NO_SPACE"
+                    plan.blocked_detail = (
+                        f"bentrok dengan tsnumber={other.tsnumber} di luar component"
+                    )
+                    break
+            if plan.blocked_reason:
+                break
+
+
+def load_rows(
+    cur, start: date, through: date, tz: ZoneInfo, context_days: int = 0
+) -> tuple[list[TimelineRow], list[dict]]:
     # CLI dates scope the canonical local check-in date. This is deliberate: it
     # matches the audited 18,730-row population and never pulls Sep-18 rows into
     # a Sep-17 repair merely because the business-day cutoff is 07:00.
     local_start = datetime.combine(start, time.min, tzinfo=tz)
     local_end = datetime.combine(through + timedelta(days=1), time.min, tzinfo=tz)
+    # Row tetangga di luar window ikut dibaca sebagai KONTEKS read-only. Tanpa ini
+    # record 18 September tidak terlihat dan dorongan bisa menabraknya.
+    context_start = local_start - timedelta(days=context_days)
+    context_end = local_end + timedelta(days=context_days)
     cur.execute(
         """
         SELECT tsnumber, serialnumber, full_name,
@@ -235,12 +332,13 @@ def load_rows(cur, start: date, through: date, tz: ZoneInfo) -> tuple[list[Timel
           AND longdate_checkin < %s
         ORDER BY tsnumber
         """,
-        (local_start, local_end),
+        (context_start, context_end),
     )
     result: list[TimelineRow] = []
     invalid: list[dict] = []
     for raw in cur.fetchall():
         item = dict(raw)
+        in_scope = local_start <= item["longdate_checkin"] < local_end
         try:
             base_start = reconstruct_endpoint(
                 item["longdate_checkin"], item["date_checkin"], item["hour_checkin"], tz
@@ -249,8 +347,12 @@ def load_rows(cur, start: date, through: date, tz: ZoneInfo) -> tuple[list[Timel
                 item["longdate_checkout"], item["date_checkout"], item["hour_checkout"], tz
             )
         except (TypeError, ValueError) as exc:
-            invalid.append({"tsnumber": item["tsnumber"], "reason": str(exc)})
-            continue
+            if in_scope:
+                invalid.append({"tsnumber": item["tsnumber"], "reason": str(exc)})
+                continue
+            # Konteks dengan clock rusak tetap dipakai apa adanya sebagai penghalang.
+            base_start = item["longdate_checkin"]
+            base_end = item["longdate_checkout"]
         business_day = business_date_for(base_start, tz)
         result.append(
             TimelineRow(
@@ -269,6 +371,7 @@ def load_rows(cur, start: date, through: date, tz: ZoneInfo) -> tuple[list[Timel
                 base_start=base_start,
                 base_end=base_end,
                 business_date=business_day,
+                in_scope=in_scope,
             )
         )
     return result, invalid
@@ -481,6 +584,7 @@ def apply_repairs(
     if not changes:
         raise RuntimeError("tidak ada row aman yang perlu diperbarui")
     _assert_locked_snapshot(cur, list(members.values()))
+    overlap_baseline = _operator_overlap_pairs(cur, allowed)
     fresh_exposures = load_exposures(cur, sorted(changes), plant)
     _verify_exposures(allowed, fresh_exposures)
 
@@ -586,7 +690,56 @@ def apply_repairs(
                 raise RuntimeError(f"blocked row berubah: {source.tsnumber}")
 
     _verify_exposures(allowed, load_exposures(cur, sorted(changes), plant))
+    _assert_no_operator_overlap(cur, allowed, overlap_baseline)
     return f"public.{backup_table}", len(updated_ids)
+
+
+def _assert_no_operator_overlap(cur, allowed: list[ComponentPlan], baseline: set[tuple[int, int]]) -> None:
+    """Verifikasi berbasis database: UPDATE tidak boleh MENAMBAH pasangan overlap
+    milik operator yang sama. Overlap lama yang di luar scope tidak diblokir,
+    tetapi juga tidak boleh bertambah satu pun."""
+
+    after = _operator_overlap_pairs(cur, allowed)
+    introduced = sorted(after - baseline)
+    if introduced:
+        sample = ", ".join(f"{a}<->{b}" for a, b in introduced[:5])
+        raise RuntimeError(f"update menimbulkan overlap baru ({len(introduced)}): {sample}")
+
+
+def _operator_overlap_pairs(cur, allowed: list[ComponentPlan]) -> set[tuple[int, int]]:
+    """Pasangan record aktif milik operator yang sama yang saling overlap."""
+
+    serials = sorted(
+        {plan.operator_key.split(":", 1)[1] for plan in allowed if plan.operator_key.startswith("SERIAL:")}
+    )
+    if not serials:
+        return set()
+    cur.execute(
+        """
+        WITH scope AS (
+            SELECT tsnumber, serialnumber, longdate_checkin AS s, longdate_checkout AS e
+            FROM public.timesheet_transaction
+            WHERE COALESCE(state_flag, 0) <> 5
+              AND serialnumber = ANY(%s::text[])
+              AND longdate_checkin IS NOT NULL
+              AND longdate_checkout IS NOT NULL
+              AND longdate_checkin >= %s::timestamptz - interval '2 days'
+              AND longdate_checkin <  %s::timestamptz + interval '2 days'
+        )
+        SELECT a.tsnumber AS a_ts, b.tsnumber AS b_ts
+        FROM scope a
+        JOIN scope b
+          ON b.serialnumber = a.serialnumber
+         AND b.tsnumber > a.tsnumber
+         AND a.s < b.e AND b.s < a.e
+        """,
+        (
+            serials,
+            min(plan.business_date for plan in allowed),
+            max(plan.business_date for plan in allowed),
+        ),
+    )
+    return {(int(row["a_ts"]), int(row["b_ts"])) for row in cur.fetchall()}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -596,6 +749,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--apply", action="store_true", help="terapkan perubahan dalam satu transaksi")
     parser.add_argument("--yes", action="store_true", help="konfirmasi non-interaktif untuk --apply")
     parser.add_argument("--report-dir", type=Path)
+    parser.add_argument(
+        "--extend-horizon",
+        action="store_true",
+        help="izinkan dorongan sampai awal record berikutnya milik operator yang sama",
+    )
     return parser.parse_args(argv)
 
 
@@ -620,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
         "through": through.isoformat(),
         "status": "PLANNED",
         "backup_table": None,
+        "extend_horizon": bool(args.extend_horizon),
     }
     conn = connect_source()
     conn.set_session(isolation_level="REPEATABLE READ", autocommit=False)
@@ -627,9 +786,12 @@ def main(argv: list[str] | None = None) -> int:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             tz_name = assert_runtime_context(cur, app_timezone(), plant_code())
             tz = ZoneInfo(tz_name)
-            rows, invalid = load_rows(cur, start, through, tz)
-            metadata["source_rows_examined"] = len(rows)
-            plans = build_component_plans(rows)
+            rows, invalid = load_rows(
+                cur, start, through, tz, context_days=2 if args.extend_horizon else 0
+            )
+            metadata["source_rows_examined"] = sum(1 for row in rows if row.in_scope)
+            metadata["context_rows"] = sum(1 for row in rows if not row.in_scope)
+            plans = build_component_plans(rows, extend_horizon=args.extend_horizon)
             changed_ids = sorted({row.source.tsnumber for plan in plans for row in plan.changed_rows})
             exposures = load_exposures(cur, changed_ids, plant_code())
             apply_exposure_guards(plans, exposures)
