@@ -69,7 +69,9 @@ updated: 2026-07-28
 
 - **[[timesheet/CONFIRMATION_NUMBER_PLAN]] — checkout atomik lokal 2026-09-21:** backfill
   historis sudah tercatat; writer `checkout`/`checkoutid` kini mengisi confirmation dan split
-  OV–RG–OV dalam satu transaksi, tetapi belum deploy. Implementasi permanen belum selesai:
+  OV–RG–OV dalam satu transaksi, dan overlap antar-job mode multiple tidak lagi memblokir
+  Stop. Pembulatan duration family kini konservatif; 248 row historis aman sudah diperbaiki,
+  sedangkan 6 family PENDING dan 1 component ambigu ditahan. Kode belum deploy. Implementasi permanen belum selesai:
   admin edit, parser suffix seluruh jalur SAP, family cap/lineage, freeze, dan repair historis.
   Hardening script manual selesai: guard timezone/plant, clock/overlap/multi-boundary
   fail-closed, recheck exposure, konservasi detik, manifest, dan `--through-today`.
@@ -78,7 +80,9 @@ updated: 2026-07-28
   [[planning/timesheet-confirmation-backfill-hardening]] · [[planning/timesheet-checkout-confirmation]] ·
   [[log/2026-09-21-confirmation-overtime-review]] ·
   [[log/2026-09-21-timesheet-confirmation-backfill-hardening]] ·
-  [[log/2026-09-21-timesheet-checkout-confirmation]].
+  [[log/2026-09-21-timesheet-checkout-confirmation]] ·
+  [[log/2026-09-21-timesheet-multiple-checkout]] ·
+  [[log/2026-09-21-timesheet-split-duration-repair]].
 
 - 🎨 **[[planning/mps-dashboard-command-center]] — pilot F2 sistem visual, KODE SELESAI (uncommitted)**
   ([[log/2026-09-19-mps-dashboard-visual-pilot]], 2026-09-19). `DashboardPage` berubah dari

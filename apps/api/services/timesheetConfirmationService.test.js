@@ -43,7 +43,9 @@ const makeHarness = ({ plan, lockedRows = [sourceRow] }) => {
           && normalized.startsWith("UPDATE")) {
         return { rows: lockedRows.map((row) => ({ ...row })) };
       }
-      if (sql === CLASSIFICATION_SQL) return { rows: [plan] };
+      if (sql === CLASSIFICATION_SQL) {
+        return { rows: [typeof plan === "function" ? plan(params[0]) : plan] };
+      }
       if (normalized.startsWith("UPDATE public.timesheet_transaction")) {
         return {
           rows: [{
@@ -74,6 +76,7 @@ const makeHarness = ({ plan, lockedRows = [sourceRow] }) => {
             gap_count: 0,
             invalid_count: 0,
             bad_confirmation: 0,
+            stored_duration_mismatch: false,
             bad_clock: 0,
           }],
         };
@@ -107,13 +110,78 @@ test("productive detection preserves legacy unproductive rows", () => {
   assert.equal(isProductiveRow({ order_no: "100", operation_no: 10 }), true);
 });
 
-test("classifier SQL supports OV-RG-OV and all fail-closed guards", () => {
+test("classifier SQL supports OV-RG-OV without rejecting multiple jobs", () => {
   assert.match(CLASSIFICATION_SQL, /SELECT 1, 'OV'/);
   assert.match(CLASSIFICATION_SQL, /SELECT\s+2,\s+'RG'/);
   assert.match(CLASSIFICATION_SQL, /SELECT 3, 'OV'/);
   assert.match(CLASSIFICATION_SQL, /PH3_AMBIGUOUS/);
   assert.match(CLASSIFICATION_SQL, /ROSTER_AMBIGUOUS/);
-  assert.match(CLASSIFICATION_SQL, /OPERATOR_OVERLAP/);
+  assert.match(CLASSIFICATION_SQL, /exact_hundredths/);
+  assert.match(CLASSIFICATION_SQL, /units_to_add/);
+  assert.doesNotMatch(CLASSIFICATION_SQL, /OPERATOR_OVERLAP|has_operator_overlap/);
+});
+
+test("serial checkout keeps overlapping jobs independent while one job splits", async () => {
+  const checkoutAt = sourceRow.longdate_checkout;
+  const lockedRows = [
+    { ...sourceRow, tsnumber: 10, longdate_checkout: checkoutAt },
+    {
+      ...sourceRow,
+      tsnumber: 11,
+      order_no: "100002",
+      longdate_checkin: "2026-09-21T02:00:00.000Z",
+      longdate_checkout: checkoutAt,
+    },
+  ];
+  const harness = makeHarness({
+    lockedRows,
+    plan: (tsnumber) => {
+      const start = lockedRows.find((row) => row.tsnumber === tsnumber).longdate_checkin;
+      return {
+        tsnumber,
+        confirmation_base: tsnumber === 10 ? "700001" : "700002",
+        block_reason: null,
+        segments: tsnumber === 10
+          ? [
+              {
+                suffix: "RG",
+                start,
+                end: "2026-09-21T10:00:00.000Z",
+                duration: "10.00",
+              },
+              {
+                suffix: "OV",
+                start: "2026-09-21T10:00:00.000Z",
+                end: checkoutAt,
+                duration: "1.00",
+              },
+            ]
+          : [{ suffix: "RG", start, end: checkoutAt, duration: "9.00" }],
+      };
+    },
+  });
+  const service = createTimesheetConfirmationService({
+    pool: harness.pool,
+    timezone: "Asia/Jakarta",
+    plant: "5100",
+  });
+
+  const rows = await service.checkoutBySerial("EMP-1");
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    harness.calls
+      .filter(({ sql }) => sql === CLASSIFICATION_SQL)
+      .map(({ params }) => params[0]),
+    [10, 11],
+  );
+  assert.equal(
+    harness.calls.filter(({ sql }) => String(sql).replace(/\s+/g, " ").trim()
+      .startsWith("INSERT INTO public.timesheet_transaction")).length,
+    1,
+  );
+  assert.equal(harness.calls.filter(({ sql }) => sql === "COMMIT").length, 1);
+  assert.equal(harness.calls.filter(({ sql }) => sql === "ROLLBACK").length, 0);
 });
 
 test("checkout writes three exact segments and commits once", async () => {
@@ -122,9 +190,24 @@ test("checkout writes three exact segments and commits once", async () => {
     confirmation_base: "700001",
     block_reason: null,
     segments: [
-      { suffix: "OV", start: sourceRow.longdate_checkin, end: "2026-09-21T01:00:00.000Z" },
-      { suffix: "RG", start: "2026-09-21T01:00:00.000Z", end: "2026-09-21T10:00:00.000Z" },
-      { suffix: "OV", start: "2026-09-21T10:00:00.000Z", end: sourceRow.longdate_checkout },
+      {
+        suffix: "OV",
+        start: sourceRow.longdate_checkin,
+        end: "2026-09-21T01:00:00.000Z",
+        duration: "1.00",
+      },
+      {
+        suffix: "RG",
+        start: "2026-09-21T01:00:00.000Z",
+        end: "2026-09-21T10:00:00.000Z",
+        duration: "9.00",
+      },
+      {
+        suffix: "OV",
+        start: "2026-09-21T10:00:00.000Z",
+        end: sourceRow.longdate_checkout,
+        duration: "1.00",
+      },
     ],
   };
   const harness = makeHarness({ plan });
@@ -142,8 +225,14 @@ test("checkout writes three exact segments and commits once", async () => {
     String(sql).replace(/\s+/g, " ").trim()
       .match(/^(UPDATE|INSERT INTO) public\.timesheet_transaction/));
   assert.deepEqual(
-    writes.slice(-3).map(({ params }) => params[params.length === 4 ? 2 : 3]),
+    writes.slice(-3).map(({ sql, params }) =>
+      String(sql).trimStart().startsWith("UPDATE") ? params[2] : params[3]),
     ["700001OV", "700001RG", "700001OV"],
+  );
+  assert.deepEqual(
+    writes.slice(-3).map(({ sql, params }) =>
+      String(sql).trimStart().startsWith("UPDATE") ? params[4] : params[5]),
+    ["1.00", "9.00", "1.00"],
   );
   assert.equal(harness.calls.filter(({ sql }) => sql === "COMMIT").length, 1);
   assert.equal(harness.calls.filter(({ sql }) => sql === "ROLLBACK").length, 0);

@@ -152,17 +152,6 @@ facts AS (
     w.shift_end_local,
     w.shift_start_ts,
     w.shift_end_ts,
-    EXISTS (
-      SELECT 1
-      FROM public.timesheet_transaction other
-      WHERE other.tsnumber <> s.tsnumber
-        AND other.serialnumber = s.serialnumber
-        AND COALESCE(other.state_flag, 0) <> 5
-        AND other.longdate_checkin IS NOT NULL
-        AND other.longdate_checkout IS NOT NULL
-        AND other.longdate_checkin < s.longdate_checkout
-        AND s.longdate_checkin < other.longdate_checkout
-    ) AS has_operator_overlap,
     COALESCE(NULLIF(LTRIM(BTRIM(s.order_no), '0'), ''), '0') LIKE '32%' AS is_rework
   FROM source s
   CROSS JOIN ph3_summary p
@@ -183,7 +172,6 @@ decision AS (
       WHEN NULLIF(BTRIM(f.confirmationnumber), '') IS NOT NULL
         THEN 'CONFIRMATION_PRESENT'
       WHEN COALESCE(BTRIM(f.plant::text), '') <> $4 THEN 'PLANT_ROW_MISMATCH'
-      WHEN f.has_operator_overlap THEN 'OPERATOR_OVERLAP'
       WHEN f.confirmation_count = 0 THEN 'PH3_MISSING'
       WHEN f.confirmation_count > 1 THEN 'PH3_AMBIGUOUS'
       WHEN f.confirmation_base !~ '^[0-9]+$' THEN 'PH3_INVALID'
@@ -241,6 +229,29 @@ segment_rows AS (
     AND d.roster_status <> ALL($3::text[])
     AND d.intersecting_count = 1
     AND d.longdate_checkout > d.shift_end_ts
+),
+segment_math AS (
+  SELECT
+    sr.*,
+    EXTRACT(EPOCH FROM (sr.segment_end - sr.segment_start)) / 36.0
+      AS exact_hundredths,
+    FLOOR(EXTRACT(EPOCH FROM (sr.segment_end - sr.segment_start)) / 36.0)::int
+      AS floor_hundredths
+  FROM segment_rows sr
+  WHERE sr.segment_end > sr.segment_start
+),
+segment_ranked AS (
+  SELECT
+    sm.*,
+    ROW_NUMBER() OVER (
+      ORDER BY
+        sm.exact_hundredths - sm.floor_hundredths DESC,
+        sm.segment_start,
+        sm.segment_order
+    ) AS allocation_rank,
+    ROUND(SUM(sm.exact_hundredths) OVER ())::int
+      - SUM(sm.floor_hundredths) OVER ()::int AS units_to_add
+  FROM segment_math sm
 )
 SELECT
   d.tsnumber,
@@ -256,12 +267,15 @@ SELECT
         jsonb_build_object(
           'suffix', sr.suffix,
           'start', sr.segment_start,
-          'end', sr.segment_end
+          'end', sr.segment_end,
+          'duration',
+            (sr.floor_hundredths
+              + CASE WHEN sr.allocation_rank <= sr.units_to_add THEN 1 ELSE 0 END
+            )::numeric / 100
         )
         ORDER BY sr.segment_start, sr.segment_order
       )
-      FROM segment_rows sr
-      WHERE sr.segment_end > sr.segment_start
+      FROM segment_ranked sr
     ),
     '[]'::jsonb
   ) AS segments
@@ -275,7 +289,7 @@ SET longdate_checkout = $2::timestamptz,
     hour_checkin = to_char(longdate_checkin AT TIME ZONE $4, 'HH24:MI'),
     date_checkout = to_char($2::timestamptz AT TIME ZONE $4, 'DD/MM/YYYY'),
     hour_checkout = to_char($2::timestamptz AT TIME ZONE $4, 'HH24:MI'),
-    duration = ROUND(EXTRACT(EPOCH FROM ($2::timestamptz - longdate_checkin)) / 3600.0, 2),
+    duration = $5::numeric,
     confirmationnumber = $3,
     modified_at = now()
 WHERE tsnumber = $1
@@ -302,7 +316,7 @@ SELECT
   $2::timestamptz, $3::timestamptz, t.note, t.part_name, t.planhours, t.plant,
   t.serialnumber, t.state_flag, t.std_foreman_hours, NULL,
   t.workcentercode, t.workcenterdescription,
-  ROUND(EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz)) / 3600.0, 2),
+  $6::numeric,
   t.operation_no, t.order_no, now(), t.ms_area_code, t.ms_bay_codes,
   t.ms_task_id, t.ms_project_id, t.ms_bay_schedule_id
 FROM public.timesheet_transaction t
@@ -411,6 +425,7 @@ const writeSegments = async (client, sourceRow, plan, timezone) => {
     first.end,
     `${base}${first.suffix}`,
     timezone,
+    first.duration,
   ]);
   const family = [firstResult.rows[0]];
   for (const segment of rest) {
@@ -420,6 +435,7 @@ const writeSegments = async (client, sourceRow, plan, timezone) => {
       segment.end,
       `${base}${segment.suffix}`,
       timezone,
+      segment.duration,
     ]);
     family.push(clone.rows[0]);
   }
@@ -450,6 +466,9 @@ const verifyFamily = async (client, sourceRow, family, timezone) => {
        COUNT(*) FILTER (WHERE longdate_checkout <= longdate_checkin)::int AS invalid_count,
        COUNT(*) FILTER (WHERE confirmationnumber !~ '^[0-9]+(RG|OV|RW)$')::int
          AS bad_confirmation,
+       SUM(duration) IS DISTINCT FROM
+         ROUND(EXTRACT(EPOCH FROM ($3::timestamptz - $2::timestamptz)) / 3600.0, 2)
+         AS stored_duration_mismatch,
        COUNT(*) FILTER (
          WHERE date_checkin IS DISTINCT FROM
                  to_char(longdate_checkin AT TIME ZONE $4, 'DD/MM/YYYY')
@@ -472,6 +491,7 @@ const verifyFamily = async (client, sourceRow, family, timezone) => {
     || check.gap_count
     || check.invalid_count
     || check.bad_confirmation
+    || check.stored_duration_mismatch
     || check.bad_clock
   ) {
     throw new ConfirmationCheckoutError(
