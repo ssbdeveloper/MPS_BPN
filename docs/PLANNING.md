@@ -74,7 +74,8 @@ updated: 2026-07-28
   check-in berikutnya dengan snapshot 12 row; code multi-shift dan guard presisi mikrodetik
   masih menunggu deploy. Enam operator multiple berikutnya (34 source) juga sudah ditutup;
   PH3/roster yang belum pasti kini menunda confirmation per source tanpa menggagalkan Stop.
-  Snapshot repair kedua berisi 34 row. Pembulatan duration family kini konservatif; 248 row historis aman sudah diperbaiki,
+  Snapshot repair kedua berisi 34 row. Balikpapan juga direpair langsung: 4 operator/21 source,
+  backup 21 row, multiple open tersisa 0. Pembulatan duration family kini konservatif; 248 row historis aman sudah diperbaiki,
   sedangkan 6 family PENDING dan 1 component ambigu ditahan. Kode belum deploy. Implementasi permanen belum selesai:
   admin edit, parser suffix seluruh jalur SAP, family cap/lineage, freeze, dan repair historis.
   Hardening script manual selesai: guard timezone/plant, clock/overlap/multi-boundary
