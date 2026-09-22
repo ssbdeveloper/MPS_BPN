@@ -2,6 +2,12 @@
 
 const OFF_SHIFT_STATUSES = ["OFF", "LEAVE", "SICK", "PERMIT", "SITE_VISIT"];
 const MAX_ANOMALY_HOURS = 24;
+const DEFERRED_CONFIRMATION_CODES = new Set([
+  "PH3_MISSING",
+  "PH3_AMBIGUOUS",
+  "PH3_INVALID",
+  "ROSTER_MISSING",
+]);
 
 class ConfirmationCheckoutError extends Error {
   constructor(code, message, statusCode = 409, details = {}) {
@@ -138,6 +144,16 @@ picked AS (
     ABS(EXTRACT(EPOCH FROM (s.ci_local - w.shift_start_local)))
   LIMIT 1
 ),
+regular_windows AS (
+  SELECT
+    GREATEST(s.longdate_checkin, w.shift_start_ts) AS regular_start,
+    LEAST(s.longdate_checkout, w.shift_end_ts) AS regular_end
+  FROM windows w
+  CROSS JOIN source s
+  WHERE COALESCE(w.roster_status, '') <> ALL($3::text[])
+    AND s.longdate_checkin < w.shift_end_ts
+    AND s.longdate_checkout > w.shift_start_ts
+),
 facts AS (
   SELECT
     s.*,
@@ -176,59 +192,81 @@ decision AS (
       WHEN f.confirmation_count > 1 THEN 'PH3_AMBIGUOUS'
       WHEN f.confirmation_base !~ '^[0-9]+$' THEN 'PH3_INVALID'
       WHEN f.roster_count = 0 THEN 'ROSTER_MISSING'
-      WHEN f.intersecting_count > 1 THEN 'ROSTER_AMBIGUOUS'
       ELSE NULL
     END AS block_reason
   FROM facts f
 ),
+boundaries AS (
+  SELECT d.longdate_checkin AS boundary
+  FROM decision d
+  WHERE d.block_reason IS NULL
+
+  UNION
+
+  SELECT d.longdate_checkout
+  FROM decision d
+  WHERE d.block_reason IS NULL
+
+  UNION
+
+  SELECT rw.regular_start
+  FROM regular_windows rw
+
+  UNION
+
+  SELECT rw.regular_end
+  FROM regular_windows rw
+),
+boundary_pairs AS (
+  SELECT
+    ROW_NUMBER() OVER (ORDER BY boundary) AS segment_order,
+    boundary AS segment_start,
+    LEAD(boundary) OVER (ORDER BY boundary) AS segment_end
+  FROM boundaries
+),
+classified_segments AS (
+  SELECT
+    bp.segment_order,
+    CASE
+      WHEN d.is_rework THEN 'RW'
+      WHEN EXISTS (
+        SELECT 1
+        FROM regular_windows rw
+        WHERE bp.segment_start < rw.regular_end
+          AND bp.segment_end > rw.regular_start
+      ) THEN 'RG'
+      ELSE 'OV'
+    END AS suffix,
+    bp.segment_start,
+    bp.segment_end
+  FROM boundary_pairs bp
+  CROSS JOIN decision d
+  WHERE bp.segment_end > bp.segment_start
+),
+segment_transitions AS (
+  SELECT
+    cs.*,
+    CASE
+      WHEN cs.suffix IS DISTINCT FROM LAG(cs.suffix) OVER (ORDER BY cs.segment_order)
+        THEN 1
+      ELSE 0
+    END AS starts_group
+  FROM classified_segments cs
+),
+segment_grouped AS (
+  SELECT
+    st.*,
+    SUM(st.starts_group) OVER (ORDER BY st.segment_order) AS segment_group
+  FROM segment_transitions st
+),
 segment_rows AS (
   SELECT
-    1 AS segment_order,
-    CASE WHEN d.is_rework THEN 'RW' ELSE 'OV' END AS suffix,
-    d.longdate_checkin AS segment_start,
-    d.longdate_checkout AS segment_end
-  FROM decision d
-  WHERE d.block_reason IS NULL
-    AND (
-      d.is_rework
-      OR d.roster_status = ANY($3::text[])
-      OR d.intersecting_count = 0
-    )
-
-  UNION ALL
-
-  SELECT 1, 'OV', d.longdate_checkin, d.shift_start_ts
-  FROM decision d
-  WHERE d.block_reason IS NULL
-    AND NOT d.is_rework
-    AND d.roster_status <> ALL($3::text[])
-    AND d.intersecting_count = 1
-    AND d.longdate_checkin < d.shift_start_ts
-
-  UNION ALL
-
-  SELECT
-    2,
-    'RG',
-    GREATEST(d.longdate_checkin, d.shift_start_ts),
-    LEAST(d.longdate_checkout, d.shift_end_ts)
-  FROM decision d
-  WHERE d.block_reason IS NULL
-    AND NOT d.is_rework
-    AND d.roster_status <> ALL($3::text[])
-    AND d.intersecting_count = 1
-    AND GREATEST(d.longdate_checkin, d.shift_start_ts)
-        < LEAST(d.longdate_checkout, d.shift_end_ts)
-
-  UNION ALL
-
-  SELECT 3, 'OV', d.shift_end_ts, d.longdate_checkout
-  FROM decision d
-  WHERE d.block_reason IS NULL
-    AND NOT d.is_rework
-    AND d.roster_status <> ALL($3::text[])
-    AND d.intersecting_count = 1
-    AND d.longdate_checkout > d.shift_end_ts
+    MIN(sg.segment_order) AS segment_order,
+    sg.suffix,
+    MIN(sg.segment_start) AS segment_start,
+    MAX(sg.segment_end) AS segment_end
+  FROM segment_grouped sg
+  GROUP BY sg.segment_group, sg.suffix
 ),
 segment_math AS (
   SELECT
@@ -442,8 +480,10 @@ const writeSegments = async (client, sourceRow, plan, timezone) => {
   return family;
 };
 
-const verifyFamily = async (client, sourceRow, family, timezone) => {
+const verifyFamily = async (client, sourceRow, plan, family, timezone) => {
   const ids = family.map((row) => row.tsnumber);
+  const expectedStart = plan.segments[0].start;
+  const expectedEnd = plan.segments[plan.segments.length - 1].end;
   const result = await client.query(
     `WITH ordered AS (
        SELECT
@@ -480,7 +520,7 @@ const verifyFamily = async (client, sourceRow, family, timezone) => {
                  to_char(longdate_checkout AT TIME ZONE $4, 'HH24:MI')
        )::int AS bad_clock
      FROM ordered`,
-    [ids, sourceRow.longdate_checkin, sourceRow.longdate_checkout, timezone],
+    [ids, expectedStart, expectedEnd, timezone],
   );
   const check = result.rows[0];
   if (
@@ -500,6 +540,34 @@ const verifyFamily = async (client, sourceRow, family, timezone) => {
       500,
       check,
     );
+  }
+};
+
+const confirmClosedTimesheet = async (client, row, timezone, plant) => {
+  if (!isProductiveRow(row)) return row;
+  const plan = await planSegments(client, row.tsnumber, timezone, plant);
+  const family = await writeSegments(client, row, plan, timezone);
+  await verifyFamily(client, row, plan, family, timezone);
+  return family[0];
+};
+
+const confirmClosedTimesheetOrDefer = async (client, row, timezone, plant) => {
+  if (!isProductiveRow(row)) return row;
+  await client.query("SAVEPOINT confirmation_write");
+  try {
+    const confirmed = await confirmClosedTimesheet(client, row, timezone, plant);
+    await client.query("RELEASE SAVEPOINT confirmation_write");
+    return confirmed;
+  } catch (error) {
+    await client.query("ROLLBACK TO SAVEPOINT confirmation_write");
+    await client.query("RELEASE SAVEPOINT confirmation_write");
+    if (
+      error instanceof ConfirmationCheckoutError
+      && DEFERRED_CONFIRMATION_CODES.has(error.code)
+    ) {
+      return row;
+    }
+    throw error;
   }
 };
 
@@ -551,14 +619,9 @@ const createTimesheetConfirmationService = ({ pool, timezone, plant }) => {
 
       const originalRows = [];
       for (const row of closed.sort((a, b) => a.tsnumber - b.tsnumber)) {
-        if (!isProductiveRow(row)) {
-          originalRows.push(row);
-          continue;
-        }
-        const plan = await planSegments(client, row.tsnumber, runtimeTimezone, plant);
-        const family = await writeSegments(client, row, plan, runtimeTimezone);
-        await verifyFamily(client, row, family, runtimeTimezone);
-        originalRows.push(family[0]);
+        originalRows.push(
+          await confirmClosedTimesheetOrDefer(client, row, runtimeTimezone, plant),
+        );
       }
 
       await client.query("COMMIT");
@@ -581,6 +644,7 @@ module.exports = {
   CLASSIFICATION_SQL,
   ConfirmationCheckoutError,
   assertRuntimeContext,
+  confirmClosedTimesheet,
   createTimesheetConfirmationService,
   isProductiveRow,
 };

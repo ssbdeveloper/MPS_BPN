@@ -67,10 +67,14 @@ updated: 2026-07-28
   sehingga vitest lolos tapi `vite build` gagal. Uji-merah juga membongkar assertion NON-MODAL
   palsu: memindai elemen `position:absolute` tidak melihat scrim `::after` — diganti hit test.
 
-- **[[timesheet/CONFIRMATION_NUMBER_PLAN]] — checkout atomik lokal 2026-09-21:** backfill
+- **[[timesheet/CONFIRMATION_NUMBER_PLAN]] — checkout atomik lokal 2026-09-22:** backfill
   historis sudah tercatat; writer `checkout`/`checkoutid` kini mengisi confirmation dan split
-  OV–RG–OV dalam satu transaksi, dan overlap antar-job mode multiple tidak lagi memblokir
-  Stop. Pembulatan duration family kini konservatif; 248 row historis aman sudah diperbaiki,
+  OV/RG lintas beberapa shift dalam satu transaksi, dan overlap antar-job mode multiple tidak
+  lagi memblokir Stop. Dua belas source terbuka Cikupa (`17238`, `90085`) sudah direpair dari
+  check-in berikutnya dengan snapshot 12 row; code multi-shift dan guard presisi mikrodetik
+  masih menunggu deploy. Enam operator multiple berikutnya (34 source) juga sudah ditutup;
+  PH3/roster yang belum pasti kini menunda confirmation per source tanpa menggagalkan Stop.
+  Snapshot repair kedua berisi 34 row. Pembulatan duration family kini konservatif; 248 row historis aman sudah diperbaiki,
   sedangkan 6 family PENDING dan 1 component ambigu ditahan. Kode belum deploy. Implementasi permanen belum selesai:
   admin edit, parser suffix seluruh jalur SAP, family cap/lineage, freeze, dan repair historis.
   Hardening script manual selesai: guard timezone/plant, clock/overlap/multi-boundary
@@ -82,7 +86,8 @@ updated: 2026-07-28
   [[log/2026-09-21-timesheet-confirmation-backfill-hardening]] ·
   [[log/2026-09-21-timesheet-checkout-confirmation]] ·
   [[log/2026-09-21-timesheet-multiple-checkout]] ·
-  [[log/2026-09-21-timesheet-split-duration-repair]].
+  [[log/2026-09-21-timesheet-split-duration-repair]] ·
+  [[log/2026-09-22-timesheet-multishift-checkout-repair]].
 
 - 🎨 **[[planning/mps-dashboard-command-center]] — pilot F2 sistem visual, KODE SELESAI (uncommitted)**
   ([[log/2026-09-19-mps-dashboard-visual-pilot]], 2026-09-19). `DashboardPage` berubah dari

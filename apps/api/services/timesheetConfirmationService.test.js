@@ -29,7 +29,10 @@ const makeHarness = ({ plan, lockedRows = [sourceRow] }) => {
     async query(sql, params = []) {
       calls.push({ sql, params });
       const normalized = String(sql).replace(/\s+/g, " ").trim();
-      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)) return { rows: [] };
+      if (["BEGIN", "COMMIT", "ROLLBACK"].includes(normalized)
+          || /^(SAVEPOINT|RELEASE SAVEPOINT|ROLLBACK TO SAVEPOINT)/.test(normalized)) {
+        return { rows: [] };
+      }
       if (normalized.includes("FROM public.plant_config")) {
         return { rows: [{ plant_code: "5100", timezone: "Asia/Jakarta" }] };
       }
@@ -37,7 +40,7 @@ const makeHarness = ({ plan, lockedRows = [sourceRow] }) => {
       if (normalized.includes("FROM public.sap_staging_exclusion")) return { rows: [] };
       if (normalized.includes("FROM public.sap_staging_source")) return { rows: [] };
       if (normalized === "SELECT clock_timestamp() AS checkout_at") {
-        return { rows: [{ checkout_at: sourceRow.longdate_checkout }] };
+        return { rows: [{ checkout_at: lockedRows[0]?.longdate_checkout }] };
       }
       if (normalized.includes("WHERE tsnumber = ANY($1::int[])")
           && normalized.startsWith("UPDATE")) {
@@ -110,15 +113,64 @@ test("productive detection preserves legacy unproductive rows", () => {
   assert.equal(isProductiveRow({ order_no: "100", operation_no: 10 }), true);
 });
 
-test("classifier SQL supports OV-RG-OV without rejecting multiple jobs", () => {
-  assert.match(CLASSIFICATION_SQL, /SELECT 1, 'OV'/);
-  assert.match(CLASSIFICATION_SQL, /SELECT\s+2,\s+'RG'/);
-  assert.match(CLASSIFICATION_SQL, /SELECT 3, 'OV'/);
+test("classifier SQL partitions every intersecting roster window", () => {
+  assert.match(CLASSIFICATION_SQL, /regular_windows AS/);
+  assert.match(CLASSIFICATION_SQL, /boundaries AS/);
+  assert.match(CLASSIFICATION_SQL, /classified_segments AS/);
+  assert.match(CLASSIFICATION_SQL, /segment_grouped AS/);
   assert.match(CLASSIFICATION_SQL, /PH3_AMBIGUOUS/);
-  assert.match(CLASSIFICATION_SQL, /ROSTER_AMBIGUOUS/);
+  assert.doesNotMatch(CLASSIFICATION_SQL, /ROSTER_AMBIGUOUS/);
   assert.match(CLASSIFICATION_SQL, /exact_hundredths/);
   assert.match(CLASSIFICATION_SQL, /units_to_add/);
   assert.doesNotMatch(CLASSIFICATION_SQL, /OPERATOR_OVERLAP|has_operator_overlap/);
+});
+
+test("checkout writes an RG-OV-RG plan spanning two roster windows", async () => {
+  const multiShiftSource = {
+    ...sourceRow,
+    longdate_checkin: new Date("2026-09-21T06:00:00.458Z"),
+    longdate_checkout: new Date("2026-09-22T01:00:00.995Z"),
+  };
+  const boundaries = [
+    "2026-09-21T06:00:00.458818Z",
+    "2026-09-21T09:30:00.000Z",
+    "2026-09-22T00:25:00.000Z",
+    "2026-09-22T01:00:00.995477Z",
+  ];
+  const suffixes = ["RG", "OV", "RG"];
+  const plan = {
+    tsnumber: 10,
+    confirmation_base: "700001",
+    block_reason: null,
+    segments: suffixes.map((suffix, index) => ({
+      suffix,
+      start: boundaries[index],
+      end: boundaries[index + 1],
+      duration: "1.00",
+    })),
+  };
+  const harness = makeHarness({ plan, lockedRows: [multiShiftSource] });
+  const service = createTimesheetConfirmationService({
+    pool: harness.pool,
+    timezone: "Asia/Jakarta",
+    plant: "5100",
+  });
+
+  await service.checkoutById(10);
+
+  const writes = harness.calls.filter(({ sql }) =>
+    String(sql).replace(/\s+/g, " ").trim()
+      .match(/^(UPDATE|INSERT INTO) public\.timesheet_transaction/));
+  assert.equal(writes.slice(-3).length, 3);
+  assert.deepEqual(
+    writes.slice(-3).map(({ sql, params }) =>
+      String(sql).trimStart().startsWith("UPDATE") ? params[2] : params[3]),
+    ["700001RG", "700001OV", "700001RG"],
+  );
+  const invariant = harness.calls.find(({ sql }) =>
+    String(sql).replace(/\s+/g, " ").trim().startsWith("WITH ordered AS"));
+  assert.equal(invariant.params[1], boundaries[0]);
+  assert.equal(invariant.params[2], boundaries.at(-1));
 });
 
 test("serial checkout keeps overlapping jobs independent while one job splits", async () => {
@@ -238,7 +290,7 @@ test("checkout writes three exact segments and commits once", async () => {
   assert.equal(harness.calls.filter(({ sql }) => sql === "ROLLBACK").length, 0);
 });
 
-test("blocked classification rolls the checkout back before segment writes", async () => {
+test("missing roster defers confirmation and still commits checkout", async () => {
   const harness = makeHarness({
     plan: {
       tsnumber: 10,
@@ -253,17 +305,43 @@ test("blocked classification rolls the checkout back before segment writes", asy
     plant: "5100",
   });
 
+  const rows = await service.checkoutById(10);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].confirmationnumber, undefined);
+  assert.equal(harness.calls.filter(({ sql }) => sql === "COMMIT").length, 1);
+  assert.equal(harness.calls.filter(({ sql }) => sql === "ROLLBACK").length, 0);
+  assert.equal(
+    harness.calls.filter(({ sql }) => sql === "ROLLBACK TO SAVEPOINT confirmation_write").length,
+    1,
+  );
+  assert.equal(harness.calls.some(({ sql }) =>
+    String(sql).replace(/\s+/g, " ").trim()
+      .startsWith("INSERT INTO public.timesheet_transaction")), false);
+});
+
+test("non-deferred classification errors still roll back the checkout", async () => {
+  const harness = makeHarness({
+    plan: {
+      tsnumber: 10,
+      confirmation_base: "700001",
+      block_reason: "ANOMALY",
+      segments: [],
+    },
+  });
+  const service = createTimesheetConfirmationService({
+    pool: harness.pool,
+    timezone: "Asia/Jakarta",
+    plant: "5100",
+  });
+
   await assert.rejects(
     service.checkoutById(10),
-    (error) => error instanceof ConfirmationCheckoutError
-      && error.code === "ROSTER_MISSING",
+    (error) => error instanceof ConfirmationCheckoutError && error.code === "ANOMALY",
   );
 
   assert.equal(harness.calls.filter(({ sql }) => sql === "COMMIT").length, 0);
   assert.equal(harness.calls.filter(({ sql }) => sql === "ROLLBACK").length, 1);
-  assert.equal(harness.calls.some(({ sql }) =>
-    String(sql).replace(/\s+/g, " ").trim()
-      .startsWith("INSERT INTO public.timesheet_transaction")), false);
 });
 
 test("retry after checkout returns no rows and creates no new segment", async () => {
