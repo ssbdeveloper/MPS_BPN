@@ -74,6 +74,7 @@ class Segment:
     exposure: str
     shift_start: datetime | None
     shift_end: datetime | None
+    text_drifted: bool = False
 
     @property
     def span(self) -> timedelta:
@@ -126,7 +127,13 @@ WITH seg AS (
          right(t.confirmationnumber, 2) AS suffix,
          (t.longdate_checkin  AT TIME ZONE %(tz)s) AS ci_loc,
          (t.longdate_checkout AT TIME ZONE %(tz)s) AS co_loc,
-         t.duration
+         t.duration,
+         (
+              t.date_checkin  IS DISTINCT FROM to_char(t.longdate_checkin  AT TIME ZONE %(tz)s, 'DD/MM/YYYY')
+           OR t.hour_checkin  IS DISTINCT FROM to_char(t.longdate_checkin  AT TIME ZONE %(tz)s, 'HH24:MI')
+           OR t.date_checkout IS DISTINCT FROM to_char(t.longdate_checkout AT TIME ZONE %(tz)s, 'DD/MM/YYYY')
+           OR t.hour_checkout IS DISTINCT FROM to_char(t.longdate_checkout AT TIME ZONE %(tz)s, 'HH24:MI')
+         ) AS text_drifted
   FROM public.timesheet_transaction t
   WHERE t.plant = %(plant)s
     AND t.confirmationnumber ~ '^[0-9]+(RG|OV|RW)$'
@@ -210,6 +217,7 @@ def load_segments(cur, plant: str, tz: str) -> list[Segment]:
                 exposure=exposure.get(r["tsnumber"], "UNSTAGED"),
                 shift_start=shift_start,
                 shift_end=shift_end,
+                text_drifted=bool(r["text_drifted"]),
             )
         )
     return segments
@@ -263,6 +271,15 @@ def build_pair_plans(segments: list[Segment], include_staged: bool) -> tuple[lis
                     new_left_end=left.end,
                     new_right_start=right.start,
                 )
+
+                # --- Gate 0: kedua row harus konsisten teks vs timestamp ---
+                # Row yang masih drift offset tidak boleh ikut perbaikan boundary:
+                # jam acuannya belum pasti, jadi titik potongnya pun belum bisa
+                # dipercaya. Selesaikan drift-nya lebih dulu.
+                if left.text_drifted or right.text_drifted:
+                    plan.blocked_reason = "TEXT_TIMESTAMP_DRIFT"
+                    blocked.append(plan)
+                    continue
 
                 # --- Gate 1: exposure SAP ---
                 exposures = {left.exposure, right.exposure}
@@ -594,6 +611,10 @@ def main() -> int:
             if cur.fetchone()["n"]:
                 raise RuntimeError("guard: ada interval nonpositif setelah UPDATE")
 
+            # Konsistensi kolom teks hanya diperiksa pada row yang BENAR-BENAR
+            # diubah transaksi ini. Row lain boleh inkonsisten karena sebab lain
+            # (drift offset) dan itu urusan repair_offset_drift.py — bukan alasan
+            # membatalkan perbaikan boundary yang sudah terbukti benar.
             cur.execute(
                 """
                 SELECT count(*) AS n FROM public.timesheet_transaction
@@ -607,8 +628,11 @@ def main() -> int:
                 """,
                 (ids, cfg["tz"], cfg["tz"], cfg["tz"], cfg["tz"]),
             )
-            if cur.fetchone()["n"]:
-                raise RuntimeError("guard: kolom teks jam tidak konsisten dengan timestamp")
+            residual = cur.fetchone()["n"]
+            if residual:
+                raise RuntimeError(
+                    f"guard: {residual} row yang diubah masih tidak konsisten teks vs timestamp"
+                )
 
             metadata["overlap_pairs_after"] = len(after_overlap)
             metadata["overlap_pairs_resolved"] = len(baseline_overlap - after_overlap)
