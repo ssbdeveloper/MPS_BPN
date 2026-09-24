@@ -2351,6 +2351,126 @@ async function mapSowOperationToTask(projectIdParam, body = {}) {
   }
 }
 
+// ── Cursor paginasi bay-schedule (F1) ────────────────────────────────────────────────────
+//
+// Halaman peta sebelumnya memakai LIMIT/OFFSET, dan urutannya BERISI SERI. Terukur di
+// produksi: 6 baris berkunci sama (`2026-09-21 | AREA-10 | A1E | P26-35127`) membentang
+// tepat di batas halaman 1/2 (ordinal 1995–2000). Tanpa pemecah seri, satu sisipan di
+// depan batas menggeser ordinal sehingga satu baris HILANG dari halaman 1 dan baris yang
+// sama muncul lagi di halaman 2 — pembacaan menjadi tidak lengkap tanpa sinyal apa pun,
+// dan itulah penyebab insiden B29E.
+//
+// Cursor di bawah memakai TOTAL ORDER yang sama dengan `ORDER BY` halaman, tetapi dengan
+// `schedule_id` sebagai pemecah seri terakhir (unik), sehingga setiap baris punya posisi
+// yang unik dan stabil. Ia juga membawa `updated_at` baris batas: kalau baris itu berubah
+// atau hilang, permintaan berikutnya ditolak (409 CURSOR_STALE) alih-alih diam-diam
+// melewatkan/mengulang baris.
+const BAY_SCHEDULE_CURSOR_KEYS = Object.freeze(['d', 'a', 'b', 'o', 'u', 'i']);
+
+function encodeBayScheduleCursor(row) {
+  const payload = {
+    d: String(row.start_date).slice(0, 10),
+    a: row.area_code,
+    // bay_codes[1] dan order_no bisa NULL; `null` di cursor berarti "kunci ini NULL".
+    b: Array.isArray(row.bay_codes) ? (row.bay_codes[0] ?? null) : null,
+    o: row.order_no === null || row.order_no === undefined ? null : String(row.order_no),
+    u: new Date(row.updated_at).toISOString(),
+    i: row.schedule_id,
+  };
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+// Cursor adalah token OPAK. Nilai yang tidak bisa didekode ditolak 400 — bukan diabaikan —
+// karena "mengabaikan filter yang tidak dimengerti" adalah cara truncation senyap terjadi.
+function decodeBayScheduleCursor(value) {
+  const text = nullableText(value);
+  if (!text) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(text, 'base64url').toString('utf8'));
+  } catch {
+    throw new ApiError(400, 'INVALID_CURSOR', 'after must be a cursor returned by this endpoint', [{ field: 'after' }]);
+  }
+  const valid = payload
+    && typeof payload === 'object'
+    && BAY_SCHEDULE_CURSOR_KEYS.every((key) => key in payload)
+    && /^\d{4}-\d{2}-\d{2}$/.test(String(payload.d))
+    && typeof payload.a === 'string' && payload.a.length > 0
+    && (payload.b === null || typeof payload.b === 'string')
+    && (payload.o === null || typeof payload.o === 'string')
+    && typeof payload.i === 'string'
+    && !Number.isNaN(new Date(payload.u).getTime());
+  if (!valid) {
+    throw new ApiError(400, 'INVALID_CURSOR', 'after must be a cursor returned by this endpoint', [{ field: 'after' }]);
+  }
+  assertUuid(payload.i, 'after');
+  return {
+    lastStartDate: payload.d,
+    lastAreaCode: payload.a,
+    lastBaysKey: payload.b,
+    lastOrderNo: payload.o,
+    lastUpdatedAt: new Date(payload.u).toISOString(),
+    lastScheduleId: payload.i,
+  };
+}
+
+// "Baris ini datang SETELAH cursor?" untuk satu kolom teks yang boleh NULL, mengikuti
+// semantik NULLS LAST yang sama dengan ORDER BY (ASC: NULL di akhir). Perbandingan
+// `> ` biasa TIDAK cukup: ketika nilai cursor NULL dan baris berisi nilai, `c > NULL`
+// bernilai NULL (bukan true) padahal baris itu justru harus ikut — jadi cabang NULL
+// ditulis eksplisit.
+function bayScheduleAfterNullable(column, param) {
+  return `(case when ${param}::text is null
+                then ${column} is null
+                else (${column} is null or ${column} > ${param}::text) end)`;
+}
+
+// Predikat kelanjutan untuk total order:
+//   (start_date, area_code, bay_codes[1] NULLS LAST, order_no NULLS LAST, schedule_id)
+function bayScheduleCursorPredicate(cursor, values) {
+  const bind = (value) => { values.push(value); return `$${values.length}`; };
+  const d = `${bind(cursor.lastStartDate)}::date`;
+  const a = bind(cursor.lastAreaCode);
+  const b = bind(cursor.lastBaysKey);
+  const o = bind(cursor.lastOrderNo);
+  const i = `${bind(cursor.lastScheduleId)}::uuid`;
+  const dateEq = `s.start_date = ${d}`;
+  const areaEq = `s.area_code = ${a}`;
+  const bayAfter = bayScheduleAfterNullable('s.bay_codes[1]', b);
+  const bayEq = `s.bay_codes[1] is not distinct from ${b}::text`;
+  const ordAfter = bayScheduleAfterNullable('s.order_no', o);
+  const ordEq = `s.order_no is not distinct from ${o}::text`;
+  return `(
+    s.start_date > ${d}
+    or (${dateEq} and s.area_code > ${a})
+    or (${dateEq} and ${areaEq} and ${bayAfter})
+    or (${dateEq} and ${areaEq} and ${bayEq} and ${ordAfter})
+    or (${dateEq} and ${areaEq} and ${bayEq} and ${ordEq} and s.schedule_id > ${i})
+  )`;
+}
+
+// Total order halaman. Pemecah seri `schedule_id` WAJIB: ia yang membuat posisi setiap
+// baris unik sehingga cursor tidak bisa melewatkan atau mengulang baris.
+const BAY_SCHEDULE_ORDER_BY =
+  's.start_date nulls last, s.area_code nulls last, s.bay_codes[1] nulls last, ' +
+  's.order_no nulls last, s.schedule_id nulls last';
+
+// Baris batas harus masih ada DAN belum berubah. Kalau tidak, rangkaian pagination yang
+// sedang dibaca sudah tidak valid dan hasil lanjutannya tidak bisa dipercaya.
+async function assertBayScheduleCursorRow(row, cursor) {
+  if (!row) {
+    throw new ApiError(409, 'CURSOR_STALE', 'The page you were reading changed; reload the map for a complete result', [{ field: 'after' }]);
+  }
+  const same = String(row.start_date).slice(0, 10) === cursor.lastStartDate
+    && row.area_code === cursor.lastAreaCode
+    && (row.bay_key ?? null) === (cursor.lastBaysKey ?? null)
+    && (row.order_no ?? null) === (cursor.lastOrderNo ?? null)
+    && new Date(row.updated_at).toISOString() === cursor.lastUpdatedAt;
+  if (!same) {
+    throw new ApiError(409, 'CURSOR_STALE', 'The page you were reading changed; reload the map for a complete result', [{ field: 'after' }]);
+  }
+}
+
 async function listBaySchedules(query = {}) {
   const values = [];
   const where = ["1 = 1"];
@@ -2388,11 +2508,24 @@ async function listBaySchedules(query = {}) {
     where.push(`s.schedule_group_id = $${values.length}::uuid`);
   }
 
+  // Cursor hanya berguna kalau urutannya benar-benar total; predikat lanjutannya memakai
+  // kolom yang sama dengan ORDER BY di bawah.
+  const afterCursor = decodeBayScheduleCursor(query.after);
+  // `if_first=1` meminta verifikasi lost-update (baris batas harus belum berubah). Klien
+  // peta memakainya; pembacaan satu halaman tidak perlu membayar query tambahan.
+  const ifFirst = String(query.if_first ?? '').trim() === '1';
+
   // Sebelumnya query ini unbounded. Batas defaultnya sengaja besar (2000) karena satu
   // reservasi task-level menghasilkan satu baris per task, jadi 100 (MAX_LIMIT) terlalu kecil
   // dan akan memotong peta secara senyap.
   const limit = clampLimit(query.limit, 2000, BAY_SCHEDULE_MAX_LIMIT);
   const offset = clampOffset(query.offset);
+  // `after` dan `offset` sama-sama memilih titik mulai. Menerima keduanya berarti menebak
+  // maksud pemanggil, dan tebakan yang salah = baris hilang tanpa pesan.
+  if (afterCursor && offset > 0) {
+    throw new ApiError(400, 'CONFLICTING_PAGINATION', 'Use either after or offset, not both', [{ field: 'offset' }]);
+  }
+  if (afterCursor) where.push(bayScheduleCursorPredicate(afterCursor, values));
   values.push(limit, offset);
 
   // Seluruh join ke ms_project / ms_project_task / sow WAJIB tetap LEFT JOIN: booking non-job
@@ -2449,8 +2582,19 @@ async function listBaySchedules(query = {}) {
        coalesce(uu.name, s.updated_by) as updated_by_name,
        s.created_by_user_id,
        s.created_at,
-       s.updated_at
+       s.updated_at,
+       -- F3: kaitan ke timesheet per baris jadwal. Baris ber-referensi adalah jejak kerja
+       -- (tidak boleh di-cancel sebagai grup begitu saja), dan check-in terbuka adalah jalur
+       -- operator menyelesaikan pekerjaan — UI memakainya untuk memblokir sebelum server menolak.
+       coalesce(ts.ref_count, 0) as timesheet_ref_count,
+       coalesce(ts.open_count, 0) as open_checkin_count
      from ms_project_bay_schedule s
+     left join lateral (
+       select count(*) as ref_count,
+              count(*) filter (where x.longdate_checkin is not null and x.longdate_checkout is null) as open_count
+       from timesheet_transaction x
+       where x.ms_bay_schedule_id = s.schedule_id
+     ) ts on true
      left join users cu on cu.id = s.created_by_user_id
      left join users uu on uu.id = s.updated_by_user_id
      left join ms_project p on p.project_id = s.project_id
@@ -2468,12 +2612,47 @@ async function listBaySchedules(query = {}) {
          and nullif(btrim(k.material_description), '') is not null
      ) ph on true
      where ${where.join(" and ")}
-     order by s.start_date, s.area_code, s.bay_codes[1], s.order_no
+     order by ${BAY_SCHEDULE_ORDER_BY}
      limit $${values.length - 1} offset $${values.length}`,
     values
   );
 
-  return { rows: result.rows, limit, offset };
+  // Rangkaian pagination harus tetap sahih sampai halaman terakhir. Sebelum mengembalikan
+  // lanjutannya, buktikan baris batas masih ada dan belum berubah; kalau tidak, 409 lebih
+  // jujur daripada halaman yang tampak normal tapi kehilangan baris.
+  if (afterCursor && ifFirst) {
+    const anchor = await pool().query(
+      `select to_char(s.start_date, 'YYYY-MM-DD') as start_date,
+              s.area_code,
+              s.bay_codes[1] as bay_key,
+              s.order_no,
+              s.updated_at
+         from ms_project_bay_schedule s
+        where s.schedule_id = $1::uuid`,
+      [afterCursor.lastScheduleId]
+    );
+    await assertBayScheduleCursorRow(anchor.rows[0], afterCursor);
+  }
+
+  // `has_more` dihitung eksplisit (bukan ditebak dari "panjang < limit", yang salah begitu
+  // ada write bersamaan) supaya konsumen bisa membedakan "habis" dari "terpotong".
+  const hasMore = result.rows.length === limit;
+  const lastRow = result.rows[result.rows.length - 1];
+  const nextCursor = hasMore && lastRow ? encodeBayScheduleCursor(lastRow) : null;
+
+  return {
+    rows: result.rows.map((row) => ({
+      ...row,
+      timesheet_ref_count: Number(row.timesheet_ref_count) || 0,
+      open_checkin_count: Number(row.open_checkin_count) || 0,
+    })),
+    limit,
+    offset,
+    // Penanda paginasi aditif: konsumen lama tetap membaca rows/limit/offset seperti semula,
+    // sementara pemanggil yang peduli kelengkapan kini punya cara membedakan
+    // "habis" dari "terpotong".
+    pageMeta: { has_more: hasMore, next_cursor: nextCursor },
+  };
 }
 
 // Reservasi bay yang terhubung task SELALU mengikuti tanggal ms_project_task
@@ -2924,6 +3103,96 @@ async function findBayOverlaps(client, { bayCodes, startDate, endDate, excludeGr
   return { rows: result.rows, truncated: total > result.rows.length, total };
 }
 
+// ── F2: deteksi konflik identitas task ──────────────────────────────────────────────────
+//
+// ATURAN BISNIS (owner, 2026-09-23): dalam satu AREA pada satu TANGGAL, satu order_no tidak
+// boleh punya operation_no yang sama lebih dari sekali.
+//
+// Kenapa di server dan bukan di UI: pemeriksaan di klien hanya menutup satu tab. Insiden B29E
+// dibuat oleh TIGA pengguna berbeda dalam 15 menit — masing-masing melihat peta yang bersih,
+// masing-masing lolos. Pemeriksaan karena itu WAJIB dijalankan di dalam transaksi saat simpan,
+// supaya tindakan pertama yang menang dan tindakan berikutnya melihat hasilnya.
+//
+// Kenapa satu baris per (order, operation) dan bukan per task_id: satu order yang dipetakan ke
+// BEBERAPA project MS punya task_id BERBEDA untuk operasi yang SAMA (lihat dedupe operasi di
+// createBaySchedule). Memeriksa per task_id akan meloloskan persis kasus duplikat yang nyata.
+//
+// Konflik dilaporkan, TIDAK otomatis ditolak: dua shift pada tanggal yang sama memang sah, dan
+// pemisahan shift tidak bisa disimpulkan hanya dari tanggal. Karena itu fungsi ini mengembalikan
+// daftar konflik; pemanggil memutuskan (butuh `allow_conflict` eksplisit + alasan) dan audit
+// tetap mencatatnya.
+async function findBayScheduleConflicts(client, { areaCode, orderNo = null, startDate, endDate, operationNos = [], excludeGroupId = null } = {}) {
+  const ops = Array.isArray(operationNos)
+    ? [...new Set(operationNos.map((op) => (op == null ? "" : String(op).trim())).filter((op) => op !== ""))]
+    : [];
+  if (!areaCode || !startDate || !endDate || ops.length === 0) {
+    return { rows: [], conflicts: [], total: 0, checked_operations: 0 };
+  }
+
+  const runner = client || pool();
+  const values = [areaCode, startDate, endDate, ops];
+  let orderSql = "";
+  // Aturan berbunyi order_no + operation_no. Menyaring hanya per operation akan melaporkan
+  // reservasi order LAIN sebagai konflik — order yang berbeda memang boleh memakai operasi
+  // yang sama, jadi penyaringan ini yang membuat aturannya tepat, bukan sekadar longgar.
+  if (orderNo != null && String(orderNo).trim() !== "") {
+    values.push(String(orderNo).trim());
+    // Pencocokan ltrim: order_no bisa tersimpan dengan nol di depan ('0012' vs '12').
+    orderSql = `and ltrim(s.order_no, '0') = ltrim($${values.length}, '0')`;
+  }
+  let excludeSql = "";
+  if (excludeGroupId) {
+    values.push(excludeGroupId);
+    excludeSql = `and (s.schedule_group_id is null or s.schedule_group_id <> $${values.length}::uuid)`;
+  }
+
+  // operation_no dibandingkan sebagai TEXT ternormalisasi: kolomnya bisa int atau teks
+  // tergantung sumber MSP, jadi '210' dan ' 210 ' harus dianggap sama.
+  const result = await runner.query(
+    `select s.schedule_id,
+            s.schedule_group_id,
+            s.order_no,
+            s.bay_codes,
+            s.start_date,
+            s.end_date,
+            s.status,
+            s.created_by,
+            s.created_at,
+            t.operation_no::text as operation_no
+       from ms_project_bay_schedule s
+       join ms_project_task t on t.task_id = s.task_id
+      where s.status <> 'CANCELLED'
+        and s.area_code = $1
+        and daterange(s.start_date, s.end_date, '[]') && daterange($2::date, $3::date, '[]')
+        and t.operation_no::text = any($4::text[])
+        ${orderSql}
+        ${excludeSql}
+      order by s.start_date, t.operation_no, s.created_at`,
+    values
+  );
+
+  // Satu RESERVASI = satu entri (baris task-level di-dedupe per grup). Yang dilaporkan ke
+  // pengguna adalah reservasi existing yang bisa dibuka, bukan baris mentahnya.
+  const byKey = new Map();
+  for (const row of result.rows) {
+    const key = `${row.operation_no}|${row.schedule_group_id || row.schedule_id}`;
+    if (!byKey.has(key)) byKey.set(key, row);
+  }
+  const conflicts = [...byKey.values()].map((row) => ({
+    operation_no: row.operation_no,
+    order_no: row.order_no,
+    schedule_id: row.schedule_id,
+    schedule_group_id: row.schedule_group_id,
+    bay_codes: row.bay_codes,
+    start_date: row.start_date,
+    end_date: row.end_date,
+    status: row.status,
+    created_by: row.created_by,
+  }));
+
+  return { rows: result.rows, conflicts, total: conflicts.length, checked_operations: ops.length };
+}
+
 async function createBaySchedule(body = {}) {
   const payload = ensureObject(body, "payload");
   // booking_type memisahkan reservasi job (ORDER) dari booking non-job (parkir unit, taruh
@@ -2945,6 +3214,10 @@ async function createBaySchedule(body = {}) {
   // barisnya cukup mengandalkan kolom teks created_by.
   const actorUserId = Number.isInteger(payload.actor_user_id) ? payload.actor_user_id : null;
   const notes = nullableText(payload.notes);
+  // F2: menembus aturan unik order_no+operation_no harus disengaja dan beralasan. Keduanya
+  // ikut tercatat di audit log supaya duplikat selalu punya jejak "mengapa".
+  const allowConflict = payload.allow_conflict === true || payload.allow_conflict === "1" || payload.allow_conflict === 1;
+  const conflictReason = nullableText(payload.conflict_reason);
   // Task-level batch: one call reserves N tasks (each -> its own row with task_id +
   // project_id populated). Empty => legacy order-level behavior (task_id NULL) unchanged.
   // `let`, bukan `const`: cabang task-level menyaring ulang daftar ini untuk membuang operasi
@@ -2979,6 +3252,61 @@ async function createBaySchedule(body = {}) {
   const client = await pool().connect();
   try {
     await client.query("begin");
+
+    // ── F3: idempotency untuk retry ────────────────────────────────────────────────
+    // Retry (klik kedua, jaringan putus lalu dikirim ulang, job yang diulang) TIDAK sama
+    // dengan dua pengguna berbeda — dua-duanya perlu penanganan sendiri. F2 menutup yang
+    // kedua; blok ini menutup yang pertama.
+    //
+    // Diletakkan di dalam transaksi yang sudah dibuka supaya reservasi dan penandanya
+    // (audit log) commit bersama: retry bisa menemukan reservasi yang SUDAH jadi, dan
+    // percobaan gagal tidak meninggalkan penanda yang memblokir retry berikutnya.
+    //
+    // Kunci advisory, bukan tabel baru: sidik jarinya deterministik, jadi tidak perlu
+    // migration di produksi dan tidak ada kolom yang harus diisi klien. Klien yang mengirim
+    // `idempotency_key` eksplisit mendapat kontrak lebih kuat; tanpa itu sidik jari payload
+    // yang dipakai.
+    const idemKey = nullableText(payload.idempotency_key)
+      || `auto:${crypto.createHash("sha256").update(JSON.stringify({
+        b: bookingType, o: orderNo, a: areaCode, bay: bayCodes,
+        s: startDate, e: endDate, p: purpose,
+        t: taskRows.map((row) => row.task_id).sort(),
+      })).digest("hex").slice(0, 40)}`;
+
+    // Fencepost diambil SEBELUM insert pertama: urutan (kunci → insert → audit) akan
+    // melewatkan retry yang tiba beberapa milidetik sebelum audit retry pertama ditulis.
+    const idemFence = new Date().toISOString();
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`idem:${idemKey}`]);
+    const priorAttempt = await client.query(
+      `select details->>'schedule_group_id' as schedule_group_id
+         from ms_project_audit_log
+        where action = 'BAY_SCHEDULE_RESERVE'
+          and details->>'idempotency_key' = $1
+          and created_at <= $2::timestamptz
+        order by created_at desc
+        limit 1`,
+      [idemKey, idemFence]
+    );
+    if (priorAttempt.rows[0]?.schedule_group_id) {
+      // Retry dari reservasi yang SUDAH jadi. Kembalikan yang ada (200), bukan 409: pemanggil
+      // sebenarnya sudah berhasil, dan menampilkan error akan membuat scheduler mengira
+      // reservasinya gagal. Baris dibaca ulang supaya bentuknya identik dengan panggilan pertama.
+      const priorRows = await client.query(
+        `select * from ms_project_bay_schedule where schedule_group_id = $1::uuid order by start_date`,
+        [priorAttempt.rows[0].schedule_group_id]
+      );
+      await client.query("commit");
+      return {
+        schedules: priorRows.rows,
+        count: priorRows.rows.length,
+        schedule_group_id: priorAttempt.rows[0].schedule_group_id,
+        overlaps: { rows: [], truncated: false, total: 0 },
+        dropped_duplicate_operations: [],
+        // Klien memakai penanda ini untuk membedakan "baru dibuat" dari "sudah ada".
+        idempotent_replay: true,
+        idempotency_key: idemKey,
+      };
+    }
 
     let resolvedOrderNo = null;
     if (isOrderBooking) {
@@ -3028,6 +3356,65 @@ async function createBaySchedule(body = {}) {
         uniqueTaskRows.push(taskRow);
       }
       taskRows = uniqueTaskRows;
+
+      // ── F2: aturan unik order_no + operation_no per area per tanggal ──────────────
+      // Pemeriksaan dilakukan DI DALAM transaksi ini, sebelum insert. Dua pengguna yang
+      // menyimpan hampir bersamaan sama-sama membaca sebelum salah satu menyimpan, jadi
+      // SELECT saja tidak cukup: kunci advisory transaksi memaksa keduanya berbaris pada
+      // kunci yang sama, sehingga penyimpan kedua pasti melihat baris penyimpan pertama.
+      // Kunci diambil dalam urutan terurut supaya dua transaksi dengan beberapa kunci
+      // tidak saling menunggu (deadlock).
+      const opOfTask = (taskIdValue) => {
+        const raw = opByTask.get(taskIdValue);
+        return raw == null || raw === "" ? null : String(raw).trim();
+      };
+      const opsToCheck = [...new Set(taskRows.map((row) => opOfTask(row.task_id)).filter(Boolean))].sort();
+      if (opsToCheck.length > 0) {
+        const lockKeys = opsToCheck.map((op) => `${areaCode}|${startDate}|${resolvedOrderNo || ""}|${op}`);
+        for (const key of lockKeys) {
+          await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
+        }
+      }
+
+      const conflicts = await findBayScheduleConflicts(client, {
+        areaCode,
+        orderNo: resolvedOrderNo,
+        startDate,
+        endDate,
+        operationNos: opsToCheck,
+      });
+
+      // Konflik TIDAK otomatis ditolak: dua shift pada tanggal sama memang sah dan tidak bisa
+      // dibedakan hanya dari tanggal. Tapi menambahkannya harus disengaja — jadi butuh
+      // `allow_conflict` + alasan, dan keduanya masuk audit log.
+      if (conflicts.total > 0) {
+        if (!allowConflict) {
+          throw new ApiError(
+            409,
+            "DUPLICATE_TASK_CONFLICT",
+            "Order dan operation ini sudah punya reservasi di area dan tanggal yang sama",
+            conflicts.conflicts.map((c) => ({
+              field: "tasks",
+              operation_no: c.operation_no,
+              order_no: c.order_no,
+              schedule_id: c.schedule_id,
+              schedule_group_id: c.schedule_group_id,
+              bay_codes: c.bay_codes,
+              start_date: c.start_date,
+              end_date: c.end_date,
+              status: c.status,
+              created_by: c.created_by,
+            }))
+          );
+        }
+        if (!conflictReason) {
+          // Tanpa alasan, jejak duplikatnya tidak bisa diaudit — dan justru itu yang hilang
+          // pada insiden B29E (9 grup, tidak ada catatan mengapa dibuat berulang).
+          throw new ApiError(400, "INVALID_PAYLOAD", "conflict_reason is required when allow_conflict is set", [
+            { field: "conflict_reason" },
+          ]);
+        }
+      }
 
       const inserted = [];
       for (const taskRow of taskRows) {
@@ -3092,6 +3479,15 @@ async function createBaySchedule(body = {}) {
           // SEBENARNYA ada, bukan berapa yang muat di daftar peringatan.
           overlap_count: overlaps.total,
           overlap_truncated: overlaps.truncated,
+          // F2: jejak duplikat. `override` hanya true kalau pengguna memang menembus aturan
+          // unik, dan alasannya ikut disimpan — inilah yang tidak ada di insiden B29E.
+          conflict_overridden: conflicts.total > 0 && allowConflict,
+          conflict_reason: conflicts.total > 0 && allowConflict ? conflictReason : null,
+          conflict_count: conflicts.total,
+          conflict_operations: conflicts.conflicts.map((c) => c.operation_no),
+          // F3: penanda retry. Tanpa ini, retry yang gagal separuh jalan tidak bisa dikenali
+          // dan akan menghasilkan reservasi kedua.
+          idempotency_key: idemKey,
         },
       });
 
@@ -3202,6 +3598,8 @@ async function createBaySchedule(body = {}) {
         end_date: endDate,
         overlap_count: overlaps.total,
         overlap_truncated: overlaps.truncated,
+        // F3: penanda retry untuk jalur order-level (satu reservasi, bukan batch task).
+        idempotency_key: idemKey,
       },
     });
 
@@ -3256,6 +3654,41 @@ async function loadBayScheduleGroup(client, groupId) {
     ]);
   }
   return result.rows;
+}
+
+// Check-in terbuka (belum checkout) yang menunjuk baris jadwal tertentu. Baris itu adalah
+// satu-satunya jalur operator untuk menyelesaikan pekerjaannya, jadi membatalkannya
+// memutus penyelesaian — keputusan yang tidak boleh diambil diam-diam oleh jalur cancel.
+// Wajib dipanggil di dalam transaksi SESUDAH baris jadwal dikunci FOR UPDATE, supaya
+// pemeriksaan dan UPDATE membaca keadaan yang sama.
+async function findOpenCheckins(client, scheduleIds) {
+  const ids = [...new Set((scheduleIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+  const result = await client.query(
+    `select t.ms_bay_schedule_id as schedule_id,
+            t.tsnumber,
+            t.operation_no,
+            t.longdate_checkin as checkin_at
+       from timesheet_transaction t
+      where t.ms_bay_schedule_id = any($1::uuid[])
+        and t.longdate_checkin is not null
+        and t.longdate_checkout is null
+      order by t.longdate_checkin, t.tsnumber`,
+    [ids]
+  );
+  return result.rows;
+}
+
+async function assertNoOpenCheckins(client, scheduleIds) {
+  const open = await findOpenCheckins(client, scheduleIds);
+  if (open.length) {
+    throw new ApiError(
+      409,
+      "OPEN_CHECKIN",
+      "Reservation row has an open check-in; it must be checked out before cancelling",
+      open
+    );
+  }
 }
 
 // Ubah SATU reservasi utuh dalam SATU transaksi: rentang tanggal, catatan, tujuan, KODE BAY,
@@ -3374,6 +3807,7 @@ async function updateBayScheduleGroup(groupIdParam, body = {}) {
 
     if (syncTasks) {
       const rowsToCancel = activeTaskRows.filter((row) => !desiredTaskIds.has(row.task_id));
+      await assertNoOpenCheckins(client, rowsToCancel.map((row) => row.schedule_id));
       if (rowsToCancel.length) {
         const cancelResult = await client.query(
           `update ms_project_bay_schedule
@@ -3571,6 +4005,12 @@ async function cancelBayScheduleGroup(groupIdParam, body = {}) {
   try {
     await client.query("begin");
     const existing = await loadBayScheduleGroup(client, groupId);
+    // Seluruh grup ditolak, bukan dibatalkan sebagian: pembatalan sebagian menyisakan grup
+    // yang isinya berbeda dari yang dilihat pengguna saat menekan tombol.
+    await assertNoOpenCheckins(
+      client,
+      existing.filter((row) => row.status !== "CANCELLED").map((row) => row.schedule_id)
+    );
 
     const result = await client.query(
       `update ms_project_bay_schedule
@@ -3612,10 +4052,23 @@ async function cancelBayScheduleGroup(groupIdParam, body = {}) {
 async function cancelBaySchedule(scheduleIdParam, body = {}) {
   const scheduleId = assertUuid(scheduleIdParam, "schedule_id");
   const actor = actorFromBody(body, "web-manufacturing");
+  const actorUserId = Number.isInteger(body?.actor_user_id) ? body.actor_user_id : null;
   const client = await pool().connect();
 
   try {
     await client.query("begin");
+    const locked = await client.query(
+      `select * from ms_project_bay_schedule
+        where schedule_id = $1::uuid
+          and status <> 'CANCELLED'
+        for update`,
+      [scheduleId]
+    );
+    if (!locked.rows[0]) {
+      throw new ApiError(404, "BAY_SCHEDULE_NOT_FOUND", "Bay schedule not found", [{ schedule_id: scheduleId }]);
+    }
+    await assertNoOpenCheckins(client, [scheduleId]);
+
     const result = await client.query(
       `update ms_project_bay_schedule
        set status = 'CANCELLED',
@@ -5295,6 +5748,11 @@ module.exports = {
   deactivateProjectResource,
   // Diekspor untuk test: logika perbandingan identitas task ber-mapping (B2).
   diffMappedTaskIdentity,
+  // Diekspor untuk test: encode/decode cursor paginasi bay-schedule (F1).
+  encodeBayScheduleCursor,
+  decodeBayScheduleCursor,
+  // Dibuka untuk controller (endpoint pra-submit) dan test aturan unik (F2).
+  findBayScheduleConflicts,
   findBayOverlaps,
   forceCheckinProject,
   getConflicts,
