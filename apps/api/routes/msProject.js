@@ -37,6 +37,8 @@ router.get("/sow-orders/:order_no/tasks", controller.listOrderTasks);
 // "/bay-schedules/:schedule_id", otherwise Express swallows them as a param.
 router.get("/bay-schedules", controller.listBaySchedules);
 router.get("/bay-schedules/occupants", controller.listBayOccupants);
+// F2: aturan unik order_no+operation_no per area per tanggal — pemeriksaan pra-submit.
+router.get("/bay-schedules/conflicts", controller.listBayScheduleConflicts);
 router.get("/bay-schedule-tasks", controller.listBayScheduleTasks);
 router.post("/bay-schedules", controller.createBaySchedule);
 router.put("/bay-schedules/group/:schedule_group_id", controller.updateBayScheduleGroup);

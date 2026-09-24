@@ -172,6 +172,60 @@ export async function fetchBaySchedules(params = {}, options = {}) {
   return payload.data || [];
 }
 
+// Varian yang mempertahankan `summary` server. Bentuk Array dari fetchBaySchedules
+// DIPERTAHANKAN dengan sengaja (ProjectBrowserPage memakainya sebagai array langsung), jadi
+// halaman yang butuh tahu kelengkapan memanggil helper ini.
+//
+// `has_more`/`next_cursor` datang dari server. Sebelum F1 keduanya tidak ada sama sekali,
+// sehingga peta tidak punya cara membedakan "tidak ada reservasi" dari "halaman terpotong" —
+// dan perbedaan itulah insiden B29E: sel tampil kosong padahal 8 reservasi aktif di bay itu.
+export async function fetchBaySchedulesPage(params = {}, options = {}) {
+  const payload = await request(`/ms-project/bay-schedules${queryString(params)}`, options);
+  const rows = Array.isArray(payload.data) ? payload.data : [];
+  const summary = payload.summary || {};
+  const asNumber = (value, fallback) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+  return {
+    rows,
+    limit: asNumber(summary.limit, rows.length),
+    offset: asNumber(summary.offset, 0),
+    // Server yang belum mengirim penanda apa pun: satu-satunya angka jujur adalah
+    // "tidak ada lanjutan yang diketahui", bukan tebakan bahwa daftarnya lengkap.
+    hasMore: Boolean(summary.has_more),
+    nextCursor: typeof summary.next_cursor === 'string' ? summary.next_cursor : null,
+    // `readComplete` = rangkaian pembacaan berakhir tanpa truncation. Dipakai peta untuk
+    // memutuskan boleh atau tidak menampilkan sel sebagai "free"; selama masih ada lanjutan,
+    // satu sel kosong TIDAK boleh disimpulkan kosong.
+    readComplete: !summary.has_more,
+  };
+}
+
+// Baca SELURUH hasil filter lewat cursor, bukan satu halaman. Dipakai panel order dan daftar
+// reservasi per order: satu halaman terpotong di sana berarti task tampil "No area reservation"
+// padahal sudah dipesan — bentuk lain insiden B29E. `readComplete: false` bila berhenti karena
+// batas pengaman, supaya pemanggil tidak menampilkan daftar terpotong sebagai daftar lengkap.
+export async function fetchAllBaySchedules(params = {}, options = {}) {
+  const PAGE_LIMIT = 2000;
+  const MAX_PAGES = 25;
+  const rows = [];
+  let after = null;
+  let pages = 0;
+  let hasMore = false;
+  do {
+    const page = await fetchBaySchedulesPage(
+      { ...params, limit: PAGE_LIMIT, ...(after ? { after, if_first: 1 } : {}) },
+      options,
+    );
+    pages += 1;
+    rows.push(...page.rows);
+    hasMore = page.hasMore;
+    after = page.nextCursor;
+  } while (hasMore && after && pages < MAX_PAGES);
+  return { rows, readComplete: !hasMore, pages };
+}
+
 // Penghuni bay pada rentang tanggal tertentu -> dipakai UI untuk peringatan lunak
 // SEBELUM submit reservasi. `params.bay_codes` boleh array (digabung jadi CSV) dan
 // `params.exclude_group_id` dipakai saat mengedit grup agar dirinya sendiri tidak
@@ -238,6 +292,15 @@ export async function updateBayScheduleGroup(groupId, payload) {
     ...(response.data || {}),
     warnings: Array.isArray(response.warnings) ? response.warnings : [],
   };
+}
+
+// F2: reservasi existing yang memakai operation_no yang sama untuk order yang sama di area
+// dan rentang tanggal ini. Peringatan SEBELUM submit — server tetap memeriksa ulang di dalam
+// transaksi, karena dua pengguna bisa sama-sama lolos di sini.
+// `options` diteruskan ke fetch supaya pemanggil bisa mengirim { signal } AbortController.
+export async function fetchBayScheduleConflicts(params = {}, options = {}) {
+  const payload = await request(`/ms-project/bay-schedules/conflicts${queryString(params)}`, options);
+  return payload.data || [];
 }
 
 // Batalkan SELURUH baris satu reservasi sekaligus (atomik di server), pengganti

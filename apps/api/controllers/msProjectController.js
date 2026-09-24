@@ -90,10 +90,18 @@ function bodyWithSessionActor(req) {
 // Ringkasan paginasi standar. `total` ikut dikirim HANYA bila service memang menghitungnya,
 // supaya pemanggil tahu daftarnya terpotong `limit` — sebelumnya truncation terjadi diam-diam
 // (temuan review #5). Service yang belum mengirim total tetap menghasilkan summary lama.
+//
+// F1: `has_more`/`next_cursor` dari service ikut diteruskan apa adanya. Keduanya ADITIF —
+// `limit`/`offset`/`total` tidak berubah bentuk, jadi konsumen lama aman. Inilah satu-satunya
+// cara konsumen membedakan "daftar habis" dari "daftar terpotong".
 function paginationSummary(result = {}) {
   const summary = { limit: result.limit, offset: result.offset };
   if (result.total !== undefined && result.total !== null) {
     summary.total = Number(result.total);
+  }
+  if (result.pageMeta) {
+    summary.has_more = Boolean(result.pageMeta.has_more);
+    summary.next_cursor = result.pageMeta.next_cursor ?? null;
   }
   return summary;
 }
@@ -186,7 +194,12 @@ exports.mapSowOperationToTask = route(async (req) => {
 exports.listBaySchedules = route(async (req) => {
   const result = await service.listBaySchedules(req.query);
   // Sync 3a: tanggal reservasi masa depan ikut jadwal task (idempotent, forward-only).
-  if (!req.query.ignore_sync) {
+  //
+  // HANYA di halaman pertama sebuah rangkaian pembacaan. Sync mengubah `start_date`, dan
+  // `start_date` justru kolom pengurut pertama — menjalankannya di tengah rangkaian cursor
+  // berarti memindahkan baris yang belum dibaca, tepat pola yang membuat peta kehilangan
+  // reservasi. Halaman lanjutan (`after`) karena itu murni membaca.
+  if (!req.query.ignore_sync && !req.query.after) {
     await service.syncBayScheduleDates();
   }
   return (res) => success(res, result.rows, 200, paginationSummary(result));
@@ -196,6 +209,35 @@ exports.listBayScheduleTasks = route(async (req) => {
   const result = await service.listBayScheduleTasks(req.query);
   return (res) => success(res, result.rows, 200, result.summary || {});
 });
+
+// F2: pemeriksaan konflik SEBELUM submit (read-only). Peta memakainya untuk menampilkan
+// reservasi existing + menawarkan buka/edit. Ini peringatan lunak; yang menentukan tetap
+// pemeriksaan di dalam transaksi saat save, karena dua pengguna bisa sama-sama lolos di sini.
+exports.listBayScheduleConflicts = route(async (req) => {
+  const result = await service.findBayScheduleConflicts(null, conflictQueryParams(req.query));
+  return (res) => success(res, result.conflicts, 200, {
+    total: result.total,
+    checked_operations: result.checked_operations,
+  });
+});
+
+// Pembungkus untuk endpoint pra-submit: query string datang sebagai teks, jadi operation_no
+// diterima sebagai daftar dipisah koma dan dinormalisasi di sini. Tanpa pembungkus ini
+// controller harus menebak bentuk argumen service, dan aturan uniknya jadi tersebar.
+function conflictQueryParams(query = {}) {
+  const raw = query.operation_no ?? query.operation_nos ?? "";
+  const operationNos = Array.isArray(raw)
+    ? raw
+    : String(raw).split(",").map((value) => value.trim()).filter(Boolean);
+  return {
+    areaCode: typeof query.area_code === "string" ? query.area_code.trim().toUpperCase() || null : null,
+    orderNo: typeof query.order_no === "string" ? query.order_no.trim() || null : null,
+    startDate: typeof query.start_date === "string" ? query.start_date.slice(0, 10) : null,
+    endDate: typeof query.end_date === "string" ? query.end_date.slice(0, 10) : null,
+    operationNos,
+    excludeGroupId: typeof query.exclude_group_id === "string" ? query.exclude_group_id.trim() || null : null,
+  };
+}
 
 // Bay occupancy preview: who already sits in these bays for this date range.
 // Used by the UI BEFORE submitting a reservation (soft warning, no blocking).
