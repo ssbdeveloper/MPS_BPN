@@ -14,7 +14,8 @@
 //   BayAreaDetail.jsx        tingkat 2 — satu area, badge kaya, drop-zone drag & drop
 //   OrderPanel.jsx           daftar order yang bisa ditarik ke bay
 //   ReservationPanel.jsx     form reservasi (mode ORDER & NONJOB)
-//   ReservationDetailModal   detail + pembatalan satu reservasi
+//   ReservationDetailModal   detail + pembatalan satu reservasi (grup atau per baris)
+//   OrderReservationList     daftar reservasi satu order lintas tanggal (F3)
 
 export {
   // Topologi
@@ -42,6 +43,8 @@ export {
   buildSchedulesByBay,
   groupKeyOf,
   dedupeByGroup,
+  groupByOrder,
+  orderReservationList,
   // Order yatim (D7) & aksen visual
   orderKeyOf,
   isUnknownOrder,

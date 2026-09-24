@@ -4,12 +4,13 @@ import {
   AlertTriangle, CalendarRange, Clock, ExternalLink, Info, ListChecks, Loader2, MapPin,
   RefreshCw, Save, Undo2, Users, X,
 } from 'lucide-react';
-import { fetchBayOccupants, fetchBaySchedules, fetchOrderTasks, updateOperationPeople } from '../../services/msProjectService';
+import { fetchAllBaySchedules, fetchBayOccupants, fetchBayScheduleConflicts, fetchOrderTasks, updateOperationPeople } from '../../services/msProjectService';
 import { SearchInput, Skeleton } from '../../components';
 import {
-  NONJOB_BOOKING_TYPES, addDaysText, bookingTypeOf, formatDate, formatHours, statusStyle, todayText,
+  NONJOB_BOOKING_TYPES, addDaysText, bookingTypeOf, formatDate, formatHours, orderReservationList, statusStyle, todayText,
   bayCode as makeBayCode, splitBayCode,
 } from './constants';
+import OrderReservationList from './OrderReservationList';
 import useDialogA11y from './useDialogA11y';
 
 // =============================================================================
@@ -92,7 +93,7 @@ function isTaskUnmapped(task) {
 
 const FIELD_CLASS = 'rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 placeholder-slate-400 transition-all duration-150 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8] motion-reduce:transition-none';
 
-const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, peopleInvalid, onPeopleChange, reservations }) {
+const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, peopleInvalid, onPeopleChange, reservations, onShowReservations }) {
   const uid = useId();
   const planhours = task.planhours;
   const hasPlan = planhours != null && planhours !== '' && Number.isFinite(Number(planhours));
@@ -165,9 +166,19 @@ const TaskRow = memo(function TaskRow({ task, checked, onToggle, peopleValue, pe
                   </span>
                 ))}
                 {reservations.length > 2 && (
-                  <span className="block truncate text-slate-500">
-                    +{reservations.length - 2} more reservation{reservations.length - 2 > 1 ? 's' : ''}
-                  </span>
+                  onShowReservations ? (
+                    <button
+                      type="button"
+                      onClick={onShowReservations}
+                      className="block truncate font-semibold text-[#0077b6] underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8]"
+                    >
+                      +{reservations.length - 2} more reservation{reservations.length - 2 > 1 ? 's' : ''}
+                    </button>
+                  ) : (
+                    <span className="block truncate text-slate-500">
+                      +{reservations.length - 2} more reservation{reservations.length - 2 > 1 ? 's' : ''}
+                    </span>
+                  )
                 )}
               </span>
             ) : (
@@ -315,7 +326,9 @@ const OccupantRow = memo(function OccupantRow({ occupant }) {
  *   onClose  – () => void
  *   onSubmit – (payload) => void  payload createBaySchedule / updateBayScheduleGroup
  */
-export default function ReservationPanel({ open, mode, area, bayCode, order, saving, onClose, onSubmit, edit }) {
+export default function ReservationPanel({
+  open, mode, area, bayCode, order, saving, onClose, onSubmit, edit, onOpenReservation, reservationsToken = 0,
+}) {
   if (!open || !area) return null;
   // Remount saat KONTEKS reservasi berganti (mode/area/order/edit) supaya form
   // tidak membawa sisa isian booking sebelumnya. Ganti BAY saja sengaja TIDAK
@@ -331,11 +344,15 @@ export default function ReservationPanel({ open, mode, area, bayCode, order, sav
       onClose={onClose}
       onSubmit={onSubmit}
       edit={edit}
+      onOpenReservation={onOpenReservation}
+      reservationsToken={reservationsToken}
     />
   );
 }
 
-function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onSubmit, edit }) {
+function ReservationPanelBody({
+  mode, area, bayCode, order, saving, onClose, onSubmit, edit, onOpenReservation, reservationsToken,
+}) {
   const isOrderMode = mode !== 'NONJOB';
   const isEdit = Boolean(edit);
   // Konstan sepanjang umur instance: shell me-remount saat mode/order berganti.
@@ -454,6 +471,18 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   // --- Submit ---------------------------------------------------------------
   const [submitError, setSubmitError] = useState('');
 
+  // --- Konflik aturan unik (F2) ---------------------------------------------
+  // Aturan: dalam satu area, satu order_no tidak boleh punya operation_no yang sama dua kali
+  // bila rentang tanggalnya BERTUMPANG TINDIH. Konflik tidak otomatis ditolak — dua shift pada
+  // tanggal yang sama memang sah dan tidak bisa dibedakan hanya dari tanggal. Tetapinya harus
+  // disengaja, dan server menuntut alasannya.
+  //
+  // Dua lapis: (1) peringatan sebelum submit dari endpoint conflicts; (2) kunci sungguhan di
+  // dalam transaksi server saat save. Lapis (2) yang mengikat — dua pengguna bisa sama-sama
+  // lolos lapis (1).
+  const [conflictAck, setConflictAck] = useState({ key: null, checked: false });
+  const [conflictReason, setConflictReason] = useState('');
+
   const titleId = useId();
   const purposeId = useId();
 
@@ -523,24 +552,36 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
   }, [shouldLoadTasks, order?.order_no, reloadToken]);
 
   // Reservasi bay order ini (SEMUA tanggal, bukan cuma window peta) -> status
-  // per task. Tanpa batas tanggal supaya task yang sudah direservasi di periode
-  // lain tetap kelihatan. Gagal fetch = diam (info opsional, tidak memblokir).
+  // per task dan daftar reservasi per order (F3). Dibaca LENGKAP lewat cursor: satu halaman
+  // terpotong membuat task tampil "No area reservation" padahal sudah dipesan. Gagal fetch =
+  // diam (info opsional, tidak memblokir).
+  const [orderRows, setOrderRows] = useState({ rows: [], readComplete: true });
   useEffect(() => {
     if (!shouldLoadTasks) return undefined;
-    let active = true;
-    fetchBaySchedules({ order_no: order.order_no, limit: 5000 })
-      .then((rows) => {
-        if (!active) return;
+    const controller = new AbortController();
+    fetchAllBaySchedules({ order_no: order.order_no }, { signal: controller.signal })
+      .then(({ rows, readComplete }) => {
+        if (controller.signal.aborted) return;
+        const active = rows.filter((row) => String(row.status || '').toUpperCase() !== 'CANCELLED');
         const map = {};
-        (Array.isArray(rows) ? rows : []).forEach((row) => {
+        active.forEach((row) => {
           if (!row.task_id) return;
           (map[row.task_id] || (map[row.task_id] = [])).push(row);
         });
         setTaskReservations(map);
+        setOrderRows({ rows: active, readComplete });
       })
-      .catch(() => { if (active) setTaskReservations({}); });
-    return () => { active = false; };
-  }, [shouldLoadTasks, order?.order_no]);
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setTaskReservations({});
+        setOrderRows({ rows: [], readComplete: true });
+      });
+    return () => controller.abort();
+  }, [shouldLoadTasks, order?.order_no, reservationsToken]);
+  const orderReservations = useMemo(() => orderReservationList(orderRows.rows), [orderRows.rows]);
+  const [showOrderReservations, setShowOrderReservations] = useState(false);
+  const toggleOrderReservations = useCallback(() => setShowOrderReservations((value) => !value), []);
+  const showAllOrderReservations = useCallback(() => setShowOrderReservations(true), []);
 
   const selectedTaskIdSet = useMemo(() => new Set(selectedTaskIds), [selectedTaskIds]);
   // Daftar task yang DITAMPILKAN. Normal = hasil fetch order. Mode EDIT dengan
@@ -646,6 +687,69 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
     // me-remount saat target edit berganti) — aman sebagai dependency.
   }, [canQueryOccupants, bayCodesKey, startDate, endDate, occupantsToken, isEdit, edit?.schedule_group_id]);
 
+  // --- Konflik order+operation (F2, mode EDIT) -------------------------------
+  // Dijalankan hanya saat MENGUBAH reservasi yang sudah ada: create tidak diperiksa di sini
+  // karena pelanggaran pertama terhadap aturan unik akan tertangkap percobaan berikutnya.
+  // Yang berbahaya adalah edit yang MENGGESER reservasi ke area/tanggal/operation yang sudah
+  // dipakai reservasi lain.
+  //
+  // Kelengkapan diturunkan dari KUNCI, bukan di-set di badan effect: begitu tanggal/bay/task
+  // berubah, hasil lama otomatis dianggap basi tanpa render tambahan — pola yang sama dengan
+  // useBaySchedules, dan menghindari setState sinkron di dalam effect.
+  const conflictOps = useMemo(
+    () => [...new Set(selectedTasks.map((task) => task.operation_no).filter((op) => op != null && op !== ''))],
+    [selectedTasks],
+  );
+  const conflictGroupId = isEdit ? edit?.schedule_group_id : null;
+  // Key sengaja memuat operation+area+tanggal: bila salah satu berubah, hasil lama basi.
+  const conflictKey = (conflictGroupId && area?.areaCode && startDate && endDate && conflictOps.length > 0)
+    ? `${area.areaCode}|${order?.order_no || ''}|${startDate}|${endDate}|${[...conflictOps].sort().join(',')}|${conflictGroupId}`
+    : null;
+
+  const [conflictResult, setConflictResult] = useState({ key: null, rows: [] });
+
+  useEffect(() => {
+    if (!conflictKey) return undefined;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetchBayScheduleConflicts({
+        area_code: area.areaCode,
+        order_no: order?.order_no,
+        start_date: startDate,
+        end_date: endDate,
+        operation_no: conflictOps,
+        // Reservasi yang sedang diedit tidak boleh melaporkan dirinya sendiri.
+        exclude_group_id: conflictGroupId,
+      }, { signal: controller.signal })
+        .then((result) => {
+          if (controller.signal.aborted) return;
+          setConflictResult({ key: conflictKey, rows: Array.isArray(result) ? result : [] });
+        })
+        .catch((error) => {
+          // Kegagalan pemeriksaan BUKAN izin untuk menyimpan: hasil kosong ditampilkan dan
+          // server tetap memeriksa ulang saat save.
+          if (controller.signal.aborted || error?.name === 'AbortError') return;
+          setConflictResult({ key: conflictKey, rows: [] });
+        });
+    }, 300);
+
+    return () => { controller.abort(); clearTimeout(timer); };
+    // conflictKey sudah merangkum area/order/tanggal/operation/grup; conflictOps dipakai di
+    // dalam untuk nilai mentahnya.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conflictKey]);
+
+  // Hasil hanya berlaku untuk kunci yang sekarang.
+  const conflicts = conflictResult.key === conflictKey ? conflictResult.rows : [];
+  // Selama pemeriksaan belum selesai, submit ditahan — menyimpan sebelum hasilnya tiba sama
+  // dengan menyimpan tanpa peringatan.
+  const loadingConflicts = Boolean(conflictKey) && conflictResult.key !== conflictKey;
+  // Konfirmasi terikat pada kunci: mengubah tanggal setelah menyetujui harus memaksa
+  // persetujuan ulang, bukan mewarisi persetujuan untuk keadaan yang berbeda.
+  const conflictAckActive = conflictAck.key === conflictKey && conflictAck.checked;
+  const ackConflict = useCallback((checked) => setConflictAck({ key: conflictKey, checked }), [conflictKey]);
+
   // --- Handler --------------------------------------------------------------
   // "Select all" bekerja pada HASIL PENCARIAN yang BISA dicentang (READY / legacy),
   // bukan seluruh baris: TASK_LOST & NEEDS_MAPPING tidak pernah ikut terseret.
@@ -716,7 +820,13 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
     && !datesMissing
     && !peopleInvalid
     && !purposeMissing
-    && !tasksMissing;
+    && !tasksMissing
+    // Selama pemeriksaan konflik masih berjalan, jangan biarkan submit: menyimpan sebelum
+    // hasilnya tiba persis sama dengan menyimpan tanpa peringatan.
+    && !loadingConflicts
+    // Mengabaikan temuan konflik harus disengaja DAN beralasan — server menolak override
+    // tanpa conflict_reason, jadi menahan tombol di sini hanya mencegah percobaan yang pasti gagal.
+    && (conflicts.length === 0 || (conflictAckActive && conflictReason.trim() !== ''));
 
   const handleSubmit = async () => {
     setSubmitError('');
@@ -781,6 +891,14 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
       base.notes = notes.trim();
     } else if (notes.trim()) {
       base.notes = notes.trim();
+    }
+
+    // F2: override konflik hanya dikirim saat pengguna benar-benar menyetujuinya untuk
+    // keadaan yang berlaku sekarang. Server menolak override tanpa alasan, dan mencatat
+    // keduanya di audit log.
+    if (conflicts.length > 0 && conflictAckActive) {
+      base.allow_conflict = true;
+      base.conflict_reason = conflictReason.trim();
     }
 
     if (isOrderMode) {
@@ -919,6 +1037,25 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                   </button>
                 )}
 
+                {orderReservations.length > 0 && typeof onOpenReservation === 'function' && (
+                  <button
+                    type="button"
+                    onClick={toggleOrderReservations}
+                    aria-expanded={showOrderReservations}
+                    className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] motion-reduce:transition-none"
+                  >
+                    <MapPin className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                    {showOrderReservations ? 'Hide' : 'Show'} {orderReservations.length} reservation{orderReservations.length === 1 ? '' : 's'} for this order
+                  </button>
+                )}
+                {showOrderReservations && typeof onOpenReservation === 'function' && (
+                  <OrderReservationList
+                    entries={orderReservations}
+                    readComplete={orderRows.readComplete}
+                    onOpen={onOpenReservation}
+                  />
+                )}
+
                 <div className="rounded-lg border border-slate-200 bg-white">
                   {loadingTasks ? (
                     <div className="space-y-2 p-3">
@@ -1002,6 +1139,7 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                                 peopleInvalid={!isValidPeople(value)}
                                 onPeopleChange={handlePeopleChange}
                                 reservations={taskReservations[task.task_id] || EMPTY_TASK_RESERVATIONS}
+                                onShowReservations={typeof onOpenReservation === 'function' ? showAllOrderReservations : undefined}
                               />
                             );
                           })}
@@ -1182,6 +1320,65 @@ function ReservationPanelBody({ mode, area, bayCode, order, saving, onClose, onS
                 </label>
               </div>
             </div>
+
+            {/* --- Konflik aturan unik order+operation (F2) --- */}
+            {conflicts.length > 0 && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-amber-800">
+                      Operation already reserved for this order in this area on these dates
+                    </p>
+                    <p className="mt-0.5 text-xs text-amber-700">
+                      Duplicate operation: {[...new Set(conflicts.map((c) => c.operation_no))].join(', ')}.
+                      Saving again will create a second reservation unless you confirm below.
+                    </p>
+                    <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                      {conflicts.map((conflict, index) => (
+                        <li
+                          key={conflict.schedule_group_id || conflict.schedule_id || index}
+                          className="rounded-lg border border-amber-200 bg-white px-2 py-1.5 text-xs text-slate-700"
+                        >
+                          <span className="font-bold tabular-nums">Op {conflict.operation_no}</span>
+                          {' · '}
+                          {(conflict.bay_codes || []).join(', ') || '—'}
+                          {' · '}
+                          <span className="tabular-nums">{formatDate(conflict.start_date)} – {formatDate(conflict.end_date)}</span>
+                          {conflict.status ? ` · ${conflict.status}` : ''}
+                          {conflict.created_by ? ` · by ${conflict.created_by}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+
+                    <label className="mt-2 flex items-start gap-2 text-xs font-semibold text-amber-900">
+                      <input
+                        type="checkbox"
+                        checked={conflictAckActive}
+                        onChange={(event) => ackConflict(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-amber-400"
+                      />
+                      Create a second reservation for the same operation anyway
+                    </label>
+                    {conflictAckActive && (
+                      <label className="mt-2 grid gap-1 text-xs font-bold text-amber-900">
+                        Reason (required, recorded in the audit log)
+                        <textarea
+                          value={conflictReason}
+                          onChange={(event) => setConflictReason(event.target.value)}
+                          rows={2}
+                          className={FIELD_CLASS}
+                          placeholder="e.g. second shift, rework after rework ticket"
+                        />
+                        {conflictReason.trim() === '' && (
+                          <span className="font-semibold text-red-600">A reason is required to continue.</span>
+                        )}
+                      </label>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* --- Error submit (write-back headcount dsb) --- */}
             {submitError && (

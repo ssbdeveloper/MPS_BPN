@@ -671,6 +671,8 @@ export function dedupeByGroup(schedules) {
         tasks: [],
         task_count: 0,
         people_total: null,
+        timesheet_ref_count: 0,
+        open_checkin_count: 0,
       };
       RESERVATION_FIELDS.forEach((field) => { entry[field] = row[field] ?? null; });
       byKey.set(key, entry);
@@ -683,6 +685,12 @@ export function dedupeByGroup(schedules) {
     }
 
     if (row.schedule_id) entry.schedule_ids.push(row.schedule_id);
+    // F3: hitungan per BARIS dari server. Dijumlahkan ke reservasi supaya tombol cancel grup
+    // bisa diblokir, dan disimpan di task supaya modal bisa bertindak per baris.
+    const refCount = Number(row.timesheet_ref_count) || 0;
+    const openCount = Number(row.open_checkin_count) || 0;
+    entry.timesheet_ref_count += refCount;
+    entry.open_checkin_count += openCount;
     if (row.task_id) {
       entry.tasks.push({
         schedule_id: row.schedule_id,
@@ -693,6 +701,9 @@ export function dedupeByGroup(schedules) {
         workcenter: row.workcenter,
         planhours: row.planhours,
         people_required: row.people_required,
+        status: row.status,
+        timesheet_ref_count: refCount,
+        open_checkin_count: openCount,
       });
     }
   });
@@ -712,6 +723,91 @@ export function dedupeByGroup(schedules) {
     entry.people_total = people;
     return entry;
   });
+}
+
+// Daftar reservasi SATU order lintas tanggal (F3). Tidak bergantung pada tanggal kursor peta,
+// supaya reservasi di luar window peta tetap bisa dibuka, diedit, dan dibatalkan.
+// Urutan memakai identitas grup sebagai pemecah seri: dua grup bertanggal sama tidak boleh
+// bertukar posisi antar-render.
+export function orderReservationList(rows) {
+  const active = (rows || []).filter((row) => row && String(row.status || '').toUpperCase() !== 'CANCELLED');
+  return dedupeByGroup(active).sort((a, b) => {
+    const byDate = dateKey(a.start_date).localeCompare(dateKey(b.start_date));
+    return byDate !== 0 ? byDate : String(a.group_key).localeCompare(String(b.group_key));
+  });
+}
+
+// Sel bay tingkat 2: SATU entri per ORDER, bukan per grup reservasi. Satu order sering
+// direservasi lewat beberapa grup (mis. op 220 dan op 280 dipesan terpisah, tanggal sama) —
+// scheduler perlu melihat seluruh operation order itu yang terjadwal di tanggal kursor dalam
+// satu kartu. Booking non-job tetap per grup (tidak punya order untuk digabung).
+//
+// Entri gabungan lebih dari satu grup ditandai `order_view: true` dan `schedule_group_id:
+// null`: Edit/Cancel grup tidak berlaku pada gabungan (akan mengubah grup lain diam-diam);
+// pembatalan dilakukan per baris operation.
+export function groupByOrder(schedules) {
+  const groups = dedupeByGroup(schedules);
+  const out = [];
+  const byOrder = new Map();
+  groups.forEach((group) => {
+    const orderKey = bookingTypeOf(group).isJob && group.order_no
+      ? String(group.order_no).replace(/^0+/, '')
+      : null;
+    if (!orderKey) { out.push(group); return; }
+    const existing = byOrder.get(orderKey);
+    if (!existing) {
+      const entry = {
+        ...group,
+        group_key: `order:${orderKey}`,
+        schedule_group_ids: group.schedule_group_id ? [group.schedule_group_id] : [],
+        schedule_ids: [...group.schedule_ids],
+        tasks: [...group.tasks],
+        bay_codes: Array.isArray(group.bay_codes) ? [...group.bay_codes] : [],
+        groups: [group],
+      };
+      byOrder.set(orderKey, entry);
+      out.push(entry);
+      return;
+    }
+    existing.groups.push(group);
+    if (group.schedule_group_id && !existing.schedule_group_ids.includes(group.schedule_group_id)) {
+      existing.schedule_group_ids.push(group.schedule_group_id);
+    }
+    existing.schedule_ids.push(...group.schedule_ids);
+    existing.tasks.push(...group.tasks);
+    (group.bay_codes || []).forEach((code) => {
+      if (!existing.bay_codes.includes(code)) existing.bay_codes.push(code);
+    });
+    if (dateKey(group.start_date) < dateKey(existing.start_date)) existing.start_date = group.start_date;
+    if (dateKey(group.end_date) > dateKey(existing.end_date)) existing.end_date = group.end_date;
+    existing.timesheet_ref_count += group.timesheet_ref_count;
+    existing.open_checkin_count += group.open_checkin_count;
+    if (group.people_total != null) existing.people_total = (existing.people_total ?? 0) + group.people_total;
+  });
+
+  byOrder.forEach((entry) => {
+    const opKey = (task) => {
+      const n = Number(task.operation_no);
+      return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+    };
+    entry.tasks.sort((a, b) => opKey(a) - opKey(b) || String(a.operation_no).localeCompare(String(b.operation_no)));
+    entry.task_count = entry.tasks.length;
+    entry.bay_codes.sort();
+    const merged = entry.groups.length > 1;
+    entry.order_view = merged;
+    if (merged) {
+      entry.schedule_group_id = null;
+      // Status kartu: CONFIRMED bila ada operation yang sudah dikerjakan.
+      if (entry.tasks.some((task) => String(task.status || '').toUpperCase() === 'CONFIRMED')) entry.status = 'CONFIRMED';
+    } else {
+      // Satu grup saja: kembalikan group_key asli supaya reservationIndex (yang
+      // dibangun dari dedupeByGroup) bisa menemukan entri ini dan Edit/Cancel tetap
+      // bekerja lewat schedule_group_id asli.
+      const solo = entry.groups[0];
+      entry.group_key = solo.group_key;
+    }
+  });
+  return out;
 }
 
 // Map bayCode -> baris jadwal yang AKTIF pada tanggal kursor.

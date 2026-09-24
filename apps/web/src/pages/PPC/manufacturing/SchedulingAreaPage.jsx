@@ -27,7 +27,7 @@ import { Skeleton } from '../../../components';
 import {
   AREA_BY_CODE, AreaDetailPanel, BayAreaDetail, FloorMapOverview, OrderPanel, ReservationDetailModal,
   ReservationPanel, addDaysText, bookingTypeOf, buildAreaReservations, dateKey, dedupeByGroup,
-  groupAreaProjects, groupKeyOf, todayText, useBaySchedules, useSowOrders,
+  formatDate, groupAreaProjects, groupKeyOf, todayText, useBaySchedules, useSowOrders,
 } from '../../../features/bayScheduling';
 import BayReservationTimeline from './BayReservationTimeline';
 
@@ -177,6 +177,9 @@ export default function SchedulingAreaPage() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [reservation, setReservation] = useState(null); // { mode, bayCode, order }
   const [detail, setDetail] = useState(null);
+  // Naik setiap kali reservasi berubah dari halaman ini, supaya daftar reservasi per order di
+  // panel (F3) ikut dibaca ulang, bukan menampilkan grup yang baru saja dibatalkan.
+  const [reservationsToken, setReservationsToken] = useState(0);
   const [saving, setSaving] = useState(false);
   const [areaFilter, setAreaFilter] = useState('');
   // Tahap 5 — panel detail area/zona di peta tingkat 1. NON-MODAL: peta tetap
@@ -193,6 +196,7 @@ export default function SchedulingAreaPage() {
   // area (feedback 2026-08-06).
   const {
     schedules, byBay, loading, error, reload, cursorDate, setCursorDate,
+    readComplete, pagesLoaded,
   } = useBaySchedules({ rangeStart: bounds.min, rangeEnd: bounds.max });
 
   // Kursor awal dari URL ?date= (booking yang diklik di Gantt).
@@ -299,6 +303,9 @@ export default function SchedulingAreaPage() {
 
   const openDetail = useCallback((schedule) => {
     if (!schedule) return;
+    // Kartu per-order (gabungan beberapa grup) dibuka apa adanya: isinya sudah seluruh
+    // operation order itu pada tanggal kursor.
+    if (schedule.order_view) { setDetail(schedule); return; }
     setDetail(indexRef.current.get(groupKeyOf(schedule)) || dedupeByGroup([schedule])[0] || null);
   }, []);
 
@@ -390,8 +397,27 @@ export default function SchedulingAreaPage() {
       }
       setReservation(null);
       reload();
+      setReservationsToken((value) => value + 1);
     } catch (err) {
-      toast.error('Reservation failed', { description: err.message });
+      // F2: konflik aturan unik datang sebagai 409 dengan daftar reservasi existing di
+      // `details`. Menampilkan pesan generik akan menyembunyikan justru informasi yang
+      // dibutuhkan scheduler untuk memutuskan: reservasi mana yang sudah ada.
+      if (err?.code === 'DUPLICATE_TASK_CONFLICT') {
+        const rows = Array.isArray(err.details) ? err.details : [];
+        const ops = [...new Set(rows.map((row) => row.operation_no).filter(Boolean))].join(', ');
+        const where = rows[0] ? `${(rows[0].bay_codes || []).join(', ')} · ${formatDate(rows[0].start_date)} – ${formatDate(rows[0].end_date)}` : '';
+        toast.error('Operation already reserved', {
+          description: [
+            ops ? `Operation ${ops} already booked for this order in this area on these dates.` : err.message,
+            where,
+            rows[0]?.created_by ? `Reserved by ${rows[0].created_by}.` : '',
+            `${rows.length} existing reservation${rows.length === 1 ? '' : 's'} — open the reservation to edit it instead.`,
+          ].filter(Boolean).join(' '),
+          duration: 12000,
+        });
+      } else {
+        toast.error('Reservation failed', { description: err.message });
+      }
     } finally {
       setSaving(false);
     }
@@ -419,8 +445,29 @@ export default function SchedulingAreaPage() {
       });
       setDetail(null);
       reload();
+      setReservationsToken((value) => value + 1);
     } catch (err) {
       toast.error('Failed to cancel', { description: err.message });
+    } finally {
+      setSaving(false);
+    }
+  }, [reload]);
+
+  // F3: batalkan SATU baris task dari grup campuran. Server menolak (409 OPEN_CHECKIN) baris
+  // yang check-in-nya masih terbuka; pesan server ditampilkan apa adanya.
+  const handleCancelRow = useCallback(async (target, task) => {
+    if (!task?.schedule_id) return;
+    setSaving(true);
+    try {
+      await cancelBaySchedule(task.schedule_id);
+      toast.success('Row cancelled', {
+        description: `${target?.order_no || ''} · Op ${task.operation_no || '-'}`,
+      });
+      setDetail(null);
+      reload();
+      setReservationsToken((value) => value + 1);
+    } catch (err) {
+      toast.error('Failed to cancel row', { description: err.message });
     } finally {
       setSaving(false);
     }
@@ -436,6 +483,16 @@ export default function SchedulingAreaPage() {
     content = <InlineError message={error} onRetry={reload} />;
   } else if (loading && schedules.length === 0) {
     content = <Skeleton className="h-full min-h-[420px] w-full rounded-xl" />;
+  } else if (showAreaLevel && !readComplete) {
+    // Rentang belum terbaca penuh. Peta yang tampak wajar tapi kehilangan reservasi adalah
+    // kegagalan yang lebih berbahaya daripada kegagalan yang mengaku gagal (insiden B29E:
+    // sel "free" padahal 8 reservasi aktif). Jadi jangan render peta setengah jadi.
+    content = (
+      <InlineError
+        message={`Peta belum terbaca lengkap (${pagesLoaded} halaman dimuat). Sebagian sel bisa tampak kosong padahal terisi. Coba lagi untuk memuat seluruh rentang.`}
+        onRetry={reload}
+      />
+    );
   } else if (viewMode === 'timeline') {
     content = (
       <BayReservationTimeline
@@ -493,6 +550,7 @@ export default function SchedulingAreaPage() {
             onOpenDetail={openDetail}
             onDropOrder={handleDropOrder}
             onBack={handleBack}
+            readComplete={readComplete}
           />
         </div>
       </div>
@@ -645,6 +703,8 @@ export default function SchedulingAreaPage() {
         saving={saving}
         onClose={closeReservation}
         onSubmit={handleSubmitReservation}
+        onOpenReservation={setDetail}
+        reservationsToken={reservationsToken}
       />
 
       {detail && (
@@ -652,6 +712,7 @@ export default function SchedulingAreaPage() {
           detail={detail}
           onClose={closeDetail}
           onCancel={handleCancelReservation}
+          onCancelRow={handleCancelRow}
           onEdit={handleEditReservation}
           busy={saving}
         />

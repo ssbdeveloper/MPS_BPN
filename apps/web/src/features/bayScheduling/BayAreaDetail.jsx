@@ -10,9 +10,8 @@ import {
   bayCode as makeBayCode,
   splitBayCode,
   zoneOrderFor,
-  dedupeByGroup,
   formatDate,
-  groupKeyOf,
+  groupByOrder,
   isActiveOn,
   isUnknownOrder,
   plural,
@@ -233,18 +232,24 @@ const ScheduleBadge = memo(function ScheduleBadge({ schedule, onOpenDetail }) {
 // ilegal. Pola role="button" + Enter/Space sama dengan implementasi lama.
 const BayDetailCell = memo(function BayDetailCell({
   area, bayCode, schedules, cursorDate, selected, onSelectBay, onOpenDetail, onDropOrder,
+  readComplete = true,
 }) {
   const [dragOver, setDragOver] = useState(false);
 
-  // Satu badge per RESERVASI: baris jadwal task-level datang N baris per reservasi.
-  // Filter kursor tanggal dilakukan di sini juga supaya sel tetap benar walau
-  // pemanggil memberi peta yang dibangun dengan tanggal lain.
+  // Satu badge per ORDER: semua operation order itu yang aktif di tanggal kursor, dari grup
+  // reservasi mana pun, tampil dalam satu kartu. Filter kursor tanggal dilakukan di sini juga
+  // supaya sel tetap benar walau pemanggil memberi peta yang dibangun dengan tanggal lain.
   const reservations = useMemo(
-    () => dedupeByGroup(schedules.filter((schedule) => isActiveOn(schedule, cursorDate))),
+    () => groupByOrder(schedules.filter((schedule) => isActiveOn(schedule, cursorDate))),
     [schedules, cursorDate],
   );
 
   const occupied = reservations.length > 0;
+  // Sel ini hanya boleh mengaku "free" kalau pembacaan rentangnya terbukti lengkap. Insiden
+  // B29E justru muncul di sini: pembacaan terpotong membuat sel berisi 8 reservasi aktif
+  // dirender sebagai "free / Drop an order here" — peta yang salah tapi terlihat wajar.
+  const cellReadComplete = readComplete !== false;
+  const unknown = !occupied && !cellReadComplete;
 
   const selectBay = useCallback(() => onSelectBay(bayCode), [onSelectBay, bayCode]);
 
@@ -295,7 +300,9 @@ const BayDetailCell = memo(function BayDetailCell({
       aria-pressed={selected}
       aria-label={occupied
         ? `Bay ${bayCode}, ${plural(reservations.length, 'reservation')}`
-        : `Bay ${bayCode}, free`}
+        : unknown
+          ? `Bay ${bayCode}, occupancy not loaded`
+          : `Bay ${bayCode}, free`}
       onClick={selectBay}
       onKeyDown={handleKeyDown}
       onDragEnter={handleDragOver}
@@ -311,18 +318,27 @@ const BayDetailCell = memo(function BayDetailCell({
         </span>
         <span
           className={`rounded-full px-1.5 text-[11px] font-bold uppercase tracking-wide tabular-nums ${
-            occupied ? 'bg-[#caf0f8] text-[#0077b6]' : 'bg-slate-100 text-slate-400'
+            occupied ? 'bg-[#caf0f8] text-[#0077b6]'
+              : unknown ? 'bg-amber-100 text-amber-700'
+                : 'bg-slate-100 text-slate-400'
           }`}
         >
-          {reservations.length === 1 ? '1 reservation' : `${plural(reservations.length, 'reservation')}`}
+          {unknown
+            ? '?'
+            : reservations.length === 1 ? '1 reservation' : `${plural(reservations.length, 'reservation')}`}
         </span>
       </div>
 
       {occupied ? (
         <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
           {reservations.map((schedule) => (
-            <ScheduleBadge key={groupKeyOf(schedule)} schedule={schedule} onOpenDetail={onOpenDetail} />
+            <ScheduleBadge key={schedule.group_key} schedule={schedule} onOpenDetail={onOpenDetail} />
           ))}
+        </div>
+      ) : unknown ? (
+        <div className="flex flex-1 select-none flex-col items-center justify-center gap-1 text-center">
+          <span className="text-xs font-semibold text-amber-600">Not loaded</span>
+          <span className="text-xs text-amber-600">Occupancy incomplete — refresh</span>
         </div>
       ) : (
         <div className="pointer-events-none flex flex-1 select-none flex-col items-center justify-center gap-1 text-center">
@@ -340,6 +356,7 @@ const BayDetailCell = memo(function BayDetailCell({
 
 export default function BayAreaDetail({
   area, schedulesByBay, cursorDate, selectedBay, onSelectBay, onOpenDetail, onDropOrder, onBack,
+  readComplete = true,
 }) {
   // Bay lane dibelah jalan jadi dua zona; tiap zona jadi seksi sendiri supaya scheduler
   // melihat pembagian fisiknya, bukan 8 kotak berderet tanpa makna. AREA-18 tidak berzona.
@@ -355,20 +372,18 @@ export default function BayAreaDetail({
 
   const bays = useMemo(() => zoneRows.flatMap((row) => row.codes), [zoneRows]);
 
-  // Ringkasan area pada tanggal kursor: reservasi unik (dedupe lintas bay — satu
-  // reservasi yang memakai 3 bay dihitung SEKALI) + jumlah baris aktivitas/task.
+  // Ringkasan area pada tanggal kursor: order/reservasi unik (satu order yang memakai 3 bay
+  // atau beberapa grup dihitung SEKALI) + jumlah baris aktivitas/task.
   const summary = useMemo(() => {
-    const groups = new Set();
-    let activities = 0;
+    const active = [];
     bays.forEach((bayCode) => {
       const rows = schedulesByBay?.get(bayCode) || EMPTY_SCHEDULES;
       rows.forEach((schedule) => {
-        if (!isActiveOn(schedule, cursorDate)) return;
-        activities += 1;
-        groups.add(groupKeyOf(schedule));
+        if (isActiveOn(schedule, cursorDate)) active.push(schedule);
       });
     });
-    return { reservations: groups.size, activities };
+    const unique = new Map(active.map((schedule) => [schedule.schedule_id, schedule]));
+    return { reservations: groupByOrder([...unique.values()]).length, activities: active.length };
   }, [bays, schedulesByBay, cursorDate]);
 
   if (!area) return null;
@@ -433,6 +448,7 @@ export default function BayAreaDetail({
                   onSelectBay={onSelectBay}
                   onOpenDetail={onOpenDetail}
                   onDropOrder={onDropOrder}
+                  readComplete={readComplete}
                 />
               ))}
             </div>
