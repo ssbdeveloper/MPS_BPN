@@ -830,13 +830,19 @@ def slice_non_productive_day_interval(
     return slices
 
 
-def validate_no_duplicate_activity_overlap(input_rows: list[dict], plant: str = "") -> None:
+def validate_no_duplicate_activity_overlap(
+    input_rows: list[dict],
+    plant: str = "",
+    *,
+    target_ts_set: set | None = None,
+) -> None:
     """Kontrak F2: Untuk satu operator (serialnumber) dan plant, dua timesheet PRODUKTIF
     dengan order_no dan operation_no yang sama tidak boleh overlap [checkin, checkout).
 
     Interval [08:00, 10:00) dan [10:00, 12:00) diperbolehkan (hanya bersentuhan / half-open).
     Order berbeda atau operasi berbeda diperbolehkan overlap.
     Jika ada overlap aktivitas produktif yang sama, gagalkan run secara atomik dengan EtlError DUPLICATE_ACTIVITY_OVERLAP.
+    Jika target_ts_set diberikan, abaikan pasangan di mana KEDUA record berada di luar target window (companion vs companion).
     """
     groups: dict[tuple, list[dict]] = defaultdict(list)
 
@@ -889,6 +895,12 @@ def validate_no_duplicate_activity_overlap(input_rows: list[dict], plant: str = 
                 r1 = sorted_rows[i]
                 r2 = sorted_rows[j]
 
+                # Jika target_ts_set ditentukan, hanya validasi pasangan yang melibatkan
+                # setidaknya satu record dari target window (cross-boundary check).
+                if target_ts_set is not None:
+                    if r1["tsnumber"] not in target_ts_set and r2["tsnumber"] not in target_ts_set:
+                        continue
+
                 # Check half-open overlap: max(s1, s2) < min(e1, e2)
                 # Karena terurut r1.checkin <= r2.checkin, overlap terjadi jika r2.checkin < r1.checkout
                 if r2["checkin"] < r1["checkout"]:
@@ -906,6 +918,7 @@ def build_cleaned_plan(
     plant_timezone: str,
     rule_version: str = CLEAN_RULE_VERSION,
     sap_rules: dict | None = None,
+    is_companion: bool = False,
 ) -> list[dict]:
     """Bentuk rencana segmen hasil cleansing untuk sekumpulan input row.
 
@@ -919,7 +932,8 @@ def build_cleaned_plan(
     - Cap tersimpan sebagai metadata (cap_seconds, cap_category, cap_rule) per input, TIDAK mengurangi WORK pada F2.
       Pengurangan cap dipindahkan ke F4 setelah alokasi F3.
     """
-    validate_no_duplicate_activity_overlap(input_rows, plant=plant)
+    if not is_companion:
+        validate_no_duplicate_activity_overlap(input_rows, plant=plant)
 
     rules = sap_rules or {}
     break_windows = rules.get("break_windows") or []
@@ -1136,8 +1150,13 @@ def fetch_companion_work_segments(
     if target_inputs:
         # Cross-boundary check: pastikan tidak ada overlap aktivitas produktif yang sama
         # antara record di dalam target window dan record companion di luar window.
+        target_ts_set = {r.get("source_tsnumber") or r.get("tsnumber") for r in target_inputs}
         combined_candidates = list(target_inputs) + list(comp_rows)
-        validate_no_duplicate_activity_overlap(combined_candidates, plant=plant)
+        validate_no_duplicate_activity_overlap(
+            combined_candidates,
+            plant=plant,
+            target_ts_set=target_ts_set,
+        )
 
     comp_plan = build_input_plan(comp_rows, plant=plant, allocation_version=allocation_version)
     comp_cleaned = build_cleaned_plan(
@@ -1146,6 +1165,7 @@ def fetch_companion_work_segments(
         plant_timezone=tz_name,
         rule_version=clean_rule_version,
         sap_rules=sap_rules,
+        is_companion=True,
     )
     comp_ts_to_serial = {r["tsnumber"]: r["serialnumber"] for r in comp_rows}
     for seg in comp_cleaned:

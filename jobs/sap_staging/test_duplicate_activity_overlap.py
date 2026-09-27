@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import psycopg2
 import psycopg2.extras
@@ -201,6 +201,94 @@ class DuplicateActivityOverlapTest(unittest.TestCase):
         self.assertIn("DUPLICATE_ACTIVITY_OVERLAP", err_msg)
         self.assertIn("2001", err_msg)
         self.assertIn("2002", err_msg)
+
+    def test_companion_vs_companion_historical_overlap_outside_window_not_rejected(self):
+        """Dua record companion di luar window yang saling overlap (data historis sebelum cutoff)
+        tidak boleh menggagalkan run jika tidak saling overlap dengan record target di dalam window."""
+        target_row = {
+            "tsnumber": 3001,
+            "serialnumber": "OP-HIST",
+            "plant": self.plant,
+            "order_no": "10009999",
+            "operation_no": "0010",
+            "activitytype": None,
+            "longdate_checkin": datetime(2026, 9, 23, 1, 0, tzinfo=timezone.utc),
+            "longdate_checkout": datetime(2026, 9, 23, 3, 0, tzinfo=timezone.utc),
+            "workcentercode": "WC-01",
+            "confirmationnumber": "CONF-3001",
+            "state_flag": 1,
+            "raw_seconds": 7200,
+            "local_date_checkin": date(2026, 9, 23),
+            "raw_snapshot": {},
+            "status": "VALID",
+        }
+        # Dua companion di tanggal 2026-09-22 yang saling overlap satu sama lain
+        comp_row_1 = {
+            "tsnumber": 3002,
+            "serialnumber": "OP-HIST",
+            "plant": self.plant,
+            "order_no": "10009999",
+            "operation_no": "0010",
+            "activitytype": None,
+            "longdate_checkin": datetime(2026, 9, 22, 1, 0, tzinfo=timezone.utc),
+            "longdate_checkout": datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc),
+            "workcentercode": "WC-01",
+            "confirmationnumber": "CONF-3002",
+            "state_flag": 1,
+            "raw_seconds": 7200,
+            "local_date_checkin": date(2026, 9, 22),
+            "raw_snapshot": {},
+            "status": "VALID",
+            "source_tsnumber": 3002,
+            "modified_at": datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc),
+        }
+        comp_row_2 = {
+            "tsnumber": 3003,
+            "serialnumber": "OP-HIST",
+            "plant": self.plant,
+            "order_no": "10009999",
+            "operation_no": "0010",
+            "activitytype": None,
+            "longdate_checkin": datetime(2026, 9, 22, 1, 5, tzinfo=timezone.utc),
+            "longdate_checkout": datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc),
+            "workcentercode": "WC-01",
+            "confirmationnumber": "CONF-3003",
+            "state_flag": 1,
+            "raw_seconds": 6900,
+            "local_date_checkin": date(2026, 9, 22),
+            "raw_snapshot": {},
+            "status": "VALID",
+            "source_tsnumber": 3003,
+            "modified_at": datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc),
+        }
+
+        class MockCursorHistorical:
+            def execute(self, sql, params):
+                pass
+
+            def fetchall(self):
+                return [comp_row_1, comp_row_2]
+
+        target_work = [{
+            "source_tsnumber": 3001,
+            "serialnumber": "OP-HIST",
+            "segment_kind": "WORK",
+            "is_productive": True,
+            "remaining_seconds": 7200,
+            "local_date": date(2026, 9, 23),
+        }]
+
+        # Harus lolos tanpa DUPLICATE_ACTIVITY_OVERLAP
+        comp_result = etl.fetch_companion_work_segments(
+            MockCursorHistorical(),
+            plant=self.plant,
+            tz_name=self.tz,
+            target_work_segments=target_work,
+            from_ts=datetime(2026, 9, 23, 0, 0, tzinfo=timezone.utc),
+            to_ts=datetime(2026, 9, 23, 4, 0, tzinfo=timezone.utc),
+            target_inputs=[target_row],
+        )
+        self.assertIsInstance(comp_result, list)
 
 
 if __name__ == "__main__":
