@@ -359,6 +359,8 @@ CREATE TABLE IF NOT EXISTS sap_timesheet_staging (
   source_row_count integer NOT NULL DEFAULT 1,
   source_min_start timestamp without time zone,
   source_max_end timestamp without time zone,
+  -- #17: snapshot rekonsiliasi alokasi timesheet (raw/allocated/cap/final).
+  provenance_snapshot jsonb,
 
   status text NOT NULL DEFAULT 'PENDING',
   sap_response jsonb,
@@ -381,6 +383,9 @@ CREATE TABLE IF NOT EXISTS sap_timesheet_staging (
 -- won't add new columns to a table that already exists).
 ALTER TABLE sap_timesheet_staging
   ADD COLUMN IF NOT EXISTS pernr_origin text NOT NULL DEFAULT '';
+
+ALTER TABLE sap_timesheet_staging
+  ADD COLUMN IF NOT EXISTS provenance_snapshot jsonb;
 
 CREATE INDEX IF NOT EXISTS sap_timesheet_staging_status_idx
   ON sap_timesheet_staging (status, created_at);
@@ -452,6 +457,7 @@ STAGING_COLUMNS = [
     "source_row_count",
     "source_min_start",
     "source_max_end",
+    "provenance_snapshot",
 ]
 
 
@@ -476,7 +482,13 @@ SET payload = jsonb_build_object(
   'IEDZ', iedz,
   'WERKS', werks,
   'AUERU', aueru,
-  'ZBARCODEID', zbarcodeid
+  'ZBARCODEID', zbarcodeid,
+  -- #17: snapshot rekonsiliasi alokasi (raw -> allocated -> cap -> final SAP).
+  -- Dipakai untuk menjawab "kenapa SAP menerima 5,5 jam padahal operator tapping
+  -- 8 jam" TANPA menjalankan ulang alokasi dengan kode versi hari ini. Kolom
+  -- segments di atas hanya merekam potongan per bucket; empat angka inilah yang
+  -- menjelaskan selisihnya.
+  'PROVENANCE_SNAPSHOT', provenance_snapshot
 ),
 updated_at = now()
 WHERE payload = '{}'::jsonb
@@ -485,10 +497,48 @@ WHERE payload = '{}'::jsonb
 """
 
 
-def ensure_staging_schema(conn) -> None:
+def assert_staging_schema(conn) -> None:
+    """Preflight schema staging secara read-only.
+
+    Fail-closed tanpa DDL runtime jika migration AWS staging belum dipasang.
+    """
     with conn.cursor() as cur:
-        cur.execute(DDL)
-    conn.commit()
+        cur.execute(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN ('sap_timesheet_staging', 'sap_stage_cursor', 'sap_staging_eligibility_audit')
+            """
+        )
+        tables = {r[0] for r in cur.fetchall()}
+        missing_tables = {'sap_timesheet_staging', 'sap_stage_cursor', 'sap_staging_eligibility_audit'} - tables
+        if missing_tables:
+            raise RuntimeError(
+                f"Staging schema preflight gagal: tabel {sorted(missing_tables)} belum ada di database staging. "
+                "Pasang migration AWS terlebih dahulu."
+            )
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'sap_timesheet_staging'
+              AND column_name IN ('provenance_snapshot', 'pernr_origin')
+            """
+        )
+        cols = {r[0] for r in cur.fetchall()}
+        missing_cols = {'provenance_snapshot', 'pernr_origin'} - cols
+        if missing_cols:
+            raise RuntimeError(
+                f"Staging schema preflight gagal: kolom {sorted(missing_cols)} belum ada di sap_timesheet_staging. "
+                "Pasang migration AWS database/migrations/aws/20260922_sap_staging_provenance_snapshot.sql terlebih dahulu."
+            )
+
+
+def ensure_staging_schema(conn) -> None:
+    """Compatibility alias: dialihkan ke preflight read-only tanpa DDL runtime."""
+    assert_staging_schema(conn)
 
 
 def get_stage_cursor(conn, source_system: str, plant: str):
@@ -544,7 +594,12 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
         return 0
 
     values = [
-        [row.get(column) if column != "is_correction" else row.get("is_correction", False) for column in STAGING_COLUMNS]
+        [
+            (psycopg2.extras.Json(row.get(column)) if row.get(column) is not None else None)
+            if column in ("provenance_snapshot", "payload")
+            else (row.get(column) if column != "is_correction" else row.get("is_correction", False))
+            for column in STAGING_COLUMNS
+        ]
         for row in rows
     ]
     columns_sql = ", ".join(STAGING_COLUMNS)
@@ -560,18 +615,21 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
         "WHERE sap_timesheet_staging.status = 'PENDING'"
     )
 
+    # execute_values sets cur.rowcount only for the *last* page it executes.
+    # We must accumulate total_inserted across every page manually using the
+    # page_size parameter so the final count is accurate for > page_size rows.
+    PAGE_SIZE = 1000
+    total_inserted = 0
+    insert_sql = f"""
+        INSERT INTO sap_timesheet_staging ({columns_sql})
+        VALUES %s
+        {conflict_sql}
+    """
     with conn.cursor() as cur:
-        psycopg2.extras.execute_values(
-            cur,
-            f"""
-            INSERT INTO sap_timesheet_staging ({columns_sql})
-            VALUES %s
-            {conflict_sql}
-            """,
-            values,
-            page_size=1000,
-        )
-        inserted = cur.rowcount
+        for page_start in range(0, len(values), PAGE_SIZE):
+            page = values[page_start : page_start + PAGE_SIZE]
+            psycopg2.extras.execute_values(cur, insert_sql, page, page_size=PAGE_SIZE)
+            total_inserted += max(cur.rowcount, 0)
 
         source_systems = sorted({row["source_system"] for row in rows})
         source_keys = [row["source_key"] for row in rows]
@@ -580,7 +638,9 @@ def insert_staging_rows(conn, rows: list[dict]) -> int:
         insert_provenance(cur, rows)
 
     conn.commit()
-    return max(inserted, 0)
+    return total_inserted
+
+
 
 
 # Provenance (migration 20260714): catat SEGMEN sumber tiap bundel ke
@@ -681,31 +741,37 @@ def upsert_eligibility_audit(conn, rows: list[dict]) -> int:
     values = [[row.get(column) for column in columns] for row in rows]
     columns_sql = ", ".join(columns)
 
+    # execute_values sets cur.rowcount only for the *last* page.
+    # Accumulate across pages to return accurate total.
+    PAGE_SIZE = 1000
+    total_count = 0
+    audit_sql = f"""
+        INSERT INTO sap_staging_eligibility_audit ({columns_sql})
+        VALUES %s
+        ON CONFLICT (source_system, source_key)
+        DO UPDATE SET
+          source_ref_id = EXCLUDED.source_ref_id,
+          source_date = EXCLUDED.source_date,
+          plant = EXCLUDED.plant,
+          eligibility_status = EXCLUDED.eligibility_status,
+          block_reason = EXCLUDED.block_reason,
+          block_detail = EXCLUDED.block_detail,
+          observed_at = now(),
+          updated_at = now()
+    """
     with conn.cursor() as cur:
-        psycopg2.extras.execute_values(
-            cur,
-            f"""
-            INSERT INTO sap_staging_eligibility_audit ({columns_sql})
-            VALUES %s
-            ON CONFLICT (source_system, source_key)
-            DO UPDATE SET
-              source_ref_id = EXCLUDED.source_ref_id,
-              source_date = EXCLUDED.source_date,
-              plant = EXCLUDED.plant,
-              eligibility_status = EXCLUDED.eligibility_status,
-              block_reason = EXCLUDED.block_reason,
-              block_detail = EXCLUDED.block_detail,
-              observed_at = now(),
-              updated_at = now()
-            """,
-            values,
-            template="(%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
-            page_size=1000,
-        )
-        count = cur.rowcount
+        for page_start in range(0, len(values), PAGE_SIZE):
+            page = values[page_start : page_start + PAGE_SIZE]
+            psycopg2.extras.execute_values(
+                cur, audit_sql, page,
+                template="(%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                page_size=PAGE_SIZE,
+            )
+            total_count += max(cur.rowcount, 0)
 
     conn.commit()
-    return max(count, 0)
+    return total_count
+
 
 
 def parse_csv_ints(value: str | None) -> list[int]:

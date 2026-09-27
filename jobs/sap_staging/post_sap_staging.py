@@ -182,6 +182,105 @@ def post_payload(payload: dict[str, Any], timeout: int) -> tuple[int, str]:
         return exc.code, exc.read().decode("utf-8", errors="replace")
 
 
+def exclusion_guard_sql() -> str:
+    """Guard exclusion (bundle yang masih memuat record excluded tidak boleh dikirim).
+
+    Satu definisi saja: dipakai eligibility_predicate (#20), claim_selected_rows,
+    dan preview_rows jalur --ids. Sebelumnya jalur --ids melewati guard ini
+    sepenuhnya, sehingga bundel yang masih mengandung record excluded bisa
+    terkirim ke SAP — over-post yang tidak bisa ditarik kembali.
+    """
+    return """
+      NOT EXISTS (
+        SELECT 1 FROM public.sap_staging_source ss
+        JOIN public.sap_staging_exclusion ex
+          ON ex.source_system = ss.source_system
+         AND ex.plant         = ss.plant
+         AND ex.source_row_id = ss.source_row_id
+        WHERE ss.staging_id = public.sap_timesheet_staging.id
+      )
+    """
+
+
+def eligibility_predicate(
+    *,
+    statuses: list[str] | None = None,
+    source_system: str | None = None,
+    plant: str | None = None,
+    productive: bool | None = None,
+    include_today: bool = False,
+    date_filter: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    pernr_filter: str | None = None,
+    exclude_correction: bool = True,
+) -> tuple[str, list]:
+    """Satu definisi "baris mana yang layak dikirim ke SAP" (review P1 #20).
+
+    Dipakai BERSAMA oleh claim_rows (posting nyata) dan preview_rows (--dry-run).
+    Sebelumnya keduanya menyusun daftar filter sendiri-sendiri, jadi dry-run bisa
+    melaporkan jumlah dan nilai yang tidak sama dengan apa yang benar-benar
+    terkirim — persis jenis jaminan palsu yang membuat dry-run tidak berguna.
+
+    Mengembalikan (where_sql, params).
+    """
+    filters: list[str] = []
+    params: list[Any] = []
+
+    if statuses is not None:
+        filters.append("status = ANY(%s)")
+        params.append(statuses)
+
+    if exclude_correction:
+        # Auto-poster TIDAK PERNAH mengirim bundel koreksi (is_correction=true).
+        # Koreksi = jam yang datang setelah harinya ter-post; harus di-review
+        # admin & di-post MANUAL dari UI.
+        filters.append("is_correction = false")
+
+    # GERBANG HARI-SELESAI (default aktif). Bundel MCH_HOURS = total SATU HARI per
+    # kunci; source_key tidak memuat durasi. Kalau hari BERJALAN di-post, bundel-nya
+    # terkunci (POSTED) dan jam sisa hari itu HILANG.
+    if not include_today:
+        filters.append(
+            "(source_system <> 'MCH_HOURS' OR bucket_start::date < (now() AT TIME ZONE %s)::date)"
+        )
+        params.append(app_timezone())
+
+    if source_system:
+        filters.append("source_system = %s")
+        params.append(source_system)
+    if plant:
+        filters.append("werks = %s")
+        params.append(plant)
+    if productive is not None:
+        filters.append("is_productive = %s")
+        params.append(productive)
+
+    if date_filter:
+        filters.append(
+            "(bucket_start::date = %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' = %s))"
+        )
+        params.extend([date_filter, date_filter.replace("-", "")])
+    if date_from or date_to:
+        lo = date_from or "1900-01-01"
+        hi = date_to or "2999-12-31"
+        filters.append(
+            "(bucket_start::date BETWEEN %s AND %s OR "
+            "(source_system = 'TIMESHEET' AND payload->>'ISDD' BETWEEN %s AND %s))"
+        )
+        params.extend([lo, hi, lo.replace("-", ""), hi.replace("-", "")])
+    if pernr_filter:
+        filters.append("(pernr = %s OR pernr_origin = %s)")
+        params.extend([pernr_filter, pernr_filter])
+
+    # GUARD EXCLUSION: bundle yang masih mengandung record excluded TIDAK boleh
+    # di-post — nilainya belum di-recalculate (bisa over-post). Satu definisi,
+    # dipakai semua jalur (#20).
+    filters.append(exclusion_guard_sql())
+
+    return " AND ".join(filters), params
+
+
 def claim_rows(
     limit: int,
     include_failed: bool,
@@ -203,69 +302,21 @@ def claim_rows(
         statuses = ["PENDING", "FAILED"]
     else:
         statuses = ["PENDING"]
-    filters = ["status = ANY(%s)", "is_correction = false"]
-    params: list[Any] = [statuses]
-    # Auto-poster TIDAK PERNAH mengirim bundel koreksi (is_correction=true). Koreksi =
-    # jam yang datang setelah harinya ter-post; harus di-review admin & di-post MANUAL
-    # dari UI (lewat --ids, claim_selected_rows yang tidak memfilter is_correction).
 
-    # GERBANG HARI-SELESAI (default aktif). Bundel MCH_HOURS = total SATU HARI per kunci;
-    # source_key tidak memuat durasi. Kalau hari BERJALAN di-post, bundel-nya terkunci
-    # (POSTED) dan jam sisa hari itu — yang datang setelah posting — tidak bisa ditambahkan
-    # lagi (ON CONFLICT WHERE status='PENDING' melewati baris POSTED) sehingga HILANG.
-    # Karena itu poster otomatis HANYA mengirim hari yang sudah lewat. --include-today
-    # meng-override (mis. untuk re-post manual hari tertentu yang kamu tahu sudah beres).
-    # Timesheet tidak terpengaruh (source_system <> MCH_HOURS).
-    if not include_today:
-        filters.append("(source_system <> 'MCH_HOURS' OR bucket_start::date < (now() AT TIME ZONE %s)::date)")
-        params.append(app_timezone())
+    # #20: predikat yang SAMA dengan preview_rows/--dry-run.
+    where_sql, params = eligibility_predicate(
+        statuses=statuses,
+        source_system=source_system,
+        plant=plant,
+        productive=productive,
+        include_today=include_today,
+        date_filter=date_filter,
+        date_from=date_from,
+        date_to=date_to,
+        pernr_filter=pernr_filter,
+        exclude_correction=True,
+    )
 
-    if source_system:
-        filters.append("source_system = %s")
-        params.append(source_system)
-    if plant:
-        filters.append("werks = %s")
-        params.append(plant)
-    # is_productive: kolom GENERATED (zconf_type IN M1/M2). Dipakai untuk posting massal
-    # yang produktif dulu, sementara unproductive masih ditolak SAP (butuh cost center).
-    if productive is not None:
-        filters.append("is_productive = %s")
-        params.append(productive)
-
-    # Posting manual via UI (2026-08-27): filter per tanggal bucket atau per operator.
-    # TIMESHEET tidak punya bucket_start (NULL — satu baris per tsnumber, bukan per jam
-    # kerja) sehingga filter tanggal harus lewat payload ISDD (tanggal kerja dari checkin);
-    # kalau tidak, baris TS tidak pernah match dan tidak pernah terkirim dari tombol ini.
-    if date_filter:
-        filters.append("(bucket_start::date = %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' = %s))")
-        params.extend([date_filter, date_filter.replace("-", "")])
-    if date_from or date_to:
-        lo = date_from or "1900-01-01"
-        hi = date_to or "2999-12-31"
-        filters.append(
-            "(bucket_start::date BETWEEN %s AND %s OR "
-            "(source_system = 'TIMESHEET' AND payload->>'ISDD' BETWEEN %s AND %s))"
-        )
-        params.extend([lo, hi, lo.replace("-", ""), hi.replace("-", "")])
-    if pernr_filter:
-        filters.append("(pernr = %s OR pernr_origin = %s)")
-        params.extend([pernr_filter, pernr_filter])
-
-    # GUARD EXCLUSION (2026-08-27): bundle yang masih mengandung record yang ditandai
-    # excluded TIDAK boleh di-post — nilainya belum di-recalculate (bisa over-post).
-    # Recalculate dulu (recalc_date), baru post.
-    filters.append("""
-      NOT EXISTS (
-        SELECT 1 FROM public.sap_staging_source ss
-        JOIN public.sap_staging_exclusion ex
-          ON ex.source_system = ss.source_system
-         AND ex.plant         = ss.plant
-         AND ex.source_row_id = ss.source_row_id
-        WHERE ss.staging_id = public.sap_timesheet_staging.id
-      )
-    """)
-
-    where_sql = " AND ".join(filters)
     sql = f"""
     SELECT id, source_system, source_ref_id, werks, status, pernr, pernr_origin, payload
     FROM sap_timesheet_staging
@@ -329,6 +380,9 @@ def claim_selected_rows(ids: list[str], ztimesheetids: list[str], allow_posted: 
     WHERE ({where_sql})
       {status_filter}
       {plant_filter}
+      -- #20: guard exclusion yang SAMA dengan claim_rows/preview_rows. Tanpa ini
+      -- bundel berisi record excluded bisa terkirim lewat --ids (over-post).
+      AND {exclusion_guard_sql()}
     ORDER BY id
     FOR UPDATE SKIP LOCKED
     """
@@ -636,6 +690,124 @@ def post_order_group(rows: list[dict], args: argparse.Namespace) -> list[str]:
     return [post_one(row, args) for row in rows]
 
 
+def preview_rows(args: argparse.Namespace) -> None:
+    """--dry-run: SELECT saja. Tidak claim, tidak UPDATE, tidak HTTP ke SAP.
+
+    Jalur ini sengaja TIDAK memanggil claim_rows/claim_selected_rows karena
+    keduanya menulis status='POSTING' sebelum mengembalikan baris. Tetapi
+    filternya WAJIB sama: keduanya memanggil eligibility_predicate() (#20).
+    Menyalin daftar filter ke sini pernah membuat dry-run melaporkan himpunan
+    baris yang berbeda dari yang benar-benar terkirim — jaminan palsu.
+    """
+    validate_date_range(args.date_from, args.date_to)
+    plant = None if args.all_plants else (args.plant or plant_code())
+
+    selected_ids = parse_csv_values(args.ids)
+    selected_zt = parse_csv_values(args.ztimesheetids)
+
+    filters: list[str] = []
+    params: list[Any] = []
+
+    if selected_ids or selected_zt:
+        # Jalur pilih-manual: cocokkan claim_selected_rows, yang juga tidak
+        # memfilter is_correction (koreksi memang di-post manual dari UI).
+        ors = []
+        if selected_ids:
+            ors.append("id = ANY(%s::bigint[])")
+            params.append([int(v) for v in selected_ids])
+        if selected_zt:
+            ors.append("ztimesheetid = ANY(%s::text[])")
+            params.append(selected_zt)
+        filters.append("(" + " OR ".join(ors) + ")")
+        if not args.allow_posted:
+            filters.append("status <> 'POSTED'")
+        if args.source_system:
+            filters.append("source_system = %s")
+            params.append(args.source_system)
+        if plant:
+            filters.append("werks = %s")
+            params.append(plant)
+        # #20: jalur dry-run --ids memakai guard exclusion yang sama dengan
+        # claim_selected_rows. Selected-id tidak berarti boleh bypass safety.
+        filters.append(exclusion_guard_sql())
+        where_sql = " AND ".join(filters)
+    else:
+        if args.failed_only:
+            statuses = ["FAILED"]
+        elif args.retry_failed:
+            statuses = ["PENDING", "FAILED"]
+        else:
+            statuses = ["PENDING"]
+
+        productive = None
+        if args.productive_only:
+            productive = True
+        elif args.unproductive_only:
+            productive = False
+
+        # #20: predikat yang SAMA dengan claim_rows (posting sebenarnya),
+        # termasuk guard exclusion dan gerbang hari-selesai.
+        where_sql, params = eligibility_predicate(
+            statuses=statuses,
+            source_system=args.source_system,
+            plant=plant,
+            productive=productive,
+            include_today=args.include_today,
+            date_filter=args.date,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            pernr_filter=args.pernr,
+            exclude_correction=True,
+        )
+
+    selected_mode = bool(selected_ids or selected_zt)
+    limit_sql = "" if selected_mode else "LIMIT %s"
+    if not selected_mode:
+        params.append(args.limit)
+    sql = f"""
+    SELECT id, ztimesheetid, source_system, source_ref_id, werks, status,
+           pernr, payload->>'ISDD' AS isdd, total_seconds
+    FROM sap_timesheet_staging
+    WHERE {where_sql}
+    ORDER BY id
+    {limit_sql}
+    """
+
+    with connect_staging() as conn:
+        # Read-only di level transaksi: setiap UPDATE yang tidak sengaja akan gagal,
+        # bukan diam-diam lolos.
+        conn.set_session(readonly=True)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            rows = [dict(r) for r in cur.fetchall()]
+
+    log.info("DRY-RUN: tidak ada claim, UPDATE, atau HTTP ke SAP")
+    log.info("plant=%s source_system=%s rentang=%s..%s",
+             plant or "(semua)", args.source_system or "(semua)",
+             args.date_from or "-", args.date_to or "-")
+    if not rows:
+        log.info("DRY-RUN: 0 baris cocok")
+        return
+
+    total_seconds = sum(int(r["total_seconds"] or 0) for r in rows)
+    by_status: dict[str, int] = {}
+    for r in rows:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+
+    log.info("DRY-RUN: %s baris, total %s detik (%.2f jam)",
+             len(rows), total_seconds, total_seconds / 3600)
+    log.info("DRY-RUN: status %s", by_status)
+    isdds = sorted({r["isdd"] for r in rows if r["isdd"]})
+    if isdds:
+        log.info("DRY-RUN: ISDD %s .. %s", isdds[0], isdds[-1])
+    ids = [str(r["id"]) for r in rows]
+    log.info("DRY-RUN: id %s%s", ",".join(ids[:20]),
+             f" ... (+{len(ids) - 20})" if len(ids) > 20 else "")
+    if len(rows) == args.limit:
+        log.warning("DRY-RUN: jumlah baris TEPAT sama dengan --limit (%s). "
+                    "Masih ada sisa; perkecil rentang atau naikkan limit.", args.limit)
+
+
 def process_rows(args: argparse.Namespace) -> None:
     validate_date_range(args.date_from, args.date_to)
     selected_ids = parse_csv_values(args.ids)
@@ -763,12 +935,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date-from", help="Awal rentang tanggal (YYYY-MM-DD), inklusif")
     parser.add_argument("--date-to", help="Akhir rentang tanggal (YYYY-MM-DD), inklusif")
     parser.add_argument("--pernr", help="Posting manual per operator (PERNR) via UI")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Tampilkan baris yang AKAN dikirim tanpa efek samping: tidak claim "
+             "(tidak ada status='POSTING'), tidak UPDATE, tidak ada HTTP ke SAP. "
+             "Sesi DB dibuka read-only sebagai guard terakhir.",
+    )
     return parser
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.dry_run:
+        preview_rows(args)
+        return
     process_rows(args)
 
 

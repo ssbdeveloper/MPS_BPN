@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import psycopg2.extras
 
@@ -23,6 +23,8 @@ from sap_staging_common import (
 )
 
 log = setup_logging("stage_sap_timesheet")
+LEGACY_TIMESHEET_FROM = date(2026, 9, 15)
+LEGACY_TIMESHEET_THROUGH = date(2026, 9, 22)
 
 
 def previous_completed_hour() -> tuple[datetime, datetime]:
@@ -45,7 +47,9 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
         "t.longdate_checkout IS NOT NULL",
         "t.longdate_checkout > t.longdate_checkin",
         "COALESCE(t.state_flag, 0) <> 5",
+        "COALESCE(t.plant::text, '') = %s",
     ]
+    params.append(plant_code())
 
     if tsnumbers:
         params.append(tsnumbers)
@@ -61,7 +65,7 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
     sql = f"""
     SELECT
       'TIMESHEET' AS source_system,
-      t.tsnumber::text AS source_key,
+      COALESCE(t.plant::text, '') || ':' || t.tsnumber::text AS source_key,
       t.tsnumber::text AS source_ref_id,
       COALESCE(t.plant, '') AS werks,
       CASE
@@ -93,14 +97,27 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
       NULL::timestamp AS bucket_start,
       NULL::timestamp AS synthetic_start,
       NULL::timestamp AS synthetic_end,
-      NULL::bigint AS total_seconds,
+      EXTRACT(EPOCH FROM (
+        date_trunc('second', t.longdate_checkout)
+        - date_trunc('second', t.longdate_checkin)
+      ))::bigint AS total_seconds,
       1::integer AS source_row_count,
       t.longdate_checkin AT TIME ZONE %s AS source_min_start,
-      t.longdate_checkout AT TIME ZONE %s AS source_max_end
+      t.longdate_checkout AT TIME ZONE %s AS source_max_end,
+      t.longdate_checkin AS provenance_start
     FROM timesheet_transaction t
-    LEFT JOIN {ph3_table} po
-      ON LTRIM(po.order_no, '0') = t.order_no
-     AND LTRIM(po.operation_no, '0') = t.operation_no::text
+    LEFT JOIN LATERAL (
+      SELECT p.confirmation_number,
+             p.sequence_category,
+             p.sequence_number,
+             p.branch_operation_no,
+             p.return_operation_no
+      FROM {ph3_table} p
+      WHERE LTRIM(p.order_no, '0') = t.order_no
+        AND LTRIM(p.operation_no, '0') = t.operation_no::text
+      ORDER BY p.created_at DESC NULLS LAST, p.id DESC
+      LIMIT 1
+    ) po ON TRUE
     LEFT JOIN LATERAL (
       SELECT roles
       FROM usernfc u
@@ -122,7 +139,15 @@ def fetch_timesheet_rows(tsnumbers: list[int], from_date: str | None, to_date: s
     with connect_source() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, query_params)
-            return [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall()]
+
+    for row in rows:
+        row["segments"] = [{
+            "id": row["source_ref_id"],
+            "bucket": row.pop("provenance_start"),
+            "sec": int(row["total_seconds"] or 0),
+        }]
+    return rows
 
 
 def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "normal") -> list[dict]:
@@ -592,7 +617,11 @@ def fetch_machine_hour_rows(from_ts: datetime, to_ts: datetime, mode: str = "nor
 
 def stage_rows(rows: list[dict], dry_run: bool) -> int:
     if dry_run:
-        log.info("Dry run: %s rows prepared, nothing inserted", len(rows))
+        total_seconds = sum(int(row.get("total_seconds") or 0) for row in rows)
+        log.info(
+            "Dry run: %s rows prepared, total=%s seconds (%.2f hours), nothing inserted",
+            len(rows), total_seconds, total_seconds / 3600,
+        )
         return 0
     with connect_staging() as conn:
         ensure_staging_schema(conn)
@@ -606,9 +635,27 @@ def cmd_init_db(_: argparse.Namespace) -> None:
 
 
 def cmd_timesheet(args: argparse.Namespace) -> None:
-    rows = fetch_timesheet_rows(parse_csv_ints(args.tsnumbers), args.from_date, args.to_date)
+    """Emergency legacy writer for the owner-approved 15–22 September cutoff."""
+    if args.tsnumbers:
+        raise ValueError("Mode legacy sementara hanya menerima --from-date dan --to-date")
+    if not args.from_date or not args.to_date:
+        raise ValueError("--from-date dan --to-date wajib dipakai bersama")
+
+    start = date.fromisoformat(args.from_date)
+    end = date.fromisoformat(args.to_date)
+    if start > end:
+        raise ValueError("--from-date tidak boleh setelah --to-date")
+    if start < LEGACY_TIMESHEET_FROM or end > LEGACY_TIMESHEET_THROUGH:
+        raise ValueError(
+            "Mode legacy TIMESHEET hanya diizinkan untuk 2026-09-15 sampai 2026-09-22"
+        )
+
+    rows = fetch_timesheet_rows([], args.from_date, args.to_date)
     inserted = stage_rows(rows, args.dry_run)
-    log.info("Timesheet staging prepared=%s inserted=%s", len(rows), inserted)
+    log.info(
+        "Legacy TIMESHEET staging range=%s..%s prepared=%s inserted=%s",
+        args.from_date, args.to_date, len(rows), inserted,
+    )
 
 
 def cmd_mchours(args: argparse.Namespace) -> None:

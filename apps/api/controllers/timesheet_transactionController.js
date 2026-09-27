@@ -1,13 +1,22 @@
 const db = global.pool || require("../db");
 const {
+  PARTIAL_UPDATE_ALLOWED_FIELDS,
+  assertCorrectionAllowed,
+  assertPlantMatches,
+  buildAuditEntry,
+  mapDbErrorToHttp,
+  actorFromRequest,
+  CorrectionError,
+} = require("./timesheetAdminGuard");
+const {
   ConfirmationCheckoutError,
   createTimesheetConfirmationService,
 } = require("../services/timesheetConfirmationService");
 // ============================================
-// DEPENDENCIES
+// DEPENDENCIES (lazy-loaded for optional export formats)
 // ============================================
-const { Parser } = require('json2csv');
-const ExcelJS = require('exceljs');
+const getParser = () => require('json2csv').Parser;
+const getExcelJS = () => require('exceljs');
 
 
 // Configuration from environment variables
@@ -534,75 +543,134 @@ exports.create = async (req, res) => {
       order_no,
       operation_no
     });
+    const isProductive = !normalizedActivityType || String(normalizedActivityType).trim() === '';
 
-    // Meal break berakhir saat pekerjaan produktif dimulai: tutup activitytype
-    // '0000' yang masih terbuka untuk orang ini (mode multiple, di mana checkout
-    // umum tidak berjalan). Mode single sudah menutup semuanya lewat checkout.
-    if (!normalizedActivityType && serialnumber) {
-      await db.query(
-        `UPDATE timesheet_transaction
-         SET longdate_checkout = NOW(),
-             date_checkout    = to_char(NOW(), 'DD/MM/YYYY'),
-             hour_checkout    = to_char(NOW(), 'HH24:MI'),
-             duration         = ROUND(EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2)
-         WHERE serialnumber = $1
-           AND activitytype = '0000'
-           AND date_checkout IS NULL`,
-        [serialnumber]
-      );
-    }
-
-    const result = await db.query(
-      `INSERT INTO timesheet_transaction
-        (order_no, ssbr_id, part_name, serialnumber, full_name, operation_no, operation_text,
-         workcentercode, workcenterdescription, planhours, longdate_checkin,
-         date_checkin, hour_checkin, plant, activitytype,
-         ms_area_code, ms_bay_codes, ms_task_id, ms_project_id, ms_bay_schedule_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(),
-         to_char(NOW(), 'DD/MM/YYYY'),
-         to_char(NOW(), 'HH24:MI'),
-         $11, $12,
-         $13, $14::text[], $15, $16, $17)
-       RETURNING *`,
-      [
-        order_no,
-        ssbr_id,
-        part_name,
-        serialnumber,
-        full_name,
-        operation_no,
-        operation_text,
-        workcentercode,
-        workcenterdescription,
-        planhours,
-        PLANT_SSB,
-        normalizedActivityType,
-        ms_area_code ?? null,
-        ms_bay_codes ?? null,
-        ms_task_id ?? null,
-        ms_project_id ?? null,
-        ms_bay_schedule_id ?? null
-      ]
-    );
-
-    // Best-effort: mark the source bay reservation CONFIRMED once an operator checks in
-    // under it. Non-fatal — a failed flip must never fail the check-in.
-    if (ms_bay_schedule_id) {
-      try {
-        await db.query(
-          `UPDATE ms_project_bay_schedule
-             SET status = 'CONFIRMED',
-                 updated_at = now()
-           WHERE schedule_id = $1
-             AND status = 'RESERVED'`,
-          [ms_bay_schedule_id]
+    // Gate: Operator tidak boleh memiliki dua timesheet produktif aktif untuk order & operasi yang sama.
+    if (isProductive && serialnumber && order_no && operation_no !== null && operation_no !== undefined && String(operation_no).trim() !== '') {
+      const normOrder = String(order_no).trim().replace(/^0+/, '');
+      const normOp = parseInt(operation_no, 10);
+      if (normOrder && !isNaN(normOp)) {
+        const activeCheck = await db.query(
+          `SELECT tsnumber
+           FROM timesheet_transaction
+           WHERE COALESCE(plant::text, '') = COALESCE($1::text, '')
+             AND serialnumber = $2
+             AND ltrim(trim(order_no), '0') = $3
+             AND operation_no = $4
+             AND longdate_checkout IS NULL
+             AND COALESCE(state_flag, 0) <> 5
+             AND (activitytype IS NULL OR trim(activitytype) = '')
+           LIMIT 1`,
+          [PLANT_SSB || '', serialnumber, normOrder, normOp]
         );
-      } catch (flipErr) {
-        console.error('bay schedule RESERVED->CONFIRMED flip failed (non-fatal):', flipErr.message);
+        if (activeCheck.rows && activeCheck.rows.length > 0) {
+          return res.status(409).json({
+            error: 'Operasi produktif ini sedang aktif untuk operator tersebut',
+            code: 'DUPLICATE_ACTIVE_OPERATION',
+          });
+        }
       }
     }
 
-    res.json(result.rows[0]);
+    const pool = db.pool || db;
+    const client = typeof pool.connect === 'function' ? await pool.connect() : null;
+    const queryRunner = client || db;
+
+    try {
+      if (client) await client.query('BEGIN');
+
+      // Meal break berakhir saat pekerjaan produktif dimulai: tutup activitytype
+      // '0000' yang masih terbuka untuk orang ini (mode multiple, di mana checkout
+      // umum tidak berjalan). Mode single sudah menutup semuanya lewat checkout.
+      if (isProductive && serialnumber) {
+        await queryRunner.query(
+          `UPDATE timesheet_transaction
+           SET longdate_checkout = NOW(),
+               date_checkout    = to_char(NOW(), 'DD/MM/YYYY'),
+               hour_checkout    = to_char(NOW(), 'HH24:MI'),
+               duration         = ROUND(EXTRACT(EPOCH FROM (NOW() - longdate_checkin)) / 3600.0, 2)
+           WHERE serialnumber = $1
+             AND activitytype = '0000'
+             AND date_checkout IS NULL`,
+          [serialnumber]
+        );
+      }
+
+      const result = await queryRunner.query(
+        `INSERT INTO timesheet_transaction
+          (order_no, ssbr_id, part_name, serialnumber, full_name, operation_no, operation_text,
+           workcentercode, workcenterdescription, planhours, longdate_checkin,
+           date_checkin, hour_checkin, plant, activitytype,
+           ms_area_code, ms_bay_codes, ms_task_id, ms_project_id, ms_bay_schedule_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(),
+           to_char(NOW(), 'DD/MM/YYYY'),
+           to_char(NOW(), 'HH24:MI'),
+           $11, $12,
+           $13, $14::text[], $15, $16, $17)
+         RETURNING *`,
+        [
+          order_no,
+          ssbr_id,
+          part_name,
+          serialnumber,
+          full_name,
+          operation_no,
+          operation_text,
+          workcentercode,
+          workcenterdescription,
+          planhours,
+          PLANT_SSB,
+          normalizedActivityType,
+          ms_area_code ?? null,
+          ms_bay_codes ?? null,
+          ms_task_id ?? null,
+          ms_project_id ?? null,
+          ms_bay_schedule_id ?? null
+        ]
+      );
+
+      if (client) await client.query('COMMIT');
+
+      // Best-effort: mark the source bay reservation CONFIRMED once an operator checks in
+      // under it. Non-fatal — a failed flip must never fail the check-in.
+      if (ms_bay_schedule_id) {
+        try {
+          await db.query(
+            `UPDATE ms_project_bay_schedule
+               SET status = 'CONFIRMED',
+                   updated_at = now()
+             WHERE schedule_id = $1
+               AND status = 'RESERVED'`,
+            [ms_bay_schedule_id]
+          );
+        } catch (flipErr) {
+          console.error('bay schedule RESERVED->CONFIRMED flip failed (non-fatal):', flipErr.message);
+        }
+      }
+
+      return res.json(result.rows[0]);
+    } catch (txErr) {
+      if (client) {
+        try {
+          await client.query('ROLLBACK');
+        } catch (rbErr) {
+          console.error('rollback error:', rbErr.message);
+        }
+      }
+      if (
+        txErr.code === '23505' &&
+        (txErr.constraint === 'idx_timesheet_active_productive_op' ||
+         (txErr.message && txErr.message.includes('idx_timesheet_active_productive_op')))
+      ) {
+        return res.status(409).json({
+          error: 'Operasi produktif ini sedang aktif untuk operator tersebut',
+          code: 'DUPLICATE_ACTIVE_OPERATION',
+        });
+      }
+      throw txErr;
+    } finally {
+      if (client) client.release();
+    }
   } catch (err) {
     console.error('create error:', err);
     res.status(500).json({ error: 'Error inserting data: ' + err.message });
@@ -727,19 +795,42 @@ exports.checkoutid = async (req, res) => {
  * BULK validation of timesheet records
  */
 exports.bulkValidation = async (req, res) => {
-  try {
-    const { tsnumbers } = req.body;
+  const { tsnumbers, reason } = req.body || {};
 
-    if (!Array.isArray(tsnumbers) || tsnumbers.length === 0) {
-      return res.status(400).json({ 
-        error: 'tsnumbers must be a non-empty array' 
-      });
-    }
+  if (!Array.isArray(tsnumbers) || tsnumbers.length === 0) {
+    return res.status(400).json({ 
+      error: 'tsnumbers must be a non-empty array' 
+    });
+  }
+
+  const actor = actorFromRequest(req);
+  if (!actor) {
+    return res.status(400).json({ 
+      error: 'Validasi timesheet wajib menyertakan identitas user tepercaya (header x-user-name / x-user-id).',
+      code: 'ACTOR_REQUIRED'
+    });
+  }
+
+  const validationReason = (reason && String(reason).trim()) || 'supervisor_validation';
+  const requestId = typeof req.header === 'function' ? req.header('x-request-id') : req.headers?.['x-request-id'] || null;
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Tetapkan session context agar trigger DB mengizinkan perubahan state_flag dan mencatat audit secara atomik
+    await client.query(
+      `SELECT set_config('mps.correction_actor', $1, true),
+              set_config('mps.correction_reason', $2, true),
+              set_config('mps.correction_channel', 'bulk_validation', true),
+              set_config('mps.correction_request_id', $3, true)`,
+      [actor, validationReason, requestId || '']
+    );
 
     const validation_date = getCurrentDateTime();
     const state_flag = "2";
 
-    const result = await db.query(
+    const result = await client.query(
       `UPDATE timesheet_transaction
        SET validation_date = $1,
            state_flag = $2
@@ -751,18 +842,25 @@ exports.bulkValidation = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ 
         error: 'No records updated. Records may already be validated or not checked out.' 
       });
     }
+
+    await client.query("COMMIT");
 
     res.json({
       updated_count: result.rows.length,
       updated_rows: result.rows
     });
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
     console.error('bulkValidation error:', err);
-    res.status(500).json({ error: 'Error updating bulk validation: ' + err.message });
+    const mapped = mapDbErrorToHttp(err);
+    res.status(mapped.status).json(mapped.body);
+  } finally {
+    client.release();
   }
 };
 
@@ -770,6 +868,7 @@ exports.bulkValidation = async (req, res) => {
  * UPDATE timesheet record (admin function)
  */
 exports.updateTimesheetadmin = async (req, res) => {
+  const client = await db.connect();
   try {
     const { id } = req.params;
     const {
@@ -782,7 +881,8 @@ exports.updateTimesheetadmin = async (req, res) => {
       workcentercode,
       workcenterdescription,
       longdate_checkin,
-      longdate_checkout
+      longdate_checkout,
+      reason,
     } = req.body;
 
     if (!id) {
@@ -793,6 +893,89 @@ exports.updateTimesheetadmin = async (req, res) => {
       return res.status(400).json({ error: 'Serial number is required' });
     }
 
+    const actor = actorFromRequest(req);
+
+    await client.query("BEGIN");
+
+    // Kunci row dan ambil state SEBELUM: audit butuh nilai lama, dan freeze
+    // harus dibaca dalam transaksi yang sama supaya tidak ada celah balapan
+    // antara pengecekan dan penulisan.
+    const beforeRes = await client.query(
+      `SELECT t.*,
+              (f.tsnumber IS NOT NULL) AS is_frozen,
+              (SELECT plant_code FROM plant_config ORDER BY id LIMIT 1) AS config_plant
+         FROM timesheet_transaction t
+         LEFT JOIN timesheet_staging_freeze f ON f.tsnumber = t.tsnumber
+        WHERE t.tsnumber = $1
+        FOR UPDATE OF t`,
+      [id]
+    );
+
+    if (beforeRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: 'Timesheet record not found' });
+    }
+
+    const before = beforeRes.rows[0];
+
+    // #11: plant record harus cocok dengan plant instance ini, bukan hanya timezone.
+    assertPlantMatches({ rowPlant: before.plant, configPlant: before.config_plant });
+
+    const s = (v) => (v ?? "").toString().trim() || null;
+
+    const changedFields = [];
+    const sameTs = (a, b) => {
+      const av = a ? new Date(a).getTime() : null;
+      const bv = b ? new Date(b).getTime() : null;
+      return av === bv;
+    };
+    if (longdate_checkin !== undefined && !sameTs(before.longdate_checkin, longdate_checkin)) {
+      changedFields.push("longdate_checkin");
+    }
+    if (longdate_checkout !== undefined && !sameTs(before.longdate_checkout, longdate_checkout)) {
+      changedFields.push("longdate_checkout");
+    }
+    if (serialnumber !== undefined && s(serialnumber) !== s(before.serialnumber)) {
+      changedFields.push("serialnumber");
+    }
+    if (order_no !== undefined && s(order_no) !== s(before.order_no)) {
+      changedFields.push("order_no");
+    }
+    if (operation_no !== undefined && s(operation_no) !== s(before.operation_no)) {
+      changedFields.push("operation_no");
+    }
+
+    // Validasi nilai baru interval
+    const effectiveIn = longdate_checkin !== undefined ? longdate_checkin : before.longdate_checkin;
+    const effectiveOut = longdate_checkout !== undefined ? longdate_checkout : before.longdate_checkout;
+    if (effectiveIn && effectiveOut) {
+      const tIn = new Date(effectiveIn).getTime();
+      const tOut = new Date(effectiveOut).getTime();
+      if (isNaN(tIn) || isNaN(tOut)) {
+        throw new CorrectionError(400, "Format timestamp longdate tidak valid", "INVALID_TIMESTAMP");
+      }
+      if (tOut < tIn) {
+        throw new CorrectionError(400, "Checkout tidak boleh lebih awal dari checkin.", "INVALID_INTERVAL");
+      }
+    }
+
+    // #7 + #10: freeze -> 409; koreksi payroll -> reason & actor wajib.
+    assertCorrectionAllowed({
+      changedFields,
+      actor,
+      reason,
+      frozen: before.is_frozen === true,
+    });
+
+    if (actor && reason) {
+      await client.query(
+        "SELECT set_config('mps.correction_actor', $1, true), set_config('mps.correction_reason', $2, true), set_config('mps.correction_channel', 'updateadmin', true)",
+        [actor, reason]
+      );
+    }
+
+    // date_*/hour_* diturunkan oleh trigger timesheet_sync_derived_time.
+    // duration dihitung konsisten dari interval longdate.
     const query = `
       UPDATE timesheet_transaction SET
         serialnumber = $1,
@@ -804,27 +987,7 @@ exports.updateTimesheetadmin = async (req, res) => {
         workcentercode = $7,
         workcenterdescription = $8,
         longdate_checkin = $9::timestamptz,
-        date_checkin = CASE
-          WHEN $9 IS NOT NULL
-          THEN to_char($9::timestamptz, 'DD/MM/YYYY')
-          ELSE NULL
-        END,
-        hour_checkin = CASE
-          WHEN $9 IS NOT NULL
-          THEN to_char($9::timestamptz, 'HH24:MI')
-          ELSE NULL
-        END,
         longdate_checkout = $10::timestamptz,
-        date_checkout = CASE
-          WHEN $10 IS NOT NULL
-          THEN to_char($10::timestamptz, 'DD/MM/YYYY')
-          ELSE NULL
-        END,
-        hour_checkout = CASE
-          WHEN $10 IS NOT NULL
-          THEN to_char($10::timestamptz, 'HH24:MI')
-          ELSE NULL
-        END,
         duration = CASE
           WHEN $10 IS NOT NULL AND $9 IS NOT NULL
           THEN ROUND(EXTRACT(EPOCH FROM ($10::timestamptz - $9::timestamptz)) / 3600.0, 2)
@@ -846,42 +1009,42 @@ exports.updateTimesheetadmin = async (req, res) => {
       RETURNING *;
     `;
 
-    const s = (v) => (v ?? "").toString().trim() || null;
-
     const values = [
-      s(serialnumber),
-      s(full_name),
-      s(order_no),
-      s(ssbr_id),
-      s(operation_text),
-      s(operation_no),
-      s(workcentercode),
-      s(workcenterdescription),
-      longdate_checkin || null,
-      longdate_checkout || null,
+      s(serialnumber !== undefined ? serialnumber : before.serialnumber),
+      s(full_name !== undefined ? full_name : before.full_name),
+      s(order_no !== undefined ? order_no : before.order_no),
+      s(ssbr_id !== undefined ? ssbr_id : before.ssbr_id),
+      s(operation_text !== undefined ? operation_text : before.operation_text),
+      s(operation_no !== undefined ? operation_no : before.operation_no),
+      s(workcentercode !== undefined ? workcentercode : before.workcentercode),
+      s(workcenterdescription !== undefined ? workcenterdescription : before.workcenterdescription),
+      effectiveIn || null,
+      effectiveOut || null,
       id
     ];
 
+    const result = await client.query(query, values);
+    const after = result.rows[0];
 
-    const result = await db.query(query, values);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Timesheet record not found' });
-    }
+    await client.query("COMMIT");
 
     // Edit admin bisa MEMBUAT record jadi terhapus: SQL di atas men-set state_flag='5'
     // otomatis ketika durasi hasil edit = 0 jam. Samakan perlakuannya dengan hapus manual.
-    if (String(result.rows[0].state_flag ?? "") === "5") {
-      await autoExcludeDeletedTimesheet(
-        [result.rows[0].tsnumber],
-        req.header("x-user-name") || req.header("x-user-id") || null,
-      );
+    if (String(after.state_flag ?? "") === "5") {
+      await autoExcludeDeletedTimesheet([after.tsnumber], actor);
     }
 
-    res.json(result.rows[0]);
+    res.json(after);
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof CorrectionError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     console.error('updateTimesheetadmin error:', err);
-    res.status(500).json({ error: err.message });
+    const mapped = mapDbErrorToHttp(err);
+    res.status(mapped.status).json(mapped.body);
+  } finally {
+    client.release();
   }
 };
 
@@ -891,28 +1054,81 @@ exports.updateTimesheetadmin = async (req, res) => {
  * DELETE timesheet record by ID
  */
 exports.remove = async (req, res) => {
+  const client = await db.connect();
   try {
     const { id } = req.params;
-    const result = await db.query(
+    const actor = actorFromRequest(req);
+    const reason = req.body?.reason || req.query?.reason || req.header("x-correction-reason");
+
+    if (!id) {
+      return res.status(400).json({ error: 'ID parameter is required' });
+    }
+
+    await client.query("BEGIN");
+
+    // Kunci row dan periksa status freeze dalam satu transaksi
+    const beforeRes = await client.query(
+      `SELECT t.*,
+              (f.tsnumber IS NOT NULL) AS is_frozen,
+              (SELECT plant_code FROM plant_config ORDER BY id LIMIT 1) AS config_plant
+         FROM timesheet_transaction t
+         LEFT JOIN timesheet_staging_freeze f ON f.tsnumber = t.tsnumber
+        WHERE t.tsnumber = $1
+        FOR UPDATE OF t`,
+      [id]
+    );
+
+    if (beforeRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: 'Record not found' });
+    }
+
+    const before = beforeRes.rows[0];
+
+    // Validasi plant
+    assertPlantMatches({ rowPlant: before.plant, configPlant: before.config_plant });
+
+    // Validasi aturan koreksi (DELETE pada frozen ditolak 409, pre-staging mewajibkan actor & reason)
+    assertCorrectionAllowed({
+      isDelete: true,
+      actor,
+      reason,
+      frozen: before.is_frozen === true,
+    });
+
+    // Set session context agar trigger DB mengizinkan DELETE
+    if (actor && reason) {
+      await client.query(
+        "SELECT set_config('mps.correction_actor', $1, true), set_config('mps.correction_reason', $2, true), set_config('mps.correction_channel', 'remove', true)",
+        [actor, reason]
+      );
+    }
+
+    const result = await client.query(
       `DELETE FROM timesheet_transaction WHERE tsnumber = $1 RETURNING tsnumber`,
       [id]
     );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Record not found' });
-    }
+
+    await client.query("COMMIT");
 
     // Record dihapus PERMANEN dari sumber, tapi salinannya bisa sudah ter-stage.
     // Tanpa exclusion, bundel staging-nya tetap bisa terkirim ke SAP padahal jamnya batal.
     const staging = await autoExcludeDeletedTimesheet(
       [result.rows[0].tsnumber],
-      req.header("x-user-name") || req.header("x-user-id") || null,
+      actor,
     );
 
     res.json({ message: 'Deleted successfully', tsnumber: result.rows[0].tsnumber, staging_exclusion: staging });
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof CorrectionError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     console.error('remove error:', err);
-    res.status(500).json({ error: err.message });
+    const mapped = mapDbErrorToHttp(err);
+    res.status(mapped.status).json(mapped.body);
+  } finally {
+    client.release();
   }
 };
 
@@ -971,6 +1187,7 @@ const generateExport = async (req, res, format = 'csv') => {
     const fields = TIMESHEET_EXPORT_FIELDS;
 
     if (format === 'csv') {
+      const Parser = getParser();
       const parser = new Parser({ fields, delimiter: ';' });
       const csv = parser.parse(exportRows);
 
@@ -980,6 +1197,7 @@ const generateExport = async (req, res, format = 'csv') => {
     }
 
     if (format === 'xlsx') {
+      const ExcelJS = getExcelJS();
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Timesheet');
 
@@ -1048,27 +1266,22 @@ exports.partialUpdate = async (req, res) => {
     return res.status(400).json({ message: "No data to update" });
   }
 
-  const allowedFields = [
-    "note",
-    "hour_checkin",
-    "hour_checkout",
-    "date_checkin",
-    "date_checkout",
-    "state_flag",
-    "std_foreman_hours",
-    "planhours",
-    "workcentercode",
-    "workcenterdescription"
-  ];
+  // #8: date_*/hour_* SENGAJA tidak ada di daftar ini — lihat
+  // PARTIAL_UPDATE_ALLOWED_FIELDS di timesheetAdminGuard.js. Empat kolom itu
+  // diturunkan trigger dari longdate_*; membiarkan admin menulisnya langsung
+  // membuat jam tampilan bergerak tanpa jam SAP ikut bergerak.
+  const allowedFields = PARTIAL_UPDATE_ALLOWED_FIELDS;
 
   const setClauses = [];
   const values = [];
+  const changedPayloadFields = [];
   let idx = 1;
 
   for (const field of allowedFields) {
     if (payload[field] !== undefined) {
       setClauses.push(`${field} = $${idx++}`);
       values.push(payload[field]);
+      changedPayloadFields.push(field);
     }
   }
 
@@ -1076,10 +1289,61 @@ exports.partialUpdate = async (req, res) => {
     return res.status(400).json({ message: "No valid fields to update" });
   }
 
-  values.push(tsnumber);
+  const actor = actorFromRequest(req);
+  const reason = (payload.reason && String(payload.reason).trim()) || null;
+  const requestId = typeof req.header === "function" ? req.header("x-request-id") : req.headers?.["x-request-id"] || null;
 
+  const client = await db.connect();
   try {
-    const result = await db.query(
+    await client.query("BEGIN");
+
+    const beforeRes = await client.query(
+      `SELECT t.*,
+              (f.tsnumber IS NOT NULL) AS is_frozen,
+              (SELECT plant_code FROM plant_config ORDER BY id LIMIT 1) AS config_plant
+         FROM timesheet_transaction t
+         LEFT JOIN timesheet_staging_freeze f ON f.tsnumber = t.tsnumber
+        WHERE t.tsnumber = $1
+        FOR UPDATE OF t`,
+      [tsnumber]
+    );
+
+    if (beforeRes.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "Timesheet not found" });
+    }
+
+    const before = beforeRes.rows[0];
+    assertPlantMatches({ rowPlant: before.plant, configPlant: before.config_plant });
+
+    // Cek field yang benar-benar berubah
+    const changedFields = changedPayloadFields.filter((f) => {
+      const b = before[f];
+      const a = payload[f];
+      return String(b ?? "") !== String(a ?? "");
+    });
+
+    // Validasi aturan koreksi (freeze ditolak 409, payroll field butuh actor & reason)
+    assertCorrectionAllowed({
+      changedFields,
+      actor,
+      reason,
+      frozen: before.is_frozen === true,
+    });
+
+    if (actor && reason) {
+      await client.query(
+        `SELECT set_config('mps.correction_actor', $1, true),
+                set_config('mps.correction_reason', $2, true),
+                set_config('mps.correction_channel', 'partial_update', true),
+                set_config('mps.correction_request_id', $3, true)`,
+        [actor, reason, requestId || ""]
+      );
+    }
+
+    values.push(tsnumber);
+
+    const result = await client.query(
       `
       UPDATE timesheet_transaction
       SET ${setClauses.join(", ")}
@@ -1089,9 +1353,7 @@ exports.partialUpdate = async (req, res) => {
       values
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "Timesheet not found" });
-    }
+    await client.query("COMMIT");
 
     // Auto-exclude kalau record ini baru saja ditandai DIHAPUS (state_flag=5) — lihat
     // catatan autoExcludeDeletedTimesheet. Non-blocking: gagal exclusion tidak membatalkan update.
@@ -1099,7 +1361,7 @@ exports.partialUpdate = async (req, res) => {
     if (String(result.rows[0].state_flag ?? "") === "5") {
       staging = await autoExcludeDeletedTimesheet(
         [result.rows[0].tsnumber],
-        req.header("x-user-name") || req.header("x-user-id") || null,
+        actor,
       );
     }
 
@@ -1109,8 +1371,16 @@ exports.partialUpdate = async (req, res) => {
       ...(staging ? { staging_exclusion: staging } : {}),
     });
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof CorrectionError) {
+      return res.status(err.status).json({ error: err.message, message: err.message, code: err.code });
+    }
     console.error("partialUpdate error:", err);
-    res.status(500).json({ message: err.message });
+    // #10: pelanggaran freeze adalah aturan bisnis, bukan crash -> 409.
+    const mapped = mapDbErrorToHttp(err);
+    res.status(mapped.status).json({ error: mapped.body.error, message: mapped.body.error, code: mapped.body.code });
+  } finally {
+    client.release();
   }
 };
 
@@ -1530,6 +1800,28 @@ const formatZTIMESHEETID = (tsnumber) => {
 };
 
 exports.postToSap = async (req, res) => {
+  // #19 DINONAKTIFKAN: jalur ini mengirim IEDD/IEDZ langsung dari
+  // longdate_checkout MENTAH, melewati staging dan alokasi interval.
+  //
+  // Untuk operator yang mengerjakan dua order bersamaan 08:00-14:00, jalur ini
+  // mengirim 6 jam untuk SETIAP order (total 12 jam dari 6 jam kerja nyata).
+  // Jalur staging mengirim 3 jam + 3 jam. Dua rumus yang hidup bersamaan
+  // membuat jam yang diterima SAP bergantung pada tombol mana yang ditekan —
+  // dan record sumber dibekukan permanen setelah masuk staging, jadi angka yang
+  // salah tidak bisa diperbaiki.
+  //
+  // Jalur yang berlaku: jobs/sap_staging/stage_timesheet_transaction.py lalu
+  // post_sap_staging.py (keduanya manual, auto-post tetap mati).
+  return res.status(410).json({
+    error:
+      'Endpoint postToSap NONAKTIF: rumus SAP untuk timesheet kini hanya lewat staging ' +
+      '(alokasi interval). Jalur lama mengirim jam mentah sehingga multitasking terhitung dobel.',
+    code: 'SAP_DIRECT_POST_DISABLED',
+    use_instead: 'jobs/sap_staging/stage_timesheet_transaction.py + post_sap_staging.py',
+  });
+};
+
+exports.__postToSapLegacyDisabled = async (req, res) => {
   const SAP_URL      = process.env.SAP_INBOUND_URL;
   const SAP_USER     = process.env.SAP_INBOUND_USERNAME;
   const SAP_PASSWORD = process.env.SAP_INBOUND_PASSWORD;

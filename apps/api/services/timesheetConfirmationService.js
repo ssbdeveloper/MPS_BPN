@@ -604,6 +604,11 @@ const createTimesheetConfirmationService = ({ pool, timezone, plant }) => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(
+        `SELECT set_config('mps.correction_actor', 'system_checkout', true),
+                set_config('mps.correction_reason', 'operational_checkout_confirmation', true),
+                set_config('mps.correction_channel', 'checkout_service', true)`
+      );
       const runtimeTimezone = await loadRuntimeContext(client, timezone, plant);
       const locked = await lockRows(client, selector, value);
       if (locked.rows.length === 0) {

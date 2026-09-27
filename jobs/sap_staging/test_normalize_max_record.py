@@ -1,5 +1,6 @@
 """Unit test normalizer max record per jenis (mirror test JS 6/6)."""
 import sys
+import unittest
 
 from sap_staging_common import (
     expand_legacy_into_type_maps,
@@ -32,25 +33,50 @@ CATALOG = {
     ],
 }
 
-eq("legacy number", legacy_category_minutes(150), {"va": 150, "nnva": 150, "nva": 150})
-eq("legacy object", legacy_category_minutes({"va": 300, "nnva": 150, "nva": 150}), {"va": 300, "nnva": 150, "nva": 150})
-eq("new no legacy", legacy_category_minutes({"mch": {"1": 300}, "timesheet": {"": 300}}), None)
-eq(
-    "normalize per-type",
-    normalize_max_record_minutes({"mch": {"1": 300, "2": None, "x": 5}, "timesheet": {"": 480, "1520": 30, "xx": 9}}),
-    {"mch": {"1": 300, "2": None}, "timesheet": {"": 480, "1520": 30}},
-)
-expanded = expand_legacy_into_type_maps(
-    normalize_max_record_minutes({"mch": {"1": None}, "timesheet": {}}),
-    {"va": 300, "nnva": 150, "nva": 150},
-    CATALOG,
-)
-eq(
-    "expand legacy",
-    expanded,
-    {"mch": {"1": None, "2": 150, "7": 150, "12": 150}, "timesheet": {"": 300, "1520": 150, "1670": 150}},
-)
-eq("expand idempotent", expand_legacy_into_type_maps(expanded, {"va": 300, "nnva": 150, "nva": 150}, CATALOG), expanded)
+class TestNormalizeMaxRecord(unittest.TestCase):
+    def test_normalize_all_cases(self):
+        self.assertEqual(legacy_category_minutes(150), {"va": 150, "nnva": 150, "nva": 150})
+        self.assertEqual(legacy_category_minutes({"va": 300, "nnva": 150, "nva": 150}), {"va": 300, "nnva": 150, "nva": 150})
+        self.assertIsNone(legacy_category_minutes({"mch": {"1": 300}, "timesheet": {"": 300}}))
+        self.assertEqual(
+            normalize_max_record_minutes({"mch": {"1": 300, "2": None, "x": 5}, "timesheet": {"": 480, "1520": 30, "xx": 9}}),
+            {"mch": {"1": 300, "2": None}, "timesheet": {"": 480, "1520": 30}},
+        )
+        expanded = expand_legacy_into_type_maps(
+            normalize_max_record_minutes({"mch": {"1": None}, "timesheet": {}}),
+            {"va": 300, "nnva": 150, "nva": 150},
+            CATALOG,
+        )
+        self.assertEqual(
+            expanded,
+            {"mch": {"1": None, "2": 150, "7": 150, "12": 150}, "timesheet": {"": 300, "1520": 150, "1670": 150}},
+        )
+        self.assertEqual(
+            expand_legacy_into_type_maps(expanded, {"va": 300, "nnva": 150, "nva": 150}, CATALOG),
+            expanded,
+        )
 
-print("\n6/6 PASS" if not FAIL else f"\n{len(FAIL)} FAIL")
-sys.exit(1 if FAIL else 0)
+
+if __name__ == "__main__":
+    eq("legacy number", legacy_category_minutes(150), {"va": 150, "nnva": 150, "nva": 150})
+    eq("legacy object", legacy_category_minutes({"va": 300, "nnva": 150, "nva": 150}), {"va": 300, "nnva": 150, "nva": 150})
+    eq("new no legacy", legacy_category_minutes({"mch": {"1": 300}, "timesheet": {"": 300}}), None)
+    eq(
+        "normalize per-type",
+        normalize_max_record_minutes({"mch": {"1": 300, "2": None, "x": 5}, "timesheet": {"": 480, "1520": 30, "xx": 9}}),
+        {"mch": {"1": 300, "2": None}, "timesheet": {"": 480, "1520": 30}},
+    )
+    expanded = expand_legacy_into_type_maps(
+        normalize_max_record_minutes({"mch": {"1": None}, "timesheet": {}}),
+        {"va": 300, "nnva": 150, "nva": 150},
+        CATALOG,
+    )
+    eq(
+        "expand legacy",
+        expanded,
+        {"mch": {"1": None, "2": 150, "7": 150, "12": 150}, "timesheet": {"": 300, "1520": 150, "1670": 150}},
+    )
+    eq("expand idempotent", expand_legacy_into_type_maps(expanded, {"va": 300, "nnva": 150, "nva": 150}, CATALOG), expanded)
+
+    print("\n6/6 PASS" if not FAIL else f"\n{len(FAIL)} FAIL")
+    sys.exit(1 if FAIL else 0)
