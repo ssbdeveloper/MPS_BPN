@@ -3092,6 +3092,29 @@ def reconcile_publishing_state(
     finalized_count = finalize_sap_ready_to_staged(cur_plant, staging_results, tsnumbers)
     conn_plant.commit()
 
+    if run_id:
+        cur_plant.execute(
+            """
+            SELECT count(*)
+            FROM public.timesheet_sap_ready
+            WHERE run_id = %s AND status NOT IN ('STAGED', 'INVALIDATED')
+            """,
+            (run_id,),
+        )
+        remaining = cur_plant.fetchone()
+        rem_count = remaining["count"] if isinstance(remaining, dict) else remaining[0]
+        if rem_count == 0:
+            cur_plant.execute(
+                """
+                UPDATE public.timesheet_etl_run
+                SET status = 'STAGED',
+                    finished_at = now()
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+            conn_plant.commit()
+
     return {
         "status": "RECONCILED",
         "plant": plant,
@@ -3159,6 +3182,29 @@ def run_publish(
                 )
             candidates = cur_plant.fetchall()
             if not candidates:
+                if run_id:
+                    cur_plant.execute(
+                        """
+                        SELECT count(*)
+                        FROM public.timesheet_sap_ready
+                        WHERE run_id = %s AND status NOT IN ('STAGED', 'INVALIDATED')
+                        """,
+                        (run_id,),
+                    )
+                    remaining = cur_plant.fetchone()
+                    rem_count = remaining["count"] if isinstance(remaining, dict) else remaining[0]
+                    if rem_count == 0:
+                        cur_plant.execute(
+                            """
+                            UPDATE public.timesheet_etl_run
+                            SET status = 'STAGED',
+                                finished_at = now()
+                            WHERE run_id = %s AND status <> 'STAGED'
+                            """,
+                            (run_id,),
+                        )
+                        conn_plant.commit()
+
                 return {
                     "mode": "publish",
                     "plant": plant,
@@ -3194,6 +3240,31 @@ def run_publish(
 
                 total_published += finalized
                 all_staging_ids.extend([sid for sid, _ in staging_results.values()])
+
+            # Jika seluruh baris sap_ready pada run ini telah STAGED (atau INVALIDATED),
+            # perbarui header run status ke 'STAGED'
+            if run_id:
+                cur_plant.execute(
+                    """
+                    SELECT count(*)
+                    FROM public.timesheet_sap_ready
+                    WHERE run_id = %s AND status NOT IN ('STAGED', 'INVALIDATED')
+                    """,
+                    (run_id,),
+                )
+                remaining = cur_plant.fetchone()
+                rem_count = remaining["count"] if isinstance(remaining, dict) else remaining[0]
+                if rem_count == 0:
+                    cur_plant.execute(
+                        """
+                        UPDATE public.timesheet_etl_run
+                        SET status = 'STAGED',
+                            finished_at = now()
+                        WHERE run_id = %s
+                        """,
+                        (run_id,),
+                    )
+                    conn_plant.commit()
 
             return {
                 "mode": "publish",
