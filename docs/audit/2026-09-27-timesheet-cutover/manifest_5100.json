@@ -1,0 +1,139 @@
+{
+  "plant": "5100",
+  "timezone": "Asia/Jakarta",
+  "generated_at": "2026-09-27T20:30:00+07:00",
+  "cutoff_date": "2026-09-23",
+  "watermark_ts": "2026-09-27T18:00:00+07:00",
+  "summary": {
+    "total_groups": 10,
+    "total_records_affected": 16,
+    "records_to_exclude": 15,
+    "records_to_keep_open": 1
+  },
+  "cases": [
+    {
+      "case_id": "CKP-20260924-90005-01",
+      "operator": "90005",
+      "order_no": "1000124907",
+      "operation_no": 230,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 115226, "in": "2026-09-24T05:01:34.736781+07:00", "out": "2026-09-24T05:51:33.263912+07:00", "action": "KEEP"},
+        {"tsnumber": 115227, "in": "2026-09-24T05:01:34.743116+07:00", "out": "2026-09-24T05:51:33.263912+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_6MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260925-14013-01",
+      "operator": "14013",
+      "order_no": "1000130582",
+      "operation_no": 70,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 116939, "in": "2026-09-25T06:54:10.858484+07:00", "out": "2026-09-25T07:25:00+07:00", "action": "KEEP"},
+        {"tsnumber": 116940, "in": "2026-09-25T06:54:10.949357+07:00", "out": "2026-09-25T07:25:00+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_91MS"},
+        {"tsnumber": 116941, "in": "2026-09-25T06:54:10.953662+07:00", "out": "2026-09-25T07:25:00+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_95MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260925-14013-02",
+      "operator": "14013",
+      "order_no": "1000130582",
+      "operation_no": 70,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 117013, "in": "2026-09-25T07:25:00+07:00", "out": "2026-09-25T07:26:28.733506+07:00", "action": "KEEP"},
+        {"tsnumber": 117014, "in": "2026-09-25T07:25:00+07:00", "out": "2026-09-25T07:26:28.733506+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_IDENTICAL_TIMESTAMP"},
+        {"tsnumber": 117015, "in": "2026-09-25T07:25:00+07:00", "out": "2026-09-25T07:26:28.733506+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_IDENTICAL_TIMESTAMP"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260925-29797-01",
+      "operator": "29797",
+      "order_no": "1000120828",
+      "operation_no": 180,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 117858, "in": "2026-09-25T19:02:38.623839+07:00", "out": "2026-09-25T20:30:56.780346+07:00", "action": "KEEP"},
+        {"tsnumber": 117859, "in": "2026-09-25T19:02:38.627334+07:00", "out": "2026-09-25T20:30:56.780346+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_3MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260925-11002009-01",
+      "operator": "11002009",
+      "order_no": "1000131015",
+      "operation_no": 70,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 117957, "in": "2026-09-25T22:56:22.146953+07:00", "out": "2026-09-26T00:09:59.954956+07:00", "action": "KEEP"},
+        {"tsnumber": 117958, "in": "2026-09-25T22:56:22.561655+07:00", "out": "2026-09-26T00:09:59.954956+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_414MS"},
+        {"tsnumber": 117959, "in": "2026-09-25T22:56:22.568307+07:00", "out": "2026-09-26T00:09:59.954956+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_421MS"},
+        {"tsnumber": 117960, "in": "2026-09-25T22:56:22.572318+07:00", "out": "2026-09-26T00:09:59.954956+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_425MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260926-1603-01",
+      "operator": "1603",
+      "order_no": "1000128545",
+      "operation_no": 190,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 118624, "in": "2026-09-26T13:03:58.702763+07:00", "out": "2026-09-26T15:01:52.538508+07:00", "action": "KEEP"},
+        {"tsnumber": 118625, "in": "2026-09-26T13:03:58.704526+07:00", "out": "2026-09-26T15:01:52.538508+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_2MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260926-10427-01",
+      "operator": "10427",
+      "order_no": "1000128545",
+      "operation_no": 180,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 119112, "in": "2026-09-26T21:03:46.167631+07:00", "out": "2026-09-26T21:06:49.159870+07:00", "action": "KEEP"},
+        {"tsnumber": 119113, "in": "2026-09-26T21:03:46.179567+07:00", "out": "2026-09-26T21:06:49.159870+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_12MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260926-21024-01",
+      "operator": "21024",
+      "order_no": "1000120828",
+      "operation_no": 200,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 119140, "in": "2026-09-26T22:46:41.580389+07:00", "out": "2026-09-27T00:32:14.147642+07:00", "action": "KEEP"},
+        {"tsnumber": 119141, "in": "2026-09-26T22:46:41.721429+07:00", "out": "2026-09-27T00:32:14.147642+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_DELTA_141MS"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260927-19720-01",
+      "operator": "19720",
+      "order_no": "1000128545",
+      "operation_no": 200,
+      "category": "DUPLICATE_SCANNER_TAPIN",
+      "records": [
+        {"tsnumber": 119614, "in": "2026-09-27T13:05:54.869968+07:00", "out": "2026-09-27T13:06:23.566478+07:00", "action": "KEEP"},
+        {"tsnumber": 119619, "in": "2026-09-27T13:06:23.660062+07:00", "out": "2026-09-27T15:01:13.368084+07:00", "action": "KEEP"},
+        {"tsnumber": 119618, "in": "2026-09-27T13:06:23.237845+07:00", "out": "2026-09-27T15:01:13.368084+07:00", "action": "SET_STATE_FLAG_5", "reason": "DUPLICATE_SCANNER_TAPIN_PREMATURE_TAP"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260924-20859-INV",
+      "operator": "20859",
+      "order_no": "1000130697",
+      "operation_no": 160,
+      "category": "INVALID_NEGATIVE_DURATION",
+      "records": [
+        {"tsnumber": 116574, "in": "2026-09-24T00:30:00+07:00", "out": "2026-09-24T00:01:00+07:00", "action": "SET_STATE_FLAG_5", "reason": "INVALID_NEGATIVE_DURATION_COVERED_BY_115087_116575"}
+      ]
+    },
+    {
+      "case_id": "CKP-20260924-11998811-OPEN",
+      "operator": "11998811",
+      "order_no": "1000120825",
+      "operation_no": 10,
+      "category": "OPEN_TIMESHEET_PENDING_CHECKOUT",
+      "records": [
+        {"tsnumber": 115732, "in": "2026-09-24T10:36:01.343782+07:00", "out": null, "action": "KEEP_OPEN", "reason": "PRESERVE_ACTIVE_SHOP_FLOOR"}
+      ]
+    }
+  ]
+}

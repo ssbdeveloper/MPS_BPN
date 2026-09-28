@@ -1,0 +1,17 @@
+{
+  "plant": "5051",
+  "timezone": "Asia/Makassar",
+  "generated_at": "2026-09-27T20:30:00+08:00",
+  "cutoff_date": "2026-09-23",
+  "watermark_ts": "2026-09-27T18:00:00+08:00",
+  "summary": {
+    "total_groups": 51,
+    "total_conflict_records": 119,
+    "staged_status_in_central": "PENDING",
+    "posted_to_sap": 0,
+    "frozen_status_in_plant": "BACKFILL",
+    "legacy_writer_status": "STOPPED_AT_17:06_WITA"
+  },
+  "strategy": "RECONCILE_STAGING_PRESERVE_VALID_EXCLUDE_DUPLICATE_TAPIN",
+  "note": "Semua 119 record konflik sudah masuk staging central dengan status PENDING dan belum terkirim ke SAP. Pipeline baru akan merekonsiliasi staging ini secara bertahap."
+}

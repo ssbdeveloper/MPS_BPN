@@ -587,14 +587,14 @@ class TestEtlF5PublishAndRecovery(unittest.TestCase):
                   zconf_type, arbpl, lstar, isdd, isdz, iedd, iedz, aueru, zbarcodeid,
                   payload, bucket_start, synthetic_start, synthetic_end, total_seconds,
                   source_row_count, source_min_start, source_max_end, provenance_snapshot,
-                  status, is_productive, created_at, updated_at
+                  status, created_at, updated_at
                 ) VALUES (
                   'TIMESHEET', %s, false, %s, %s,
                   '00010424', '00010424', '6998430', '001000128545', '0170', '', '', '', '',
                   'RG', 'C5100FIT', '', '20260910', '080000', '20260910', '090000', '', '',
                   %s::jsonb, now(), now(), now(), 3600,
                   1, now(), now(), %s::jsonb,
-                  'PENDING', true, now(), now()
+                  'PENDING', now(), now()
                 )
                 """,
                 (source_key, str(TS_F5_B), PLANT_CKP, json.dumps(payload), prov_json),
@@ -672,14 +672,14 @@ class TestEtlF5PublishAndRecovery(unittest.TestCase):
                   zconf_type, arbpl, lstar, isdd, isdz, iedd, iedz, aueru, zbarcodeid,
                   payload, bucket_start, synthetic_start, synthetic_end, total_seconds,
                   source_row_count, source_min_start, source_max_end, provenance_snapshot,
-                  status, is_productive, created_at, updated_at
+                  status, created_at, updated_at
                 ) VALUES (
                   'TIMESHEET', %s, false, %s, %s,
                   '00010424', '00010424', '6998430', '001000128545', '0170', '', '', '', '',
                   'RG', 'C5100FIT', '', '20260910', '080000', '20260910', '090000', '', '',
                   %s::jsonb, now(), now(), now(), 3600,
                   1, now(), now(), %s::jsonb,
-                  'PENDING', true, now(), now()
+                  'PENDING', now(), now()
                 )
                 """,
                 (payload_a["source_key"], str(TS_F5_A), PLANT_CKP, json.dumps(payload_a), prov_json),
@@ -731,14 +731,14 @@ class TestEtlF5PublishAndRecovery(unittest.TestCase):
                   zconf_type, arbpl, lstar, isdd, isdz, iedd, iedz, aueru, zbarcodeid,
                   payload, bucket_start, synthetic_start, synthetic_end, total_seconds,
                   source_row_count, source_min_start, source_max_end, provenance_snapshot,
-                  status, is_productive, created_at, updated_at
+                  status, created_at, updated_at
                 ) VALUES (
                   'TIMESHEET', %s, false, %s, %s,
                   '00010424', '00010424', '6998430', '009999999999', '0170', '', '', '', '',
                   'RG', 'C5100FIT', '', '20260910', '080000', '20260910', '090000', '', '',
                   %s::jsonb, now(), now(), now(), 3600,
                   1, now(), now(), %s::jsonb,
-                  'PENDING', true, now(), now()
+                  'PENDING', now(), now()
                 )
                 """,
                 (payload["source_key"], str(TS_F5_C), PLANT_CKP, json.dumps(drift_payload), prov_json),
@@ -769,14 +769,14 @@ class TestEtlF5PublishAndRecovery(unittest.TestCase):
                   zconf_type, arbpl, lstar, isdd, isdz, iedd, iedz, aueru, zbarcodeid,
                   payload, bucket_start, synthetic_start, synthetic_end, total_seconds,
                   source_row_count, source_min_start, source_max_end, provenance_snapshot,
-                  status, is_productive, created_at, updated_at
+                  status, created_at, updated_at
                 ) VALUES (
                   'TIMESHEET', %s, false, %s, %s,
                   '00010424', '00010424', '6998430', '001000128545', '0170', '', '', '', '',
                   'RG', 'C5100FIT', '', '20260910', '080000', '20260910', '090000', '', '',
                   %s::jsonb, now(), now(), now(), 1800,
                   1, now(), now(), '{"raw": 3600, "cleaned": 3600, "alloc": 3600, "cap": null, "sec": 3600, "ready_rule_version": "READY-V1"}'::jsonb,
-                  'PENDING', true, now(), now()
+                  'PENDING', now(), now()
                 )
                 """,
                 (payload["source_key"], str(TS_F5_C), PLANT_CKP, json.dumps(payload)),
@@ -1002,14 +1002,14 @@ class TestEtlF5PublishAndRecovery(unittest.TestCase):
                   zconf_type, arbpl, lstar, isdd, isdz, iedd, iedz, aueru, zbarcodeid,
                   payload, bucket_start, synthetic_start, synthetic_end, total_seconds,
                   source_row_count, source_min_start, source_max_end, provenance_snapshot,
-                  status, is_productive, created_at, updated_at
+                  status, created_at, updated_at
                 ) VALUES (
                   'TIMESHEET', %s, false, %s, %s,
                   '00010424', '00010424', '6998430', '001000128545', '0170', '', '', '', '',
                   'RG', 'C5100FIT', '', '20260910', '080000', '20260910', '090000', '', '',
                   %s::jsonb, now(), now(), now(), 3600,
                   1, now(), now(), %s::jsonb,
-                  'PENDING', true, now(), now()
+                  'PENDING', now(), now()
                 )
                 """,
                 (payload["source_key"], str(TS_F5_C), PLANT_CKP, json.dumps(drift_payload), prov_json),

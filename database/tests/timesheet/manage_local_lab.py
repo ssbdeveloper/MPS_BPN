@@ -550,7 +550,13 @@ def recreate_staging_db() -> None:
               posted_at timestamptz,
               created_at timestamptz NOT NULL DEFAULT now(),
               updated_at timestamptz NOT NULL DEFAULT now(),
-              is_productive boolean,
+              is_productive boolean GENERATED ALWAYS AS (
+                CASE
+                  WHEN source_system = 'MCH_HOURS' THEN (zconf_type = ANY (ARRAY['M1'::text, 'M2'::text]))
+                  WHEN source_system = 'TIMESHEET' THEN (zconf_type = ANY (ARRAY['RG'::text, 'OV'::text, 'RW'::text]))
+                  ELSE false
+                END
+              ) STORED,
               CONSTRAINT sap_timesheet_staging_source_uk UNIQUE (source_system, source_key)
             );
             CREATE INDEX IF NOT EXISTS sap_timesheet_staging_status_idx ON public.sap_timesheet_staging (status, created_at);

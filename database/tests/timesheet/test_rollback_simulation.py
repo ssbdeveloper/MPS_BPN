@@ -134,8 +134,9 @@ def apply_migrations_to_scratch(plant_db: str, central_db: str) -> None:
         cur_c.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
         aws_mig_1 = (REPO_ROOT / "database" / "migrations" / "aws" / "20260831_sap_staging_aws_schema.sql").read_text(encoding="utf-8")
         cur_c.execute(aws_mig_1)
-        # Drop GENERATED ALWAYS expression agar sinkron dengan kontrak produksi (is_productive boolean)
-        cur_c.execute("ALTER TABLE public.sap_timesheet_staging ALTER COLUMN is_productive DROP EXPRESSION IF EXISTS;")
+        # Terapkan migrasi multi-source is_productive agar identik dengan AWS RDS production
+        aws_mig_multi = (REPO_ROOT / "database" / "migrations" / "aws" / "20260928_sap_staging_is_productive_multi_source.sql").read_text(encoding="utf-8")
+        cur_c.execute(aws_mig_multi)
         aws_mig_2 = (REPO_ROOT / "database" / "migrations" / "aws" / "20260922_sap_staging_provenance_snapshot.sql").read_text(encoding="utf-8")
         cur_c.execute(aws_mig_2)
     conn_c.close()

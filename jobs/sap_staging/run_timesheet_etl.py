@@ -306,9 +306,15 @@ def connect_central(
     autocommit: bool = False,
     *,
     env: str = "lab",
+    plant_conn=None,
 ):
-    """Buka koneksi central staging (lab: loopback-only; prod: TLS terverifikasi & env vars)."""
+    """Buka koneksi central staging (lab: loopback-only; prod: direct TLS atau plant dblink adapter)."""
     if env == "prod":
+        transport = (os.environ.get("MPS2_PROD_CENTRAL_TRANSPORT") or "").strip().lower()
+        if transport == "plant_dblink" and plant_conn:
+            from central_dblink_adapter import CentralDblinkConnection
+            return CentralDblinkConnection(plant_conn, server_name="aws_staging")
+
         conn_params = _prod_central_conn_params(dbname)
         pwd = conn_params.get("password")
         try:
@@ -2881,7 +2887,6 @@ def insert_central_staging_batch(
                 synth_end,
                 json.dumps(prov_snap),
                 "PENDING",
-                is_productive,
             ))
 
         PAGE_SIZE = 1000
@@ -2896,13 +2901,13 @@ def insert_central_staging_batch(
                   zconf_type, arbpl, lstar, isdd, isdz, iedd, iedz, aueru, zbarcodeid,
                   payload, bucket_start, synthetic_start, synthetic_end, total_seconds,
                   source_row_count, source_min_start, source_max_end, provenance_snapshot,
-                  status, is_productive, created_at, updated_at
+                  status, created_at, updated_at
                 )
                 VALUES %s
                 ON CONFLICT (source_system, source_key) DO NOTHING
                 """,
                 page,
-                template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, now(), now())",
+                template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, now(), now())",
                 page_size=PAGE_SIZE,
             )
 
@@ -3958,6 +3963,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.central_db if args.env == "lab" else None,
                     autocommit=False,
                     env=args.env,
+                    plant_conn=conn_plant,
                 )
             except (EtlError, psycopg2.Error) as exc:
                 print(f"ERROR koneksi central: {exc}", file=sys.stderr)
@@ -3978,6 +3984,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.central_db if args.env == "lab" else None,
                     autocommit=False,
                     env=args.env,
+                    plant_conn=conn_plant,
                 )
             except (EtlError, psycopg2.Error) as exc:
                 print(f"ERROR koneksi central: {exc}", file=sys.stderr)
