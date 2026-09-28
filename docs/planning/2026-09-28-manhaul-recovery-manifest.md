@@ -10,107 +10,112 @@ Project `fd136156-dd1a-450d-a370-2e18c353cfd0`, "NEW OPP R2 - MPS - 11x MANHAUL 
 Dasar: [[planning/2026-09-28-scheduling-map-sap-reliability]] §4 dan [[concepts/msproject-sync-identitas-task]].
 Bukti sesi: [[log/2026-09-28-scheduling-map-sap-pencegahan]].
 
-**Status: data produksi BELUM pulih.** Dokumen ini hanya manifest diagnosis. Semua query dijalankan
-dengan `BEGIN READ ONLY` lalu `ROLLBACK` pada 2026-09-28 sekitar 06:51 UTC. Tidak ada write, sync,
-publish, atau restore.
+**Status: data produksi BELUM pulih.** Dokumen ini adalah manifest diagnosis dan rencana rekonstruksi
+Text10 dry-run. Semua diagnosis dijalankan dengan `BEGIN READ ONLY` lalu `ROLLBACK` pada 2026-09-28.
+Tidak ada write DB produksi, sync/publish, restore, atau perubahan file MPP yang dijalankan di sesi ini.
 
 ## Ringkasan terukur
 
-| Hal | Nilai |
-|---|---|
-| Revisi sekarang / published | 9 / 1 |
-| Task di DB / aktif / nonaktif | 1.010 / 156 / 854 |
-| Snapshot rev 1-4 | 967, 967, 977, 977 task |
-| Snapshot rev 5-9 | 156 task (tetap) |
-| Audit rev 5 (2026-09-27 15:32 UTC) | created 18, updated 993, **deactivated 839** |
-| Audit rev 6-9 | updated 1.011 per revisi, deactivated 0 |
-| Task rev 4 yang kini nonaktif | 839 (0 hilang dari DB, local UID tidak berubah) |
-| Lock aktif | tidak ada (FORCE_CHECKIN 2026-09-28 01:34 UTC) |
+- **DB sekarang**: 1.010 row `ms_project_task`.
+  - **156 aktif**: 53 prelim/manuf (outline 1.*, 2), 87 di bawah outline 2.11 (sekarang bernama UNIT 11),
+    16 task summary/QC unit lain.
+  - **854 nonaktif**.
+  - Revision `ms_project`: 9. Published revision: 1.
+- **Revision 4** (2026-09-21 10:53 UTC, sebelum kerusakan rev 5):
+  - 977 task aktif: 52 prelim, 94 unit 1 (order 1000131891), 83-84 task per unit 2..11.
+  - Setiap unit 1..11 memiliki subtree lengkap dengan order masing-masing.
+- **Revision 5** (2026-09-27 15:32 UTC):
+  - Menonaktifkan 839 task, menyisakan 156 task aktif.
+- **Revision 6–9** (2026-09-27 15:33–15:38 UTC):
+  - Masing-masing mencatat 1.011 task ter-update, tetapi snapshot tetap 156 task.
+- **MPP terbaru** (`tmp/manhaul-recovery/source-latest.mpp`):
+  - 1.012 baris (1 project root + 1.011 task).
+  - 156 Text10 unik. 85 Text10 dipakai ulang pada 940 baris.
+  - Text10 pada outline 2.2..2.11 (unit 2..11) adalah **salinan persis dari Text10 unit 1**
+    pada 75–86 baris per unit (fakta copy-paste di level Microsoft Project terbukti dari file).
+  - Text1 (order_no) di MPP sudah benar per unit: 1000131891 (unit 1), 1000131374 (unit 2)
+    s/d 1000131383 (unit 11). Hanya unit 9 yang memiliki 41 baris ber-order 1000131380
+    (beririsan dengan unit 8).
 
-## Identitas UNIT: revisi 4 vs sekarang
+## Rekonstruksi 1-ke-1 Text10 (koreksi file .mpp planner)
 
-Pada revisi 4 ada 11 summary unit di bawah `2 MANUFACTURING`. Sekarang hanya satu unit yang aktif.
+Dari 1.011 baris task di MPP terbaru, disusun rencana pemetaan 1-ke-1 terhadap row DB yang
+sudah ada (kandidat dikelompokkan menurut outline revision 4):
 
-| Rev 4 outline / nama | task_id (8 awal) | UID | Sekarang | Order task anak sekarang |
+- **53 keep (preliminaries)**: Text10 sudah mengarah ke row prelim yang benar (53 aktif).
+- **86 keep (unit 1)**: Text10 di MPP adalah row `42854140` dkk yang di rev4 memang milik
+  unit 1 (order 1000131891). Baris-baris ini sekarang di DB aktif di bawah outline 2.11 dan
+  bernama UNIT 11. **Sync dengan Text10 ini akan mengembalikan row tersebut ke outline 2.1
+  dan nama UNIT 1**.
+- **692 set (unit 2..11)**: Text10 yang sekarang salinan unit 1 diganti ke `task_id` asli
+  milik masing-masing unit di DB (yang dinonaktifkan di rev 5).
+  - Dicocokkan lewat: UID lama yang cocok (17), order + operation + nama (62), dan urutan
+    nama dalam unit (613).
+  - **Semua 692 target berstatus `is_active = false` di DB sekarang**.
+  - Begitu sync berjalan dengan Text10 yang sudah dipulihkan, **upsertTasks otomatis
+    mengaktifkan kembali row-row tersebut (`is_active = true`)** tanpa perlu script manual.
+- **163 blank / task baru**: baris MPP yang tidak memiliki pasangan di revision 4 (kebanyakan
+  task inspeksi / subcont baru yang ditambah planner). Text10 dikosongkan agar upsertTasks
+  membuat task baru dengan ID unik.
+- **1 blank di unit 1**: baris `2.1.2.1` FRAME ASSY di MPP tidak memiliki target yang cocok,
+  dikosongkan untuk dibuat task baru.
+- **Invariant**:
+  - `dup_targets`: **0** (tidak ada `task_id` yang dipakai dua kali).
+  - Target di luar DB project: **0**.
+  - Sesuai dengan validasi B (`msProjectSyncIdentity`) dan preflight C (`MsDuplicateTaskIdReport`).
+  - `db_unmatched currently active`: **0** (tidak ada task aktif yang akan dinonaktifkan tanpa sengaja).
+- Rincian per baris tersimpan di artefak kerja:
+  - `C:/Users/Admin/AppData/Local/Temp/mps-baseline/text10-plan.json`
+  - `C:/Users/Admin/AppData/Local/Temp/mps-baseline/text10-plan.csv`
+
+## Konsistensi referensi produksi (mapping, bay, timesheet)
+
+Dicek silang dengan data produksi nyata (`recovery_refs2.js`, `BEGIN READ ONLY` + rollback):
+
+| Objek | Total di project | Di bawah task target plan | Di bawah row `2.1.1.10` | Keterangan |
 |---|---|---|---|---|
-| 2.1 UNIT 1 | 42854140 | 6403 | **aktif, bernama "UNIT 11", outline 2.11** | lihat catatan A |
-| 2.2 UNIT 2 | 6f203eb9 | 6485 | nonaktif | 1000131374 |
-| 2.3 UNIT 3 | f9df0731 | 6567 | nonaktif | 1000131375 |
-| 2.4 UNIT 4 | f6e8af92 | 6649 | nonaktif | 1000131376 |
-| 2.5 UNIT 5 | 92958494 | 6731 | nonaktif | 1000131377 |
-| 2.6 UNIT 6 | 50a4ea0a | 6813 | nonaktif | 1000131378 |
-| 2.7 UNIT 7 | d4a832ad | 6897 | nonaktif | 1000131379 |
-| 2.8 UNIT 8 | e6d80b71 | 6979 | nonaktif | 1000131380 |
-| 2.9 UNIT 9 | 6b847055 | 7066 | nonaktif | 1000131381 |
-| 2.10 UNIT 10 | add63aaa | 7148 | nonaktif | 1000131382 |
-| 2.11 UNIT 11 | f259407a | 7230 | nonaktif | 1000131383 |
+| `sow_operation_task_map` | 94 | 94 (100%) | 0 | Semua order mapping cocok dengan order task di plan |
+| `ms_project_bay_schedule` | 111 | 94 (85%) | 17 (15%) | 94 reservasi cocok ordernya; 17 berada di row placeholder `2.1.1.10` |
+| `timesheet_transaction` | 332 | 324 (98%) | 8 (2%) | 324 timesheet cocok ordernya; 8 berada di row placeholder `2.1.1.10` |
 
-Ada juga `2.1 BATCH 1` (UID 6895) yang nonaktif dan tidak ada di snapshot rev 4 sebagai unit.
+### Temuan 14 row placeholder `2.1.1.10`
 
-Catatan A:
-- 66 task non-summary aktif yang pada rev 4 berorder **1000131891** (UNIT 1) kini berorder
-  **1000131383** (order UNIT 11 di rev 4).
-- Per order sekarang, 1000131383 punya 68 task aktif. Order 1000131891 tinggal 1 task aktif
-  dan 23 nonaktif. Order 1000131374-1000131382 masing-masing punya 68 nonaktif dan 1-2 aktif.
-- Pola ini konsisten dengan baris UNIT 11 di file planner yang memegang task_id UNIT 1 (Text10),
-  sehingga row UNIT 1 ditimpa atribut UNIT 11. Hal ini **belum dibuktikan dari payload atau MPP
-  asli**. Server tidak menyimpan payload sync mentah, dan file MPP belum diperiksa.
+Di DB terdapat 14 row ber-outline `2.1.1.10` ber-order `1000131891`, dibuat pada 2026-09-07
+lewat `MAP_SOW_OPERATION` (bukan dari sync MPP; `local_task_uid` null). Row ini menampung:
+- 17 reservasi bay
+- 8 timesheet (QC FABRICATION)
 
-## Referensi ke task nonaktif project ini
+Row ini tidak ada di MPP terbaru. Jika sync dijalankan, row ini **tidak tersentuh** karena
+tidak ada di payload (tetap nonaktif seperti sekarang). Referensi bay dan timesheet-nya
+tetap aman tetapi menunjuk ke task nonaktif. Perlu keputusan owner: apakah dimapping ulang
+ke task sah unit 1 atau dibiarkan sebagai riwayat.
 
-| Sumber | Jumlah | Catatan |
-|---|---|---|
-| `sow_operation_task_map` | 70 | 7 per order untuk 1000131374 s.d. 1000131383 |
-| `sow_operation_task_map` pada task aktif | 24 | order 1000131891 |
-| `ms_project_bay_schedule` (task nonaktif) | 87 | CONFIRMED + RESERVED, rentang 2026-09-04 s.d. 2026-10-01, order 1000131374-1000131383 dan 1000131891 |
-| `ms_project_bay_schedule` (task aktif, order 1000131891) | 24 | tanggal 2026-11-08 s.d. 2026-11-26. **Tanggal ini perlu dicek**: bisa jadi sudah digeser oleh sync ke jadwal UNIT 11 |
-| `timesheet_transaction.ms_task_id` ke task nonaktif | 166 | |
-| timesheet per order (baris) | 1000131374: 52, 1000131375: 53, 1000131376: 27, 1000131377: 20, 1000131378: 5, 1000131379: 1, 1000131380: 1, 1000131891: 241 | shop floor sudah bekerja di unit yang task-nya kini nonaktif |
-| assignment aktif / dependency aktif | 0 / 0 | dependency historis (semua status): 1.120 |
-| Tabrakan order+operasi nonaktif vs aktif lain | 0 | aktivasi ulang tidak langsung melanggar `uq_ms_project_task_order_op`, kecuali pada order 1000131383 (lihat ambiguitas 2) |
+## Ambiguitas yang tersisa sebelum eksekusi
 
-## Ambiguitas (unresolved) dan sumber yang dibutuhkan
+1. **Unit 9 order split**: di MPP terbaru, 41 baris unit 9 membawa order `1000131380` (order
+   milik unit 8), bukan `1000131381`. Target rev4 untuk baris-baris ini ber-order `1000131381`.
+   Planner perlu memastikan apakah ini typo di MPP atau transfer pekerjaan antar-unit.
+2. **Order 1000131383 (unit 11) selama 7 hari terakhir**: apakah ada reservasi bay baru atau
+   timesheet baru yang diinput user ke row `42854140` dkk dengan asumsi row tersebut adalah
+   unit 11? Data probe menunjukkan timesheet order `1000131383` = 0 row. Reservasi bay order
+   `1000131383` = 0 row. Aman untuk dikembalikan ke unit 1.
+3. **163 task baru tanpa Text10**: saat sync berjalan, 163 row baru akan dibuat di DB.
+   Sebagian besar adalah inspeksi QC tambahan.
+4. **Metode aplikasi**:
+   - **Opsi A (disarankan, zero-risk ke DB)**: Terapkan `text10-plan.csv` ke file .mpp
+     planner (mengisi kolom Text10 di Microsoft Project via macro/script mpxj), lalu biarkan
+     planner menekan **Save to Server** dari MS Project.
+     - Keuntungan: mengikuti alur resmi, tervalidasi guard B & C, menghasilkan revisi 10 sah,
+       audit log tercatat, snapshot revisi tersimpan otomatis, reservasi bay ikut bergeser sah.
+     - Syarat: guard B dan C sudah terdeploy.
+   - **Opsi B (script SQL langsung ke DB)**: update `task_id` dan `is_active` via SQL.
+     - Risiko: tidak menghasilkan revisi snapshot yang konsisten, berisiko conflict saat
+       planner sync berikutnya, melanggar prinsip *single source of truth*. **Tidak disarankan**.
 
-1. **Row `42854140` (UNIT 1 di rev 4, "UNIT 11" sekarang).**
-   - Belum diketahui apakah UNIT 11 di file planner merupakan salinan baris UNIT 1 atau hasil
-     rename yang disengaja.
-   - Sumber: file MPP planner *sebelum* save 2026-09-27 15:32 UTC, atau file `.mpp` server yang
-     di-upload pada rev 4 (2026-09-21 03:53 UTC) bila masih ada di storage atau backup. Juga
-     diperlukan MPP terbaru beserta nilai Text10/UniqueID per baris.
-2. **Order 1000131383.**
-   - 68 task aktif (dulu anak UNIT 1) dan 68 task nonaktif (anak UNIT 11 asli, `f259407a`) sama-sama
-     berorder ini.
-   - Bila UNIT 11 asli diaktifkan tanpa mengembalikan order UNIT 1 ke 1000131891, indeks unik
-     order+operasi akan bentrok atau task menjadi ganda.
-   - Harus diputuskan per task oleh planner.
-3. **Reservasi 24 baris order 1000131891 pada task aktif.** Tanggal November perlu dibandingkan
-   dengan audit `BAY_SCHEDULE_*` dan jadwal UNIT 1 yang benar. Sync memanggil
-   `syncBayScheduleDates`, jadi tanggal bisa sudah mengikuti task yang tertimpa.
-4. **Mapping 24 baris order 1000131891 pada task aktif.** Task sudah berorder 1000131383, tetapi
-   mapping masih memakai order_key 1000131891 (drift). Ini perlu dicocokkan dengan hasil
-   `mapping_drift` di audit rev 5.
-5. **Perubahan sah sesudah rev 4.**
-   - Contoh: rename material 1.4.x ("Unit 1 s.d. 5", "Unit 6 s.d. 11") dan Bullbar yang pindah
-     1.4.9 → 1.4.10.
-   - Perubahan ini tampak disengaja dan **tidak boleh** ditimpa oleh restore rev 4.
-6. **BATCH 1 (UID 6895)** belum diketahui apakah struktur lama atau baru.
-7. **14 task tanpa local UID** perlu dicocokkan secara manual.
+## Langkah berikutnya (menunggu persetujuan)
 
-## Langkah pemulihan yang diusulkan (belum disetujui, belum dijalankan)
-
-1. Deploy guard backend (commit `b7d46f0`) dan VBA (`1e43a62`) sebelum ada sync lagi pada project
-   ini.
-2. Ambil MPP sumber (poin 1 di atas). Backup file dan DB project (task, map, bay schedule,
-   revision).
-3. Susun manifest per task. Isinya: task_id, UID, nama/outline/parent/order sebelum dan sesudah,
-   aktif sebelum dan sesudah, alasan pencocokan (UID + Text10 file, bukan nama), serta
-   referensinya. Kasus ambigu diberi status unresolved.
-4. Minta persetujuan owner per kelompok: row 42854140, anak-anak UNIT 1, UNIT 2-11 asli,
-   reservasi, dan mapping.
-5. Terapkan dalam satu transaksi dengan dry-run, before-image, dan verifikasi. Setelah itu
-   perbaiki file planner: Text10 salinan dikosongkan hanya atas keputusan planner.
-6. Kriteria selesai: API/UI menampilkan 11 unit yang benar, dan dua sync berikutnya tidak
-   mengurangi unit atau memindahkan identitas.
-
-Query yang dipakai ada di skrip probe read-only lokal (tidak di-commit karena membaca `.env`):
-`recovery_manifest.js`, `recovery_manifest2.js`, `recovery_manifest3.js` di `%LOCALAPPDATA%/Temp/mps-baseline/`.
+1. Review manifest dan `text10-plan.csv` bersama planner / owner project.
+2. Konfirmasi ambiguitas #1 (order unit 9).
+3. Jika disetujui: jalankan script pengisi Text10 pada salinan `.mpp`, buka di Microsoft
+   Project, periksa preflight C (tidak ada duplikat), lalu Save to Server.
+4. Verifikasi di DB: 11 summary unit aktif, ~940 task aktif, revisi 10 tercipta.
