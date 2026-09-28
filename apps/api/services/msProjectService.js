@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
 const { resolveTimezone } = require("../config/timezone");
+const { assertPayloadTaskIdentity, assertDbTaskIdentity } = require("./msProjectSyncIdentity");
 
 const MAX_LIMIT = 100;
 // Batas khusus daftar bay schedule: satu reservasi task-level = satu baris per task, jadi
@@ -4894,6 +4895,11 @@ async function publishCurrentRevision(projectIdParam, payload = {}) {
 
 async function publishProject(payload) {
   const normalized = normalizeProjectPayload(payload, false);
+  // Publish membuat task_id baru, jadi yang bisa bentrok hanya local_task_uid ganda.
+  assertPayloadTaskIdentity(
+    ApiError,
+    normalized.tasks.map((task, index) => normalizeTaskPayload(task, index, true))
+  );
   const client = await pool().connect();
 
   try {
@@ -5403,6 +5409,11 @@ async function syncProject(projectIdParam, payload) {
   if (!Number.isInteger(normalized.project.last_known_revision_no)) {
     throw new ApiError(400, "REVISION_REQUIRED", "project.last_known_revision_no is required for sync");
   }
+  // Identitas satu-ke-satu diperiksa sebelum transaksi dibuka; konflik ditolak utuh,
+  // tidak di-dedupe. Lihat msProjectSyncIdentity.js.
+  const identityTasks = normalized.tasks.map((task, index) => normalizeTaskPayload(task, index, false));
+  const deactivateTaskIds = normalizeUuidArray(normalized.deactivate.task_ids || [], "deactivate.task_ids");
+  assertPayloadTaskIdentity(ApiError, identityTasks, deactivateTaskIds);
 
   const client = await pool().connect();
 
@@ -5423,6 +5434,7 @@ async function syncProject(projectIdParam, payload) {
         current_revision_no: project.revision_no,
       });
     }
+    await assertDbTaskIdentity(ApiError, client, projectId, identityTasks, deactivateTaskIds);
 
     await client.query(
       `update ms_project
