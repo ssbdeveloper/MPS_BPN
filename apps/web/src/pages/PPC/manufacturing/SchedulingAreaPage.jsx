@@ -483,10 +483,12 @@ export default function SchedulingAreaPage() {
     content = <InlineError message={error} onRetry={reload} />;
   } else if (loading && schedules.length === 0) {
     content = <Skeleton className="h-full min-h-[420px] w-full rounded-xl" />;
-  } else if (showAreaLevel && !readComplete) {
+  } else if (showAreaLevel && !loading && !readComplete) {
     // Rentang belum terbaca penuh. Peta yang tampak wajar tapi kehilangan reservasi adalah
     // kegagalan yang lebih berbahaya daripada kegagalan yang mengaku gagal (insiden B29E:
     // sel "free" padahal 8 reservasi aktif). Jadi jangan render peta setengah jadi.
+    // `!loading`: selama reload (mis. setelah simpan reservasi) readComplete sengaja false,
+    // bukan tanda terpotong — peta lama tetap tampil, sel kosong ditandai belum pasti.
     content = (
       <InlineError
         message={`Peta belum terbaca lengkap (${pagesLoaded} halaman dimuat). Sebagian sel bisa tampak kosong padahal terisi. Coba lagi untuk memuat seluruh rentang.`}
@@ -690,6 +692,15 @@ export default function SchedulingAreaPage() {
           </div>
         )}
       </section>
+
+      {/* Reload dengan data lama tetap tampil: status netral, bukan error. Sel kosong belum
+          boleh dibaca sebagai bebas sampai pembacaan baru selesai dan terbukti lengkap. */}
+      {loading && schedules.length > 0 ? (
+        <p role="status" className="inline-flex items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-[#0077b6] motion-reduce:animate-none" aria-hidden="true" />
+          Refreshing map — empty bays are not confirmed free until loading finishes.
+        </p>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col">{content}</div>
 
