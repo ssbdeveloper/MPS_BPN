@@ -17,6 +17,8 @@ updated: 2026-07-28
 
 ## 👀 Menunggu review / keputusan
 
+- [[planning/2026-09-28-scheduling-map-sap-reliability]]: pencegahan A/B/C committed lokal (guard reload, validasi identitas sync backend, preflight VBA; belum deploy). Data MANHAUL 11 unit **belum pulih**: [[planning/2026-09-28-manhaul-recovery-manifest]] menunggu MPP sumber dan keputusan owner. [[log/2026-09-28-scheduling-map-sap-pencegahan|Log]]; [[concepts/msproject-sync-identitas-task|konsep identitas]].
+
 - 🎨 **[[design/sow-area-tablet/PLAN]] — arah visual tablet landscape: TAHAP 1 & 2 SUDAH MASUK APLIKASI 2026-09-21**
   ([[log/2026-09-21-sow-area-tablet-visual-direction]], [[log/2026-09-21-cors-localhost-3001-dan-area-tahap1]]):
   tab lane sebagai navigasi otoritatif, grid kartu area sebagai peta kerja, panel detail zona
