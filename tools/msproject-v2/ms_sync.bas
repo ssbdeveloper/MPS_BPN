@@ -428,6 +428,23 @@ Public Sub Ms_SaveToServer()
     Dim deactivateJson As String
     Dim deactivateSummary As String
 
+    ' Preflight identitas: satu task_id server (Text10) hanya boleh dipegang satu baris.
+    ' Baris yang disalin membawa Text10 lamanya, lalu deactivate diff dan server akan
+    ' menganggap kedua baris sebagai task yang sama. Ditolak di sini sebelum apa pun
+    ' dihitung atau dikirim; Text10 TIDAK dihapus otomatis karena hanya planner yang
+    ' tahu baris mana yang asli.
+    phase = "preflight identitas task"
+    Dim duplicateReport As String
+    duplicateReport = MsDuplicateTaskIdReport()
+    If Len(duplicateReport) > 0 Then
+        MsgBox "Save dibatalkan. Beberapa baris memakai task_id server (Text10) yang sama:" & vbCrLf & vbCrLf & _
+               duplicateReport & vbCrLf & _
+               "Biasanya salah satu baris adalah salinan. Pada baris salinan yang merupakan task BARU, " & _
+               "kosongkan Text10 lalu save lagi. Jangan kosongkan Text10 pada baris asli." & vbCrLf & _
+               "Tidak ada perubahan yang dikirim ke server.", vbCritical, "Identitas task ganda"
+        Exit Sub
+    End If
+
     ' Propagasi DELETE. Payload sync hanya memuat baris yang MASIH ada di plan, dan
     ' "hilang dari payload" tidak berarti apa-apa bagi server (upsert-only, by design).
     ' Jadi apa yang dihapus harus dihitung dulu dengan membandingkan plan ini terhadap
@@ -483,6 +500,42 @@ ErrHandler:
            syncErrDescription & vbCrLf & vbCrLf & _
            "Source: " & syncErrSource, vbCritical
 End Sub
+
+' Daftar task_id (Text10) yang dipegang lebih dari satu baris, dibandingkan tanpa
+' membedakan huruf besar/kecil. Kosong = aman. Text10 kosong (task baru) diabaikan.
+' Format: task_id lalu tiap pemegangnya (ID baris, UID, nama). Maksimal 10 task_id.
+Private Function MsDuplicateTaskIdReport() As String
+    Dim holders As Object
+    Dim t As Task
+    Dim key As String
+    Dim report As String
+    Dim shown As Long
+    Dim k As Variant
+
+    Set holders = CreateObject("Scripting.Dictionary")
+    For Each t In ActiveProject.Tasks
+        If Not t Is Nothing Then
+            key = LCase$(MsTaskId(t))
+            If Len(key) > 0 Then
+                If holders.Exists(key) Then
+                    holders(key) = holders(key) & vbCrLf
+                Else
+                    holders(key) = ""
+                End If
+                holders(key) = holders(key) & "    baris ID " & CStr(t.ID) & ", UID " & CStr(t.UniqueID) & ", " & t.Name
+            End If
+        End If
+    Next t
+
+    For Each k In holders.Keys
+        If InStr(holders(k), vbCrLf) > 0 Then
+            shown = shown + 1
+            If shown <= 10 Then report = report & "task_id " & CStr(k) & ":" & vbCrLf & holders(k) & vbCrLf
+        End If
+    Next k
+    If shown > 10 Then report = report & "... dan " & CStr(shown - 10) & " task_id ganda lainnya." & vbCrLf
+    MsDuplicateTaskIdReport = report
+End Function
 
 ' --- Check-in --------------------------------------------------------------------
 Public Sub Ms_CheckIn()

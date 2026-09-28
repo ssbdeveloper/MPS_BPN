@@ -144,6 +144,22 @@ Penting:
 - Kalau `GET package` gagal, save ikut gagal. Disengaja: save yang "sukses" tapi menyisakan
   baris terhapus di DB persis bug yang diperbaiki di sini.
 
+## Preflight identitas task — sejak 2026-09-28
+
+Menyalin baris di MS Project ikut menyalin `Text10`. Akibatnya dua baris memegang task_id
+server yang sama. Diff di atas lalu menganggap keduanya satu task, dan server akan menimpa row
+yang sama.
+
+- `Ms_SaveToServer` memeriksa hal ini **sebelum** diff dihitung dan sebelum request apa pun
+  dikirim. Pemeriksaannya tanpa membedakan huruf besar/kecil. Bila ada task_id ganda, save
+  dibatalkan dan pesan menampilkan ID baris, UID, dan nama tiap pemegangnya.
+- `Text10` **tidak** dihapus otomatis. Planner menentukan sendiri baris mana yang salinan.
+  Pada salinan yang merupakan task baru, kosongkan `Text10`; `Text10` kosong adalah cara sah
+  menandai task baru.
+- Server punya penjaga yang sama (`DUPLICATE_TASK_ID`, `TASK_IDENTITY_CONFLICT`,
+  `TASK_PROJECT_MISMATCH`, `TASK_UPSERT_DEACTIVATE_CONFLICT`). Klien VBA lama yang belum
+  diperbarui tetap ditolak utuh tanpa perubahan parsial.
+
 ## Catatan
 
 - Sync existing wajib `project_id` + `revision_no` + `lock_token` (checkout dulu).
