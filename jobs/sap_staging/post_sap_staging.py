@@ -617,11 +617,16 @@ def post_one(row: dict, args: argparse.Namespace) -> str:
     bukan dihitung dua kali.
     """
     row_id = row["id"]
-    zid = (row["payload"] or {}).get("ZTIMESHEETID")
-    payload = row["payload"] or {}
+    payload = dict(row.get("payload") or {})
     if not payload:
         update_result(row_id, False, 0, "empty payload", "empty payload")
         return "failed"
+
+    # Guard: ZTIMESHEETID wajib ada di payload SAP.
+    # Jika staging payload belum memuatnya, fallback ke id baris staging (ztimesheetid).
+    zid = str(payload.get("ZTIMESHEETID") or row_id)
+    payload["ZTIMESHEETID"] = zid
+    row["payload"] = payload
 
     last_error = None
     last_message = None

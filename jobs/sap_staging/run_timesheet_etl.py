@@ -2548,8 +2548,8 @@ def assert_semantic_contract_match(candidate_row: dict, central_row: dict) -> No
     # 1. Bandingkan seluruh field SAP payload tanpa menyamakan None dan string kosong ""
     all_keys = sorted(set(cand_p.keys()) | set(cent_p.keys()))
     for k in all_keys:
-        if k == "PROVENANCE_SNAPSHOT":
-            continue  # Abaikan legacy wrapper key bila ada
+        if k in ("PROVENANCE_SNAPSHOT", "ZTIMESHEETID"):
+            continue  # Abaikan legacy wrapper key atau central-generated identity
         v_cand = cand_p.get(k)
         v_cent = cent_p.get(k)
         # Strict comparison: None != ""
@@ -2910,6 +2910,19 @@ def insert_central_staging_batch(
                 template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, now(), now())",
                 page_size=PAGE_SIZE,
             )
+
+        # Update payload to inject ZTIMESHEETID from central generated column ztimesheetid
+        cur_central.execute(
+            """
+            UPDATE public.sap_timesheet_staging
+            SET payload = jsonb_set(payload, '{ZTIMESHEETID}', to_jsonb(ztimesheetid)),
+                updated_at = now()
+            WHERE source_system = 'TIMESHEET'
+              AND source_key = ANY(%s)
+              AND NOT (payload ? 'ZTIMESHEETID')
+            """,
+            (source_keys,),
+        )
 
         # Retrieve and strictly validate inserted/existing ids and all semantic fields
         cur_central.execute(
