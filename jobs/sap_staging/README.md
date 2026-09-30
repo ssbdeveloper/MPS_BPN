@@ -154,17 +154,20 @@ terkirim lewat `--ids` (tombol **Post selected** di UI → aksi `post_correction
 
 ## Script
 
+> **Per 2026-09-30:** jalur TIMESHEET hanya `run_timesheet_etl.py` → `post_sap_staging.py`.
+> Stager cursor lama, rebuild_pending, backfill/repair/remedy/seed dipindah ke `legacy/`
+> (lihat `legacy/README.md`) dan service `sap-stage-ts-worker` hanya jalan dengan `--profile legacy`.
+
 | Script | Fungsi |
 |---|---|
+| `run_timesheet_etl.py` | ETL TIMESHEET berlapis (dry-run → execute → publish ke central) |
+| `central_dblink_adapter.py`, `timesheet_normalization.py`, `timesheet_allocation.py` | Modul ETL |
 | `stage_machinehours.py` | Job rutin jam mesin (cursor) + **catch-up** (menjalankan mode NORMAL **dan** KOREKSI) |
-| `stage_timesheet_transaction.py` | Job rutin timesheet operator (cursor) |
 | `stage_sap_timesheet.py` | Mesin bundling + tool manual (init-db, stage ad-hoc). Berisi SQL bundling — **inti dari semua aturan di atas**. `mode="normal"` / `mode="correction"` |
 | **`rebuild_machinehours.py`** | **Bangun ulang antrian** setelah bentuk payload/aturan berubah |
-| **`backfill_operator.py`** | Isi ulang `operatorid` di record lama dari `usernfc` (bedah, `--snssb`/`--all`/`--since`/`--dry-run`) |
 | `post_sap_staging.py` | Kirim payload ke SAP (paralel, ber-guard, guard hari-selesai) |
 | **`ops_worker.py`** | **Konsumen antrian `sap_ops_request`** — menjalankan script di atas saat tombol UI menitip permintaan |
 | `sap_staging_common.py` | Helper: koneksi, DDL, insert staging + provenance, builder payload, cursor |
-| `seed_sap_staging_manual.py` | Seed payload manual untuk testing |
 
 ---
 

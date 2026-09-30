@@ -71,6 +71,25 @@ def connect_staging():
     return psycopg2.connect(**staging_db_config())
 
 
+def load_plant_cutoff(plant: str | None = None) -> date | None:
+    """Baca timesheet_allocation_cutoff_date dari plant_config di source DB.
+    Mengembalikan None jika belum diset.
+    """
+    p = plant or plant_code()
+    try:
+        with connect_source() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT timesheet_allocation_cutoff_date FROM public.plant_config WHERE plant_code = %s ORDER BY id LIMIT 1",
+                    (p,)
+                )
+                row = cur.fetchone()
+                return row[0] if row and row[0] else None
+    except Exception as exc:
+        log.warning("load_plant_cutoff gagal membaca plant_config: %s", exc)
+        return None
+
+
 def plant_code() -> str:
     return env_value("PLANT_SSB")
 

@@ -95,16 +95,17 @@ def fetch_blocked_today_production_rows() -> list[dict]:
 def managed_floor():
     """Tanggal paling awal yang BOLEH disentuh catch-up.
 
-    LANTAI PENGAMAN — jangan hapus. Tanpa ini, catch-up menemukan SEMUA record layak
-    yang tak punya provenance, termasuk data JUNI: 13.535 record dari 24-30 Juni, periode
-    di mana 66 konfirmasi sudah SUKSES masuk SAP lewat batch lama yang baris staging-nya
-    (dan provenance-nya) sudah lama terhapus. Men-stage & mengirimnya = jam kerja masuk
-    SAP DUA KALI.
-
-    Lantainya = bucket paling awal yang MEMANG kita kelola (hasil rebuild = 1 Juli).
-    Kalau antrian kosong, catch-up tidak melakukan apa-apa — itu benar: tidak ada rentang
-    yang dikelola, tidak ada yang boleh disapu.
+    LANTAI PENGAMAN — jangan hapus. Diprioritaskan dari plant_config.timesheet_allocation_cutoff_date
+    agar sinkron dengan tanggal cutoff plant resmi.
     """
+    try:
+        from sap_staging_common import load_plant_cutoff
+        cutoff = load_plant_cutoff(plant_code())
+        if cutoff:
+            return cutoff
+    except Exception:
+        pass
+
     with connect_staging() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -191,7 +192,19 @@ def run_once(args: argparse.Namespace) -> bool:
         with connect_staging() as staging_conn:
             ensure_staging_schema(staging_conn)
             cursor_value = get_stage_cursor(staging_conn, "MCH_HOURS", plant_code())
+        
+        # Jaga agar from_ts tidak pernah lebih kecil dari cutoff plant
+        cutoff = None
+        try:
+            from sap_staging_common import load_plant_cutoff
+            cutoff = load_plant_cutoff(plant_code())
+        except Exception:
+            pass
+
         from_ts = cursor_value or cursor_initial_from()
+        if cutoff:
+            cutoff_dt = datetime.combine(cutoff, datetime.min.time())
+            from_ts = max(from_ts, cutoff_dt)
         if args.overlap_minutes > 0:
             from_ts = from_ts - timedelta(minutes=args.overlap_minutes)
         max_to_ts = from_ts + timedelta(hours=args.max_hours)

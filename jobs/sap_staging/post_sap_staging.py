@@ -19,7 +19,7 @@ from sap_staging_common import (
     connect_source,
     connect_staging,
     ensure_staging_schema,
-    mark_local_timesheet_rejected,
+    load_plant_cutoff,
     plant_code,
     sap_credentials,
     setup_logging,
@@ -245,6 +245,18 @@ def eligibility_predicate(
             "(source_system <> 'MCH_HOURS' OR bucket_start::date < (now() AT TIME ZONE %s)::date)"
         )
         params.append(app_timezone())
+
+    # GERBANG CUTOFF: baris dengan tanggal sebelum cutoff plant tidak boleh dikirim
+    cutoff = None
+    try:
+        cutoff = load_plant_cutoff(plant)
+    except Exception:
+        pass
+    if cutoff:
+        filters.append(
+            "(bucket_start::date >= %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' >= %s))"
+        )
+        params.extend([cutoff, cutoff.strftime("%Y%m%d")])
 
     if source_system:
         filters.append("source_system = %s")
@@ -643,8 +655,6 @@ def post_one(row: dict, args: argparse.Namespace) -> str:
                 continue
             update_result(row_id, False, 0, last_error, last_error)
             log.warning("SAP ERROR id=%s ztimesheetid=%s error=%s", row_id, zid, last_error)
-            if row["source_system"] == "TIMESHEET" and row.get("source_ref_id"):
-                mark_local_timesheet_rejected([row["source_ref_id"]], last_error)
             return "failed"
 
         sap_status, sap_message = parse_sap_status(response_text)
@@ -674,8 +684,6 @@ def post_one(row: dict, args: argparse.Namespace) -> str:
             return "success"
 
         log.warning("SAP FAILED id=%s ztimesheetid=%s message=%s", row_id, zid, sap_message)
-        if row["source_system"] == "TIMESHEET" and row.get("source_ref_id"):
-            mark_local_timesheet_rejected([row["source_ref_id"]], sap_message)
         return "failed"
 
     msg = last_message or last_error or "gagal setelah retry"

@@ -226,10 +226,11 @@ services:
     networks:
       - timesheet-network
 
-  # ── SAP staging pipeline (machine hours → SAP) ───────────────────────────────
-  # sap-stage-worker = AUTO bundling (stage_machinehours --catchup loop)
-  # sap-post-worker  = AUTO posting completed days (post_sap_staging loop)
-  # sap-ops-worker   = UI button queue consumer (ops_worker --loop)
+  # ── SAP staging pipeline ───────────────────────────────────────────────────
+  # sap-stage-worker = Unified Staging Worker (machine hours + timesheet ETL).
+  #                    Memuat seluruh alur dari transaksi lokal sampai central staging AWS.
+  # sap-post-worker  = Posting worker terpisah: mengirim data PENDING di central staging ke SAP.
+  # sap-ops-worker   = UI button queue consumer (ops_worker --loop).
   sap-stage-worker:
     build:
       context: ./jobs/sap_staging
@@ -238,9 +239,7 @@ services:
     environment: *sap-env
     volumes:
       - ./jobs/sap_staging:/app
-    command: >
-      sh -c "while true; do python stage_machinehours.py --catchup || true;
-             sleep $${SAP_STAGE_INTERVAL}; done"
+    command: ["python", "-u", "stage_worker.py", "--loop"]
     depends_on:
       db:
         condition: service_healthy
@@ -254,7 +253,10 @@ services:
   # Pasangan sap-stage-worker yang hanya menangani MCH_HOURS.
   # --loop 10 = hingga 10 langkah cursor per siklus (catch-up backlog), berhenti lebih
   # awal kalau cursor tidak maju. Pengiriman ke SAP TETAP manual via UI (bukan di sini).
+  # PENSIUN 2026-09-30: diganti run_timesheet_etl.py (ETL berlapis). Hanya jalan bila
+  # dipanggil eksplisit dengan --profile legacy. Script ada di jobs/sap_staging/legacy/.
   sap-stage-ts-worker:
+    profiles: ["legacy"]
     build:
       context: ./jobs/sap_staging
       dockerfile: Dockerfile.sap
@@ -262,8 +264,9 @@ services:
     environment: *sap-env
     volumes:
       - ./jobs/sap_staging:/app
+    working_dir: /app/legacy
     command: >
-      sh -c "while true; do python stage_timesheet_transaction.py --loop 10 || true;
+      sh -c "while true; do PYTHONPATH=/app python stage_timesheet_transaction.py --loop 10 || true;
              sleep $${SAP_STAGE_TS_INTERVAL:-900}; done"
     depends_on:
       db:

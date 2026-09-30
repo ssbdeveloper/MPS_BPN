@@ -124,32 +124,34 @@ def _prod_plant_conn_params(plant: str, dbname: str) -> dict:
     def get_val(key: str, default: str | None = None) -> str | None:
         return os.environ.get(f"{prefix_plant}{key}") or os.environ.get(f"{prefix_gen}{key}") or default
 
-    host = get_val("HOST")
+    host = get_val("HOST") or os.environ.get("DB_HOST")
     if not host:
         raise EtlError(
             f"MPS2_PROD_PLANT_{plant}_HOST atau MPS2_PROD_PLANT_HOST belum dikonfigurasi untuk mode prod."
         )
 
-    port_str = get_val("PORT", "5432")
+    port_str = get_val("PORT") or os.environ.get("DB_PORT", "5432")
     try:
         port = int(port_str)
     except ValueError:
         raise EtlError(f"Port database plant prod tidak valid: {port_str!r}")
 
-    user = get_val("USER")
+    user = get_val("USER") or os.environ.get("DB_USER")
     if not user:
         raise EtlError(
             f"MPS2_PROD_PLANT_{plant}_USER atau MPS2_PROD_PLANT_USER belum dikonfigurasi untuk mode prod."
         )
 
-    password = get_val("PASSWORD")
+    password = get_val("PASSWORD") or os.environ.get("DB_PASSWORD")
     if not password:
         raise EtlError(
             f"MPS2_PROD_PLANT_{plant}_PASSWORD atau MPS2_PROD_PLANT_PASSWORD belum dikonfigurasi untuk mode prod."
         )
 
-    sslmode = get_val("SSLMODE", "verify-full")
-    allow_insecure = (get_val("ALLOW_INSECURE_TRANSPORT") or "").lower() in ("true", "1", "yes")
+    is_docker_internal = host in ("db", "pgbouncer", "timesheet-db", "localhost", "127.0.0.1", "::1")
+    default_ssl = "disable" if (is_docker_internal and not get_val("HOST")) else "verify-full"
+    sslmode = get_val("SSLMODE", default_ssl)
+    allow_insecure = (get_val("ALLOW_INSECURE_TRANSPORT") or "").lower() in ("true", "1", "yes") or (is_docker_internal and not get_val("HOST"))
     if sslmode in ("disable", "allow", "prefer") and not allow_insecure:
         raise EtlError(
             f"sslmode={sslmode!r} ditolak pada mode prod. Produksi wajib menggunakan TLS (mis. verify-full, verify-ca, require) "
@@ -311,7 +313,7 @@ def connect_central(
     """Buka koneksi central staging (lab: loopback-only; prod: direct TLS atau plant dblink adapter)."""
     if env == "prod":
         transport = (os.environ.get("MPS2_PROD_CENTRAL_TRANSPORT") or "").strip().lower()
-        if transport == "plant_dblink" and plant_conn:
+        if (transport == "plant_dblink" or not os.environ.get("MPS2_PROD_CENTRAL_HOST")) and plant_conn:
             from central_dblink_adapter import CentralDblinkConnection
             return CentralDblinkConnection(plant_conn, server_name="aws_staging")
 
@@ -387,7 +389,11 @@ def assert_central_staging_schema(cur) -> None:
 def resolve_database(plant: str, *, env: str = "lab") -> str:
     if env == "prod":
         env_key = f"MPS2_PROD_PLANT_{plant}_DBNAME"
-        dbname = os.environ.get(env_key) or os.environ.get("MPS2_PROD_PLANT_DBNAME")
+        dbname = (
+            os.environ.get(env_key)
+            or os.environ.get("MPS2_PROD_PLANT_DBNAME")
+            or (os.environ.get("DB_NAME") if os.environ.get("DB_HOST") else None)
+        )
         if not dbname:
             raise EtlError(
                 f"Konfigurasi database produksi untuk plant {plant!r} tidak ditemukan. "
@@ -408,7 +414,10 @@ def resolve_database(plant: str, *, env: str = "lab") -> str:
 
 def load_plant_config(cur, plant: str) -> dict:
     """Baca plant_config dan PASTIKAN plant yang diminta cocok. Fail-closed."""
-    cur.execute("SELECT plant_code, timezone, sap_rules FROM public.plant_config WHERE id = 1 LIMIT 1")
+    cur.execute(
+        "SELECT plant_code, timezone, sap_rules, timesheet_allocation_cutoff_date, auto_post_enabled "
+        "FROM public.plant_config WHERE id = 1 LIMIT 1"
+    )
     row = cur.fetchone()
     if not row:
         raise EtlError("plant_config id=1 tidak ditemukan; menolak menebak timezone.")
@@ -421,7 +430,14 @@ def load_plant_config(cur, plant: str) -> dict:
             f"plant diminta {plant!r} tetapi plant_config.plant_code={plant_code!r} — "
             "koneksi atau argumen salah."
         )
-    return {"plant": plant_code, "timezone": tz, "sap_rules": row.get("sap_rules") or {}}
+    cutoff = row.get("timesheet_allocation_cutoff_date")
+    return {
+        "plant": plant_code,
+        "timezone": tz,
+        "sap_rules": row.get("sap_rules") or {},
+        "cutoff_date": cutoff,
+        "auto_post_enabled": bool(row.get("auto_post_enabled", False)),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -841,13 +857,17 @@ def validate_no_duplicate_activity_overlap(
     plant: str = "",
     *,
     target_ts_set: set | None = None,
+    quarantine: bool = False,
+    cur = None,
 ) -> None:
     """Kontrak F2: Untuk satu operator (serialnumber) dan plant, dua timesheet PRODUKTIF
     dengan order_no dan operation_no yang sama tidak boleh overlap [checkin, checkout).
 
     Interval [08:00, 10:00) dan [10:00, 12:00) diperbolehkan (hanya bersentuhan / half-open).
     Order berbeda atau operasi berbeda diperbolehkan overlap.
-    Jika ada overlap aktivitas produktif yang sama, gagalkan run secara atomik dengan EtlError DUPLICATE_ACTIVITY_OVERLAP.
+    Jika ada overlap aktivitas produktif yang sama:
+    - Jika quarantine=True: tandai baris yang beririsan sebagai INVALIDATED pada input plan & DB (timesheet_etl_input).
+    - Jika quarantine=False: gagalkan run secara atomik dengan EtlError DUPLICATE_ACTIVITY_OVERLAP.
     Jika target_ts_set diberikan, abaikan pasangan di mana KEDUA record berada di luar target window (companion vs companion).
     """
     groups: dict[tuple, list[dict]] = defaultdict(list)
@@ -910,6 +930,27 @@ def validate_no_duplicate_activity_overlap(
                 # Check half-open overlap: max(s1, s2) < min(e1, e2)
                 # Karena terurut r1.checkin <= r2.checkin, overlap terjadi jika r2.checkin < r1.checkout
                 if r2["checkin"] < r1["checkout"]:
+                    if quarantine:
+                        ts1 = r1["tsnumber"]
+                        ts2 = r2["tsnumber"]
+                        for r_item in input_rows:
+                            curr_ts = r_item.get("source_tsnumber") or r_item.get("tsnumber")
+                            if curr_ts in (ts1, ts2):
+                                r_item["status"] = "INVALIDATED"
+                                r_item["invalidated_reason"] = "DUPLICATE_ACTIVITY_OVERLAP"
+                                r_item["invalidated_at"] = datetime.now(timezone.utc)
+                                if cur and r_item.get("input_id"):
+                                    cur.execute(
+                                        """
+                                        UPDATE public.timesheet_etl_input
+                                        SET status = 'INVALIDATED',
+                                            invalidated_at = now(),
+                                            invalidated_reason = 'DUPLICATE_ACTIVITY_OVERLAP'
+                                        WHERE input_id = %s
+                                        """,
+                                        (r_item["input_id"],),
+                                    )
+                        continue
                     raise EtlError(
                         f"DUPLICATE_ACTIVITY_OVERLAP: Operator {serial} pada plant {p} memiliki 2 timesheet produktif "
                         f"dengan order {order} op {op} yang overlap: tsnumber {r1['tsnumber']} [{r1['checkin']}, {r1['checkout']}) "
@@ -925,6 +966,8 @@ def build_cleaned_plan(
     rule_version: str = CLEAN_RULE_VERSION,
     sap_rules: dict | None = None,
     is_companion: bool = False,
+    quarantine_duplicates: bool = False,
+    cur = None,
 ) -> list[dict]:
     """Bentuk rencana segmen hasil cleansing untuk sekumpulan input row.
 
@@ -939,7 +982,9 @@ def build_cleaned_plan(
       Pengurangan cap dipindahkan ke F4 setelah alokasi F3.
     """
     if not is_companion:
-        validate_no_duplicate_activity_overlap(input_rows, plant=plant)
+        validate_no_duplicate_activity_overlap(
+            input_rows, plant=plant, quarantine=quarantine_duplicates, cur=cur
+        )
 
     rules = sap_rules or {}
     break_windows = rules.get("break_windows") or []
@@ -1442,6 +1487,7 @@ def build_sap_ready_plan(
     ready_version: str = READY_RULE_VERSION,
     enrichment_data: dict | None = None,
     cur = None,
+    cutoff_date: date | None = None,
 ) -> tuple[list[dict], dict, dict]:
     """Bentuk rencana payload SAP-ready (F4).
 
@@ -1707,6 +1753,12 @@ def build_sap_ready_plan(
 
         # 10. Distribute effective seconds & construct payload
         for frag in fragments:
+            # Saring fragmen sebelum cutoff plant jika record melintasi batas tengah malam cutoff
+            if cutoff_date is not None and frag["local_date"] < cutoff_date:
+                exclusions["PRE_CUTOFF_FRAGMENT"] = exclusions.get("PRE_CUTOFF_FRAGMENT", 0) + 1
+                blocked_seconds_per_reason["PRE_CUTOFF_FRAGMENT"] = blocked_seconds_per_reason.get("PRE_CUTOFF_FRAGMENT", 0) + frag["pre_cap_seconds"]
+                continue
+
             alloc = min(frag["pre_cap_seconds"], remaining_allowance)
             frag["sap_effective_seconds"] = alloc
             remaining_allowance -= alloc
@@ -2024,6 +2076,7 @@ def run_dry_run(
     allocation_version: str,
     clean_rule_version: str = CLEAN_RULE_VERSION,
     ready_version: str = READY_RULE_VERSION,
+    quarantine_duplicates: bool = False,
 ) -> dict:
     before = database_fingerprint(cur)
     captured = capture_candidates(
@@ -2043,6 +2096,7 @@ def run_dry_run(
         plant_timezone=cfg["timezone"],
         rule_version=clean_rule_version,
         sap_rules=cfg.get("sap_rules"),
+        quarantine_duplicates=quarantine_duplicates,
     )
 
     work_count = 0
@@ -2116,6 +2170,7 @@ def run_dry_run(
         allocation_version=allocation_version,
         ready_version=ready_version,
         cur=cur,
+        cutoff_date=cfg.get("cutoff_date"),
     )
     out_checksum = sap_ready_plan_checksum(sap_ready_plan)
 
@@ -3362,6 +3417,7 @@ def compare_with_legacy_staging(
         cur=cur_plant,
     )
 
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "legacy"))
     import stage_timesheet_transaction as stt
 
     orig_env = {
@@ -3546,6 +3602,7 @@ def run_execute(
     clean_rule_version: str = CLEAN_RULE_VERSION,
     ready_version: str = READY_RULE_VERSION,
     created_by: str,
+    quarantine_duplicates: bool = False,
 ) -> dict:
     """Buat satu run manifest, snapshot input, cleaned segments, allocated segments, dan sap ready. Satu transaksi atomik."""
     captured = capture_candidates(
@@ -3613,6 +3670,8 @@ def run_execute(
         plant_timezone=cfg["timezone"],
         rule_version=clean_rule_version,
         sap_rules=cfg.get("sap_rules"),
+        quarantine_duplicates=quarantine_duplicates,
+        cur=cur,
     )
 
     inserted_segments = 0
@@ -3791,6 +3850,7 @@ def run_execute(
         allocation_version=allocation_version,
         ready_version=ready_version,
         cur=cur,
+        cutoff_date=cfg.get("cutoff_date"),
     )
     out_checksum = sap_ready_plan_checksum(sap_ready_plan)
 
@@ -3962,6 +4022,70 @@ def parse_tz_aware(value: str) -> datetime:
     return parsed
 
 
+def resolve_auto_window(
+    cur,
+    *,
+    plant: str,
+    tz_name: str,
+    cutoff_date: date | None = None,
+) -> tuple[datetime, datetime] | None:
+    """Tentukan window otomatis:
+    from_ts: max(to_ts) dari run STAGED sebelumnya untuk plant ini.
+             Dibatasi tidak boleh mundur sebelum plant cutoff_date.
+             Jika belum ada run STAGED, gunakan plant cutoff_date jam 00:00:00.
+    to_ts: awal hari ini pada timezone plant (midnight hari berjalan).
+    """
+    from datetime import time as dt_time
+    tz = ZoneInfo(tz_name)
+    now = datetime.now(tz)
+    today_midnight = datetime.combine(now.date(), dt_time.min, tzinfo=tz)
+
+    if cutoff_date is None:
+        cur.execute(
+            """
+            SELECT timesheet_allocation_cutoff_date
+            FROM public.plant_config
+            WHERE plant_code = %s
+            ORDER BY id LIMIT 1
+            """,
+            (plant,),
+        )
+        c_row = cur.fetchone()
+        cutoff_date = c_row.get("timesheet_allocation_cutoff_date") if isinstance(c_row, dict) else (c_row[0] if c_row else None)
+
+    if not cutoff_date:
+        raise EtlError(
+            f"timesheet_allocation_cutoff_date belum dikonfigurasi di plant_config untuk plant {plant} "
+            "— menolak menentukan window otomatis tanpa cutoff."
+        )
+
+    cutoff_dt = datetime.combine(cutoff_date, dt_time.min, tzinfo=tz)
+
+    cur.execute(
+        """
+        SELECT max(to_ts) AS last_to
+        FROM public.timesheet_etl_run
+        WHERE plant = %s AND status = 'STAGED'
+        """,
+        (plant,),
+    )
+    row = cur.fetchone()
+    last_to = row["last_to"] if row and row.get("last_to") else None
+
+    if last_to:
+        if last_to.tzinfo is None:
+            last_to = last_to.replace(tzinfo=tz)
+        # Invariant: max(to_ts) run lama TIDAK boleh menarik proses kembali sebelum cutoff
+        last_to = max(last_to, cutoff_dt)
+    else:
+        last_to = cutoff_dt
+
+    if last_to >= today_midnight:
+        return None
+
+    return last_to, today_midnight
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="ETL timesheet berlapis — F1 capture + F2 cleansing + F3 allocation + F4 SAP-ready + F5 publish (lab & prod)."
@@ -3982,6 +4106,8 @@ def build_parser() -> argparse.ArgumentParser:
                       help="hanya SELECT dan kalkulasi in-memory; tidak menulis apa pun")
     mode.add_argument("--execute", action="store_true",
                       help="buat run manifest, snapshot input, cleaned segments, allocated segments, dan sap-ready")
+    mode.add_argument("--stage", action="store_true",
+                      help="jalankan pipeline lengkap dari awal (capture raw) sampai staging (publish ke central staging)")
     mode.add_argument("--preview-persisted", action="store_true",
                       help="baca langsung timesheet_sap_ready tanpa menjalankan ulang pipeline")
     mode.add_argument("--preview-publish", action="store_true",
@@ -3992,6 +4118,10 @@ def build_parser() -> argparse.ArgumentParser:
                       help="pulihkan baris dengan status PUBLISHING yang belum final")
     mode.add_argument("--compare-legacy", action="store_true",
                       help="bandingkan hasil pipeline baru dengan staging lama secara read-only")
+    parser.add_argument("--auto-window", action="store_true",
+                        help="hitung otomatis window dari run STAGED terakhir sampai batas hari selesai")
+    parser.add_argument("--quarantine-duplicates", action="store_true",
+                        help="karantina (INVALIDATED) record duplikat aktivitas produktif alih-alih membatalkan seluruh run")
     parser.add_argument("--run-id", default=None,
                       help="filter run_id spesifik untuk preview, publish, atau reconcile")
     parser.add_argument("--limit", type=int, default=None,
@@ -4015,7 +4145,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    needs_window = args.dry_run or args.execute or args.compare_legacy
+    needs_window = (args.dry_run or args.execute or args.compare_legacy or args.stage) and not args.auto_window
     if needs_window:
         if not args.from_ts or not args.to_ts:
             print("ERROR: --from-ts dan --to-ts wajib disediakan untuk mode ini", file=sys.stderr)
@@ -4103,12 +4233,68 @@ def main(argv: list[str] | None = None) -> int:
                         allocation_version=args.allocation_version,
                     )
                 elif args.dry_run:
+                    from_ts = args.from_ts
+                    to_ts = args.to_ts
+                    if args.auto_window and (not from_ts or not to_ts):
+                        win = resolve_auto_window(
+                            cur,
+                            plant=args.plant,
+                            tz_name=cfg["timezone"],
+                            cutoff_date=cfg.get("cutoff_date"),
+                        )
+                        if not win:
+                            print("INFO: Staging up-to-date (tidak ada window baru yang siap di-stage).", file=sys.stderr)
+                            return 0
+                        from_ts, to_ts = win
                     summary = run_dry_run(
-                        cur, cfg=cfg, dbname=dbname, from_ts=args.from_ts, to_ts=args.to_ts,
+                        cur, cfg=cfg, dbname=dbname, from_ts=from_ts, to_ts=to_ts,
                         allocation_version=args.allocation_version,
                         clean_rule_version=args.clean_rule_version,
                         ready_version=args.ready_version,
+                        quarantine_duplicates=args.quarantine_duplicates,
                     )
+                elif args.stage:
+                    from_ts = args.from_ts
+                    to_ts = args.to_ts
+                    if args.auto_window and (not from_ts or not to_ts):
+                        win = resolve_auto_window(
+                            cur,
+                            plant=args.plant,
+                            tz_name=cfg["timezone"],
+                            cutoff_date=cfg.get("cutoff_date"),
+                        )
+                        if not win:
+                            print("INFO: Staging up-to-date (tidak ada window baru yang siap di-stage).", file=sys.stderr)
+                            return 0
+                        from_ts, to_ts = win
+                    exec_summary = run_execute(
+                        cur, conn_plant, cfg=cfg, dbname=dbname, from_ts=from_ts, to_ts=to_ts,
+                        allocation_version=args.allocation_version,
+                        clean_rule_version=args.clean_rule_version,
+                        ready_version=args.ready_version,
+                        created_by=created_by,
+                        quarantine_duplicates=args.quarantine_duplicates,
+                    )
+                    if exec_summary.get("sap_ready_count", 0) > 0:
+                        conn_central = connect_central(
+                            args.central_db if args.env == "lab" else None,
+                            autocommit=False,
+                            env=args.env,
+                            plant_conn=conn_plant,
+                        )
+                        try:
+                            pub_summary = run_publish(
+                                conn_plant, conn_central,
+                                plant=args.plant, run_id=exec_summary["run_id"],
+                                ready_rule_version=args.ready_version,
+                                limit=args.limit, batch_size=args.batch_size,
+                                env=args.env,
+                            )
+                            summary = {**exec_summary, "publish": pub_summary, "mode": "stage"}
+                        finally:
+                            conn_central.close()
+                    else:
+                        summary = {**exec_summary, "mode": "stage", "published_count": 0}
                 else:
                     summary = run_execute(
                         cur, conn_plant, cfg=cfg, dbname=dbname, from_ts=args.from_ts, to_ts=args.to_ts,
@@ -4116,6 +4302,7 @@ def main(argv: list[str] | None = None) -> int:
                         clean_rule_version=args.clean_rule_version,
                         ready_version=args.ready_version,
                         created_by=created_by,
+                        quarantine_duplicates=args.quarantine_duplicates,
                     )
     except EtlError as exc:
         conn_plant.rollback()
