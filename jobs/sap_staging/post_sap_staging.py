@@ -9,7 +9,8 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import psycopg2.extras
 
@@ -244,6 +245,78 @@ def require_plant_cutoff(plant: str | None) -> date:
     return cutoff
 
 
+def load_plant_timezone(plant: str) -> str:
+    """Timezone plant dari plant_config.timezone (source DB). Gagal/kosong = exception."""
+    with connect_source() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT timezone FROM public.plant_config WHERE plant_code = %s ORDER BY id LIMIT 1",
+                (plant,),
+            )
+            row = cur.fetchone()
+    tz = (row[0] if row else None) or ""
+    if not tz.strip():
+        raise CutoffUnavailable(f"timezone plant {plant} tidak ada di plant_config. Posting dihentikan.")
+    ZoneInfo(tz.strip())  # validasi nama zona; nama salah = exception
+    return tz.strip()
+
+
+def require_plant_timezone(plant: str | None) -> str:
+    """Timezone plant WAJIB diketahui untuk gerbang hari-selesai (fail-closed)."""
+    if not plant:
+        raise CutoffUnavailable("Plant tidak ditentukan: timezone hari kerja tidak bisa dipastikan.")
+    try:
+        return load_plant_timezone(plant)
+    except CutoffUnavailable:
+        raise
+    except Exception as exc:
+        raise CutoffUnavailable(
+            f"Gagal membaca timezone plant {plant}: {exc}. Posting dihentikan."
+        ) from exc
+
+
+def plant_today(tz: str) -> date:
+    """Tanggal kerja BERJALAN di timezone plant, diambil dari jam aktual saat eksekusi."""
+    return datetime.now(ZoneInfo(tz)).date()
+
+
+def work_date_sql() -> str:
+    """Tanggal kerja SAP satu-satunya untuk filter tanggal: payload ISDD (YYYYMMDD).
+    (Dipakai inline sebagai payload->>'ISDD' di eligibility_predicate.)
+
+    Dulu filter tanggal memakai `bucket_start::date OR ISDD`. bucket_start TIMESHEET
+    adalah timestamp UTC (shift 30 Sep 00:00 WITA = 29 Sep 16:00), sehingga rentang
+    1 Agu-29 Sep ikut memilih 291 baris bertanggal kerja 30 Sep. ISDD adalah tanggal
+    yang benar-benar dikirim ke SAP, dan untuk MCH ISDD = tanggal bundel.
+    """
+    return "(payload->>'ISDD')"
+
+
+def day_complete_guard_sql() -> str:
+    """Gerbang hari-selesai MCH: hanya bundel yang tanggal kerjanya < hari berjalan plant.
+
+    Bundel MCH_HOURS = total SATU HARI. Bila hari berjalan di-post, bundelnya terkunci
+    (POSTED) dan jam sisa hari itu hilang. Param: [hari berjalan 'YYYYMMDD'].
+    """
+    return "(source_system <> 'MCH_HOURS' OR (payload->>'ISDD' ~ '^[0-9]{8}$' AND payload->>'ISDD' < %s))"
+
+
+def assert_mch_days_complete(rows: list[dict], today: date) -> None:
+    """Lapis kedua di Python: bundel MCH hari berjalan tidak boleh sampai di-claim."""
+    floor = today.strftime("%Y%m%d")
+    bad = [
+        f"{row.get('id')}:{(row.get('payload') or {}).get('ISDD') or '-'}"
+        for row in rows
+        if row.get("source_system") == "MCH_HOURS"
+        and not str((row.get("payload") or {}).get("ISDD") or "") < floor
+    ]
+    if bad:
+        raise PreCutoffRowClaimed(
+            f"{len(bad)} bundel MCH hari berjalan ({today}) lolos ke claim ({', '.join(bad[:10])}); "
+            "claim dibatalkan."
+        )
+
+
 def cutoff_guard_sql() -> str:
     """Guard cutoff: satu definisi untuk SEMUA jalur (auto, tanggal, operator, --ids).
 
@@ -283,6 +356,7 @@ def selected_predicate(
     plant: str | None,
     cutoff: date,
     source_system: str | None = None,
+    today: date | None = None,
 ) -> tuple[str, list]:
     """Predikat jalur pilih-manual, dipakai bersama claim_selected_rows dan --dry-run.
 
@@ -307,6 +381,11 @@ def selected_predicate(
     params.append(statuses)
     filters.append(cutoff_guard_sql())
     params.append(cutoff.strftime("%Y%m%d"))
+    # Hari-selesai MCH juga berlaku di jalur pilih-manual (UI post_bundles).
+    if today is None:
+        today = plant_today(require_plant_timezone(plant))
+    filters.append(day_complete_guard_sql())
+    params.append(today.strftime("%Y%m%d"))
     if source_system:
         filters.append("source_system = %s")
         params.append(source_system)
@@ -330,6 +409,7 @@ def eligibility_predicate(
     date_to: str | None = None,
     pernr_filter: str | None = None,
     exclude_correction: bool = True,
+    today: date | None = None,
 ) -> tuple[str, list]:
     """Satu definisi "baris mana yang layak dikirim ke SAP" (review P1 #20).
 
@@ -353,14 +433,16 @@ def eligibility_predicate(
         # admin & di-post MANUAL dari UI.
         filters.append("is_correction = false")
 
-    # GERBANG HARI-SELESAI (default aktif). Bundel MCH_HOURS = total SATU HARI per
-    # kunci; source_key tidak memuat durasi. Kalau hari BERJALAN di-post, bundel-nya
-    # terkunci (POSTED) dan jam sisa hari itu HILANG.
-    if not include_today:
-        filters.append(
-            "(source_system <> 'MCH_HOURS' OR bucket_start::date < (now() AT TIME ZONE %s)::date)"
-        )
-        params.append(app_timezone())
+    # GERBANG HARI-SELESAI (SELALU aktif). Bundel MCH_HOURS = total SATU HARI per
+    # kunci; kalau hari BERJALAN di-post, bundel-nya terkunci (POSTED) dan jam sisa
+    # hari itu HILANG. Hari berjalan dihitung di timezone PLANT (plant_config) dari
+    # jam aktual, dibandingkan dengan ISDD. include_today TIDAK lagi membuka gerbang
+    # ini (dulu ops worker post_date/post_operator memakainya -> bundel hari berjalan
+    # ikut terkirim). Parameter dipertahankan agar pemanggil lama tidak patah.
+    if today is None:
+        today = plant_today(require_plant_timezone(plant))
+    filters.append(day_complete_guard_sql())
+    params.append(today.strftime("%Y%m%d"))
 
     # GERBANG CUTOFF (fail-closed): baris dengan ISDD sebelum cutoff plant tidak
     # boleh dikirim. Gagal membaca cutoff = exception, BUKAN query tanpa batas.
@@ -379,19 +461,16 @@ def eligibility_predicate(
         filters.append("is_productive = %s")
         params.append(productive)
 
+    # Filter tanggal = tanggal kerja SAP (ISDD) untuk SEMUA source, tunggal maupun
+    # rentang. Tidak ada OR ke bucket_start (timestamp UTC -> geser hari).
     if date_filter:
-        filters.append(
-            "(bucket_start::date = %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' = %s))"
-        )
-        params.extend([date_filter, date_filter.replace("-", "")])
+        filters.append("payload->>'ISDD' = %s")
+        params.append(date.fromisoformat(date_filter).strftime("%Y%m%d"))
     if date_from or date_to:
-        lo = date_from or "1900-01-01"
-        hi = date_to or "2999-12-31"
-        filters.append(
-            "(bucket_start::date BETWEEN %s AND %s OR "
-            "(source_system = 'TIMESHEET' AND payload->>'ISDD' BETWEEN %s AND %s))"
-        )
-        params.extend([lo, hi, lo.replace("-", ""), hi.replace("-", "")])
+        lo = date.fromisoformat(date_from or "1900-01-01").strftime("%Y%m%d")
+        hi = date.fromisoformat(date_to or "2999-12-31").strftime("%Y%m%d")
+        filters.append("payload->>'ISDD' BETWEEN %s AND %s")
+        params.extend([lo, hi])
     if pernr_filter:
         filters.append("(pernr = %s OR pernr_origin = %s)")
         params.extend([pernr_filter, pernr_filter])
@@ -426,8 +505,9 @@ def claim_rows(
     else:
         statuses = ["PENDING"]
 
-    # Cutoff dibaca SEBELUM koneksi claim dibuka: gagal = berhenti, tidak ada claim.
+    # Cutoff & hari berjalan dibaca SEBELUM koneksi claim dibuka: gagal = berhenti.
     cutoff = require_plant_cutoff(plant)
+    today = plant_today(require_plant_timezone(plant))
 
     # #20: predikat yang SAMA dengan preview_rows/--dry-run.
     where_sql, params = eligibility_predicate(
@@ -442,6 +522,7 @@ def claim_rows(
         date_to=date_to,
         pernr_filter=pernr_filter,
         exclude_correction=True,
+        today=today,
     )
 
     sql = f"""
@@ -460,6 +541,7 @@ def claim_rows(
             cur.execute(sql, params)
             fetched = [dict(row) for row in cur.fetchall()]
             assert_rows_after_cutoff(fetched, cutoff)
+            assert_mch_days_complete(fetched, today)
             rows = apply_current_nfc_roles(cur, fetched)
             if rows:
                 cur.execute(
@@ -501,6 +583,7 @@ def claim_selected_rows(
 
     # Fail-closed sebelum menyentuh antrean.
     cutoff = require_plant_cutoff(plant)
+    today = plant_today(require_plant_timezone(plant))
     where_sql, params = selected_predicate(
         ids=ids,
         ztimesheetids=ztimesheetids,
@@ -508,6 +591,7 @@ def claim_selected_rows(
         plant=plant,
         cutoff=cutoff,
         source_system=source_system,
+        today=today,
     )
     sql = f"""
     SELECT id, source_system, source_ref_id, werks, status, pernr, pernr_origin, payload
@@ -523,6 +607,7 @@ def claim_selected_rows(
             cur.execute(sql, params)
             fetched = [dict(row) for row in cur.fetchall()]
             assert_rows_after_cutoff(fetched, cutoff)
+            assert_mch_days_complete(fetched, today)
             rows = apply_current_nfc_roles(cur, fetched)
             if rows:
                 cur.execute(
@@ -539,8 +624,9 @@ def claim_selected_rows(
     if len(rows) < requested:
         log.warning(
             "Selected-ID: %s diminta, %s diklaim. Sisanya ditolak guard "
-            "(status SKIPPED/POSTING/POSTED, sebelum cutoff %s, plant lain, atau excluded).",
-            requested, len(rows), cutoff,
+            "(status SKIPPED/POSTING/POSTED, sebelum cutoff %s, MCH hari berjalan %s, "
+            "plant lain, atau excluded).",
+            requested, len(rows), cutoff, today,
         )
     return rows
 
@@ -1031,7 +1117,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-ms", type=int, default=100)
     parser.add_argument("--retry-failed", action="store_true", help="Also retry rows with status FAILED")
     parser.add_argument("--failed-only", action="store_true", help="HANYA baris FAILED (dipakai tombol 'kirim ulang gagal' di UI — tidak menyentuh PENDING)")
-    parser.add_argument("--include-today", action="store_true", help="Ikutkan bundel MCH_HOURS hari BERJALAN (default: hanya hari selesai). Hati-hati: mengunci hari yang masih tumbuh.")
+    parser.add_argument("--include-today", action="store_true", help="DIABAIKAN (dipertahankan untuk kompatibilitas). Bundel MCH_HOURS hari berjalan di timezone plant SELALU ditahan.")
     parser.add_argument("--source-system", choices=["TIMESHEET", "MCH_HOURS"], help="Only post one source system")
     parser.add_argument(
         "--workers", type=int, default=1,
@@ -1077,6 +1163,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.include_today:
+        log.warning("--include-today diabaikan: bundel MCH hari berjalan selalu ditahan.")
     if args.dry_run:
         preview_rows(args)
         return

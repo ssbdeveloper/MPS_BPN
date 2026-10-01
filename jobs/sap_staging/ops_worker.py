@@ -48,8 +48,8 @@ COMMANDS = {
     "post_bundles":   [sys.executable, "post_sap_staging.py", "--workers", "3"],
     # --limit 1000: posting manual per tanggal/operator harus HABIS dalam satu request
     # (default argparse 50 → cuma 50 bundle terkirim per klik — sisanya tetap PENDING).
-    "post_date":      [sys.executable, "post_sap_staging.py", "--workers", "4", "--limit", "1000", "--include-today"],
-    "post_operator":  [sys.executable, "post_sap_staging.py", "--workers", "4", "--limit", "1000", "--include-today"],
+    "post_date":      [sys.executable, "post_sap_staging.py", "--workers", "4", "--limit", "1000"],
+    "post_operator":  [sys.executable, "post_sap_staging.py", "--workers", "4", "--limit", "1000"],
     "recalc_date":    [sys.executable, "rebuild_machinehours.py"],
 }
 

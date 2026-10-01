@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from unittest import mock
 
 import psycopg2
@@ -130,6 +130,10 @@ class _DbCase(unittest.TestCase):
             mock.patch.object(poster, "log_timesheet_sap", lambda payload, text: None),
             mock.patch.object(poster, "post_payload", side_effect=fake_post),
             mock.patch.object(poster, "load_plant_cutoff", lambda plant=None: CUTOFF),
+            mock.patch.object(poster, "load_plant_timezone", lambda plant: "Asia/Makassar"),
+            # Hari berjalan dibekukan jauh setelah data uji agar gerbang hari-selesai
+            # tidak mengganggu tes cutoff; tes hari-selesai mem-patch ulang.
+            mock.patch.object(poster, "plant_today", lambda tz: date(2026, 12, 31)),
         ]
         for p in patches:
             p.start()
@@ -233,6 +237,133 @@ class AutoPathCutoffTest(_DbCase):
                         "--retry-failed", "--limit", "1000"])
         )
         self.assertEqual(sorted(self.sent, key=int), ["4", "5"])
+
+
+WORKDATE_SCHEMA = """
+-- Batas tengah malam UTC vs Asia/Makassar (UTC+8). bucket_start disimpan UTC.
+-- 21: TIMESHEET shift 30 Sep 00:30 WITA = 29 Sep 16:30 UTC -> ISDD 20260930
+-- 22: TIMESHEET 29 Sep 23:30 WITA (pra-cutoff, PENDING) -> ISDD 20260929
+-- 23: MCH bundel hari selesai 30 Sep
+-- 24: MCH bundel hari BERJALAN 1 Okt (WITA)
+-- 25: TIMESHEET 1 Okt (bukan MCH, hari berjalan boleh)
+INSERT INTO sap_timesheet_staging (id, ztimesheetid, source_system, werks, status, pernr, payload, bucket_start) VALUES
+ (21,'21','TIMESHEET','5100','PENDING','1001','{"ISDD":"20260930","AUFNR":"B1"}','2026-09-29 16:30+00'),
+ (22,'22','TIMESHEET','5100','PENDING','1001','{"ISDD":"20260929","AUFNR":"B2"}','2026-09-29 15:30+00'),
+ (23,'23','MCH_HOURS','5100','PENDING','1001','{"ISDD":"20260930","AUFNR":"B3"}','2026-09-30 00:00+00'),
+ (24,'24','MCH_HOURS','5100','PENDING','1001','{"ISDD":"20261001","AUFNR":"B4"}','2026-10-01 00:00+00'),
+ (25,'25','TIMESHEET','5100','PENDING','1001','{"ISDD":"20261001","AUFNR":"B5"}','2026-09-30 17:00+00');
+DELETE FROM sap_timesheet_staging WHERE id < 20;
+"""
+
+
+class WorkDateFilterTest(_DbCase):
+    """Filter tanggal = tanggal kerja SAP (ISDD), bukan bucket_start UTC.
+    Reproduksi produksi 5051: rentang 1 Agu-29 Sep memilih 291 baris ISDD 30 Sep."""
+
+    def setUp(self):
+        super().setUp()
+        with psycopg2.connect(DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(WORKDATE_SCHEMA)
+                # Sesi poster di produksi ber-TimeZone Asia/Jakarta; samakan.
+                cur.execute("ALTER DATABASE mps2_test_cutoff_guard SET timezone TO 'Asia/Jakarta'")
+            conn.commit()
+
+    def _preview(self, argv):
+        with self.assertLogs(poster.log, level="INFO") as cap:
+            poster.preview_rows(self._args(["--dry-run", "--plant", "5100", *argv]))
+        return "\n".join(cap.output)
+
+    def test_rentang_sebelum_cutoff_tidak_memilih_isdd_30_sep(self):
+        out = self._preview(["--date-from", "2026-08-01", "--date-to", "2026-09-29", "--limit", "1000"])
+        self.assertIn("DRY-RUN: 0 baris", out)
+        poster.process_rows(self._args(["--plant", "5100", "--date-from", "2026-08-01",
+                                        "--date-to", "2026-09-29", "--limit", "1000"]))
+        self.assertEqual(self.sent, [])
+
+    def test_tanggal_tunggal_29_sep_kosong_30_sep_memilih_isdd(self):
+        self.assertIn("DRY-RUN: 0 baris", self._preview(["--date", "2026-09-29"]))
+        out = self._preview(["--date", "2026-09-30"])
+        self.assertIn("DRY-RUN: id 21,23", out)
+        poster.process_rows(self._args(["--plant", "5100", "--date", "2026-09-30"]))
+        self.assertEqual(sorted(self.sent, key=int), ["21", "23"])
+
+    def test_preview_dan_eksekusi_rentang_sama(self):
+        out = self._preview(["--date-from", "2026-09-30", "--date-to", "2026-10-01"])
+        self.assertIn("DRY-RUN: id 21,23,24,25", out)
+        poster.process_rows(self._args(["--plant", "5100", "--date-from", "2026-09-30",
+                                        "--date-to", "2026-10-01"]))
+        self.assertEqual(sorted(self.sent, key=int), ["21", "23", "24", "25"])
+
+
+class DayCompleteGateTest(_DbCase):
+    """Bundel MCH hari BERJALAN (timezone plant) wajib tertahan di SEMUA jalur."""
+
+    def setUp(self):
+        super().setUp()
+        with psycopg2.connect(DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(WORKDATE_SCHEMA)
+            conn.commit()
+        p = mock.patch.object(poster, "plant_today", lambda tz: date(2026, 10, 1))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_plant_today_batas_tengah_malam_utc_vs_makassar(self):
+        class FakeDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 9, 30, 16, 30, tzinfo=timezone.utc).astimezone(tz)
+        mock.patch.stopall()  # lepas patch plant_today untuk menguji fungsi aslinya
+        with mock.patch.object(poster, "datetime", FakeDT):
+            self.assertEqual(poster.plant_today("Asia/Makassar"), date(2026, 10, 1))
+            self.assertEqual(poster.plant_today("UTC"), date(2026, 9, 30))
+            self.assertEqual(poster.plant_today("Asia/Jakarta"), date(2026, 9, 30))
+
+    def test_auto_tidak_mengirim_mch_hari_berjalan(self):
+        poster.process_rows(self._args(["--plant", "5100", "--limit", "100"]))
+        self.assertEqual(sorted(self.sent, key=int), ["21", "23", "25"])
+
+    def test_include_today_diabaikan(self):
+        poster.process_rows(self._args(["--plant", "5100", "--include-today", "--date", "2026-10-01"]))
+        self.assertEqual(self.sent, ["25"])
+
+    def test_selected_id_tidak_mengirim_mch_hari_berjalan(self):
+        poster.process_rows(self._args(["--plant", "5100", "--ids", "23,24"]))
+        self.assertEqual(self.sent, ["23"])
+        self.assertEqual(self._status()[24], "PENDING")
+
+    def test_ops_worker_post_date_dan_bundles_menahan_hari_berjalan(self):
+        import ops_worker
+        for action, params in (("post_date", {"date": "2026-10-01"}), ("post_bundles", {"ids": [24]}),
+                               ("post_operator", {"pernr": "1001"})):
+            cmd = ops_worker.build_command(action, params)
+            self.assertNotIn("--include-today", cmd, action)
+            argv = cmd[cmd.index("post_sap_staging.py") + 1:]
+            self.sent.clear()
+            poster.process_rows(self._args(["--plant", "5100", *argv]))
+            self.assertNotIn("24", self.sent, action)
+
+    def test_dry_run_sama_dengan_eksekusi(self):
+        with self.assertLogs(poster.log, level="INFO") as cap:
+            poster.preview_rows(self._args(["--dry-run", "--plant", "5100", "--include-today"]))
+        self.assertIn("DRY-RUN: id 21,23,25", "\n".join(cap.output))
+
+    def test_python_guard_membatalkan_claim_mch_hari_berjalan(self):
+        with mock.patch.object(poster, "day_complete_guard_sql", lambda: "(%s IS NOT NULL)"):
+            with self.assertRaises(poster.PreCutoffRowClaimed):
+                poster.process_rows(self._args(["--plant", "5100", "--ids", "23,24"]))
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self._status()[23], "PENDING", "claim harus rollback")
+
+    def test_timezone_gagal_dibaca_berhenti(self):
+        def boom(plant):
+            raise psycopg2.OperationalError("down")
+        mock.patch.stopall()
+        with mock.patch.object(poster, "load_plant_cutoff", lambda plant=None: CUTOFF), \
+             mock.patch.object(poster, "load_plant_timezone", boom):
+            with self.assertRaises(poster.CutoffUnavailable):
+                poster.eligibility_predicate(statuses=["PENDING"], plant="5100", cutoff=CUTOFF)
 
 
 class CutoffReadFailureTest(_DbCase):

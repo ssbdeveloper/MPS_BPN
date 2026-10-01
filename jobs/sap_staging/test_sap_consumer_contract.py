@@ -124,7 +124,7 @@ class TestDryRunSharesGuards(unittest.TestCase):
         from datetime import date
 
         # Cutoff kini wajib (fail-closed); tes kontrak memberinya eksplisit.
-        pred, _params = p.eligibility_predicate(statuses=["PENDING"], cutoff=date(2026, 9, 30))
+        pred, _params = p.eligibility_predicate(statuses=["PENDING"], cutoff=date(2026, 9, 30), today=date(2026, 10, 2))
         self.assertIn("exclusion", pred.lower(), "filter exclusion harus ada")
         self.assertIn("status", pred.lower(), "filter status harus ada")
         self.assertIn("ISDD", pred, "filter cutoff harus ada")
