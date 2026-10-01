@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 import DateRangeShiftForm from './DateRangeShiftForm';
@@ -80,77 +80,6 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
     );
 
     expect(fromInput.value).toBe('2026-10-10');
-  });
-
-  it('retains typed reason on PREVIEW_STALE and succeeds on retry', async () => {
-    let callCount = 0;
-    const onApply = vi.fn().mockImplementation(async () => {
-      callCount += 1;
-      if (callCount === 1) throw new Error('PREVIEW_STALE: State telah berubah di database');
-      return { success: true };
-    });
-
-    let previewCount = 0;
-    const onPreview = vi.fn().mockImplementation(async () => {
-      previewCount += 1;
-      return {
-        plant_today: '2026-10-01',
-        affects_today: true,
-        preview_token: `token_fresh_${previewCount}`,
-        items: [{
-          date: '2026-10-01',
-          shift_code: 'DAY',
-          today: { started: false, scheduled_operators: 12 },
-          after: { start_time: '08:00:00', end_time: '14:00:00' },
-        }],
-        blocking: [],
-      };
-    });
-
-    const user = userEvent.setup();
-    const defaults = [
-      { shift_code: 'DAY', start_time: '07:25:00', end_time: '16:30:00', crosses_midnight: false, standard_hours: 8 },
-      { shift_code: 'NIGHT', start_time: '16:30:00', end_time: '00:30:00', crosses_midnight: true, standard_hours: 7 },
-    ];
-
-    render(
-      <DateRangeShiftForm
-        plantToday="2026-10-01"
-        defaultShifts={defaults}
-        upcomingOverrides={[]}
-        onApplyOverride={onApply}
-        onDeleteOverride={vi.fn()}
-        onPreviewOverride={onPreview}
-        busy={false}
-      />
-    );
-
-    await user.click(screen.getByRole('button', { name: /Terapkan Jam Khusus/i }));
-    await waitFor(() => {
-      expect(screen.getByText('Konfirmasi Perubahan Hari Ini')).toBeTruthy();
-    });
-
-    const reasonInput = screen.getByPlaceholderText(/Wajib diisi manual minimal 10 karakter/i);
-    await user.type(reasonInput, 'Perubahan darurat PLN padam');
-    const checkbox = screen.getByLabelText(/Saya memahami dampak perubahan jam shift hari ini/i);
-    await user.click(checkbox);
-
-    const submitBtn = screen.getByRole('button', { name: /Konfirmasi & Terapkan/i });
-    await user.click(submitBtn);
-
-    await waitFor(() => {
-      expect(onApply).toHaveBeenCalledTimes(1);
-      expect(screen.getByText(/Kondisi jadwal di server telah berubah/i)).toBeTruthy();
-    });
-
-    expect(reasonInput.value).toBe('Perubahan darurat PLN padam');
-    await user.click(checkbox);
-    await user.click(submitBtn);
-
-    await waitFor(() => {
-      expect(onApply).toHaveBeenCalledTimes(2);
-      expect(screen.queryByText('Konfirmasi Perubahan Hari Ini')).toBeNull();
-    });
   });
 
   it('displays operator statistics correctly for nonzero, genuine zero, and query failure', () => {

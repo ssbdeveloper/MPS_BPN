@@ -394,6 +394,108 @@ async function verifyActor(client, reqOrHeaders) {
 }
 
 /**
+ * Statistik dampak hari ini untuk (business_date, shift) — definisi di spec §7.4.
+ *
+ * - Window shift efektif: baris public.resolve_shift_definition(business_date) untuk shift
+ *   tersebut pada SAAT preview (override aktif bila ada, selain itu default), di-anchor ke
+ *   business_date dalam timezone plant: [bd + start_time, bd + end_time (+1 hari bila
+ *   crosses_midnight)), half-open.
+ * - Scheduled operators: operator unik ews.roster_effective dengan business_date = bd,
+ *   eff_shift = shift, status = 'SCHEDULED'.
+ * - Operator dengan transaksi: subset scheduled operators yang memiliki >= 1 transaksi valid
+ *   yang BERIRISAN dengan window ([checkin, end) ∩ [ws, we) tidak kosong). Transaksi valid
+ *   mengikuti aturan existing ewsCalculator: state_flag <> 5, (duration > 0 ATAU checkout
+ *   NULL), serialnumber tidak kosong, end > checkin. Transaksi terbuka (checkout NULL) berakhir
+ *   di LEAST(now, checkin + 12 jam) — batas 12 jam sama dengan calculateAdoptionLabourFromRoster.
+ *
+ * Tidak pernah melempar: kegagalan query menghasilkan stats_status "unavailable" dengan angka
+ * null (bukan 0). Query dibungkus SAVEPOINT bila berada dalam transaksi agar kegagalan tidak
+ * meng-abort transaksi pemanggil (preview apply berjalan di BEGIN READ ONLY).
+ */
+const TODAY_IMPACT_STATS_SQL = `
+  WITH params AS (
+    SELECT $1::date AS bd, $2::text AS shift, $3::text AS tz,
+           COALESCE($4::timestamptz, now()) AS now_ts
+  ),
+  win AS (
+    SELECT ((p.bd + sd.start_time)::timestamp AT TIME ZONE p.tz) AS ws,
+           ((p.bd + sd.end_time
+              + CASE WHEN sd.crosses_midnight THEN INTERVAL '1 day' ELSE INTERVAL '0' END
+            )::timestamp AT TIME ZONE p.tz) AS we
+    FROM params p
+    JOIN public.resolve_shift_definition((SELECT bd FROM params)) sd
+      ON sd.roster_shift_code = p.shift
+  ),
+  scheduled AS (
+    SELECT DISTINCT NULLIF(BTRIM(r.serialnumber), '') AS op
+    FROM ews.roster_effective r, params p
+    WHERE r.business_date = p.bd
+      AND r.eff_shift = p.shift
+      AND r.status = 'SCHEDULED'
+      AND NULLIF(BTRIM(r.serialnumber), '') IS NOT NULL
+  ),
+  tx AS (
+    SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
+           t.longdate_checkin AS a,
+           COALESCE(t.longdate_checkout,
+                    LEAST(p.now_ts, t.longdate_checkin + INTERVAL '12 hours')) AS b
+    FROM public.timesheet_transaction t, params p, win w
+    WHERE t.longdate_checkin IS NOT NULL
+      AND t.longdate_checkin < w.we
+      AND COALESCE(t.state_flag, 0) <> 5
+      AND (COALESCE(t.duration, 0) > 0 OR t.longdate_checkout IS NULL)
+      AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+  ),
+  tx_ops AS (
+    SELECT DISTINCT tx.op
+    FROM tx, win w
+    WHERE tx.b > tx.a AND tx.a < w.we AND tx.b > w.ws
+  )
+  SELECT
+    (SELECT ws FROM win) AS window_start,
+    (SELECT we FROM win) AS window_end,
+    (SELECT COUNT(*) FROM win)::int AS window_rows,
+    (SELECT COUNT(*) FROM scheduled)::int AS scheduled_operators,
+    (SELECT COUNT(*) FROM scheduled s WHERE s.op IN (SELECT op FROM tx_ops))::int AS operators_with_records
+`;
+
+async function queryTodayImpactStats(client, businessDate, shiftCode, options = {}) {
+  const timezone = options.timezone || resolveTimezone();
+  const nowTs = options.nowTs || null;
+  let savepoint = false;
+  try {
+    await client.query("SAVEPOINT ews_today_stats");
+    savepoint = true;
+  } catch (err) {
+    // 25P01 = no_active_sql_transaction: dipanggil di luar transaksi, tidak perlu savepoint.
+    if (err.code !== "25P01") {
+      return { scheduled_operators: null, operators_with_records: null, stats_status: "unavailable", stats_error: err.message };
+    }
+  }
+  try {
+    const res = await client.query(TODAY_IMPACT_STATS_SQL, [businessDate, shiftCode, timezone, nowTs]);
+    const row = res.rows[0];
+    if (!row || Number(row.window_rows) !== 1) {
+      throw new Error(`Window shift ${shiftCode} pada ${businessDate} tidak ter-resolve secara tunggal (rows=${row ? row.window_rows : 0})`);
+    }
+    if (savepoint) await client.query("RELEASE SAVEPOINT ews_today_stats");
+    return {
+      scheduled_operators: Number(row.scheduled_operators),
+      operators_with_records: Number(row.operators_with_records),
+      stats_status: "available",
+      stats_error: null,
+      window_start: row.window_start instanceof Date ? row.window_start.toISOString() : row.window_start,
+      window_end: row.window_end instanceof Date ? row.window_end.toISOString() : row.window_end,
+    };
+  } catch (err) {
+    if (savepoint) {
+      await client.query("ROLLBACK TO SAVEPOINT ews_today_stats").catch(() => {});
+    }
+    return { scheduled_operators: null, operators_with_records: null, stats_status: "unavailable", stats_error: err.message };
+  }
+}
+
+/**
  * Ambil tanggal plant hari ini langsung dari database dalam timezone plant
  */
 async function getPlantToday(client) {
@@ -546,42 +648,7 @@ async function previewDateRange(client, payload) {
       // Info khusus hari ini jika terdampak
       let todayInfo = null;
       if (dateIso === plantToday) {
-        let stats = null;
-        try {
-          const statsRes = await client.query(
-            `WITH logged AS (
-               SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
-                      SUM(t.duration::float) AS recorded
-               FROM public.timesheet_transaction t
-               WHERE t.longdate_checkin >= ($1::date)::timestamp
-                 AND t.longdate_checkin <  ($1::date + 2)::timestamp
-                 AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
-                 AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
-               GROUP BY 1
-             )
-             SELECT
-               COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2)::int AS scheduled_operators,
-               COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2 AND COALESCE(lg.recorded, 0) > 0)::int AS operators_with_records
-             FROM ews.roster_effective r
-             LEFT JOIN logged lg ON lg.op = r.serialnumber
-             WHERE r.business_date = $1::date`,
-            [dateIso, code]
-          );
-          const sRow = statsRes.rows[0];
-          stats = {
-            scheduled_operators: sRow?.scheduled_operators != null ? Number(sRow.scheduled_operators) : 0,
-            operators_with_records: sRow?.operators_with_records != null ? Number(sRow.operators_with_records) : 0,
-            stats_status: "available",
-            stats_error: null,
-          };
-        } catch (err) {
-          stats = {
-            scheduled_operators: null,
-            operators_with_records: null,
-            stats_status: "unavailable",
-            stats_error: err.message,
-          };
-        }
+        const stats = await queryTodayImpactStats(client, dateIso, code);
 
         // Periksa apakah shift sudah dimulai berdasarkan jam plant sekarang
         const tz = resolveTimezone();
@@ -598,6 +665,8 @@ async function previewDateRange(client, payload) {
           operators_with_records: stats.operators_with_records,
           stats_status: stats.stats_status,
           stats_error: stats.stats_error,
+          stats_window_start: stats.window_start || null,
+          stats_window_end: stats.window_end || null,
         };
       }
 
@@ -1191,42 +1260,7 @@ async function previewDeleteOverrideById(client, overrideId) {
   let previewToken = null;
 
   if (isToday) {
-    let stats = null;
-    try {
-      const statsRes = await client.query(
-        `WITH logged AS (
-           SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
-                  SUM(t.duration::float) AS recorded
-           FROM public.timesheet_transaction t
-           WHERE t.longdate_checkin >= ($1::date)::timestamp
-             AND t.longdate_checkin <  ($1::date + 2)::timestamp
-             AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
-             AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
-           GROUP BY 1
-         )
-         SELECT
-           COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2)::int AS scheduled_operators,
-           COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2 AND COALESCE(lg.recorded, 0) > 0)::int AS operators_with_records
-         FROM ews.roster_effective r
-         LEFT JOIN logged lg ON lg.op = r.serialnumber
-         WHERE r.business_date = $1::date`,
-        [plantToday, row.roster_shift_code]
-      );
-      const sRow = statsRes.rows[0];
-      stats = {
-        scheduled_operators: sRow?.scheduled_operators != null ? Number(sRow.scheduled_operators) : 0,
-        operators_with_records: sRow?.operators_with_records != null ? Number(sRow.operators_with_records) : 0,
-        stats_status: "available",
-        stats_error: null,
-      };
-    } catch (err) {
-      stats = {
-        scheduled_operators: null,
-        operators_with_records: null,
-        stats_status: "unavailable",
-        stats_error: err.message,
-      };
-    }
+    const stats = await queryTodayImpactStats(client, plantToday, row.roster_shift_code);
 
     todayInfo = {
       is_today: true,
@@ -1235,6 +1269,8 @@ async function previewDeleteOverrideById(client, overrideId) {
       operators_with_records: stats.operators_with_records,
       stats_status: stats.stats_status,
       stats_error: stats.stats_error,
+      stats_window_start: stats.window_start || null,
+      stats_window_end: stats.window_end || null,
       fallback_to: fallbackDef
         ? {
             start_time: fallbackDef.start_time,
@@ -1283,4 +1319,6 @@ module.exports = {
   applyDateRange,
   previewDeleteOverrideById,
   deleteOverrideById,
+  queryTodayImpactStats,
+  TODAY_IMPACT_STATS_SQL,
 };

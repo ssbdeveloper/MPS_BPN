@@ -404,7 +404,7 @@ describe("ewsShiftOverrideService — Pure Units", () => {
         if (sql.includes("ews_sow_blocking_refs")) {
           return { rows: [{ info: { total: 0, counts: {} } }] };
         }
-        if (sql.includes("COUNT(DISTINCT r.serialnumber)")) {
+        if (sql.includes("operators_with_records") && sql.includes("resolve_shift_definition")) {
           return statsHandler(sql, params);
         }
         return { rows: [] };
@@ -413,7 +413,7 @@ describe("ewsShiftOverrideService — Pure Units", () => {
 
     it("menghasilkan statistik nonzero jika operator terjadwal", async () => {
       const client = makeFakeClient(() => ({
-        rows: [{ scheduled_operators: 15, operators_with_records: 4 }],
+        rows: [{ window_rows: 1, scheduled_operators: 15, operators_with_records: 4 }],
       }));
 
       const preview = await previewDeleteOverrideById(client, 99);
@@ -425,7 +425,7 @@ describe("ewsShiftOverrideService — Pure Units", () => {
 
     it("menghasilkan nol yang sah jika tidak ada operator", async () => {
       const client = makeFakeClient(() => ({
-        rows: [{ scheduled_operators: 0, operators_with_records: 0 }],
+        rows: [{ window_rows: 1, scheduled_operators: 0, operators_with_records: 0 }],
       }));
 
       const preview = await previewDeleteOverrideById(client, 99);
@@ -445,6 +445,16 @@ describe("ewsShiftOverrideService — Pure Units", () => {
       assert.strictEqual(preview.today.scheduled_operators, null);
       assert.strictEqual(preview.today.operators_with_records, null);
       assert.match(preview.today.stats_error, /relation ews\.roster_effective does not exist/);
+    });
+
+    it("window shift yang tidak ter-resolve tunggal dilaporkan unavailable, bukan nol", async () => {
+      const client = makeFakeClient(() => ({
+        rows: [{ window_rows: 0, scheduled_operators: 0, operators_with_records: 0 }],
+      }));
+      const preview = await previewDeleteOverrideById(client, 99);
+      assert.strictEqual(preview.today.stats_status, "unavailable");
+      assert.strictEqual(preview.today.scheduled_operators, null);
+      assert.match(preview.today.stats_error, /tidak ter-resolve/);
     });
   });
 });

@@ -8,16 +8,19 @@ export default function TodayImpactDialog({
   isOpen, onClose, onConfirm, previewData, busy, errorMessage, onRefreshPreview, isStale,
 }) {
   const [reason, setReason] = useState('');
-  const [confirmedToken, setConfirmedToken] = useState(null);
+  // Konfirmasi terikat pada objek preview yang sedang ditampilkan. Setiap refresh preview
+  // menghasilkan objek baru sehingga centang lama otomatis gugur (konfirmasi ulang wajib),
+  // termasuk bila token hasil refresh kebetulan identik.
+  const [confirmedFor, setConfirmedFor] = useState(null);
   const dialogRef = useRef(null);
   const reasonRef = useRef(null);
 
-  const confirmed = Boolean(previewData?.preview_token && confirmedToken === previewData.preview_token);
+  const confirmed = Boolean(previewData?.preview_token && confirmedFor === previewData);
 
   const handleClose = useCallback(() => {
     if (busy) return;
     setReason('');
-    setConfirmedToken(null);
+    setConfirmedFor(null);
     onClose();
   }, [busy, onClose]);
 
@@ -98,7 +101,7 @@ export default function TodayImpactDialog({
               <div className={ERROR_BOX_CLS}>
                 <p className="flex items-center gap-1.5 font-bold"><AlertTriangle size={15} className="text-red-600" /> {errorMessage}</p>
                 {isStale && onRefreshPreview && (
-                  <button type="button" onClick={onRefreshPreview} disabled={busy} className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">
+                  <button type="button" onClick={() => onRefreshPreview()} disabled={busy} className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">
                     <RefreshCw size={13} className={busy ? 'animate-spin' : ''} /> Muat Ulang Preview
                   </button>
                 )}
@@ -144,7 +147,7 @@ export default function TodayImpactDialog({
             </div>
 
             <label className="flex min-h-[44px] cursor-pointer items-start gap-2.5 pt-1 text-slate-700">
-              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmedToken(e.target.checked ? previewData?.preview_token : null)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#0077b6] focus:ring-[#00b4d8]" />
+              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmedFor(e.target.checked ? previewData : null)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#0077b6] focus:ring-[#00b4d8]" />
               <span className="text-xs font-semibold leading-relaxed">
                 {isDeleteMode
                   ? 'Saya memahami penghapusan jadwal hari ini akan mengembalikan jam shift ke default untuk checkout berikutnya.'

@@ -5,6 +5,11 @@ import DateRangeShiftRow from './DateRangeShiftRow';
 import UpcomingOverridesList from './UpcomingOverridesList';
 
 const clock = (val) => String(val || '').slice(0, 5);
+const EMPTY_DELETE_DIALOG = { isOpen: false, preview: null, overrideId: null, error: null, stale: false };
+// Kontrak API: 409 { code: 'PREVIEW_STALE' }. Deteksi HANYA lewat err.code, bukan teks message.
+const isPreviewStale = (err) => err?.code === 'PREVIEW_STALE';
+const STALE_REFRESHED_MSG = 'Kondisi jadwal di server telah berubah. Preview diperbarui, centang konfirmasi ulang.';
+const REFRESH_FAILED_MSG = 'Preview kedaluwarsa dan gagal dimuat ulang. Submit dinonaktifkan sampai preview berhasil dimuat ulang.';
 
 export default function DateRangeShiftForm({
   plantToday, defaultShifts, upcomingOverrides, onApplyOverride, onDeleteOverride, onPreviewOverride, onPreviewDeleteOverride, busy,
@@ -54,7 +59,8 @@ export default function DateRangeShiftForm({
   const [blockingError, setBlockingError] = useState(null);
   const [showTodayDialog, setShowTodayDialog] = useState(false);
   const [todayDialogError, setTodayDialogError] = useState(null);
-  const [deleteDialogData, setDeleteDialogData] = useState({ isOpen: false, preview: null, overrideId: null, error: null });
+  const [todayDialogStale, setTodayDialogStale] = useState(false);
+  const [deleteDialogData, setDeleteDialogData] = useState(EMPTY_DELETE_DIALOG);
   const [successMsg, setSuccessMsg] = useState('');
 
   // Jangan mount form yang dapat digunakan sebelum plant_today dan default_shifts tersedia
@@ -95,22 +101,35 @@ export default function DateRangeShiftForm({
     } catch (err) { setBlockingError(err.message || 'Gagal memproses pratinjau'); }
   };
 
+  const refreshApplyPreview = async () => {
+    try {
+      const refreshed = await onPreviewOverride(buildPayload());
+      if (refreshed?.blocking?.length > 0) {
+        setTodayDialogStale(true);
+        setTodayDialogError('Preview terbaru diblokir oleh dependensi SOW. Perubahan tidak dapat dikirim.');
+        return;
+      }
+      setPreviewResult(refreshed);
+      setTodayDialogStale(false);
+      setTodayDialogError(STALE_REFRESHED_MSG);
+    } catch (refErr) {
+      setTodayDialogStale(true);
+      setTodayDialogError(`${REFRESH_FAILED_MSG} (${refErr?.message || 'error'})`);
+    }
+  };
+
   const handleConfirmToday = async (todayConfirmation) => {
     setTodayDialogError(null);
     try {
       await onApplyOverride({ ...buildPayload(), ...todayConfirmation });
       setShowTodayDialog(false);
+      setTodayDialogStale(false);
       setIsDirty(false);
       setSuccessMsg(`Berhasil menerapkan jadwal khusus termasuk hari ini (${plantToday})`);
     } catch (err) {
-      if (err.message && (err.message.includes('PREVIEW_STALE') || err.message.includes('PREVIEW_TOKEN_MISMATCH'))) {
-        try {
-          const refreshed = await onPreviewOverride(buildPayload());
-          setPreviewResult(refreshed);
-          setTodayDialogError('Kondisi jadwal di server telah berubah. Preview diperbarui, silakan centang konfirmasi ulang.');
-        } catch (refErr) {
-          setTodayDialogError(refErr.message || 'Gagal memperbarui pratinjau');
-        }
+      if (isPreviewStale(err)) {
+        setTodayDialogStale(true);
+        await refreshApplyPreview();
       } else {
         setTodayDialogError(err.message || 'Gagal menyimpan perubahan');
       }
@@ -136,6 +155,7 @@ export default function DateRangeShiftForm({
           preview: { ...preview, mode: 'delete' },
           overrideId: id,
           error: null,
+          stale: false,
         });
       } catch (err) {
         setBlockingError(err.message || 'Gagal memuat pratinjau penghapusan');
@@ -151,25 +171,33 @@ export default function DateRangeShiftForm({
     }
   };
 
+  const refreshDeletePreview = async (id = deleteDialogData.overrideId) => {
+    if (!id) return;
+    try {
+      const refreshed = await onPreviewDeleteOverride(id);
+      if (refreshed?.sow_blocking || refreshed?.overlap_conflict) {
+        setDeleteDialogData((prev) => ({ ...prev, stale: true, error: 'Preview terbaru memblokir penghapusan (dependensi SOW / overlap).' }));
+        return;
+      }
+      setDeleteDialogData((prev) => ({
+        ...prev, preview: { ...refreshed, mode: 'delete' }, stale: false, error: STALE_REFRESHED_MSG,
+      }));
+    } catch (refErr) {
+      setDeleteDialogData((prev) => ({ ...prev, stale: true, error: `${REFRESH_FAILED_MSG} (${refErr?.message || 'error'})` }));
+    }
+  };
+
   const handleConfirmDeleteToday = async (confirmation) => {
     const id = deleteDialogData.overrideId;
     if (!id) return;
     try {
       await onDeleteOverride(id, confirmation);
-      setDeleteDialogData({ isOpen: false, preview: null, overrideId: null, error: null });
+      setDeleteDialogData(EMPTY_DELETE_DIALOG);
       setSuccessMsg('Jadwal khusus hari ini berhasil dihapus');
     } catch (err) {
-      if (err.message && (err.message.includes('PREVIEW_STALE') || err.message.includes('PREVIEW_TOKEN_MISMATCH'))) {
-        try {
-          const refreshed = await onPreviewDeleteOverride(id);
-          setDeleteDialogData((prev) => ({
-            ...prev,
-            preview: { ...refreshed, mode: 'delete' },
-            error: 'Kondisi jadwal di server telah berubah. Preview diperbarui, silakan centang konfirmasi ulang.',
-          }));
-        } catch (refErr) {
-          setDeleteDialogData((prev) => ({ ...prev, error: refErr.message || 'Gagal memperbarui pratinjau' }));
-        }
+      if (isPreviewStale(err)) {
+        setDeleteDialogData((prev) => ({ ...prev, stale: true }));
+        await refreshDeletePreview(id);
       } else {
         setDeleteDialogData((prev) => ({ ...prev, error: err.message || 'Gagal menghapus jadwal khusus' }));
       }
@@ -255,19 +283,23 @@ export default function DateRangeShiftForm({
       <UpcomingOverridesList upcomingOverrides={upcomingOverrides} plantToday={plantToday} onDeleteOverride={handleDeleteTrigger} busy={busy} />
       <TodayImpactDialog
         isOpen={showTodayDialog}
-        onClose={() => { setShowTodayDialog(false); setTodayDialogError(null); }}
+        onClose={() => { setShowTodayDialog(false); setTodayDialogError(null); setTodayDialogStale(false); }}
         onConfirm={handleConfirmToday}
         previewData={previewResult}
         busy={busy}
         errorMessage={todayDialogError}
+        isStale={todayDialogStale}
+        onRefreshPreview={refreshApplyPreview}
       />
       <TodayImpactDialog
         isOpen={deleteDialogData.isOpen}
-        onClose={() => setDeleteDialogData({ isOpen: false, preview: null, overrideId: null, error: null })}
+        onClose={() => setDeleteDialogData(EMPTY_DELETE_DIALOG)}
         onConfirm={handleConfirmDeleteToday}
         previewData={deleteDialogData.preview}
         busy={busy}
         errorMessage={deleteDialogData.error}
+        isStale={deleteDialogData.stale}
+        onRefreshPreview={() => refreshDeletePreview()}
       />
     </div>
   );
