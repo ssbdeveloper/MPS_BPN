@@ -744,6 +744,207 @@ class TestEwsShiftOverrideDB(unittest.TestCase):
         self.assertIn("COMMITTED", statuses)
         self.assertTrue(any("P0409" in s for s in statuses if s != "COMMITTED"))
 
+    def test_16_concurrent_shift_rules_update_vs_sow_writer_controlled_order(self):
+        """
+        UPDATE writer shift-rules melawan SOW writer dengan urutan transaksi terkontrol.
+        Memverifikasi bahwa locking simetris mendeteksi konflik tanpa kebocoran transaksi,
+        dengan timeout dan blok finally untuk jaminan penutupan koneksi.
+        """
+        dt = "2026-10-25"
+        # Buat override awal
+        with get_conn() as init_conn:
+            with init_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO public.shift_definition
+                      (shift_code, shift_name, roster_shift_code, effective_date, is_default,
+                       start_time, end_time, crosses_midnight, standard_hours, is_active)
+                    VALUES
+                      ('SHIFT-1', 'Day 25', 'DAY', %s, false, '07:25:00', '16:30:00', false, 8, true)
+                    RETURNING id;
+                    """,
+                    (dt,),
+                )
+                ov_id = cur.fetchone()[0]
+            init_conn.commit()
+
+        step_t1_locked = threading.Event()
+        step_t2_attempted = threading.Event()
+        results = {"t1_update": None, "t2_sow": None, "deadlock": False}
+
+        def worker_t1_update():
+            c = None
+            try:
+                c = get_conn()
+                c_cur = c.cursor()
+                # T1: UPDATE shift definition (mengubah jam)
+                c_cur.execute(
+                    "UPDATE public.shift_definition SET start_time = '08:00:00', end_time = '17:00:00' WHERE id = %s;",
+                    (ov_id,),
+                )
+                step_t1_locked.set()
+                # Tunggu T2 mencoba insert
+                step_t2_attempted.wait(timeout=3)
+                time.sleep(0.1)
+                c.commit()
+                results["t1_update"] = "COMMITTED"
+                c_cur.close()
+            except psycopg2.DatabaseError as e:
+                if e.pgcode == "40P01":
+                    results["deadlock"] = True
+                results["t1_update"] = f"REJECTED_{e.pgcode}"
+                if c:
+                    c.rollback()
+            except Exception as e:
+                results["t1_update"] = str(e)
+            finally:
+                if c:
+                    c.close()
+
+        def worker_t2_sow():
+            c = None
+            try:
+                # Tunggu T1 memegang lock
+                step_t1_locked.wait(timeout=3)
+                c = get_conn()
+                c_cur = c.cursor()
+                step_t2_attempted.set()
+                # T2 mencoba insert SOW dengan shift_id lama
+                c_cur.execute(
+                    """
+                    INSERT INTO public.sow_schedule
+                      (plan_id, line_id, machine_id, shift_id, scheduled_date, status, shift_code, effective_shift_name)
+                    VALUES
+                      (101, 1, 1, %s, %s, 'CONFIRMED', 'SHIFT-1', 'Day 25');
+                    """,
+                    (ov_id, dt),
+                )
+                c.commit()
+                results["t2_sow"] = "COMMITTED"
+                c_cur.close()
+            except psycopg2.DatabaseError as e:
+                if e.pgcode == "40P01":
+                    results["deadlock"] = True
+                results["t2_sow"] = f"REJECTED_{e.pgcode}"
+                if c:
+                    c.rollback()
+            except Exception as e:
+                results["t2_sow"] = str(e)
+            finally:
+                if c:
+                    c.close()
+
+        t1 = threading.Thread(target=worker_t1_update)
+        t2 = threading.Thread(target=worker_t2_sow)
+
+        try:
+            t1.start()
+            t2.start()
+        finally:
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+
+        self.assertFalse(results["deadlock"], "Terdeteksi deadlock pada skenario update vs sow!")
+        self.assertIsNotNone(results["t1_update"], "Thread T1 update tidak selesai!")
+        self.assertIsNotNone(results["t2_sow"], "Thread T2 sow tidak selesai!")
+
+    def test_17_concurrent_shift_rules_delete_vs_sow_writer_controlled_order(self):
+        """
+        DELETE writer shift-rules melawan SOW writer dengan urutan transaksi terkontrol.
+        Memverifikasi bahwa penghapusan override terdeteksi dan tidak memicu deadlock.
+        """
+        dt = "2026-10-26"
+        with get_conn() as init_conn:
+            with init_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO public.shift_definition
+                      (shift_code, shift_name, roster_shift_code, effective_date, is_default,
+                       start_time, end_time, crosses_midnight, standard_hours, is_active)
+                    VALUES
+                      ('SHIFT-1', 'Day 26', 'DAY', %s, false, '07:25:00', '16:30:00', false, 8, true)
+                    RETURNING id;
+                    """,
+                    (dt,),
+                )
+                ov_id = cur.fetchone()[0]
+            init_conn.commit()
+
+        step_t1_deleted = threading.Event()
+        step_t2_attempted = threading.Event()
+        results = {"t1_delete": None, "t2_sow": None, "deadlock": False}
+
+        def worker_t1_delete():
+            c = None
+            try:
+                c = get_conn()
+                c_cur = c.cursor()
+                # T1: soft-delete shift definition override
+                c_cur.execute("UPDATE public.shift_definition SET is_active = false WHERE id = %s;", (ov_id,))
+                step_t1_deleted.set()
+                step_t2_attempted.wait(timeout=3)
+                time.sleep(0.1)
+                c.commit()
+                results["t1_delete"] = "COMMITTED"
+                c_cur.close()
+            except psycopg2.DatabaseError as e:
+                if e.pgcode == "40P01":
+                    results["deadlock"] = True
+                results["t1_delete"] = f"REJECTED_{e.pgcode}"
+                if c:
+                    c.rollback()
+            except Exception as e:
+                results["t1_delete"] = str(e)
+            finally:
+                if c:
+                    c.close()
+
+        def worker_t2_sow():
+            c = None
+            try:
+                step_t1_deleted.wait(timeout=3)
+                c = get_conn()
+                c_cur = c.cursor()
+                step_t2_attempted.set()
+                # T2 mencoba insert SOW mengacu pada shift yang sedang di-delete
+                c_cur.execute(
+                    """
+                    INSERT INTO public.sow_schedule
+                      (plan_id, line_id, machine_id, shift_id, scheduled_date, status, shift_code, effective_shift_name)
+                    VALUES
+                      (102, 1, 1, %s, %s, 'CONFIRMED', 'SHIFT-1', 'Day 26');
+                    """,
+                    (ov_id, dt),
+                )
+                c.commit()
+                results["t2_sow"] = "COMMITTED"
+                c_cur.close()
+            except psycopg2.DatabaseError as e:
+                if e.pgcode == "40P01":
+                    results["deadlock"] = True
+                results["t2_sow"] = f"REJECTED_{e.pgcode}"
+                if c:
+                    c.rollback()
+            except Exception as e:
+                results["t2_sow"] = str(e)
+            finally:
+                if c:
+                    c.close()
+
+        t1 = threading.Thread(target=worker_t1_delete)
+        t2 = threading.Thread(target=worker_t2_sow)
+
+        try:
+            t1.start()
+            t2.start()
+        finally:
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+
+        self.assertFalse(results["deadlock"], "Terdeteksi deadlock pada skenario delete vs sow!")
+        self.assertIsNotNone(results["t1_delete"], "Thread T1 delete tidak selesai!")
+        self.assertIsNotNone(results["t2_sow"], "Thread T2 sow tidak selesai!")
+
 
 if __name__ == "__main__":
     unittest.main()

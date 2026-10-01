@@ -546,13 +546,42 @@ async function previewDateRange(client, payload) {
       // Info khusus hari ini jika terdampak
       let todayInfo = null;
       if (dateIso === plantToday) {
-        const opCountRes = await client.query(
-          `SELECT count(*) AS n
-           FROM ews.roster_effective
-           WHERE business_date = $1::date AND eff_shift = $2 AND status = 'SCHEDULED'`,
-          [dateIso, code]
-        );
-        const opCount = parseInt(opCountRes.rows[0]?.n || "0", 10);
+        let stats = null;
+        try {
+          const statsRes = await client.query(
+            `WITH logged AS (
+               SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
+                      SUM(t.duration::float) AS recorded
+               FROM public.timesheet_transaction t
+               WHERE t.longdate_checkin >= ($1::date)::timestamp
+                 AND t.longdate_checkin <  ($1::date + 2)::timestamp
+                 AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
+                 AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+               GROUP BY 1
+             )
+             SELECT
+               COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2)::int AS scheduled_operators,
+               COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2 AND COALESCE(lg.recorded, 0) > 0)::int AS operators_with_records
+             FROM ews.roster_effective r
+             LEFT JOIN logged lg ON lg.op = r.serialnumber
+             WHERE r.business_date = $1::date`,
+            [dateIso, code]
+          );
+          const sRow = statsRes.rows[0];
+          stats = {
+            scheduled_operators: sRow?.scheduled_operators != null ? Number(sRow.scheduled_operators) : 0,
+            operators_with_records: sRow?.operators_with_records != null ? Number(sRow.operators_with_records) : 0,
+            stats_status: "available",
+            stats_error: null,
+          };
+        } catch (err) {
+          stats = {
+            scheduled_operators: null,
+            operators_with_records: null,
+            stats_status: "unavailable",
+            stats_error: err.message,
+          };
+        }
 
         // Periksa apakah shift sudah dimulai berdasarkan jam plant sekarang
         const tz = resolveTimezone();
@@ -565,7 +594,10 @@ async function previewDateRange(client, payload) {
 
         todayInfo = {
           started,
-          scheduled_operators: opCount,
+          scheduled_operators: stats.scheduled_operators,
+          operators_with_records: stats.operators_with_records,
+          stats_status: stats.stats_status,
+          stats_error: stats.stats_error,
         };
       }
 
@@ -1159,22 +1191,50 @@ async function previewDeleteOverrideById(client, overrideId) {
   let previewToken = null;
 
   if (isToday) {
-    const todayStats = await client.query(
-      `SELECT
-         COUNT(*) FILTER (WHERE r.eff_shift = $1)::int AS scheduled_operators,
-         COUNT(*) FILTER (WHERE r.eff_shift = $1 AND lg.recorded > 0)::int AS operators_with_records
-       FROM ews.roster_effective r
-       LEFT JOIN (SELECT op, SUM(recorded) AS recorded FROM ews.operator_logged_hours GROUP BY op) lg
-         ON lg.op = r.serialnumber
-       WHERE r.business_date = $2::date`,
-      [row.roster_shift_code, plantToday]
-    ).catch(() => ({ rows: [{ scheduled_operators: 0, operators_with_records: 0 }] }));
+    let stats = null;
+    try {
+      const statsRes = await client.query(
+        `WITH logged AS (
+           SELECT NULLIF(BTRIM(t.serialnumber), '') AS op,
+                  SUM(t.duration::float) AS recorded
+           FROM public.timesheet_transaction t
+           WHERE t.longdate_checkin >= ($1::date)::timestamp
+             AND t.longdate_checkin <  ($1::date + 2)::timestamp
+             AND COALESCE(t.state_flag, 0) <> 5 AND COALESCE(t.duration, 0) > 0
+             AND NULLIF(BTRIM(t.serialnumber), '') IS NOT NULL
+           GROUP BY 1
+         )
+         SELECT
+           COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2)::int AS scheduled_operators,
+           COUNT(DISTINCT r.serialnumber) FILTER (WHERE r.eff_shift = $2 AND COALESCE(lg.recorded, 0) > 0)::int AS operators_with_records
+         FROM ews.roster_effective r
+         LEFT JOIN logged lg ON lg.op = r.serialnumber
+         WHERE r.business_date = $1::date`,
+        [plantToday, row.roster_shift_code]
+      );
+      const sRow = statsRes.rows[0];
+      stats = {
+        scheduled_operators: sRow?.scheduled_operators != null ? Number(sRow.scheduled_operators) : 0,
+        operators_with_records: sRow?.operators_with_records != null ? Number(sRow.operators_with_records) : 0,
+        stats_status: "available",
+        stats_error: null,
+      };
+    } catch (err) {
+      stats = {
+        scheduled_operators: null,
+        operators_with_records: null,
+        stats_status: "unavailable",
+        stats_error: err.message,
+      };
+    }
 
     todayInfo = {
       is_today: true,
       business_date: plantToday,
-      scheduled_operators: todayStats.rows[0]?.scheduled_operators || 0,
-      operators_with_records: todayStats.rows[0]?.operators_with_records || 0,
+      scheduled_operators: stats.scheduled_operators,
+      operators_with_records: stats.operators_with_records,
+      stats_status: stats.stats_status,
+      stats_error: stats.stats_error,
       fallback_to: fallbackDef
         ? {
             start_time: fallbackDef.start_time,

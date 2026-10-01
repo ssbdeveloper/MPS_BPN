@@ -343,4 +343,108 @@ describe("ewsShiftOverrideService — Pure Units", () => {
       assert.notStrictEqual(actor.role, "superadmin_fake");
     });
   });
+
+  describe("Statistik Preview Delete (Butir 2)", () => {
+    const { previewDeleteOverrideById } = require("./ewsShiftOverrideService");
+
+    const baseRow = {
+      id: 99,
+      shift_code: "SHIFT-1",
+      roster_shift_code: "DAY",
+      effective_date: "2026-10-01",
+      start_time: "08:00:00",
+      end_time: "14:00:00",
+      crosses_midnight: false,
+      standard_hours: 6,
+      is_active: true,
+      is_default: false,
+    };
+
+    const makeFakeClient = (statsHandler) => ({
+      query: async (sql, params) => {
+        if (sql.includes("plant_today")) {
+          return { rows: [{ plant_today: "2026-10-01" }] };
+        }
+        if (sql.includes("FROM public.shift_definition WHERE id = $1")) {
+          return { rows: [baseRow] };
+        }
+        if (sql.includes("is_default = true")) {
+          return {
+            rows: [
+              {
+                id: 1,
+                shift_code: "SHIFT-1",
+                roster_shift_code: "DAY",
+                effective_date: null,
+                start_time: "07:25:00",
+                end_time: "16:30:00",
+                crosses_midnight: false,
+                standard_hours: 8,
+                is_active: true,
+                is_default: true,
+              },
+              {
+                id: 2,
+                shift_code: "SHIFT-2",
+                roster_shift_code: "NIGHT",
+                effective_date: null,
+                start_time: "16:30:00",
+                end_time: "00:30:00",
+                crosses_midnight: true,
+                standard_hours: 7,
+                is_active: true,
+                is_default: true,
+              },
+            ],
+          };
+        }
+        if (sql.includes("FROM public.shift_definition") && sql.includes("effective_date")) {
+          return { rows: [baseRow] };
+        }
+        if (sql.includes("ews_sow_blocking_refs")) {
+          return { rows: [{ info: { total: 0, counts: {} } }] };
+        }
+        if (sql.includes("COUNT(DISTINCT r.serialnumber)")) {
+          return statsHandler(sql, params);
+        }
+        return { rows: [] };
+      },
+    });
+
+    it("menghasilkan statistik nonzero jika operator terjadwal", async () => {
+      const client = makeFakeClient(() => ({
+        rows: [{ scheduled_operators: 15, operators_with_records: 4 }],
+      }));
+
+      const preview = await previewDeleteOverrideById(client, 99);
+      assert.strictEqual(preview.today.stats_status, "available");
+      assert.strictEqual(preview.today.scheduled_operators, 15);
+      assert.strictEqual(preview.today.operators_with_records, 4);
+      assert.strictEqual(preview.today.stats_error, null);
+    });
+
+    it("menghasilkan nol yang sah jika tidak ada operator", async () => {
+      const client = makeFakeClient(() => ({
+        rows: [{ scheduled_operators: 0, operators_with_records: 0 }],
+      }));
+
+      const preview = await previewDeleteOverrideById(client, 99);
+      assert.strictEqual(preview.today.stats_status, "available");
+      assert.strictEqual(preview.today.scheduled_operators, 0);
+      assert.strictEqual(preview.today.operators_with_records, 0);
+    });
+
+    it("menghasilkan status unavailable jika query database gagal dan tidak mengubah error menjadi angka nol", async () => {
+      const client = makeFakeClient(() => {
+        throw new Error("relation ews.roster_effective does not exist");
+      });
+
+      const preview = await previewDeleteOverrideById(client, 99);
+      // PENTING: Jangan ubah kegagalan query menjadi angka nol!
+      assert.strictEqual(preview.today.stats_status, "unavailable");
+      assert.strictEqual(preview.today.scheduled_operators, null);
+      assert.strictEqual(preview.today.operators_with_records, null);
+      assert.match(preview.today.stats_error, /relation ews\.roster_effective does not exist/);
+    });
+  });
 });

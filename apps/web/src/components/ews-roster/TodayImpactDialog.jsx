@@ -1,17 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Clock, Users, X } from 'lucide-react';
+import { AlertTriangle, Clock, RefreshCw, Users, X } from 'lucide-react';
 
-export default function TodayImpactDialog({ isOpen, onClose, onConfirm, previewData, busy }) {
+const LABEL_CLS = 'text-xs font-bold uppercase text-slate-500';
+const ERROR_BOX_CLS = 'rounded-xl border border-red-300 bg-red-50 p-3 text-red-900';
+
+export default function TodayImpactDialog({
+  isOpen, onClose, onConfirm, previewData, busy, errorMessage, onRefreshPreview, isStale,
+}) {
   const [reason, setReason] = useState('');
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmedToken, setConfirmedToken] = useState(null);
   const dialogRef = useRef(null);
   const reasonRef = useRef(null);
 
+  const confirmed = Boolean(previewData?.preview_token && confirmedToken === previewData.preview_token);
+
   const handleClose = useCallback(() => {
+    if (busy) return;
     setReason('');
-    setConfirmed(false);
+    setConfirmedToken(null);
     onClose();
-  }, [onClose]);
+  }, [busy, onClose]);
 
   useEffect(() => {
     if (isOpen) setTimeout(() => reasonRef.current?.focus(), 50);
@@ -36,19 +44,36 @@ export default function TodayImpactDialog({ isOpen, onClose, onConfirm, previewD
     ? null
     : (previewData.items || []).find((it) => it.date === previewData.plant_today);
   const isStarted = isDeleteMode ? false : todayItem?.today?.started;
-  const operatorCount = isDeleteMode
-    ? (previewData.today?.scheduled_operators ?? 0)
-    : (todayItem?.today?.scheduled_operators ?? 0);
+
+  const todayStats = isDeleteMode ? previewData.today : todayItem?.today;
+  const statsStatus = todayStats?.stats_status;
+  const operatorCount = todayStats?.scheduled_operators;
+  const operatorsWithRecords = todayStats?.operators_with_records || 0;
+
   const isReasonValid = reason.trim().length >= 10 && reason.trim().length <= 200;
-  const canSubmit = confirmed && isReasonValid && !busy;
+  const canSubmit = confirmed && isReasonValid && !busy && !isStale;
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!canSubmit) return;
     const reasonText = reason.trim();
-    setReason('');
-    setConfirmed(false);
+    // PERHATIAN: JANGAN hapus reason di sini! Biarkan tetap tersimpan
+    // jika request gagal (misal 409 PREVIEW_STALE / network error).
     onConfirm({ reason: reasonText, confirm_today_impact: true, preview_token: previewData.preview_token });
+  };
+
+  const renderOperatorDisplay = () => {
+    if (statsStatus === 'unavailable' || operatorCount === null || operatorCount === undefined) {
+      return <span className="font-extrabold text-red-600">Data Tidak Tersedia (Error)</span>;
+    }
+    if (operatorCount === 0) {
+      return <span className="text-slate-800">0 Orang</span>;
+    }
+    return (
+      <span className="text-slate-800">
+        {operatorCount} Orang {operatorsWithRecords > 0 ? `(${operatorsWithRecords} aktif)` : ''}
+      </span>
+    );
   };
 
   return (
@@ -69,16 +94,27 @@ export default function TodayImpactDialog({ isOpen, onClose, onConfirm, previewD
 
         <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-y-auto p-5 text-xs text-slate-700">
           <div className="space-y-3">
+            {errorMessage && (
+              <div className={ERROR_BOX_CLS}>
+                <p className="flex items-center gap-1.5 font-bold"><AlertTriangle size={15} className="text-red-600" /> {errorMessage}</p>
+                {isStale && onRefreshPreview && (
+                  <button type="button" onClick={onRefreshPreview} disabled={busy} className="mt-2 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">
+                    <RefreshCw size={13} className={busy ? 'animate-spin' : ''} /> Muat Ulang Preview
+                  </button>
+                )}
+              </div>
+            )}
+
             {isStarted && (
-              <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-red-900">
+              <div className={ERROR_BOX_CLS}>
                 <p className="flex items-center gap-1.5 font-extrabold"><AlertTriangle size={15} className="text-red-600" /> Perhatian: Shift hari ini sudah atau sedang berjalan!</p>
                 <p className="mt-1 font-semibold text-red-800 text-xs">Perubahan window jam dapat mempengaruhi status kehadiran seketika saat halaman dimuat ulang.</p>
               </div>
             )}
 
             <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <div className="flex items-center gap-2"><Users size={16} className="text-slate-500" /><div><span className="text-xs font-bold uppercase text-slate-500">Operator</span><p className="text-sm font-extrabold text-slate-800">{operatorCount} Orang</p></div></div>
-              <div className="flex items-center gap-2"><Clock size={16} className="text-slate-500" /><div><span className="text-xs font-bold uppercase text-slate-500">Jam Shift</span><p className="text-xs font-bold text-slate-800">
+              <div className="flex items-center gap-2"><Users size={16} className="text-slate-500" /><div><span className={LABEL_CLS}>Operator</span><p className="text-sm font-extrabold">{renderOperatorDisplay()}</p></div></div>
+              <div className="flex items-center gap-2"><Clock size={16} className="text-slate-500" /><div><span className={LABEL_CLS}>Jam Shift</span><p className="text-xs font-bold text-slate-800">
                 {isDeleteMode ? (
                   <span>Kembali ke Default ({previewData.today?.fallback_to ? `${previewData.today.fallback_to.start_time.slice(0,5)}-${previewData.today.fallback_to.end_time.slice(0,5)}` : 'Default'})</span>
                 ) : (
@@ -108,7 +144,7 @@ export default function TodayImpactDialog({ isOpen, onClose, onConfirm, previewD
             </div>
 
             <label className="flex min-h-[44px] cursor-pointer items-start gap-2.5 pt-1 text-slate-700">
-              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#0077b6] focus:ring-[#00b4d8]" />
+              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmedToken(e.target.checked ? previewData?.preview_token : null)} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#0077b6] focus:ring-[#00b4d8]" />
               <span className="text-xs font-semibold leading-relaxed">
                 {isDeleteMode
                   ? 'Saya memahami penghapusan jadwal hari ini akan mengembalikan jam shift ke default untuk checkout berikutnya.'
