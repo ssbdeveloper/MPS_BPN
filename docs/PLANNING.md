@@ -1,6 +1,6 @@
 ---
 tags: [board, domain/vault]
-updated: 2026-07-28
+updated: 2026-10-01
 ---
 
 # 📌 Planning Board
@@ -11,13 +11,54 @@ updated: 2026-07-28
 
 ## 🏗️ Sedang dikerjakan (active)
 
+- [[planning/ews-roster-date-range-shift-hours]] — Jam Shift Khusus Rentang Tanggal EWS (1C, 2A bersyarat, 3B, 4A bersyarat). **KODE SELESAI LOKAL & TERVERIFIKASI PENUH** (branch 2b):
+  - Service murni: validasi tanggal ISO, batas 1..62 hari, interval waktu nyata overlap 0 menit (lintas D-1/D+1), token kalkulasi kanonikal.
+  - Guard SOW 1C: `sow_machine_capacity` (aktif), `sow_schedule` & `sow_schedule_batch` (selain CANCELLED), `sow_overtime_request` (PENDING/APPROVED). Anti-race: trigger DB `sow_assert_resolved_shift()` dengan `FOR KEY SHARE` + EWS deterministik `FOR UPDATE` + advisory lock.
+  - Perubahan hari ini: preview token, alasan wajib 10..200 karakter, checkbox konfirmasi dampak, audit trail `ews.shift_definition_audit` (before/after jsonb, aktor, request_id).
+  - Soft-delete override + reaktivasi baris & ID yang sama.
+  - UI Web: form rentang tanggal, dekomposisi komponen (deslop C13 < 200 baris), dialog dampak hari ini (accessible Escape/trap, touch target >= 44px, no-slop), daftar upcoming overrides.
+  - Verifikasi: gate full-stack passed, 20/20 service tests passed, 12/12 contract tests passed, 7/7 test suite integrasi database PostgreSQL nyata (termasuk concurrency race 2 koneksi), Vitest web 254/254 passed, build web sukses, verifikasi visual browser di 768×1024 dan 960×600 bebas overflow horizontal.
+  - **Status rollout produksi: BLOCKED** menunggu penyelesaian prasyarat rollout produksi (verifikasi skema live plant Q1-Q4, persetujuan trigger SOW P1/P2, otentikasi aktor B4).
+
 - [[REFACTOR_PLAN]] — refactor besar DB/API/frontend. Phase 1 ✅ · Phase 2 berikutnya: A-R1 auth, A-R3 satu jalur SAP, D-R1 migration ledger
 - [[SOW_SCHEDULING_MFG_UI_REDESIGN_PLAN]] — perombakan UI/UX scheduling manufaktur (desktop-only). **KODE SELESAI lokal (branch 2b, uncommitted)**: route bersarang `/sow-scheduling/{projects,map,area}` + `PageHeader` tunggal (fix back-button), design-system sweep, bay board fit-to-width, drag desktop + jalur klik. Build/lint hijau. **Pending: test owner → commit → push**. Follow-up: ekstrak Modal accessible bersama (ui/Modal.jsx = modal kamera, tak reusable)
 - [[deployment/PLANT_CONFIG_VARIANT_DESIGN]] · [[deployment/PLANT_CONFIG_VARIANT_PLAN]] — sumber kebenaran per plant (identitas+varian+timezone) di tabel `plant_config`; frontend fetch varian dari `/config` (revisi F-R4). **Kode SELESAI 2026-07-27** (12 task, test/build/lint hijau, uncommitted). **Pending: rollout** (migrate+seed+deploy per plant) + commit. Jobs & aturan SAP (BLOCKED PRD D2/D3) = follow-up
 
 ## 👀 Menunggu review / keputusan
 
+- **Audit live Cikupa/AWS 30 September:** [[operations/cikupa-timesheet-manual-20260930]] · [[log/2026-09-30-cikupa-sap-readiness]]. Migration ETL Cikupa terpasang; 5.680 STAGED cocok dengan central (597 POSTED, 5.083 POSTING). Dry-run checkout 28–29 September: 2.218 input → 1.513 ready / 1.088,5733 jam. **Posting massal NO-GO:** failure path poster mencoba mengubah source frozen. Patch manual + regression check + SQL requeue berscope tersedia, belum diterapkan production. Tidak perlu rebuild total; 5.083 ID harus direkonsiliasi SAP sebelum replay.
+
 - [[planning/2026-09-28-scheduling-map-sap-reliability]]: pencegahan A/B/C committed lokal (guard reload, validasi identitas sync backend, preflight VBA; belum deploy). Data MANHAUL 11 unit **belum pulih**: [[planning/2026-09-28-manhaul-recovery-manifest]] menunggu MPP sumber dan keputusan owner. [[log/2026-09-28-scheduling-map-sap-pencegahan|Log]]; [[concepts/msproject-sync-identitas-task|konsep identitas]].
+
+- 🟡 [[planning/2026-09-23-reservasi-b29e-hilang-duplikat]]: **F0 SELESAI & terbukti sampai UI nyata; F1/F2/F3 (pencegahan) SUDAH DIIMPLEMENTASIKAN & DIUKUR.** **F1** — cursor keyset dengan pemecah seri `schedule_id` (kunci urut lama berisi seri: 6 baris di ordinal 1995–2000, 4 baris `order_no` NULL): satu halaman lama 2.000 dari **2.764** → hilang **764 (27,6%)**, jalur cursor **2 halaman / 2.764 baris / hilang 0 / inversi 0**; order `1000121250` 44 baris 9 grup semuanya terjangkau (dulu 0); **di UI nyata B29E kini "8 reservations"** (dulu *free*) dan **UI === DB untuk seluruh 8 bay**; cursor rusak → 400, `after`+`offset` → 400, baris batas berubah → 409 `CURSOR_STALE`; sync tanggal kini hanya di halaman pertama. **F2** — aturan unik `order_no`+`operation_no` dijalankan **di dalam transaksi** dengan `pg_advisory_xact_lock` (tumpang tindih rentang, sesuai konfirmasi owner); create duplikat nyata → **409 `DUPLICATE_TASK_CONFLICT`** (8 konflik, op 210) tanpa menulis apa pun (baris 29→29), override tanpa alasan → 400, endpoint `GET /bay-schedules/conflicts` terbukti (29 konflik untuk order insiden, 0 untuk order lain); **15 kunci di produksi sudah melanggar** → indeks unik keras tidak bisa dipasang, jadi bentuknya peringatan + konfirmasi beralasan. **F3** — idempotency retry via advisory lock + audit log, **tanpa DDL**: 3 panggilan identik → tepat 1 reservasi. 13 tes baru lulus; suite 124/131 (7 gagal **pre-existing**, dibuktikan `git stash`); web `eslint` + `build` bersih. **Sisa:** UI F3 (daftar per order, blokir baris check-in terbuka) dan **F4 cleanup yang DITUNDA** atas keputusan owner sampai manifes per baris disetujui. Konsep: [[concepts/reservasi-bay-identitas-dan-kelengkapan]]. Log: [[log/2026-09-23-verifikasi-f0-reservasi-b29e]] (mengoreksi [[log/2026-09-23-investigasi-reservasi-b29e]]).
+
+- [[planning/2026-09-23-integrasi-anti-slop]] — plugin Codex anti-slop upstream versi 3.2.13 aktif di scope pengguna. Mulai sesi baru agar plugin dimuat; panggil skill inti dan modul sesuai tugas. Gate MPS tetap otoritatif. Perubahan ini tidak menyentuh `AGENTS.md` karena file itu melarang konten tambahan.
+
+- **[[planning/2026-09-23-timesheet-legacy-cutoff-15-22]] — SELESAI staging legacy CKP:**
+  9.728 row `PENDING` / 7.490,05 jam mentah untuk ISDD 15–22 September sudah masuk central;
+  auto-post tetap mati dan posting SAP belum dijalankan. Mulai tanggal 23 kembali ke pipeline
+  berlapis. Bukti: [[log/2026-09-23-timesheet-legacy-staging-15-22]].
+
+- **[[planning/2026-09-23-timesheet-etl-berlapis]] — arah baru pipeline timesheet:**
+  `timesheet_transaction` tetap raw; capture immutable → cleaned segment → allocated segment →
+  SAP-ready → central staging. Pipeline berada di DB plant, manual explicit window, tanpa cursor,
+  tanpa 2PC, dan tanpa auto-post. Mesin allocation/normalization serta local lab yang sudah hijau dipakai
+  ulang. Implementasi direct source-to-central lama diparkir.
+   **Checkpoint F0–F4 historis:** [[planning/2026-09-23-timesheet-etl-f0-f1-checkpoint]] — F0 (schema), F1 (capture + manifest + lineage),
+   F2 (cleansing + date clipping + physical break partition + canonical confirmation classification + immutable cap metadata + hardening persistence CLEAN-V2),
+   F3 (sweep-line allocation + companion integration + deterministic tie-breaking + metric separation ALLOC-V1), dan
+   F4 (SAP-ready stage + master order & usernfc role enrichment + eligibility gates + cap per source record + JSONB payload + lineage + READY-V1) selesai &
+   terverifikasi saat checkpoint lama. **Status terbaru:** [[planning/2026-09-25-timesheet-etl-duplicate-activity-handoff]] — revisi planning 27 September: T0–T5 memakai ulang implementasi, verifikasi/perbaikan lab, review konflik, guide deploy, checkpoint tiap task, dan prompt siap salin. T0–T5 dieksekusi 27 September: lab kedua plant lulus, guide production ditulis, keputusan **NO-GO** kedua plant — [[log/2026-09-27-timesheet-etl-lab-execution]]. Production cutover belum disetujui.
+
+- **[[planning/2026-09-22-sisa-overlap-segmen-lebih-1-menit]] — alokasi timesheet multitasking
+  berbasis interval:** jam operator = union interval; jam order = alokasi per irisan aktif,
+  bukan AVG/MAX durasi. Empat kolom waktu tetap ada tetapi diturunkan dari `longdate_*`;
+  koreksi admin teraudit dan record frozen sejak pernah staging. Cutoff per plant, auto-post
+  tetap mati. **Arsitektur implementasi terbaru:**
+  [[planning/2026-09-23-timesheet-etl-berlapis]]. Bukti local lab sebelumnya:
+  [[planning/2026-09-22-timesheet-local-lab-current-handoff]]. Handoff sebelumnya:
+  [[planning/2026-09-22-timesheet-interval-allocation-continuation]]. Instruksi teknis awal:
+  [[planning/2026-09-22-timesheet-interval-allocation-implementation]].
 
 - 🎨 **[[design/sow-area-tablet/PLAN]] — arah visual tablet landscape: TAHAP 1 & 2 SUDAH MASUK APLIKASI 2026-09-21**
   ([[log/2026-09-21-sow-area-tablet-visual-direction]], [[log/2026-09-21-cors-localhost-3001-dan-area-tahap1]]):

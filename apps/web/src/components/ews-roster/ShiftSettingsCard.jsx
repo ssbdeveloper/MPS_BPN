@@ -88,12 +88,23 @@ function ShiftRow({ shift, draft, onChange, onSave, busy }) {
   );
 }
 
-export default function ShiftSettingsCard({ shifts, overrides, impact, onSave, onPreview, onResync, busy }) {
+export default function ShiftSettingsCard({
+  shifts,
+  overrides,
+  todayShiftSource,
+  impact,
+  onSave,
+  onPreview,
+  onResync,
+  busy,
+}) {
   const [drafts, setDrafts] = useState({});
   const change = (code, patch) => setDrafts((d) => ({ ...d, [code]: { ...(d[code] || {}), ...patch } }));
 
   const differing = Number(impact?.differing_rows ?? 0);
   const resyncable = Number(impact?.resyncable_rows ?? 0);
+
+  const hasTodayOverride = todayShiftSource && Object.values(todayShiftSource).some((v) => v === 'override');
 
   if (!shifts?.length) {
     return (
@@ -106,6 +117,18 @@ export default function ShiftSettingsCard({ shifts, overrides, impact, onSave, o
 
   return (
     <div className="flex flex-col gap-3">
+      {hasTodayOverride && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-3 text-xs text-blue-900">
+          <p className="font-extrabold flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+            Shift Hari Ini Menggunakan Jam Khusus (Override)
+          </p>
+          <p className="mt-1 font-semibold text-blue-800 text-[11px]">
+            Form di bawah mengatur <strong>Jadwal Master Default</strong> (jadwal reguler jika tidak ada override). Perubahan di sini tidak akan menimpa jadwal khusus yang aktif untuk hari ini.
+          </p>
+        </div>
+      )}
+
       {shifts.map((shift) => (
         <ShiftRow
           key={shift.shift_code}

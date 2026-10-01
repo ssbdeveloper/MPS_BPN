@@ -242,6 +242,13 @@ const MANIFEST = [
   // sinkronkan snapshot baris future. Fallback A-03: route baru wajib ikut manifest.
   { m: 'PUT',    p: '/ews/roster/shift',                      f: 'roster_operator', a: W },
   { m: 'PUT',    p: '/ews/roster/shift/resync-future',         f: 'roster_operator', a: W },
+  // Date-range shift hours overrides (EWS feature 2026-10-01)
+  { m: 'POST',   p: '/ews/roster/shift/date-range/preview',   f: 'roster_operator', a: W },
+  { m: 'PUT',    p: '/ews/roster/shift/date-range',           f: 'roster_operator', a: W },
+  { m: 'POST',   p: '/ews/roster/shift/override/:id/preview', f: 'roster_operator', a: W },
+  { m: 'DELETE', p: '/ews/roster/shift/override/:id',         f: 'roster_operator', a: W },
+  { m: 'POST',   p: '/ews/roster/shift/date-range/delete-preview', f: 'roster_operator', a: W },
+  { m: 'DELETE', p: '/ews/roster/shift/date-range',           f: 'roster_operator', a: W },
   { m: 'POST',   p: '/ews/roster/generate',                   f: 'roster_operator', a: W },
   { m: 'POST',   p: '/ews/roster/generate/preview',           f: 'roster_operator', a: W },
   { m: 'POST',   p: '/ews/roster/generate/apply',             f: 'roster_operator', a: W },

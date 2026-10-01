@@ -1,6 +1,12 @@
 const db = global.pool || require("../db");
 const { generateRoster, previewRoster, applyRoster } = require("../services/rosterGenerator");
 const { resolveTimezone } = require("../config/timezone");
+const {
+  ShiftOverrideError,
+  previewDateRange,
+  applyDateRange,
+  deleteOverrideById,
+} = require("../services/ewsShiftOverrideService");
 
 const VALID_STATUS = new Set(["SCHEDULED", "OFF", "LEAVE", "SICK", "PERMIT", "SITE_VISIT"]);
 const TZ = resolveTimezone();
@@ -595,7 +601,7 @@ async function getConfig(req, res) {
   try {
     const requestedWeek = req.query?.week_start || isoUtc(new Date());
     assertIsoDate(requestedWeek);
-    const [shifts, overrides, workdays, exceptions, rotation, groups, members, roster] = await Promise.all([
+    const [shifts, overrides, workdays, exceptions, rotation, groups, members, roster, defaultShifts, plantTodayRes] = await Promise.all([
       // Master tunggal: shift yang dipakai roster, diresolusi untuk hari ini. span_minutes =
       // rentang kehadiran, standard_minutes = jam kerja bersih, selisihnya waktu istirahat.
       db.query(`SELECT sd.roster_shift_code AS shift_code, sd.shift_code AS sow_shift_code,
@@ -633,12 +639,60 @@ async function getConfig(req, res) {
                 WHERE u.snssb IS NOT NULL AND btrim(u.snssb) <> '' AND u.full_name IS NOT NULL AND btrim(u.full_name) <> ''
                   AND (u.inactive_from IS NULL OR u.inactive_from > (now() AT TIME ZONE $1)::date)
                 ORDER BY lower(u.full_name), u.snssb`, [TZ]),
+      // Field additive spec §3: baris master default (is_default = true)
+      db.query(`SELECT sd.id, sd.roster_shift_code AS shift_code, sd.shift_code AS sow_shift_code,
+                       sd.shift_name, sd.start_time::text, sd.end_time::text, sd.crosses_midnight,
+                       sd.standard_hours, sd.default_capacity_hours, sd.is_active, sd.updated_at,
+                       (sd.standard_hours * 60)::int AS standard_minutes,
+                       (EXTRACT(EPOCH FROM (sd.end_time - sd.start_time)) / 60
+                         + CASE WHEN sd.crosses_midnight THEN 1440 ELSE 0 END)::int AS span_minutes
+                FROM public.shift_definition sd
+                WHERE sd.is_default = true AND sd.roster_shift_code IS NOT NULL
+                ORDER BY sd.start_time`),
+      // Tanggal plant hari ini
+      db.query(`SELECT (now() AT TIME ZONE $1)::date::text AS plant_today`, [TZ]),
     ]);
     const rotationConfig = rotation.rows[0] || null;
+    const plantToday = plantTodayRes.rows[0]?.plant_today;
+
+    // Evaluasi sumber shift hari ini (default vs override)
+    const todayShiftSource = {};
+    const defaultMap = new Map(defaultShifts.rows.map((d) => [d.shift_code, d]));
+    for (const sh of shifts.rows) {
+      const def = defaultMap.get(sh.shift_code);
+      if (!def) {
+        todayShiftSource[sh.shift_code] = "default";
+      } else {
+        const isMatch =
+          def.start_time === sh.start_time &&
+          def.end_time === sh.end_time &&
+          def.crosses_midnight === sh.crosses_midnight &&
+          Number(def.standard_hours) === Number(sh.standard_hours);
+        todayShiftSource[sh.shift_code] = isMatch ? "default" : "override";
+      }
+    }
+
+    // Upcoming active overrides (effective_date >= today_plant)
+    const upcomingOverrides = overrides.rows
+      .filter((o) => o.is_active && o.effective_date && o.effective_date >= plantToday)
+      .sort((a, b) => {
+        const d = a.effective_date.localeCompare(b.effective_date);
+        if (d !== 0) return d;
+        return (a.shift_code || "").localeCompare(b.shift_code || "");
+      })
+      .map((o) => ({
+        ...o,
+        today: o.effective_date === plantToday,
+      }));
+
     res.json({
       data: {
         shifts: shifts.rows,
         shift_overrides: overrides.rows,
+        default_shifts: defaultShifts.rows,
+        today_shift_source: todayShiftSource,
+        upcoming_shift_overrides: upcomingOverrides,
+        plant_today: plantToday,
         workday_rules: workdays.rows,
         weekly_pattern: workdays.rows,
         calendar_exceptions: exceptions.rows,
@@ -1138,4 +1192,240 @@ async function resyncFutureShifts(req, res) {
   }
 }
 
-module.exports = { getRoster, getRosterMonth, updateStatus, updateHalfDay, deleteRoster, bulkUpdateRoster, getConfig, updateWorkday, putExceptions, deleteException, previewGenerate, applyGenerate, updateGroup, updatePermanentShift, updateShiftMaster, getShiftImpact, resyncFutureShifts, generate, setLock, cancelLock, listLocks, getForemanTeam, setForemanMember, removeForemanMember, resolveWeekContext, expandDateRange, exceptionState, strictBoolean };
+// ============================================================================
+// Date-Range Shift Hours Handlers (Spec §8, 2026-10-01)
+// ============================================================================
+
+// POST /ews/roster/shift/date-range/preview (Read-Only)
+async function previewShiftDateRange(req, res) {
+  let client;
+  try {
+    client = await (db.pool || db).connect();
+    await client.query("BEGIN TRANSACTION READ ONLY");
+    const result = await previewDateRange(client, req.body);
+    await client.query("COMMIT");
+    res.json({ data: result });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof ShiftOverrideError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+        details: err.details,
+      });
+    }
+    console.error("previewShiftDateRange error:", err);
+    res.status(500).json({ error: err.message || "Failed to preview shift date range" });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+// PUT /ews/roster/shift/date-range (ACID Transaction)
+async function putShiftDateRange(req, res) {
+  let client;
+  try {
+    client = await (db.pool || db).connect();
+    await client.query("BEGIN");
+    const result = await applyDateRange(client, req.body, req.headers);
+    await client.query("COMMIT");
+    res.json({ data: result });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof ShiftOverrideError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+        details: err.details,
+      });
+    }
+    if (err.code === "55P03" || err.code === "40P01" || err.code === "23505") {
+      return res.status(409).json({
+        error: "Konflik konkurensi data. Silakan coba kembali sesaat lagi.",
+        code: "RETRYABLE_CONFLICT",
+      });
+    }
+    console.error("putShiftDateRange error:", err);
+    res.status(500).json({ error: err.message || "Failed to update shift date range" });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+// POST /ews/roster/shift/override/:id/preview
+async function previewDeleteShiftOverride(req, res) {
+  let client;
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid override ID", code: "INVALID_ID" });
+    }
+    client = await (db.pool || db).connect();
+    const ovRes = await client.query(
+      `SELECT id, shift_code, roster_shift_code, effective_date::text AS effective_date,
+              start_time::text, end_time::text, crosses_midnight, standard_hours, is_active
+       FROM public.shift_definition WHERE id = $1`,
+      [id]
+    );
+    const row = ovRes.rows[0];
+    if (!row) {
+      return res.status(404).json({ error: "Override not found", code: "OVERRIDE_NOT_FOUND" });
+    }
+
+    const familyRes = await client.query(
+      "SELECT array_agg(id) AS ids FROM public.shift_definition WHERE lower(shift_code) = lower($1)",
+      [row.shift_code]
+    );
+    const familyIds = familyRes.rows[0]?.ids || [row.id];
+
+    const refRes = await client.query(
+      "SELECT public.ews_sow_blocking_refs($1::date, $2::bigint[]) AS info",
+      [row.effective_date, familyIds]
+    );
+    const info = refRes.rows[0]?.info || {};
+
+    res.json({
+      data: {
+        id: row.id,
+        shift_code: row.roster_shift_code,
+        date: row.effective_date,
+        sow_refs: info.counts || {},
+        total_blocking: info.total || 0,
+        samples: info.samples || [],
+      },
+    });
+  } catch (err) {
+    console.error("previewDeleteShiftOverride error:", err);
+    res.status(500).json({ error: err.message || "Failed to preview delete" });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+// DELETE /ews/roster/shift/override/:id (Soft-delete)
+async function deleteShiftOverride(req, res) {
+  let client;
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Invalid override ID", code: "INVALID_ID" });
+    }
+    client = await (db.pool || db).connect();
+    await client.query("BEGIN");
+    const result = await deleteOverrideById(client, id, req.body, req.headers);
+    await client.query("COMMIT");
+    res.json({ data: result });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof ShiftOverrideError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+        details: err.details,
+      });
+    }
+    console.error("deleteShiftOverride error:", err);
+    res.status(500).json({ error: err.message || "Failed to delete shift override" });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+// POST /ews/roster/shift/date-range/delete-preview
+async function previewDeleteShiftDateRange(req, res) {
+  let client;
+  try {
+    const from = req.query.from || req.body?.from;
+    const to = req.query.to || req.body?.to;
+    assertIsoDate(from);
+    assertIsoDate(to);
+    client = await (db.pool || db).connect();
+    const ovRes = await client.query(
+      `SELECT id, roster_shift_code AS shift_code, effective_date::text AS date
+       FROM public.shift_definition
+       WHERE is_default = false AND is_active = true AND effective_date BETWEEN $1::date AND $2::date
+       ORDER BY effective_date, roster_shift_code`,
+      [from, to]
+    );
+    res.json({ data: { count: ovRes.rows.length, items: ovRes.rows } });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+// DELETE /ews/roster/shift/date-range
+async function deleteShiftDateRange(req, res) {
+  let client;
+  try {
+    const from = req.query.from || req.body?.from;
+    const to = req.query.to || req.body?.to;
+    assertIsoDate(from);
+    assertIsoDate(to);
+    client = await (db.pool || db).connect();
+    await client.query("BEGIN");
+    const ovRes = await client.query(
+      `SELECT id FROM public.shift_definition
+       WHERE is_default = false AND is_active = true AND effective_date BETWEEN $1::date AND $2::date
+       ORDER BY id`,
+      [from, to]
+    );
+    const results = [];
+    for (const r of ovRes.rows) {
+      const d = await deleteOverrideById(client, r.id, req.body, req.headers);
+      results.push(d);
+    }
+    await client.query("COMMIT");
+    res.json({ data: { deleted_count: results.length, items: results } });
+  } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    if (err instanceof ShiftOverrideError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+        details: err.details,
+      });
+    }
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+module.exports = {
+  getRoster,
+  getRosterMonth,
+  updateStatus,
+  updateHalfDay,
+  deleteRoster,
+  bulkUpdateRoster,
+  getConfig,
+  updateWorkday,
+  putExceptions,
+  deleteException,
+  previewGenerate,
+  applyGenerate,
+  updateGroup,
+  updatePermanentShift,
+  updateShiftMaster,
+  getShiftImpact,
+  resyncFutureShifts,
+  previewShiftDateRange,
+  putShiftDateRange,
+  previewDeleteShiftOverride,
+  deleteShiftOverride,
+  previewDeleteShiftDateRange,
+  deleteShiftDateRange,
+  generate,
+  setLock,
+  cancelLock,
+  listLocks,
+  getForemanTeam,
+  setForemanMember,
+  removeForemanMember,
+  resolveWeekContext,
+  expandDateRange,
+  exceptionState,
+  strictBoolean,
+};

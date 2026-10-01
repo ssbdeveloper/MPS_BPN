@@ -178,7 +178,11 @@ function hasSupervisorRole(req) {
 
 function sendError(res, err, fallback = "Request failed") {
   console.error("sowSchedule error:", err);
-  res.status(err.status || 500).json({ error: err.message || fallback });
+  const status = err.status || (err.code === "P0409" ? 409 : 500);
+  res.status(status).json({
+    error: err.message || fallback,
+    code: err.code === "P0409" ? "SOW_SHIFT_NOT_RESOLVED" : undefined,
+  });
 }
 
 async function fetchShift(client, shiftId) {

@@ -6,11 +6,25 @@ import ScheduleCard from '../components/ews-roster/ScheduleCard';
 import OperatorShiftCard from '../components/ews-roster/OperatorShiftCard';
 import RosterPreviewCard from '../components/ews-roster/RosterPreviewCard';
 import ShiftSettingsCard from '../components/ews-roster/ShiftSettingsCard';
+import DateRangeShiftForm from '../components/ews-roster/DateRangeShiftForm';
 import { todayLocalISO } from '../components/ews-roster/rosterConstants';
+import { authHeaders } from '../rbac/useAuth';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const weekOf = (value = todayLocalISO()) => value;
-const request = async (path, options) => { const response = await fetch(`${API_BASE}${path}`, options); const payload = await response.json().catch(() => null); if (!response.ok) throw new Error(payload?.error || `Failed (${response.status})`); return payload?.data ?? payload; };
+const request = async (path, options = {}) => {
+  const headers = { ...authHeaders(), ...(options.headers || {}) };
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const err = new Error(payload?.error || `Failed (${response.status})`);
+    err.status = response.status;
+    err.code = payload?.code;
+    err.details = payload?.details;
+    throw err;
+  }
+  return payload?.data ?? payload;
+};
 
 function Card({ title, icon, children }) {
   return <section className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm"><header className="flex items-center gap-3 border-b border-slate-200 bg-slate-50/70 px-5 py-3"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0077b6] text-white">{React.createElement(icon, { size: 17 })}</span><h2 className="text-sm font-extrabold text-slate-900">{title}</h2></header><div className="p-5">{children}</div></section>;
@@ -55,6 +69,23 @@ export default function EwsRosterConfigPage() {
   const fetchShiftImpact = async () => { const value = await request('/ews/roster/shift/impact'); setShiftImpact(value); return value; };
   const saveShift = async (shift_code, draft) => { await mutate('/ews/roster/shift', json('PUT', { shift_code, ...draft, standard_hours: draft.standard_hours === undefined ? undefined : Number(draft.standard_hours), updated_by: 'ews-roster-ui' }), 'Shift hours saved'); await load(); await fetchShiftImpact(); };
   const resyncShifts = async () => { const result = await mutate('/ews/roster/shift/resync-future', json('PUT', { updated_by: 'ews-roster-ui' })); toast.success(`${result.rows_updated} future rows synchronized`); await fetchShiftImpact(); };
+
+  // Handlers Date-Range Shift Hours
+  const previewDateRangeShift = async (payload) => {
+    return await request('/ews/roster/shift/date-range/preview', json('POST', payload));
+  };
+  const applyDateRangeShift = async (payload) => {
+    const res = await mutate('/ews/roster/shift/date-range', json('PUT', payload), 'Jadwal shift khusus berhasil diterapkan');
+    await load();
+    return res;
+  };
+  const deleteOverrideShift = async (id, isToday) => {
+    if (!window.confirm('Yakin ingin menghapus jadwal khusus ini?')) return;
+    const body = isToday ? { confirm_today_impact: true, reason: 'Penghapusan jadwal khusus hari ini dari UI' } : {};
+    await mutate(`/ews/roster/shift/override/${id}`, json('DELETE', body), 'Jadwal khusus berhasil dihapus');
+    await load();
+  };
+
   const loadRosterPreview = async () => {
     setRosterPreview({ loading: true, error: '', rows: [] });
     try { const dates = Array.from({ length: 7 }, (_, offset) => { const date = new Date(`${todayLocalISO()}T00:00:00`); date.setDate(date.getDate() + offset); return date.toISOString().slice(0, 10); }); const rows = await Promise.all(dates.map(async (date) => { const data = await request(`/ews/roster?date=${date}`); const scheduled = (Array.isArray(data) ? data : []).filter((row) => row.status === 'SCHEDULED'); return { date, day: scheduled.filter((row) => row.scheduled_shift === 'DAY').length, night: scheduled.filter((row) => row.scheduled_shift === 'NIGHT').length, total: scheduled.length }; })); setRosterPreview({ loading: false, error: '', rows }); }
@@ -71,7 +102,30 @@ export default function EwsRosterConfigPage() {
       <div className="grid items-start gap-5 xl:grid-cols-2">
         <Card title="Schedule" icon={CalendarCog}><ScheduleCard rules={rules} exceptions={config?.calendar_exceptions || []} onSavePattern={savePattern} onAddException={addException} onRemoveException={removeException} onPreview={previewSchedule} onApply={applySchedule} busy={busy} /></Card>
         <Card title="Operators" icon={Users}><OperatorShiftCard operators={operators} weekContext={weekContext} onWeekChange={setWeekStart} onAssign={assign} onFixedShift={fixedShift} /></Card>
-        <Card title="Shift Hours" icon={Clock3}><ShiftSettingsCard shifts={config?.shifts || []} overrides={config?.shift_overrides || []} impact={shiftImpact} onSave={saveShift} onPreview={fetchShiftImpact} onResync={resyncShifts} busy={busy} /></Card>
+        <Card title="Shift Hours" icon={Clock3}>
+          <ShiftSettingsCard
+            shifts={config?.default_shifts || config?.shifts || []}
+            overrides={config?.shift_overrides || []}
+            todayShiftSource={config?.today_shift_source}
+            plantToday={config?.plant_today}
+            impact={shiftImpact}
+            onSave={saveShift}
+            onPreview={fetchShiftImpact}
+            onResync={resyncShifts}
+            busy={busy}
+          />
+          <div className="mt-5 border-t border-slate-200 pt-5">
+            <DateRangeShiftForm
+              plantToday={config?.plant_today}
+              defaultShifts={config?.default_shifts || config?.shifts || []}
+              upcomingOverrides={config?.upcoming_shift_overrides || []}
+              onApplyOverride={applyDateRangeShift}
+              onDeleteOverride={deleteOverrideShift}
+              onPreviewOverride={previewDateRangeShift}
+              busy={busy}
+            />
+          </div>
+        </Card>
         <Card title="7-Day Preview" icon={Eye}><RosterPreviewCard {...rosterPreview} onLoad={loadRosterPreview} /></Card>
       </div>
     </main>

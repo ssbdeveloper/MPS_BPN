@@ -43,6 +43,13 @@ router.put("/roster/permanent-shift", roster.updatePermanentShift);
 router.put("/roster/shift", roster.updateShiftMaster);
 router.get("/roster/shift/impact", roster.getShiftImpact);
 router.put("/roster/shift/resync-future", roster.resyncFutureShifts);
+// Date-range shift hours overrides (2026-10-01)
+router.post("/roster/shift/date-range/preview", roster.previewShiftDateRange);
+router.put("/roster/shift/date-range", roster.putShiftDateRange);
+router.post("/roster/shift/override/:id/preview", roster.previewDeleteShiftOverride);
+router.delete("/roster/shift/override/:id", roster.deleteShiftOverride);
+router.post("/roster/shift/date-range/delete-preview", roster.previewDeleteShiftDateRange);
+router.delete("/roster/shift/date-range", roster.deleteShiftDateRange);
 router.post("/roster/generate", roster.generate);
 router.post("/roster/generate/preview", roster.previewGenerate);
 router.post("/roster/generate/apply", roster.applyGenerate);
