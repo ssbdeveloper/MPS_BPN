@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
@@ -19,7 +20,7 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
     );
 
     expect(screen.getByTestId('date-range-loading')).toBeTruthy();
-    expect(screen.queryByLabelText(/Mulai \(From\)/i)).toBeNull();
+    expect(screen.queryByLabelText(/Start Date \(From\)/i)).toBeNull();
 
     const customDefaults = [
       { shift_code: 'DAY', start_time: '06:30:00', end_time: '15:30:00', crosses_midnight: false, standard_hours: 8.5 },
@@ -38,7 +39,7 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
       />
     );
 
-    const fromInput = screen.getByLabelText(/Mulai \(From\)/i);
+    const fromInput = screen.getByLabelText(/Start Date \(From\)/i);
     expect(fromInput.value).toBe('2026-10-02');
     expect(screen.queryByTestId('date-range-loading')).toBeNull();
   });
@@ -62,7 +63,7 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
       />
     );
 
-    const fromInput = screen.getByLabelText(/Mulai \(From\)/i);
+    const fromInput = screen.getByLabelText(/Start Date \(From\)/i);
     await user.clear(fromInput);
     await user.type(fromInput, '2026-10-10');
     expect(fromInput.value).toBe('2026-10-10');
@@ -101,7 +102,7 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
     const { rerender } = render(
       <TodayImpactDialog isOpen={true} onClose={vi.fn()} onConfirm={vi.fn()} previewData={basePreview} busy={false} />
     );
-    expect(screen.getByText(/14 Orang/i)).toBeTruthy();
+    expect(screen.getByText(/14 Operators/i)).toBeTruthy();
 
     rerender(
       <TodayImpactDialog
@@ -112,7 +113,7 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
         busy={false}
       />
     );
-    expect(screen.getByText('0 Orang')).toBeTruthy();
+    expect(screen.getByText('0 Operators')).toBeTruthy();
 
     rerender(
       <TodayImpactDialog
@@ -123,6 +124,6 @@ describe('DateRangeShiftForm — Lifecycle, Delayed Config & Error Retention', (
         busy={false}
       />
     );
-    expect(screen.getByText('Data Tidak Tersedia (Error)')).toBeTruthy();
+    expect(screen.getByText('Unavailable (Query Error)')).toBeTruthy();
   });
 });

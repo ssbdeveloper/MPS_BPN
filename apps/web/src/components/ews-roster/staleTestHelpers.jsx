@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
 import DateRangeShiftForm from './DateRangeShiftForm';
@@ -14,7 +15,7 @@ export const DEFAULTS = [
   { shift_code: 'NIGHT', start_time: '21:00:00', end_time: '05:00:00', crosses_midnight: true, standard_hours: 7 },
 ];
 export const PLANT_TODAY = '2026-10-02';
-export const REASON = 'Perubahan darurat karena PLN padam';
+export const REASON = 'Emergency adjustment due to facility grid maintenance';
 
 export const applyPreview = (token) => ({
   plant_today: PLANT_TODAY,
@@ -41,12 +42,12 @@ export const deletePreview = (token) => ({
 export async function openApplyDialog(user, props) {
   render(<DateRangeShiftForm plantToday={PLANT_TODAY} defaultShifts={DEFAULTS} upcomingOverrides={[]}
     onDeleteOverride={vi.fn()} busy={false} {...props} />);
-  await user.click(screen.getByRole('button', { name: /Terapkan Jam Khusus/i }));
-  await screen.findByText('Konfirmasi Perubahan Hari Ini');
+  await user.click(screen.getByRole('button', { name: /Apply Temporary Hours/i }));
+  await screen.findByText(/Confirm Same-Day Shift Adjustments/i);
   return {
-    reason: screen.getByLabelText(/Alasan Perubahan Operasional/i),
-    checkbox: () => screen.getByRole('checkbox', { name: /Saya memahami dampak perubahan jam shift/i }),
-    submit: () => screen.getByRole('button', { name: /Konfirmasi & Terapkan/i }),
+    reason: screen.getByLabelText(/Operational Change Reason/i),
+    checkbox: () => screen.getByRole('checkbox', { name: /I acknowledge the operational impact/i }),
+    submit: () => screen.getByRole('button', { name: /Confirm & Apply/i }),
   };
 }
 
@@ -54,11 +55,11 @@ export async function openDeleteDialog(user, props) {
   const upcoming = [{ id: 202, shift_code: 'DAY', effective_date: PLANT_TODAY, start_time: '08:00:00', end_time: '14:00:00', standard_hours: 6, today: true }];
   render(<DateRangeShiftForm plantToday={PLANT_TODAY} defaultShifts={DEFAULTS} upcomingOverrides={upcoming}
     onApplyOverride={vi.fn()} onPreviewOverride={vi.fn()} busy={false} {...props} />);
-  await user.click(screen.getByRole('button', { name: new RegExp(`Hapus jam khusus DAY tanggal ${PLANT_TODAY}`, 'i') }));
-  await screen.findByText('Konfirmasi Hapus Jam Khusus Hari Ini');
+  await user.click(screen.getByRole('button', { name: new RegExp(`Delete temporary hours for DAY on ${PLANT_TODAY}`, 'i') }));
+  await screen.findByText(/Confirm Same-Day Override Removal/i);
   return {
-    reason: screen.getByLabelText(/Alasan Pembatalan \/ Penghapusan Khusus/i),
-    checkbox: () => screen.getByRole('checkbox', { name: /Saya memahami penghapusan jadwal hari ini/i }),
-    submit: () => screen.getByRole('button', { name: /Konfirmasi & Hapus/i }),
+    reason: screen.getByLabelText(/Reason for Removing Same-Day Override/i),
+    checkbox: () => screen.getByRole('checkbox', { name: /I acknowledge that deleting today's override/i }),
+    submit: () => screen.getByRole('button', { name: /Confirm & Remove/i }),
   };
 }

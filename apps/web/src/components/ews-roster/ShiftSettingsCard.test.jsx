@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
@@ -14,22 +15,22 @@ const OVERRIDES = [
 describe('ShiftSettingsCard', () => {
   it('renders master values before any draft exists', () => {
     render(<ShiftSettingsCard shifts={SHIFTS} overrides={OVERRIDES} impact={null} onSave={vi.fn()} onPreview={vi.fn()} onResync={vi.fn()} busy={false} />);
-    expect(screen.getAllByLabelText('Standard Hours').length).toBe(2);
-    expect(screen.getAllByLabelText('Standard Hours')[0].value).toBe('8.00');
+    expect(screen.getAllByLabelText('Net Working Hours').length).toBe(2);
+    expect(screen.getAllByLabelText('Net Working Hours')[0].value).toBe('8.00');
     expect(screen.getAllByLabelText('Start Time')[1].value).toBe('16:30');
   });
 
-  it('shows date-specific shift hours', () => {
-    render(<ShiftSettingsCard shifts={SHIFTS} overrides={OVERRIDES} impact={null} onSave={vi.fn()} onPreview={vi.fn()} onResync={vi.fn()} busy={false} />);
-    expect(screen.getByText('2026-05-14')).toBeTruthy();
-    expect(screen.getByText('3h standard')).toBeTruthy();
+  it('shows operational explanation and banner when temporary hours active today', () => {
+    render(<ShiftSettingsCard shifts={SHIFTS} overrides={OVERRIDES} todayShiftSource="temporary" impact={null} onSave={vi.fn()} onPreview={vi.fn()} onResync={vi.fn()} busy={false} />);
+    expect(screen.getByText(/Today's shift uses temporary hours/i)).toBeTruthy();
+    expect(screen.getByText(/Default hours serve as the permanent baseline/i)).toBeTruthy();
   });
 
   it('sends only the changed field', async () => {
     const onSave = vi.fn();
     const user = userEvent.setup();
     render(<ShiftSettingsCard shifts={SHIFTS} overrides={OVERRIDES} impact={null} onSave={onSave} onPreview={vi.fn()} onResync={vi.fn()} busy={false} />);
-    const hours = screen.getAllByLabelText('Standard Hours')[0];
+    const hours = screen.getAllByLabelText('Net Working Hours')[0];
     await user.clear(hours);
     await user.type(hours, '7.5');
     await user.click(screen.getAllByRole('button', { name: 'Save' })[0]);

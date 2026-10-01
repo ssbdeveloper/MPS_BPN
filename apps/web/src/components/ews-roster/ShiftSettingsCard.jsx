@@ -1,199 +1,195 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Moon, RefreshCw, Save, Sun } from 'lucide-react';
+import { AlertTriangle, Clock3, Moon, RefreshCw, Save, Sun } from 'lucide-react';
 
 const clock = (value) => String(value || '').slice(0, 5);
 
-
 const FIELD = 'flex flex-col gap-1 text-xs font-bold text-slate-600';
-const INPUT = 'h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-800 focus:border-[#0096c7] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]';
-const NOTE = 'mt-2 text-xs font-semibold text-slate-500';
-
-function duration(minutes) {
-  const total = Number(minutes);
-  if (!Number.isFinite(total) || total <= 0) return '—';
-  const h = Math.floor(total / 60);
-  const m = total % 60;
-  return m ? `${h}h ${String(m).padStart(2, '0')}m` : `${h}h`;
-}
-
-function ShiftRow({ shift, draft, onChange, onSave, busy }) {
-  const value = (field) => (draft?.[field] !== undefined ? draft[field] : shift[field]);
-  const isDay = shift.shift_code === 'DAY';
-  const span = Number(shift.span_minutes || 0);
-  const std = Number(value('standard_hours') || 0) * 60;
-  const rest = span - std;
-  return (
-    <div className="rounded-xl border border-slate-300 bg-white p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-extrabold ${isDay ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-indigo-300 bg-indigo-50 text-indigo-800'}`}>
-            {isDay ? <Sun size={13} /> : <Moon size={13} />}
-            {shift.shift_code}
-          </span>
-          <span className="text-xs font-semibold text-slate-500">{shift.shift_name} · {shift.sow_shift_code}</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => onSave(shift.shift_code, draft)}
-          disabled={busy || !draft || Object.keys(draft).length === 0}
-          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 text-xs font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Save size={14} /> Save
-        </button>
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <label className={FIELD}>
-          Start Time
-          <input
-            type="time"
-            value={clock(value('start_time'))}
-            onChange={(e) => onChange(shift.shift_code, { start_time: e.target.value })}
-            className={INPUT}
-          />
-        </label>
-        <label className={FIELD}>
-          End Time
-          <input
-            type="time"
-            value={clock(value('end_time'))}
-            onChange={(e) => onChange(shift.shift_code, { end_time: e.target.value })}
-            className={INPUT}
-          />
-        </label>
-        <label className={FIELD}>
-          Standard Hours
-          <input
-            type="number" min="0.25" max="24" step="0.25"
-            value={value('standard_hours')}
-            onChange={(e) => onChange(shift.shift_code, { standard_hours: e.target.value })}
-            className={INPUT}
-          />
-        </label>
-        <label className="flex items-center gap-2 pt-5 text-xs font-bold text-slate-600">
-          <input
-            type="checkbox"
-            checked={Boolean(value('crosses_midnight'))}
-            onChange={(e) => onChange(shift.shift_code, { crosses_midnight: e.target.checked })}
-            className="h-4 w-4 rounded border-slate-400"
-          />
-          Overnight
-        </label>
-      </div>
-
-      <p className={NOTE}>
-        Shift span {duration(span)} · standard hours {duration(std)} · break {rest > 0 ? duration(rest) : '—'}
-      </p>
-    </div>
-  );
-}
+const INPUT = 'h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold tabular-nums text-slate-800 focus:border-[#0077b6] focus:outline-none focus:ring-2 focus:ring-[#00b4d8]';
 
 export default function ShiftSettingsCard({
-  shifts,
-  overrides,
-  todayShiftSource,
-  impact,
+  shifts = [],
+  todayShiftSource = null,
+  impact = null,
   onSave,
   onPreview,
   onResync,
-  busy,
+  busy = false,
 }) {
   const [drafts, setDrafts] = useState({});
-  const change = (code, patch) => setDrafts((d) => ({ ...d, [code]: { ...(d[code] || {}), ...patch } }));
 
-  const differing = Number(impact?.differing_rows ?? 0);
-  const resyncable = Number(impact?.resyncable_rows ?? 0);
+  const update = (code, field, val) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [code]: { ...prev[code], [field]: val },
+    }));
+  };
 
-  const hasTodayOverride = todayShiftSource && Object.values(todayShiftSource).some((v) => v === 'override');
+  const isChanged = (code, field, orig) => {
+    const d = drafts[code];
+    if (!d || d[field] === undefined) return false;
+    return d[field] !== orig;
+  };
 
-  if (!shifts?.length) {
-    return (
-      <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-        <AlertTriangle size={14} className="mr-1 inline" />
-        No shifts are configured for the roster.
-      </div>
-    );
-  }
+  const handleSave = (code) => {
+    const d = drafts[code];
+    if (!d) return;
+    const patch = {};
+    if (d.start_time !== undefined) patch.start_time = d.start_time;
+    if (d.end_time !== undefined) patch.end_time = d.end_time;
+    if (d.standard_hours !== undefined) patch.standard_hours = d.standard_hours;
+    if (d.crosses_midnight !== undefined) patch.crosses_midnight = d.crosses_midnight;
+    onSave?.(code, patch);
+  };
+
+  const hasDraft = (code) => {
+    const d = drafts[code];
+    return d && Object.keys(d).length > 0;
+  };
+
+  const isTodayTemporary = todayShiftSource === 'override' || todayShiftSource === 'temporary';
 
   return (
-    <div className="flex flex-col gap-3">
-      {hasTodayOverride && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-3 text-xs text-blue-900">
-          <p className="font-extrabold flex items-center gap-1.5">
-            <span className="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
-            Shift Hari Ini Menggunakan Jam Khusus (Override)
-          </p>
-          <p className="mt-1 font-semibold text-blue-800 text-[11px]">
-            Form di bawah mengatur <strong>Jadwal Master Default</strong> (jadwal reguler jika tidak ada override). Perubahan di sini tidak akan menimpa jadwal khusus yang aktif untuk hari ini.
-          </p>
+    <div className="flex flex-col gap-3.5">
+      <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3 text-xs text-slate-600">
+        <p className="font-semibold text-slate-800">
+          Default hours serve as the permanent baseline for shop-floor scheduling.
+        </p>
+        <p className="mt-0.5 text-slate-500">
+          Temporary hours (configured below) will override this default window for specified dates.
+        </p>
+      </div>
+
+      {isTodayTemporary && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <AlertTriangle size={15} className="shrink-0 text-amber-600" />
+          <span>
+            <strong>Notice:</strong> Today&apos;s shift uses temporary hours override. Default values apply once the temporary window concludes.
+          </span>
         </div>
       )}
 
-      {shifts.map((shift) => (
-        <ShiftRow
-          key={shift.shift_code}
-          shift={shift}
-          draft={drafts[shift.shift_code]}
-          onChange={change}
-          onSave={onSave}
-          busy={busy}
-        />
-      ))}
+      {shifts.map((s) => {
+        const d = drafts[s.shift_code] || {};
+        const st = d.start_time !== undefined ? d.start_time : clock(s.start_time);
+        const et = d.end_time !== undefined ? d.end_time : clock(s.end_time);
+        const sh = d.standard_hours !== undefined ? d.standard_hours : (s.standard_hours ?? '');
+        const cm = d.crosses_midnight !== undefined ? d.crosses_midnight : Boolean(s.crosses_midnight);
+        const changed = hasDraft(s.shift_code);
 
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-extrabold uppercase tracking-wide text-slate-500">Future Roster Impact</span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onPreview}
-              disabled={busy}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-extrabold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:opacity-50"
-            >
-              <RefreshCw size={14} /> Check Impact
-            </button>
-            <button
-              type="button"
-              onClick={onResync}
-              disabled={busy || resyncable === 0}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-3 text-xs font-extrabold text-white hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Apply to {resyncable} Rows
-            </button>
-          </div>
-        </div>
-        {impact ? (
-          <p className="mt-2 text-xs font-semibold text-slate-600">
-            {impact.future_rows} future rows · {differing} differ · {resyncable} safe to synchronize · {impact.skipped_rows} protected.
-          </p>
-        ) : (
-          <p className={NOTE}>
-            Check the impact before synchronizing future rows.
-          </p>
-        )}
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white p-3">
-        <div className="text-xs font-extrabold uppercase tracking-wide text-slate-500">Date-Specific Hours</div>
-        {overrides?.length ? (
-          <ul className="mt-2 divide-y divide-slate-100">
-            {overrides.map((row) => (
-              <li key={`${row.shift_code}-${row.effective_date}`} className="flex flex-wrap items-center gap-2 py-2 text-xs font-semibold text-slate-700">
-                <span className="font-mono text-slate-500">{row.effective_date}</span>
-                <span className={`rounded-full border px-2 py-0.5 text-xs font-extrabold ${row.shift_code === 'DAY' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-indigo-200 bg-indigo-50 text-indigo-700'}`}>
-                  {row.shift_code}
+        return (
+          <div
+            key={s.shift_code}
+            className="rounded-xl border border-slate-200 bg-white p-3.5 transition-shadow hover:shadow-xs"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-extrabold ${
+                    s.shift_code === 'DAY'
+                      ? 'border-amber-300 bg-amber-50 text-amber-800'
+                      : 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                  }`}
+                >
+                  {s.shift_code === 'DAY' ? <Sun size={13} /> : <Moon size={13} />}
+                  {s.shift_code} Shift
                 </span>
-                <span>{clock(row.start_time)} - {clock(row.end_time)}</span>
-                <span className="text-slate-500">{Number(row.standard_hours)}h standard</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className={NOTE}>No date-specific hours.</p>
+                <span className="text-xs font-semibold text-slate-500">
+                  {s.shift_name} ({s.sow_shift_code})
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={!changed || busy}
+                onClick={() => handleSave(s.shift_code)}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 text-xs font-extrabold text-white transition-all hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Save size={14} /> Save
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <label className={FIELD}>
+                Start Time
+                <input
+                  type="time"
+                  value={st}
+                  onChange={(e) => update(s.shift_code, 'start_time', e.target.value)}
+                  className={`${INPUT} ${isChanged(s.shift_code, 'start_time', clock(s.start_time)) ? 'border-amber-400 bg-amber-50/40' : ''}`}
+                />
+              </label>
+              <label className={FIELD}>
+                End Time
+                <input
+                  type="time"
+                  value={et}
+                  onChange={(e) => update(s.shift_code, 'end_time', e.target.value)}
+                  className={`${INPUT} ${isChanged(s.shift_code, 'end_time', clock(s.end_time)) ? 'border-amber-400 bg-amber-50/40' : ''}`}
+                />
+              </label>
+              <label className={FIELD}>
+                Net Working Hours
+                <input
+                  type="number"
+                  aria-label="Net Working Hours"
+                  step="0.25"
+                  min="0.25"
+                  max="24"
+                  value={sh}
+                  onChange={(e) => update(s.shift_code, 'standard_hours', e.target.value)}
+                  className={`${INPUT} ${isChanged(s.shift_code, 'standard_hours', s.standard_hours) ? 'border-amber-400 bg-amber-50/40' : ''}`}
+                />
+                <span className="text-[11px] font-normal text-slate-500">Target net working time</span>
+              </label>
+              <label className="flex items-center gap-2 pt-5 text-xs font-bold text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={cm}
+                  onChange={(e) => update(s.shift_code, 'crosses_midnight', e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-400 text-[#0077b6] focus:ring-[#00b4d8]"
+                />
+                Ends Next Day
+              </label>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50/80 p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h4 className="text-xs font-extrabold text-slate-800">Advanced: Synchronize Future Roster Entries</h4>
+            <p className="mt-0.5 text-xs text-slate-500">
+              Push updated default hours to generated upcoming roster rows. Requires saved default changes.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onPreview?.()}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 text-xs font-extrabold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:opacity-50"
+          >
+            <Clock3 size={14} /> Preview Sync Impact
+          </button>
+        </div>
+
+        {impact && (
+          <div className="mt-3 border-t border-slate-200 pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-slate-700">
+                {impact.differing_rows ?? 0} of {impact.future_rows ?? 0} future rows differ from defaults.
+              </span>
+              <button
+                type="button"
+                disabled={busy || !impact.resyncable_rows}
+                onClick={() => onResync?.()}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-[#0077b6] px-4 text-xs font-extrabold text-white transition-all hover:bg-[#023e8a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00b4d8] active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={busy ? 'animate-spin' : ''} />
+                Apply to {impact.resyncable_rows ?? 0} Rows
+              </button>
+            </div>
+          </div>
         )}
-        <p className="mt-2 text-xs font-semibold text-slate-400">
-          Date-specific hours apply only to the listed date.
-        </p>
       </div>
     </div>
   );

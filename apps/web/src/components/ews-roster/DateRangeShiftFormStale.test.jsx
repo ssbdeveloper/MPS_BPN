@@ -25,7 +25,7 @@ describe('PREVIEW_STALE — deteksi via err.code (APPLY)', () => {
 
     await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(2));
     expect(onApply.mock.calls[0][0].preview_token).toBe('tok_apply_1');
-    await screen.findByText(/Preview diperbarui, centang konfirmasi ulang/i);
+    await screen.findByText(/preview has been refreshed/i);
     expect(ui.reason.value).toBe(REASON);
     expect(ui.checkbox().checked).toBe(false);
     expect(ui.submit().disabled).toBe(true);
@@ -36,14 +36,14 @@ describe('PREVIEW_STALE — deteksi via err.code (APPLY)', () => {
 
     await waitFor(() => expect(onApply).toHaveBeenCalledTimes(2));
     expect(onApply.mock.calls[1][0]).toMatchObject({ preview_token: 'tok_apply_2', reason: REASON, confirm_today_impact: true });
-    await waitFor(() => expect(screen.queryByText('Konfirmasi Perubahan Hari Ini')).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Confirm Same-Day Shift Adjustments/i)).toBeNull());
   });
 
   it('refresh gagal: submit tetap terkunci, tidak ada submit ulang dengan token lama; refresh manual lalu retry token baru', async () => {
     const user = userEvent.setup();
     const onPreview = vi.fn()
       .mockResolvedValueOnce(applyPreview('tok_apply_1'))
-      .mockRejectedValueOnce(Object.assign(new Error('Koneksi database terputus'), { status: 503 }))
+      .mockRejectedValueOnce(Object.assign(new Error('Database connection interrupted'), { status: 503 }))
       .mockResolvedValueOnce(applyPreview('tok_apply_3'));
     const onApply = vi.fn().mockRejectedValueOnce(staleError()).mockResolvedValueOnce({ ok: true });
     const ui = await openApplyDialog(user, { onPreviewOverride: onPreview, onApplyOverride: onApply });
@@ -52,16 +52,15 @@ describe('PREVIEW_STALE — deteksi via err.code (APPLY)', () => {
     await user.click(ui.checkbox());
     await user.click(ui.submit());
 
-    await screen.findByText(/gagal dimuat ulang/i);
+    await screen.findByText(/expired and could not be reloaded/i);
     expect(ui.reason.value).toBe(REASON);
-    // Centang ulang pun tidak boleh membuka submit selama preview masih yang lama.
     await user.click(ui.checkbox());
     expect(ui.submit().disabled).toBe(true);
     await user.click(ui.submit());
     expect(onApply).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole('button', { name: /Muat Ulang Preview/i }));
-    await screen.findByText(/Preview diperbarui/i);
+    await user.click(screen.getByRole('button', { name: /Refresh Preview/i }));
+    await screen.findByText(/preview has been refreshed/i);
     expect(onPreview).toHaveBeenCalledTimes(3);
     expect(ui.checkbox().checked).toBe(false);
     expect(ui.reason.value).toBe(REASON);
