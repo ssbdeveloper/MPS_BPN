@@ -34,6 +34,7 @@ describe('DateRangeShiftForm', () => {
   });
 
   it('triggers delete callback when clicking trash button', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const onDelete = vi.fn();
     const user = userEvent.setup();
     render(
@@ -50,7 +51,7 @@ describe('DateRangeShiftForm', () => {
 
     const deleteBtn = screen.getByRole('button', { name: /Hapus jam khusus DAY tanggal 2026-10-15/i });
     await user.click(deleteBtn);
-    expect(onDelete).toHaveBeenCalledWith(101, false);
+    expect(onDelete).toHaveBeenCalledWith(101, {});
   });
 
   it('opens TodayImpactDialog when preview affects today', async () => {
@@ -146,6 +147,76 @@ describe('DateRangeShiftForm', () => {
         confirm_today_impact: true,
         reason: 'Pemadaman listrik terencana PLN',
         preview_token: 'sha256:token123',
+      })
+    );
+  });
+
+  it('delete today override triggers preview -> dialog -> delete with preview_token and manual reason', async () => {
+    const todayOverride = [
+      { id: 202, shift_code: 'DAY', effective_date: '2026-10-01', start_time: '08:00:00', end_time: '14:00:00', standard_hours: 6, today: true },
+    ];
+
+    const onPreviewDelete = vi.fn().mockResolvedValue({
+      id: 202,
+      effective_date: '2026-10-01',
+      shift_code: 'DAY',
+      affects_today: true,
+      plant_today: '2026-10-01',
+      preview_token: 'sha256:deltoken456',
+      sow_blocking: false,
+      today: {
+        is_today: true,
+        business_date: '2026-10-01',
+        scheduled_operators: 15,
+        fallback_to: { start_time: '07:25:00', end_time: '16:30:00', standard_hours: 8 },
+      },
+    });
+
+    const onDelete = vi.fn().mockResolvedValue({});
+    const user = userEvent.setup();
+
+    render(
+      <DateRangeShiftForm
+        plantToday="2026-10-01"
+        defaultShifts={DEFAULT_SHIFTS}
+        upcomingOverrides={todayOverride}
+        onApplyOverride={vi.fn()}
+        onDeleteOverride={onDelete}
+        onPreviewOverride={vi.fn()}
+        onPreviewDeleteOverride={onPreviewDelete}
+        busy={false}
+      />
+    );
+
+    const deleteBtn = screen.getByRole('button', { name: /Hapus jam khusus DAY tanggal 2026-10-01/i });
+    await user.click(deleteBtn);
+
+    expect(onPreviewDelete).toHaveBeenCalledWith(202);
+
+    await waitFor(() => {
+      expect(screen.getByText('Konfirmasi Hapus Jam Khusus Hari Ini')).toBeTruthy();
+      expect(screen.getByText(/15 Orang/i)).toBeTruthy();
+      expect(screen.getByText(/Kembali ke Default/i)).toBeTruthy();
+    });
+
+    const submitBtn = screen.getByRole('button', { name: /Konfirmasi & Hapus/i });
+    expect(submitBtn.disabled).toBe(true);
+
+    const reasonInput = screen.getByLabelText(/Alasan Pembatalan \/ Penghapusan Khusus/i);
+    await user.type(reasonInput, 'Jadwal darurat dibatalkan karena mesin normal kembali');
+
+    const checkbox = screen.getByRole('checkbox', { name: /Saya memahami penghapusan jadwal hari ini/i });
+    await user.click(checkbox);
+
+    expect(submitBtn.disabled).toBe(false);
+    await user.click(submitBtn);
+
+    expect(onDelete).toHaveBeenCalledWith(
+      202,
+      expect.objectContaining({
+        confirm_today_impact: true,
+        reason: 'Jadwal darurat dibatalkan karena mesin normal kembali',
+        preview_token: 'sha256:deltoken456',
       })
     );
   });

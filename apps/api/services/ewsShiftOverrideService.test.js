@@ -250,4 +250,97 @@ describe("ewsShiftOverrideService — Pure Units", () => {
       assert.equal(tok1, tok2);
     });
   });
+
+  describe("computeDeletePreviewToken & validateDeleteFallbackNoOverlap (Blocker #3)", () => {
+    const { computeDeletePreviewToken, validateDeleteFallbackNoOverlap } = require("./ewsShiftOverrideService");
+
+    it("computeDeletePreviewToken menghasilkan token kanonikal untuk DELETE_OVERRIDE", () => {
+      const row = { id: 42, effective_date: "2026-10-15", roster_shift_code: "DAY", shift_code: "SHIFT-1" };
+      const state = [
+        { id: 1, shift_code: "SHIFT-1", roster_shift_code: "DAY", is_default: true, start_time: "07:00:00", end_time: "15:00:00" },
+        { id: 42, shift_code: "SHIFT-1", roster_shift_code: "DAY", effective_date: "2026-10-15", is_default: false, is_active: true, start_time: "08:00:00", end_time: "16:00:00" },
+      ];
+      const token1 = computeDeletePreviewToken(row, state, "2026-10-15");
+      const token2 = computeDeletePreviewToken(row, state, "2026-10-15");
+      const tokenDiffDate = computeDeletePreviewToken({ ...row, effective_date: "2026-10-16" }, state, "2026-10-15");
+
+      assert.strictEqual(token1, token2);
+      assert.match(token1, /^sha256:[a-f0-9]{64}$/);
+      assert.notStrictEqual(token1, tokenDiffDate);
+    });
+
+    it("validateDeleteFallbackNoOverlap mendeteksi overlap jika fallback default bertabrakan", () => {
+      const defaults = [
+        { id: 1, roster_shift_code: "DAY", start_time: "07:00:00", end_time: "16:00:00", crosses_midnight: false },
+        { id: 2, roster_shift_code: "NIGHT", start_time: "16:00:00", end_time: "00:00:00", crosses_midnight: false },
+      ];
+      const overrides = [
+        { id: 10, roster_shift_code: "DAY", effective_date: "2026-10-20", is_active: true, start_time: "07:00:00", end_time: "15:00:00", crosses_midnight: false },
+        { id: 11, roster_shift_code: "NIGHT", effective_date: "2026-10-20", is_active: true, start_time: "15:00:00", end_time: "23:00:00", crosses_midnight: false },
+      ];
+      const rowToDelete = overrides[0]; // hapus DAY
+
+      assert.throws(
+        () => validateDeleteFallbackNoOverlap(rowToDelete, defaults, overrides),
+        (err) => {
+          assert.strictEqual(err.code, "OVERLAP_CONFLICT");
+          return true;
+        }
+      );
+    });
+  });
+
+  describe("ewsAuthGuard — Identity & RBAC", () => {
+    const { authenticateAndAuthorizeActor } = require("./ewsAuthGuard");
+
+    it("authenticateAndAuthorizeActor menolak request tanpa identitas aktor (fail closed)", async () => {
+      const fakeClient = { query: async () => ({ rows: [] }) };
+      const unauthenticatedReq = { headers: {} };
+
+      await assert.rejects(
+        async () => authenticateAndAuthorizeActor(fakeClient, unauthenticatedReq),
+        (err) => {
+          assert.strictEqual(err.status, 401);
+          assert.strictEqual(err.code, "AUTHENTICATION_REQUIRED");
+          return true;
+        }
+      );
+    });
+
+    it("authenticateAndAuthorizeActor mengambil nama & role dari server DB dan memeriksa RBAC", async () => {
+      const authenticatedReq = {
+        headers: {
+          "x-user-id": "42",
+          "x-user-name": "SpoofedClientName",
+          "x-user-role": "superadmin_fake",
+        },
+      };
+
+      const fakeClient = {
+        query: async (sql) => {
+          if (sql.includes("FROM public.users")) {
+            return {
+              rows: [
+                {
+                  id: 42,
+                  username: "real_planner",
+                  name: "Real Planner Server",
+                  role: "planner",
+                },
+              ],
+            };
+          }
+          return { rows: [] };
+        },
+      };
+
+      const actor = await authenticateAndAuthorizeActor(fakeClient, authenticatedReq);
+      // Nama dan role HARUS dari server, BUKAN dari spoofed headers!
+      assert.strictEqual(actor.id, "42");
+      assert.strictEqual(actor.name, "Real Planner Server");
+      assert.strictEqual(actor.role, "planner");
+      assert.notStrictEqual(actor.name, "SpoofedClientName");
+      assert.notStrictEqual(actor.role, "superadmin_fake");
+    });
+  });
 });

@@ -17,7 +17,7 @@ const migration = fs.readFileSync(
   "utf8"
 );
 const rollback = fs.readFileSync(
-  path.join(__dirname, "../../../database/migrations/api/20261001_ews_shift_date_override_guard_rollback.sql"),
+  path.join(__dirname, "../../../database/migrations/rollback/20261001_ews_shift_date_override_guard_rollback.sql"),
   "utf8"
 );
 
@@ -71,3 +71,119 @@ test("rollback migration cleans up triggers and functions cleanly", () => {
   assert.match(rollback, /DROP FUNCTION IF EXISTS public\.sow_assert_resolved_shift/);
   assert.match(rollback, /DROP FUNCTION IF EXISTS public\.ews_sow_blocking_refs/);
 });
+
+test("HTTP direct request: missing/stale preview_token & unauthenticated mutation rejected (Blockers #2 & #3)", async () => {
+  const { putShiftDateRange, deleteShiftOverride } = require("./ewsRosterController");
+  const { createTrustedAuthToken } = require("../services/ewsAuthGuard");
+
+  function createMockRes() {
+    return {
+      statusCode: null,
+      body: null,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(data) {
+        this.body = data;
+        return this;
+      },
+    };
+  }
+
+  // 1. Request tanpa identitas sama sekali -> ditolak 401
+  {
+    const req = {
+      body: {
+        from: "2026-10-15",
+        to: "2026-10-16",
+        shifts: [{ shift_code: "DAY", start_time: "08:00:00", end_time: "16:00:00", crosses_midnight: false, standard_hours: 8 }],
+      },
+      headers: {},
+    };
+    const res = createMockRes();
+    await putShiftDateRange(req, res);
+    assert.strictEqual(res.statusCode, 401);
+    assert.strictEqual(res.body?.code, "AUTHENTICATION_REQUIRED");
+  }
+
+  // 2. Request delete override tanpa identitas sama sekali -> ditolak 401
+  {
+    const req = {
+      params: { id: "42" },
+      body: { reason: "Mau hapus jadwal hari ini" },
+      headers: {},
+    };
+    const res = createMockRes();
+    await deleteShiftOverride(req, res);
+    assert.strictEqual(res.statusCode, 401);
+    assert.strictEqual(res.body?.code, "AUTHENTICATION_REQUIRED");
+  }
+
+  // 3. User fixture tidak terdaftar di database pengguna -> ditolak 403 ACTOR_UNVERIFIED
+  {
+    const req = {
+      user: { id: "999999" },
+      body: {
+        from: "2026-10-15",
+        to: "2026-10-16",
+        shifts: [{ shift_code: "DAY", start_time: "08:00:00", end_time: "16:00:00", crosses_midnight: false, standard_hours: 8 }],
+      },
+      headers: { "x-user-id": "999999" },
+    };
+    const res = createMockRes();
+    await putShiftDateRange(req, res);
+    assert.strictEqual(res.statusCode, 403);
+    assert.strictEqual(res.body?.code, "ACTOR_UNVERIFIED");
+  }
+
+  // 4. Request perubahan hari ini terautentikasi tetapi TANPA preview_token -> ditolak 400 PREVIEW_REQUIRED (Blocker #3)
+  {
+    const db = global.pool || require("../db");
+    const todayRes = await db.query("SELECT (now() AT TIME ZONE 'Asia/Jakarta')::date::text AS today");
+    const today = todayRes.rows[0].today;
+
+    const req = {
+      user: { id: "1" },
+      body: {
+        from: today,
+        to: today,
+        shifts: [{ shift_code: "DAY", start_time: "08:15:00", end_time: "16:15:00", crosses_midnight: false, standard_hours: 8 }],
+        confirm_today_impact: true,
+        reason: "Perubahan darurat untuk tes blocker",
+        // preview_token sengaja dihilangkan!
+      },
+      headers: { "x-user-id": "1" },
+    };
+    const res = createMockRes();
+    await putShiftDateRange(req, res);
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.body?.code, "PREVIEW_REQUIRED");
+  }
+
+  // 5. Request perubahan hari ini dengan preview_token STALE / palsu -> ditolak 409 PREVIEW_STALE (Blocker #3)
+  {
+    const db = global.pool || require("../db");
+    const todayRes = await db.query("SELECT (now() AT TIME ZONE 'Asia/Jakarta')::date::text AS today");
+    const today = todayRes.rows[0].today;
+
+    const req = {
+      user: { id: "1" },
+      body: {
+        from: today,
+        to: today,
+        shifts: [{ shift_code: "DAY", start_time: "08:15:00", end_time: "16:15:00", crosses_midnight: false, standard_hours: 8 }],
+        confirm_today_impact: true,
+        reason: "Perubahan darurat untuk tes blocker",
+        preview_token: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      },
+      headers: { "x-user-id": "1" },
+    };
+    const res = createMockRes();
+    await putShiftDateRange(req, res);
+    assert.strictEqual(res.statusCode, 409);
+    assert.strictEqual(res.body?.code, "PREVIEW_STALE");
+  }
+});
+
+

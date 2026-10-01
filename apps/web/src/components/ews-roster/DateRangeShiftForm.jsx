@@ -7,7 +7,7 @@ import UpcomingOverridesList from './UpcomingOverridesList';
 const clock = (val) => String(val || '').slice(0, 5);
 
 export default function DateRangeShiftForm({
-  plantToday, defaultShifts, upcomingOverrides, onApplyOverride, onDeleteOverride, onPreviewOverride, busy,
+  plantToday, defaultShifts, upcomingOverrides, onApplyOverride, onDeleteOverride, onPreviewOverride, onPreviewDeleteOverride, busy,
 }) {
   const [from, setFrom] = useState(plantToday || new Date().toISOString().slice(0, 10));
   const [to, setTo] = useState(plantToday || new Date().toISOString().slice(0, 10));
@@ -33,6 +33,7 @@ export default function DateRangeShiftForm({
   const [previewResult, setPreviewResult] = useState(null);
   const [blockingError, setBlockingError] = useState(null);
   const [showTodayDialog, setShowTodayDialog] = useState(false);
+  const [deleteDialogData, setDeleteDialogData] = useState({ isOpen: false, preview: null, overrideId: null });
   const [successMsg, setSuccessMsg] = useState('');
 
   const buildPayload = () => ({
@@ -68,6 +69,52 @@ export default function DateRangeShiftForm({
     } catch (err) {
       setShowTodayDialog(false);
       setBlockingError(err.message || 'Gagal menyimpan perubahan');
+    }
+  };
+
+  const handleDeleteTrigger = async (id, isToday) => {
+    setBlockingError(null); setSuccessMsg('');
+    if (isToday) {
+      if (typeof onPreviewDeleteOverride !== 'function') {
+        return setBlockingError('Preview delete tidak tersedia');
+      }
+      try {
+        const preview = await onPreviewDeleteOverride(id);
+        if (preview.sow_blocking) {
+          return setBlockingError({ title: 'Penghapusan diblokir oleh dependensi SOW', counts: preview.sow_refs });
+        }
+        if (preview.overlap_conflict) {
+          return setBlockingError(`Penghapusan dibatalkan: ${preview.overlap_conflict}`);
+        }
+        setDeleteDialogData({
+          isOpen: true,
+          preview: { ...preview, mode: 'delete' },
+          overrideId: id,
+        });
+      } catch (err) {
+        setBlockingError(err.message || 'Gagal memuat pratinjau penghapusan');
+      }
+    } else {
+      if (!window.confirm('Yakin ingin menghapus jadwal khusus ini?')) return;
+      try {
+        await onDeleteOverride(id, {});
+        setSuccessMsg('Jadwal khusus berhasil dihapus');
+      } catch (err) {
+        setBlockingError(err.message || 'Gagal menghapus jadwal khusus');
+      }
+    }
+  };
+
+  const handleConfirmDeleteToday = async (confirmation) => {
+    const id = deleteDialogData.overrideId;
+    if (!id) return;
+    try {
+      await onDeleteOverride(id, confirmation);
+      setDeleteDialogData({ isOpen: false, preview: null, overrideId: null });
+      setSuccessMsg('Jadwal khusus hari ini berhasil dihapus');
+    } catch (err) {
+      setDeleteDialogData({ isOpen: false, preview: null, overrideId: null });
+      setBlockingError(err.message || 'Gagal menghapus jadwal khusus');
     }
   };
 
@@ -143,8 +190,9 @@ export default function DateRangeShiftForm({
         </form>
       </div>
 
-      <UpcomingOverridesList upcomingOverrides={upcomingOverrides} plantToday={plantToday} onDeleteOverride={onDeleteOverride} busy={busy} />
+      <UpcomingOverridesList upcomingOverrides={upcomingOverrides} plantToday={plantToday} onDeleteOverride={handleDeleteTrigger} busy={busy} />
       <TodayImpactDialog isOpen={showTodayDialog} onClose={() => setShowTodayDialog(false)} onConfirm={handleConfirmToday} previewData={previewResult} busy={busy} />
+      <TodayImpactDialog isOpen={deleteDialogData.isOpen} onClose={() => setDeleteDialogData({ isOpen: false, preview: null, overrideId: null })} onConfirm={handleConfirmDeleteToday} previewData={deleteDialogData.preview} busy={busy} />
     </div>
   );
 }

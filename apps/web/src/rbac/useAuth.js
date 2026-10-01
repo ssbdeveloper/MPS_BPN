@@ -34,11 +34,16 @@ export function isAuthenticated() {
 export function authHeaders() {
   const user = readAuthUser();
   if (!user) return {};
-  return {
+  const token = user.token || sessionStorage.getItem('authToken');
+  const headers = {
     'x-user-id': user.id != null ? String(user.id) : '',
     'x-user-name': user.name || user.username || '',
     'x-user-role': user.roles || user.role || '',
   };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 export function useAuth() {

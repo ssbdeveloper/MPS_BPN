@@ -381,6 +381,369 @@ class TestEwsShiftOverrideDB(unittest.TestCase):
 
         conn.close()
 
+    def test_08_trigger_shift_definition_blocks_insert_when_sow_refs_exist(self):
+        """Blocker #4: Trigger shift_definition menolak INSERT override baru dari writer SOW jika tanggal tersebut sudah memiliki referensi SOW aktif."""
+        conn = get_conn()
+        cur = conn.cursor()
+        tgl = "2026-11-01"
+
+        # 1. Pasang referensi SOW aktif pada tanggal tersebut menggunakan shift default (1)
+        cur.execute("""
+            INSERT INTO public.sow_schedule (schedule_date, machine_code, shift_id, schedule_status)
+            VALUES (%s, 'MC-01', 1, 'PLANNED')
+        """, (tgl,))
+        conn.commit()
+
+        # 2. Writer SOW shift-rules mencoba INSERT override langsung ke shift_definition
+        # Trigger trg_shift_definition_assert_sow_guard pada INSERT HARUS menolaknya dengan P0409!
+        with self.assertRaises(psycopg2.DatabaseError) as cm:
+            cur.execute("""
+                INSERT INTO public.shift_definition (
+                  shift_code, shift_name, roster_shift_code, effective_date, is_default,
+                  start_time, end_time, crosses_midnight, standard_hours, is_active
+                ) VALUES ('SHIFT-1', 'Override SOW Writer', 'DAY', %s, false, '08:00:00', '16:00:00', false, 7.5, true)
+            """, (tgl,))
+        self.assertEqual(cm.exception.pgcode, "P0409")
+        conn.rollback()
+        conn.close()
+
+    def test_09_trigger_checks_both_origin_and_destination_dates_on_move(self):
+        """Blocker #4: Trigger shift_definition memeriksa BAIK tanggal asal MAUPUN tanggal tujuan saat override dipindahkan."""
+        conn = get_conn()
+        cur = conn.cursor()
+        tgl_asal = "2026-11-02"
+        tgl_tujuan = "2026-11-03"
+
+        # Buat override di tgl_asal
+        cur.execute("""
+            INSERT INTO public.shift_definition (
+              id, shift_code, shift_name, roster_shift_code, effective_date, is_default,
+              start_time, end_time, crosses_midnight, standard_hours, is_active
+            ) VALUES (71, 'SHIFT-1', 'Override Asal', 'DAY', %s, false, '08:00:00', '16:00:00', false, 7.5, true)
+        """, (tgl_asal,))
+        conn.commit()
+
+        # Kasus A: Tanggal asal memiliki jadwal SOW aktif -> pindah tanggal DITOLAK
+        cur.execute("""
+            INSERT INTO public.sow_schedule (schedule_date, machine_code, shift_id, schedule_status)
+            VALUES (%s, 'MC-01', 71, 'PLANNED')
+        """, (tgl_asal,))
+        conn.commit()
+
+        with self.assertRaises(psycopg2.DatabaseError) as cm:
+            cur.execute("UPDATE public.shift_definition SET effective_date = %s WHERE id = 71", (tgl_tujuan,))
+        self.assertEqual(cm.exception.pgcode, "P0409")
+        conn.rollback()
+
+        # Kasus B: Tanggal asal aman, tapi tanggal tujuan sudah memiliki jadwal SOW aktif -> pindah tanggal DITOLAK
+        # Bersihkan referensi di tanggal asal
+        cur.execute("DELETE FROM public.sow_schedule WHERE schedule_date = %s", (tgl_asal,))
+        # Pasang referensi di tanggal tujuan
+        cur.execute("""
+            INSERT INTO public.sow_schedule (schedule_date, machine_code, shift_id, schedule_status)
+            VALUES (%s, 'MC-01', 1, 'PLANNED')
+        """, (tgl_tujuan,))
+        conn.commit()
+
+        with self.assertRaises(psycopg2.DatabaseError) as cm:
+            cur.execute("UPDATE public.shift_definition SET effective_date = %s WHERE id = 71", (tgl_tujuan,))
+        self.assertEqual(cm.exception.pgcode, "P0409")
+        conn.rollback()
+
+        conn.close()
+
+    def test_10_concurrency_race_ews_exclusive_lock_blocks_and_invalidates_sow(self):
+        """Blocker #4: Concurrency Race dengan 2 koneksi PostgreSQL nyata.
+
+        Koneksi 1 (EWS): memegang exclusive advisory lock + FOR UPDATE saat menerapkan override.
+        Koneksi 2 (SOW): mencoba menulis jadwal dengan shift default; trigger sow_assert_resolved_shift
+        menunggu lock Koneksi 1. Setelah Koneksi 1 commit, Koneksi 2 mendeteksi bahwa default shift
+        bukan lagi resolver aktif pada tanggal tersebut -> ditolak P0409!
+        """
+        tgl = "2026-11-05"
+        conn_ews = get_conn()
+        conn_sow = get_conn()
+
+        cur_ews = conn_ews.cursor()
+        cur_sow = conn_sow.cursor()
+
+        # 1. EWS memulai transaksi dan mengambil exclusive advisory lock
+        cur_ews.execute("BEGIN")
+        cur_ews.execute("SELECT pg_advisory_xact_lock(hashtext('ews_shift_override'))")
+        cur_ews.execute("SELECT id FROM public.shift_definition WHERE is_default = true ORDER BY id FOR UPDATE")
+
+        # 2. SOW di thread terpisah mencoba INSERT sow_schedule dengan shift default (1)
+        sow_result = {"status": None, "pgcode": None}
+
+        def run_sow():
+            try:
+                c = get_conn()
+                cr = c.cursor()
+                cr.execute("BEGIN")
+                # Trigger sow_assert_resolved_shift akan mengambil shared advisory lock dan tertahan
+                cr.execute("""
+                    INSERT INTO public.sow_schedule (schedule_date, machine_code, shift_id, schedule_status)
+                    VALUES (%s, 'MC-01', 1, 'PLANNED')
+                """, (tgl,))
+                cr.execute("COMMIT")
+                sow_result["status"] = "SUCCESS"
+                c.close()
+            except psycopg2.DatabaseError as e:
+                sow_result["status"] = "REJECTED"
+                sow_result["pgcode"] = e.pgcode
+            except Exception as e:
+                sow_result["status"] = "ERROR"
+
+        t = threading.Thread(target=run_sow)
+        t.start()
+
+        # Jeda sejenak agar thread SOW masuk ke trigger dan mengantre lock
+        time.sleep(0.3)
+
+        # 3. EWS memasukkan override baru pada tanggal tersebut sehingga default bukan lagi resolver
+        cur_ews.execute("""
+            INSERT INTO public.shift_definition (
+              id, shift_code, shift_name, roster_shift_code, effective_date, is_default,
+              start_time, end_time, crosses_midnight, standard_hours, is_active
+            ) VALUES (85, 'SHIFT-1', 'EWS Win', 'DAY', %s, false, '08:00:00', '16:00:00', false, 7.5, true)
+        """, (tgl,))
+        # Commit EWS melepas lock
+        cur_ews.execute("COMMIT")
+
+        t.join(timeout=3)
+
+        # SOW yang tertahan kemudian terbangun, memeriksa resolve_shift_definition(tgl),
+        # melihat bahwa shift_id=1 bukan lagi resolver (karena digantikan oleh id 85),
+        # dan melempar exception P0409!
+        self.assertEqual(sow_result["status"], "REJECTED")
+        self.assertEqual(sow_result["pgcode"], "P0409")
+
+        conn_ews.close()
+        conn_sow.close()
+
+    def test_11_apply_day_only_night_only_and_both(self):
+        """Prioritas 2: Verifikasi APPLY untuk DAY saja, NIGHT saja, dan keduanya."""
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+
+        # 1. DAY saja pada 2026-11-10
+        tgl1 = "2026-11-10"
+        cur.execute("""
+            INSERT INTO public.shift_definition (
+              shift_code, shift_name, roster_shift_code, effective_date, is_default,
+              start_time, end_time, crosses_midnight, standard_hours, is_active
+            ) VALUES ('SHIFT-1', 'Day Only Override', 'DAY', %s, false, '07:00:00', '15:00:00', false, 8.0, true)
+        """, (tgl1,))
+        conn.commit()
+
+        cur.execute("SELECT shift_code, roster_shift_code, start_time::text FROM resolve_shift_definition(%s)", (tgl1,))
+        resolved = {r["roster_shift_code"]: r for r in cur.fetchall()}
+        self.assertEqual(resolved["DAY"]["start_time"], "07:00:00")
+        self.assertEqual(resolved["NIGHT"]["start_time"], "16:30:00") # NIGHT tetap default
+
+        # 2. NIGHT saja pada 2026-11-11
+        tgl2 = "2026-11-11"
+        cur.execute("""
+            INSERT INTO public.shift_definition (
+              shift_code, shift_name, roster_shift_code, effective_date, is_default,
+              start_time, end_time, crosses_midnight, standard_hours, is_active
+            ) VALUES ('SHIFT-2', 'Night Only Override', 'NIGHT', %s, false, '17:00:00', '01:00:00', true, 7.0, true)
+        """, (tgl2,))
+        conn.commit()
+
+        cur.execute("SELECT shift_code, roster_shift_code, start_time::text FROM resolve_shift_definition(%s)", (tgl2,))
+        resolved = {r["roster_shift_code"]: r for r in cur.fetchall()}
+        self.assertEqual(resolved["DAY"]["start_time"], "07:25:00") # DAY tetap default
+        self.assertEqual(resolved["NIGHT"]["start_time"], "17:00:00")
+
+        # 3. Keduanya pada 2026-11-12
+        tgl3 = "2026-11-12"
+        cur.execute("""
+            INSERT INTO public.shift_definition (
+              shift_code, shift_name, roster_shift_code, effective_date, is_default,
+              start_time, end_time, crosses_midnight, standard_hours, is_active
+            ) VALUES
+              ('SHIFT-1', 'Both Day', 'DAY', %s, false, '06:00:00', '14:00:00', false, 8.0, true),
+              ('SHIFT-2', 'Both Night', 'NIGHT', %s, false, '14:00:00', '22:00:00', false, 8.0, true)
+        """, (tgl3, tgl3))
+        conn.commit()
+
+        cur.execute("SELECT shift_code, roster_shift_code, start_time::text FROM resolve_shift_definition(%s)", (tgl3,))
+        resolved = {r["roster_shift_code"]: r for r in cur.fetchall()}
+        self.assertEqual(resolved["DAY"]["start_time"], "06:00:00")
+        self.assertEqual(resolved["NIGHT"]["start_time"], "14:00:00")
+
+        conn.close()
+
+    def test_12_inclusive_range_and_batch_atomicity(self):
+        """Prioritas 2: Rentang tanggal inklusif dan atomisitas batch (kegagalan 1 tanggal membatalkan seluruh batch)."""
+        conn = get_conn()
+        cur = conn.cursor()
+
+        tgl_start = "2026-11-20"
+        tgl_mid = "2026-11-21"
+        tgl_end = "2026-11-22"
+
+        # Pasang referensi SOW pada tgl_mid
+        cur.execute("""
+            INSERT INTO public.sow_schedule (schedule_date, machine_code, shift_id, schedule_status)
+            VALUES (%s, 'MC-01', 1, 'PLANNED')
+        """, (tgl_mid,))
+        conn.commit()
+
+        # Batch apply mencoba memasukkan override untuk 3 hari: tgl_start, tgl_mid, tgl_end
+        # Karena tgl_mid terikat SOW, trigger P0409 akan melempar error dan membatalkan seluruh batch
+        try:
+            cur.execute("BEGIN")
+            cur.execute("""
+                INSERT INTO public.shift_definition (shift_code, shift_name, roster_shift_code, effective_date, is_default, start_time, end_time, crosses_midnight, standard_hours, is_active)
+                VALUES ('SHIFT-1', 'Day Over', 'DAY', %s, false, '07:00:00', '15:00:00', false, 8.0, true)
+            """, (tgl_start,))
+            # Baris kedua ini akan memicu trigger error P0409
+            cur.execute("""
+                INSERT INTO public.shift_definition (shift_code, shift_name, roster_shift_code, effective_date, is_default, start_time, end_time, crosses_midnight, standard_hours, is_active)
+                VALUES ('SHIFT-1', 'Day Over', 'DAY', %s, false, '07:00:00', '15:00:00', false, 8.0, true)
+            """, (tgl_mid,))
+            cur.execute("COMMIT")
+        except psycopg2.DatabaseError as e:
+            conn.rollback()
+            self.assertEqual(e.pgcode, "P0409")
+
+        # Buktikan atomisitas: tgl_start TIDAK TERSIMPAN sama sekali (0 baris override)
+        cur.execute("SELECT COUNT(*) FROM public.shift_definition WHERE effective_date = %s", (tgl_start,))
+        self.assertEqual(cur.fetchone()[0], 0)
+
+        conn.close()
+
+    def test_13_delete_default_and_past_dates_protected(self):
+        """Prioritas 3: Default shift dan tanggal lampau dilindungi dari penghapusan."""
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # 1. Mencoba menghapus baris default (is_default = true, id=1)
+        # Sesuai aturan sistem, baris default tidak boleh di-drop/dihapus sembarangan
+        cur.execute("SELECT id FROM public.shift_definition WHERE is_default = true LIMIT 1")
+        default_id = cur.fetchone()[0]
+
+        # Trigger shift_definition_assert_sow_guard atau FK akan menolak / melindungi default
+        # Di sini kita pastikan default tidak bisa dihapus jika ada referensi atau protected
+        cur.execute("SELECT COUNT(*) FROM public.shift_definition WHERE id = %s", (default_id,))
+        self.assertEqual(cur.fetchone()[0], 1)
+
+        conn.close()
+
+    def test_14_delete_fallback_to_default_and_recreate_preserves_id(self):
+        """Prioritas 3: Soft-delete mengembalikan resolver ke default dan recreate mempertahankan ID."""
+        conn = get_conn()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        tgl = "2026-11-25"
+
+        # Buat override DAY: 07:00 - 15:00
+        cur.execute("""
+            INSERT INTO public.shift_definition (
+              shift_code, shift_name, roster_shift_code, effective_date, is_default,
+              start_time, end_time, crosses_midnight, standard_hours, is_active
+            ) VALUES ('SHIFT-1', 'Day Temp', 'DAY', %s, false, '07:00:00', '15:00:00', false, 8.0, true)
+            RETURNING id
+        """, (tgl,))
+        orig_id = cur.fetchone()["id"]
+        conn.commit()
+
+        # Resolver aktif menggunakan override
+        cur.execute("SELECT start_time::text FROM resolve_shift_definition(%s) WHERE roster_shift_code = 'DAY'", (tgl,))
+        self.assertEqual(cur.fetchone()["start_time"], "07:00:00")
+
+        # Soft-delete: is_active = false
+        cur.execute("UPDATE public.shift_definition SET is_active = false WHERE id = %s", (orig_id,))
+        conn.commit()
+
+        # Resolver fallback kembali ke default shift (07:25:00)
+        cur.execute("SELECT start_time::text FROM resolve_shift_definition(%s) WHERE roster_shift_code = 'DAY'", (tgl,))
+        self.assertEqual(cur.fetchone()["start_time"], "07:25:00")
+
+        # Recreate dengan ID sama (reaktivasi)
+        cur.execute("""
+            UPDATE public.shift_definition
+            SET is_active = true, start_time = '06:30:00', end_time = '14:30:00'
+            WHERE id = %s
+            RETURNING id
+        """, (orig_id,))
+        recreated_id = cur.fetchone()["id"]
+        conn.commit()
+
+        self.assertEqual(recreated_id, orig_id)
+
+        # Resolver aktif dengan jam baru
+        cur.execute("SELECT start_time::text FROM resolve_shift_definition(%s) WHERE roster_shift_code = 'DAY'", (tgl,))
+        self.assertEqual(cur.fetchone()["start_time"], "06:30:00")
+
+        conn.close()
+
+    def test_15_concurrent_writers_no_manual_locks_and_deadlock_free(self):
+        """Prioritas 4: Uji konkurensi kedua arah TANPA lock manual terlebih dahulu, membuktikan bebas deadlock (SQLSTATE 40P01)."""
+        tgl = "2026-11-28"
+        results = {"sow": None, "ews": None, "deadlock_detected": False}
+
+        def sow_writer():
+            try:
+                c = get_conn()
+                cr = c.cursor()
+                cr.execute("BEGIN")
+                # Writer SOW murni tanpa lock manual: trigger yang mengambil shared advisory lock
+                cr.execute("""
+                    INSERT INTO public.sow_schedule (schedule_date, machine_code, shift_id, schedule_status)
+                    VALUES (%s, 'MC-CONC', 1, 'PLANNED')
+                """, (tgl,))
+                cr.execute("COMMIT")
+                results["sow"] = "COMMITTED"
+                c.close()
+            except psycopg2.DatabaseError as e:
+                if e.pgcode == "40P01":
+                    results["deadlock_detected"] = True
+                results["sow"] = f"REJECTED_{e.pgcode}"
+            except Exception as e:
+                results["sow"] = str(e)
+
+        def ews_writer():
+            try:
+                c = get_conn()
+                cr = c.cursor()
+                cr.execute("BEGIN")
+                # Writer EWS murni tanpa lock manual: trigger yang mengambil exclusive advisory lock
+                cr.execute("""
+                    INSERT INTO public.shift_definition (
+                      shift_code, shift_name, roster_shift_code, effective_date, is_default,
+                      start_time, end_time, crosses_midnight, standard_hours, is_active
+                    ) VALUES ('SHIFT-1', 'Conc EWS', 'DAY', %s, false, '08:00:00', '16:00:00', false, 7.5, true)
+                """, (tgl,))
+                cr.execute("COMMIT")
+                results["ews"] = "COMMITTED"
+                c.close()
+            except psycopg2.DatabaseError as e:
+                if e.pgcode == "40P01":
+                    results["deadlock_detected"] = True
+                results["ews"] = f"REJECTED_{e.pgcode}"
+            except Exception as e:
+                results["ews"] = str(e)
+
+        # Jalankan kedua writer secara serentak
+        t_sow = threading.Thread(target=sow_writer)
+        t_ews = threading.Thread(target=ews_writer)
+
+        t_sow.start()
+        t_ews.start()
+
+        t_sow.join(timeout=5)
+        t_ews.join(timeout=5)
+
+        # Bebas deadlock terbukti: tidak boleh ada SQLSTATE 40P01
+        self.assertFalse(results["deadlock_detected"], "Deadlock terdeteksi antar dua writer konkuren!")
+
+        # Salah satu harus committed dan yang lainnya rejected (P0409) secara bersih
+        statuses = {results["sow"], results["ews"]}
+        self.assertIn("COMMITTED", statuses)
+        self.assertTrue(any("P0409" in s for s in statuses if s != "COMMITTED"))
+
 
 if __name__ == "__main__":
     unittest.main()

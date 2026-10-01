@@ -5,6 +5,7 @@ const {
   ShiftOverrideError,
   previewDateRange,
   applyDateRange,
+  previewDeleteOverrideById,
   deleteOverrideById,
 } = require("../services/ewsShiftOverrideService");
 
@@ -1227,7 +1228,7 @@ async function putShiftDateRange(req, res) {
   try {
     client = await (db.pool || db).connect();
     await client.query("BEGIN");
-    const result = await applyDateRange(client, req.body, req.headers);
+    const result = await applyDateRange(client, req.body, req);
     await client.query("COMMIT");
     res.json({ data: result });
   } catch (err) {
@@ -1261,40 +1262,16 @@ async function previewDeleteShiftOverride(req, res) {
       return res.status(400).json({ error: "Invalid override ID", code: "INVALID_ID" });
     }
     client = await (db.pool || db).connect();
-    const ovRes = await client.query(
-      `SELECT id, shift_code, roster_shift_code, effective_date::text AS effective_date,
-              start_time::text, end_time::text, crosses_midnight, standard_hours, is_active
-       FROM public.shift_definition WHERE id = $1`,
-      [id]
-    );
-    const row = ovRes.rows[0];
-    if (!row) {
-      return res.status(404).json({ error: "Override not found", code: "OVERRIDE_NOT_FOUND" });
-    }
-
-    const familyRes = await client.query(
-      "SELECT array_agg(id) AS ids FROM public.shift_definition WHERE lower(shift_code) = lower($1)",
-      [row.shift_code]
-    );
-    const familyIds = familyRes.rows[0]?.ids || [row.id];
-
-    const refRes = await client.query(
-      "SELECT public.ews_sow_blocking_refs($1::date, $2::bigint[]) AS info",
-      [row.effective_date, familyIds]
-    );
-    const info = refRes.rows[0]?.info || {};
-
-    res.json({
-      data: {
-        id: row.id,
-        shift_code: row.roster_shift_code,
-        date: row.effective_date,
-        sow_refs: info.counts || {},
-        total_blocking: info.total || 0,
-        samples: info.samples || [],
-      },
-    });
+    const result = await previewDeleteOverrideById(client, id);
+    res.json({ data: result });
   } catch (err) {
+    if (err instanceof ShiftOverrideError) {
+      return res.status(err.status).json({
+        error: err.message,
+        code: err.code,
+        details: err.details,
+      });
+    }
     console.error("previewDeleteShiftOverride error:", err);
     res.status(500).json({ error: err.message || "Failed to preview delete" });
   } finally {
@@ -1312,7 +1289,7 @@ async function deleteShiftOverride(req, res) {
     }
     client = await (db.pool || db).connect();
     await client.query("BEGIN");
-    const result = await deleteOverrideById(client, id, req.body, req.headers);
+    const result = await deleteOverrideById(client, id, req.body, req);
     await client.query("COMMIT");
     res.json({ data: result });
   } catch (err) {
@@ -1373,7 +1350,7 @@ async function deleteShiftDateRange(req, res) {
     );
     const results = [];
     for (const r of ovRes.rows) {
-      const d = await deleteOverrideById(client, r.id, req.body, req.headers);
+      const d = await deleteOverrideById(client, r.id, req.body, req);
       results.push(d);
     }
     await client.query("COMMIT");

@@ -449,3 +449,27 @@ test("manifest 20260925: ledger yang sudah berisi 3 file lama hanya memilih inde
   assert.deepEqual(plan.pending, ["20260925_timesheet_unique_active_productive_op.sql"]);
 });
 
+test("discovery forward migration tidak memindai rollback file", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const files = fs.readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql"));
+
+  // Tidak boleh ada file rollback di dalam MIGRATIONS_DIR (database/migrations/api)
+  const rollbackInApi = files.filter((name) => /rollback/i.test(name));
+  assert.deepEqual(
+    rollbackInApi,
+    [],
+    `Ditemukan file rollback di folder migrasi forward ${MIGRATIONS_DIR}: ${rollbackInApi.join(", ")}`
+  );
+
+  // File rollback harus tersimpan di database/migrations/rollback/
+  const rollbackDir = path.join(__dirname, "migrations", "rollback");
+  assert.ok(fs.existsSync(rollbackDir), "Direktori rollback tidak ditemukan");
+  const rollbackFiles = fs.readdirSync(rollbackDir).filter((name) => name.endsWith(".sql"));
+  assert.ok(
+    rollbackFiles.includes("20261001_ews_shift_date_override_guard_rollback.sql"),
+    "File rollback 20261001_ews_shift_date_override_guard_rollback.sql harus ada di database/migrations/rollback/"
+  );
+});
+
+

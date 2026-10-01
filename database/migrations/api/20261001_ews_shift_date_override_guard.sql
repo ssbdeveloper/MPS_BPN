@@ -146,7 +146,7 @@ COMMENT ON FUNCTION public.ews_sow_blocking_refs(date, bigint[]) IS
   'Memeriksa keberadaan dependensi SOW aktif yang memblokir perubahan shift override pada tanggal tertentu.';
 
 -- 3. Trigger SOW: memastikan writer SOW hanya menggunakan shift yang ter-resolusi aktif
---    sekaligus mencegah race dengan mutasi override di EWS.
+--    sekaligus mencegah race dengan mutasi override di EWS menggunakan protokol konkurensi bersama.
 CREATE OR REPLACE FUNCTION public.sow_assert_resolved_shift()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -191,6 +191,11 @@ BEGIN
     END IF;
   END IF;
 
+  -- Protokol konkurensi bersama dengan writer shift_definition:
+  -- Ambil shared advisory lock agar bersaing secara teratur dengan exclusive advisory lock
+  -- yang dipegang oleh transaksi mutasi shift definition.
+  PERFORM pg_advisory_xact_lock_shared(hashtext('ews_shift_override'));
+
   -- Ambil KEY SHARE lock pada shift_definition untuk bersaing secara deterministik
   -- dengan FOR UPDATE lock transaksi EWS
   PERFORM 1 FROM public.shift_definition WHERE id = NEW.shift_id FOR KEY SHARE;
@@ -233,53 +238,127 @@ CREATE TRIGGER trg_sow_assert_resolved_shift
   FOR EACH ROW EXECUTE FUNCTION public.sow_assert_resolved_shift();
 
 -- 4. Trigger penjaga pada public.shift_definition untuk menutup writer SOW shift-rules
---    Mencegah modifikasi atau deaktivasi override bila sudah memiliki referensi SOW.
+--    Mencegah modifikasi, deaktivasi, aktivasi ulang, perubahan tanggal/family,
+--    maupun INSERT override bila sudah memiliki referensi SOW yang memblokir.
 CREATE OR REPLACE FUNCTION public.shift_definition_assert_sow_guard()
 RETURNS trigger
 LANGUAGE plpgsql
 VOLATILE
 AS $$
 DECLARE
-  v_date date;
   v_family_ids bigint[];
   v_res jsonb;
   v_total bigint;
+  v_chk_date date;
+  v_chk_code text;
+  v_dates_to_check date[] := '{}';
+  v_codes_to_check text[] := '{}';
+  i int;
 BEGIN
-  -- Hanya berlaku untuk override bertanggal (bukan default)
-  IF TG_OP = 'DELETE' THEN
+  -- Protokol konkurensi bersama: kunci eksklusif transaksi untuk serialisasi seluruh writer
+  PERFORM pg_advisory_xact_lock(hashtext('ews_shift_override'));
+
+  IF TG_OP = 'INSERT' THEN
+    -- Baris default baru tidak dilarang jika belum ada bentrok
+    IF NEW.is_default THEN
+      RETURN NEW;
+    END IF;
+    -- Override bertanggal baru yang aktif: wajib cek apakah tanggal & family tersebut sudah punya referensi SOW
+    IF NEW.is_active AND NEW.effective_date IS NOT NULL THEN
+      v_dates_to_check := array_append(v_dates_to_check, NEW.effective_date);
+      v_codes_to_check := array_append(v_codes_to_check, NEW.shift_code);
+    END IF;
+
+  ELSIF TG_OP = 'DELETE' THEN
     IF OLD.is_default THEN
       RETURN OLD;
     END IF;
-    v_date := OLD.effective_date;
+    -- Hapus override bertanggal yang aktif: cek apakah tanggal tersebut terikat referensi SOW
+    IF OLD.is_active AND OLD.effective_date IS NOT NULL THEN
+      v_dates_to_check := array_append(v_dates_to_check, OLD.effective_date);
+      v_codes_to_check := array_append(v_codes_to_check, OLD.shift_code);
+    END IF;
+
   ELSIF TG_OP = 'UPDATE' THEN
+    -- Jika baris default diubah jam/statusnya:
     IF OLD.is_default AND NEW.is_default THEN
+      IF OLD.start_time <> NEW.start_time OR OLD.end_time <> NEW.end_time OR
+         OLD.crosses_midnight <> NEW.crosses_midnight OR OLD.is_active <> NEW.is_active OR
+         lower(OLD.shift_code) <> lower(NEW.shift_code) THEN
+        -- Cek apakah ada referensi SOW aktif di masa depan yang memakai default shift ini
+        SELECT array_agg(id) INTO v_family_ids
+        FROM public.shift_definition
+        WHERE lower(shift_code) = lower(OLD.shift_code);
+
+        -- Periksa apakah ada tanggal mendatang dengan referensi SOW pada shift default ini
+        -- (Dimana pada tanggal tersebut belum ada override aktif)
+        IF EXISTS (
+          SELECT 1 FROM (
+            SELECT schedule_date AS dt, shift_id FROM public.sow_schedule WHERE schedule_status <> 'CANCELLED' AND schedule_date >= CURRENT_DATE
+            UNION ALL
+            SELECT schedule_date AS dt, shift_id FROM public.sow_schedule_batch WHERE batch_status <> 'CANCELLED' AND schedule_date >= CURRENT_DATE
+            UNION ALL
+            SELECT schedule_date AS dt, shift_id FROM public.sow_machine_capacity WHERE is_active = true AND schedule_date >= CURRENT_DATE
+            UNION ALL
+            SELECT overtime_date AS dt, shift_id FROM public.sow_overtime_request WHERE request_status IN ('PENDING', 'APPROVED') AND overtime_date >= CURRENT_DATE
+          ) s
+          WHERE s.shift_id = OLD.id
+            AND NOT EXISTS (
+              SELECT 1 FROM public.shift_definition o
+              WHERE o.effective_date = s.dt AND lower(o.shift_code) = lower(OLD.shift_code) AND o.is_active = true
+            )
+        ) THEN
+          RAISE EXCEPTION 'SOW_REFERENCE_CONFLICT: perubahan default shift % diblokir referensi SOW aktif pada tanggal tanpa override',
+            OLD.shift_code USING ERRCODE = 'P0409';
+        END IF;
+      END IF;
       RETURN NEW;
     END IF;
-    -- Jika bukan perubahan jam, tanggal, atau is_active, lewati
+
+    -- Jika tidak ada perubahan jam, tanggal, kode, atau status aktif, lewati
     IF OLD.start_time = NEW.start_time AND OLD.end_time = NEW.end_time AND
        OLD.crosses_midnight = NEW.crosses_midnight AND OLD.is_active = NEW.is_active AND
-       OLD.effective_date IS NOT DISTINCT FROM NEW.effective_date THEN
+       OLD.effective_date IS NOT DISTINCT FROM NEW.effective_date AND
+       lower(OLD.shift_code) = lower(NEW.shift_code) THEN
       RETURN NEW;
     END IF;
-    v_date := COALESCE(OLD.effective_date, NEW.effective_date);
+
+    -- 1. Cek tanggal asal (OLD) jika sebelumnya aktif
+    IF OLD.is_active AND OLD.effective_date IS NOT NULL THEN
+      v_dates_to_check := array_append(v_dates_to_check, OLD.effective_date);
+      v_codes_to_check := array_append(v_codes_to_check, OLD.shift_code);
+    END IF;
+
+    -- 2. Cek tanggal tujuan (NEW) jika sekarang aktif
+    IF NEW.is_active AND NEW.effective_date IS NOT NULL THEN
+      IF NEW.effective_date IS DISTINCT FROM OLD.effective_date OR
+         lower(NEW.shift_code) <> lower(OLD.shift_code) OR
+         NOT OLD.is_active THEN
+        v_dates_to_check := array_append(v_dates_to_check, NEW.effective_date);
+        v_codes_to_check := array_append(v_codes_to_check, NEW.shift_code);
+      END IF;
+    END IF;
   END IF;
 
-  IF v_date IS NULL THEN
-    RETURN COALESCE(NEW, OLD);
-  END IF;
+  -- Lakukan pemeriksaan untuk setiap pasangan (tanggal, kode shift) yang terdampak
+  IF array_length(v_dates_to_check, 1) > 0 THEN
+    FOR i IN 1 .. array_length(v_dates_to_check, 1) LOOP
+      v_chk_date := v_dates_to_check[i];
+      v_chk_code := v_codes_to_check[i];
 
-  -- Cari seluruh id shift dalam keluarga kode yang sama
-  SELECT array_agg(id) INTO v_family_ids
-  FROM public.shift_definition
-  WHERE lower(shift_code) = lower(COALESCE(OLD.shift_code, NEW.shift_code));
+      SELECT array_agg(id) INTO v_family_ids
+      FROM public.shift_definition
+      WHERE lower(shift_code) = lower(v_chk_code);
 
-  v_res := public.ews_sow_blocking_refs(v_date, v_family_ids);
-  v_total := (v_res->>'total')::bigint;
+      v_res := public.ews_sow_blocking_refs(v_chk_date, v_family_ids);
+      v_total := (v_res->>'total')::bigint;
 
-  IF v_total > 0 THEN
-    RAISE EXCEPTION 'SOW_REFERENCE_CONFLICT: shift override tanggal % terikat % referensi SOW aktif',
-      v_date, v_total
-      USING ERRCODE = 'P0409', DETAIL = v_res::text;
+      IF v_total > 0 THEN
+        RAISE EXCEPTION 'SOW_REFERENCE_CONFLICT: shift override tanggal % (shift %) terikat % referensi SOW aktif',
+          v_chk_date, v_chk_code, v_total
+          USING ERRCODE = 'P0409', DETAIL = v_res::text;
+      END IF;
+    END LOOP;
   END IF;
 
   RETURN COALESCE(NEW, OLD);
@@ -288,5 +367,6 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_shift_definition_assert_sow_guard ON public.shift_definition;
 CREATE TRIGGER trg_shift_definition_assert_sow_guard
-  BEFORE UPDATE OR DELETE ON public.shift_definition
+  BEFORE INSERT OR UPDATE OR DELETE ON public.shift_definition
   FOR EACH ROW EXECUTE FUNCTION public.shift_definition_assert_sow_guard();
+

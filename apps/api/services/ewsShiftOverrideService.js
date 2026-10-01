@@ -2,20 +2,13 @@
 
 const crypto = require("crypto");
 const { resolveTimezone } = require("../config/timezone");
+const { authenticateAndAuthorizeActor } = require("./ewsAuthGuard");
+const { ShiftOverrideError } = require("./shiftOverrideError");
 
 const ISO_DATE_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
 const MAX_RANGE_DAYS = 62;
 const ROSTER_SHIFT_CODES = Object.freeze(["DAY", "NIGHT"]);
-
-class ShiftOverrideError extends Error {
-  constructor(status, code, message, details = {}) {
-    super(message);
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
 
 /**
  * Validasi tanggal format ISO YYYY-MM-DD dengan round-trip check kalender.
@@ -254,8 +247,9 @@ function checkIntervalsForOverlap(intervals) {
 /**
  * Hitung canonical preview_token sha256 dari state DB terkini + payload.
  */
-function computePreviewToken(payload, stateSnapshot) {
+function computePreviewToken(payload, stateSnapshot, plantToday = null, operation = "APPLY_DATE_RANGE") {
   const canonicalObj = {
+    operation,
     payload: {
       from: payload.from,
       to: payload.to,
@@ -263,8 +257,8 @@ function computePreviewToken(payload, stateSnapshot) {
         shift_code: s.shift_code,
         start_time: s.start_time,
         end_time: s.end_time,
-        crosses_midnight: s.crosses_midnight,
-        standard_hours: s.standard_hours,
+        crosses_midnight: Boolean(s.crosses_midnight),
+        standard_hours: Number(s.standard_hours),
       })).sort((a, b) => a.shift_code.localeCompare(b.shift_code)),
     },
     state: (stateSnapshot || []).map((row) => ({
@@ -284,6 +278,7 @@ function computePreviewToken(payload, stateSnapshot) {
       if (d !== 0) return d;
       return (a.roster_shift_code || "").localeCompare(b.roster_shift_code || "");
     }),
+    plant_today: plantToday || null,
   };
 
   const hash = crypto.createHash("sha256").update(JSON.stringify(canonicalObj)).digest("hex");
@@ -291,38 +286,111 @@ function computePreviewToken(payload, stateSnapshot) {
 }
 
 /**
- * Validasi aktor dari header terhadap tabel public.users
+ * Token preview kanonikal untuk operasi penghapusan override (Spec §8.3 & Blocker #3)
  */
-async function verifyActor(client, reqHeaders) {
-  const userIdRaw = reqHeaders?.["x-user-id"];
-  const userNameRaw = reqHeaders?.["x-user-name"];
-  const userRoleRaw = reqHeaders?.["x-user-role"];
-
-  if (!userIdRaw) {
-    throw new ShiftOverrideError(400, "ACTOR_REQUIRED", "Header identitas aktor x-user-id wajib disertakan");
-  }
-
-  const userId = parseInt(userIdRaw, 10);
-  if (!Number.isInteger(userId) || userId <= 0) {
-    throw new ShiftOverrideError(400, "ACTOR_REQUIRED", "Identitas x-user-id tidak valid");
-  }
-
-  const res = await client.query(
-    `SELECT id, username, name, COALESCE(NULLIF(roles, ''), role) AS role
-     FROM public.users WHERE id = $1 LIMIT 1`,
-    [userId]
-  );
-
-  const row = res.rows[0];
-  if (!row) {
-    throw new ShiftOverrideError(403, "ACTOR_UNVERIFIED", "Aktor tidak ditemukan di database pengguna");
-  }
-
-  return {
-    id: String(row.id),
-    name: userNameRaw || row.name || row.username,
-    role: userRoleRaw || row.role || "operator",
+function computeDeletePreviewToken(row, stateSnapshot, plantToday) {
+  const canonicalObj = {
+    operation: "DELETE_OVERRIDE",
+    override_id: Number(row.id),
+    effective_date: row.effective_date,
+    roster_shift_code: row.roster_shift_code,
+    state: (stateSnapshot || []).map((r) => ({
+      id: Number(r.id),
+      shift_code: r.shift_code,
+      roster_shift_code: r.roster_shift_code,
+      effective_date: r.effective_date,
+      is_default: Boolean(r.is_default),
+      is_active: Boolean(r.is_active),
+      start_time: r.start_time,
+      end_time: r.end_time,
+      crosses_midnight: Boolean(r.crosses_midnight),
+      standard_hours: Number(r.standard_hours),
+      updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : null,
+    })).sort((a, b) => {
+      const d = (a.effective_date || "1900-01-01").localeCompare(b.effective_date || "1900-01-01");
+      if (d !== 0) return d;
+      return (a.roster_shift_code || "").localeCompare(b.roster_shift_code || "");
+    }),
+    plant_today: plantToday,
   };
+
+  const hash = crypto.createHash("sha256").update(JSON.stringify(canonicalObj)).digest("hex");
+  return `sha256:${hash}`;
+}
+
+/**
+ * Validasi bahwa saat override dihapus (fallback ke shift default),
+ * jadwal default tidak menimbulkan overlap interval dengan shift lain di tanggal D, D-1, atau D+1.
+ */
+function validateDeleteFallbackNoOverlap(row, defaults, overrides) {
+  const targetDate = row.effective_date;
+  const prevDate = addDaysToIso(targetDate, -1);
+  const nextDate = addDaysToIso(targetDate, 1);
+  const defaultByCode = new Map(defaults.map((d) => [d.roster_shift_code, d]));
+  const fallbackDef = defaultByCode.get(row.roster_shift_code);
+  if (!fallbackDef) return;
+
+  const evalDates = [prevDate, targetDate, nextDate];
+  const activeShiftsMap = new Map();
+
+  for (const d of evalDates) {
+    for (const code of ROSTER_SHIFT_CODES) {
+      const def = defaultByCode.get(code);
+      if (def) {
+        activeShiftsMap.set(`${code}_${d}`, {
+          start_time: def.start_time,
+          end_time: def.end_time,
+          crosses_midnight: Boolean(def.crosses_midnight),
+        });
+      }
+    }
+  }
+
+  for (const o of overrides) {
+    if (o.is_active && evalDates.includes(o.effective_date)) {
+      if (Number(o.id) === Number(row.id)) continue; // Abaikan baris yang sedang dihapus
+      activeShiftsMap.set(`${o.roster_shift_code}_${o.effective_date}`, {
+        start_time: o.start_time,
+        end_time: o.end_time,
+        crosses_midnight: Boolean(o.crosses_midnight),
+      });
+    }
+  }
+
+  const intervals = [];
+  const anchorDate = addDaysToIso(prevDate, -1);
+  for (const d of evalDates) {
+    for (const code of ROSTER_SHIFT_CODES) {
+      const sh = activeShiftsMap.get(`${code}_${d}`);
+      if (sh) {
+        const startMin = parseTimeToMinutes(sh.start_time);
+        const endMin = parseTimeToMinutes(sh.end_time);
+        const span = sh.crosses_midnight ? endMin + 1440 - startMin : endMin - startMin;
+        intervals.push(
+          buildIntervalMinutes(anchorDate, d, sh.start_time, sh.crosses_midnight, span)
+        );
+      }
+    }
+  }
+
+  const check = checkIntervalsForOverlap(intervals);
+  if (check.conflict) {
+    throw new ShiftOverrideError(
+      400,
+      "OVERLAP_CONFLICT",
+      "Penghapusan override shift dibatalkan karena kembalinya shift ke default menimbulkan overlap jadwal dengan shift sekitar"
+    );
+  }
+}
+
+/**
+ * Validasi aktor dari request terhadap identitas server yang terautentikasi (Blocker #2)
+ */
+async function verifyActor(client, reqOrHeaders) {
+  const req = reqOrHeaders && (reqOrHeaders.headers || reqOrHeaders.user || reqOrHeaders.session)
+    ? reqOrHeaders
+    : { headers: reqOrHeaders };
+  return authenticateAndAuthorizeActor(client, req);
 }
 
 /**
@@ -387,7 +455,7 @@ async function previewDateRange(client, payload) {
 
   const { defaults, overrides } = await fetchShiftState(client, validated.from, validated.to, false);
   const stateSnapshot = [...defaults, ...overrides];
-  const previewToken = computePreviewToken(validated, stateSnapshot);
+  const previewToken = computePreviewToken(validated, stateSnapshot, plantToday, "APPLY_DATE_RANGE");
 
   const defaultByCode = new Map(defaults.map((d) => [d.roster_shift_code, d]));
   const overrideKey = (code, date) => `${code}_${date}`;
@@ -555,7 +623,7 @@ async function applyDateRange(client, payload, reqHeaders) {
   );
 
   const stateSnapshot = [...defaults, ...overrides];
-  const currentToken = computePreviewToken(validated, stateSnapshot);
+  const currentToken = computePreviewToken(validated, stateSnapshot, plantToday, "APPLY_DATE_RANGE");
 
   const defaultByCode = new Map(defaults.map((d) => [d.roster_shift_code, d]));
   const overrideKey = (code, date) => `${code}_${date}`;
@@ -621,8 +689,9 @@ async function applyDateRange(client, payload, reqHeaders) {
     }
   }
 
-  // 4. Verifikasi aturan perubahan hari ini (§5.2) jika ada mutasi
-  let actor = { id: null, name: null, role: null };
+  // 4. Verifikasi identitas aktor server yang terautentikasi dan hak tulis RBAC (Blocker #2)
+  // Wajib pada SELURUH mutasi, baik menyentuh hari ini maupun tanggal mendatang!
+  const actor = await verifyActor(client, reqHeaders);
   let reason = null;
 
   if (touchesTodayWithMutation) {
@@ -634,24 +703,24 @@ async function applyDateRange(client, payload, reqHeaders) {
       );
     }
     reason = validateReason(payload.reason, true);
-    actor = await verifyActor(client, reqHeaders);
 
-    if (payload.preview_token && payload.preview_token !== currentToken) {
+    // Blocker #3: preview_token WAJIB disertakan pada perubahan hari ini
+    if (!payload.preview_token) {
+      throw new ShiftOverrideError(
+        400,
+        "PREVIEW_REQUIRED",
+        "preview_token wajib disertakan untuk perubahan jadwal hari ini. Silakan muat ulang preview."
+      );
+    }
+    if (payload.preview_token !== currentToken) {
       throw new ShiftOverrideError(
         409,
         "PREVIEW_STALE",
-        "Kondisi shift telah berubah sejak preview terakhir. Silakan muat ulang preview."
+        "Kondisi shift telah berubah sejak preview terakhir atau token tidak valid. Silakan muat ulang preview."
       );
     }
   } else {
     reason = validateReason(payload.reason, false);
-    if (reqHeaders?.["x-user-id"]) {
-      try {
-        actor = await verifyActor(client, reqHeaders);
-      } catch (_) {
-        // Abaikan untuk tanggal non-hari ini jika header parsial
-      }
-    }
   }
 
   // 5. Validasi aljabar interval overlap toleransi 0 menit pada [prevDate, nextDate] (§6.2)
@@ -898,6 +967,10 @@ async function applyDateRange(client, payload, reqHeaders) {
  * Soft delete override berdasarkan id (§8.3)
  */
 async function deleteOverrideById(client, overrideId, body = {}, reqHeaders = {}) {
+  // 1. Verifikasi identitas aktor server yang terautentikasi dan hak tulis RBAC (Blocker #2)
+  // Wajib dilakukan di awal sebelum memeriksa data atau row keberadaan!
+  const actor = await verifyActor(client, reqHeaders);
+
   await client.query("SET LOCAL lock_timeout = '5s'");
   await client.query("SELECT pg_advisory_xact_lock(hashtext('ews_shift_override'))");
 
@@ -934,9 +1007,20 @@ async function deleteOverrideById(client, overrideId, body = {}, reqHeaders = {}
     throw new ShiftOverrideError(400, "PAST_DATE_LOCKED", "Override tanggal lampau tidak boleh dihapus");
   }
 
-  let actor = { id: null, name: null, role: null };
   let reason = null;
 
+  // 2. Ambil snapshot state di sekitar tanggal target untuk validasi overlap fallback & preview token
+  const { defaults, overrides } = await fetchShiftState(
+    client,
+    row.effective_date,
+    row.effective_date,
+    true
+  );
+
+  // 3. Pastikan kembalinya shift ke default saat override dihapus tidak menciptakan overlap
+  validateDeleteFallbackNoOverlap(row, defaults, overrides);
+
+  // 4. Verifikasi aturan jika menghapus jadwal hari ini (Blocker #3)
   if (row.effective_date === plantToday) {
     if (body.confirm_today_impact !== true) {
       throw new ShiftOverrideError(
@@ -946,14 +1030,24 @@ async function deleteOverrideById(client, overrideId, body = {}, reqHeaders = {}
       );
     }
     reason = validateReason(body.reason, true);
-    actor = await verifyActor(client, reqHeaders);
+
+    if (!body.preview_token) {
+      throw new ShiftOverrideError(
+        400,
+        "PREVIEW_REQUIRED",
+        "preview_token wajib disertakan untuk penghapusan jadwal hari ini. Silakan muat ulang preview."
+      );
+    }
+    const expectedToken = computeDeletePreviewToken(row, [...defaults, ...overrides], plantToday);
+    if (body.preview_token !== expectedToken) {
+      throw new ShiftOverrideError(
+        409,
+        "PREVIEW_STALE",
+        "Kondisi shift telah berubah sejak preview terakhir atau token tidak valid. Silakan muat ulang preview."
+      );
+    }
   } else {
     reason = validateReason(body.reason, false);
-    if (reqHeaders?.["x-user-id"]) {
-      try {
-        actor = await verifyActor(client, reqHeaders);
-      } catch (_) {}
-    }
   }
 
   // Guard SOW
@@ -1018,6 +1112,96 @@ async function deleteOverrideById(client, overrideId, body = {}, reqHeaders = {}
   };
 }
 
+/**
+ * Preview penghapusan override shift untuk mengecek dampak, dependensi SOW, dan menghasilkan preview_token (Spec §8.3 & Blocker #3)
+ */
+async function previewDeleteOverrideById(client, overrideId) {
+  const plantToday = await getPlantToday(client);
+  const ovRes = await client.query(
+    `SELECT id, shift_code, roster_shift_code, effective_date::text AS effective_date,
+            start_time::text, end_time::text, crosses_midnight, standard_hours, is_active, is_default
+     FROM public.shift_definition WHERE id = $1`,
+    [overrideId]
+  );
+  const row = ovRes.rows[0];
+  if (!row) {
+    throw new ShiftOverrideError(404, "OVERRIDE_NOT_FOUND", "Shift override tidak ditemukan");
+  }
+  if (row.is_default) {
+    throw new ShiftOverrideError(400, "DEFAULT_PROTECTED", "Shift default tidak boleh dihapus");
+  }
+
+  const { defaults, overrides } = await fetchShiftState(client, row.effective_date, row.effective_date, false);
+  const defaultByCode = new Map(defaults.map((d) => [d.roster_shift_code, d]));
+  const fallbackDef = defaultByCode.get(row.roster_shift_code);
+
+  let overlapConflict = null;
+  try {
+    validateDeleteFallbackNoOverlap(row, defaults, overrides);
+  } catch (err) {
+    overlapConflict = err.message;
+  }
+
+  const familyRes = await client.query(
+    "SELECT array_agg(id) AS ids FROM public.shift_definition WHERE lower(shift_code) = lower($1)",
+    [row.shift_code]
+  );
+  const familyIds = familyRes.rows[0]?.ids || [row.id];
+
+  const refRes = await client.query(
+    "SELECT public.ews_sow_blocking_refs($1::date, $2::bigint[]) AS info",
+    [row.effective_date, familyIds]
+  );
+  const sowInfo = refRes.rows[0]?.info || {};
+
+  const isToday = row.effective_date === plantToday;
+  let todayInfo = null;
+  let previewToken = null;
+
+  if (isToday) {
+    const todayStats = await client.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE r.eff_shift = $1)::int AS scheduled_operators,
+         COUNT(*) FILTER (WHERE r.eff_shift = $1 AND lg.recorded > 0)::int AS operators_with_records
+       FROM ews.roster_effective r
+       LEFT JOIN (SELECT op, SUM(recorded) AS recorded FROM ews.operator_logged_hours GROUP BY op) lg
+         ON lg.op = r.serialnumber
+       WHERE r.business_date = $2::date`,
+      [row.roster_shift_code, plantToday]
+    ).catch(() => ({ rows: [{ scheduled_operators: 0, operators_with_records: 0 }] }));
+
+    todayInfo = {
+      is_today: true,
+      business_date: plantToday,
+      scheduled_operators: todayStats.rows[0]?.scheduled_operators || 0,
+      operators_with_records: todayStats.rows[0]?.operators_with_records || 0,
+      fallback_to: fallbackDef
+        ? {
+            start_time: fallbackDef.start_time,
+            end_time: fallbackDef.end_time,
+            standard_hours: Number(fallbackDef.standard_hours),
+          }
+        : null,
+    };
+
+    previewToken = computeDeletePreviewToken(row, [...defaults, ...overrides], plantToday);
+  }
+
+  return {
+    id: Number(row.id),
+    effective_date: row.effective_date,
+    shift_code: row.roster_shift_code,
+    sow_shift_code: row.shift_code,
+    affects_today: isToday,
+    plant_today: plantToday,
+    preview_token: previewToken,
+    sow_blocking: sowInfo.total > 0,
+    sow_refs: sowInfo,
+    overlap_conflict: overlapConflict,
+    today: todayInfo,
+  };
+}
+
 module.exports = {
   ShiftOverrideError,
   isValidIsoDate,
@@ -1030,10 +1214,13 @@ module.exports = {
   buildIntervalMinutes,
   checkIntervalsForOverlap,
   computePreviewToken,
+  computeDeletePreviewToken,
+  validateDeleteFallbackNoOverlap,
   verifyActor,
   getPlantToday,
   fetchShiftState,
   previewDateRange,
   applyDateRange,
+  previewDeleteOverrideById,
   deleteOverrideById,
 };

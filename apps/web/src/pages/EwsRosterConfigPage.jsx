@@ -79,11 +79,13 @@ export default function EwsRosterConfigPage() {
     await load();
     return res;
   };
-  const deleteOverrideShift = async (id, isToday) => {
-    if (!window.confirm('Yakin ingin menghapus jadwal khusus ini?')) return;
-    const body = isToday ? { confirm_today_impact: true, reason: 'Penghapusan jadwal khusus hari ini dari UI' } : {};
-    await mutate(`/ews/roster/shift/override/${id}`, json('DELETE', body), 'Jadwal khusus berhasil dihapus');
+  const deleteOverrideShift = async (id, payload = {}) => {
+    const res = await mutate(`/ews/roster/shift/override/${id}`, json('DELETE', payload), 'Jadwal khusus berhasil dihapus');
     await load();
+    return res;
+  };
+  const previewDeleteOverride = async (id) => {
+    return await request(`/ews/roster/shift/override/${id}/preview`, json('POST', {}));
   };
 
   const loadRosterPreview = async () => {
@@ -122,6 +124,7 @@ export default function EwsRosterConfigPage() {
               onApplyOverride={applyDateRangeShift}
               onDeleteOverride={deleteOverrideShift}
               onPreviewOverride={previewDateRangeShift}
+              onPreviewDeleteOverride={previewDeleteOverride}
               busy={busy}
             />
           </div>
