@@ -82,6 +82,153 @@ class StageModeAndAutoWindowTest(unittest.TestCase):
         self.assertEqual(rows[1].get("invalidated_reason"), "DUPLICATE_ACTIVITY_OVERLAP")
         self.assertIsNone(rows[2].get("status"))
 
+    def test_validate_no_duplicate_activity_overlap_different_workcenter_allowed(self):
+        t1 = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc)
+        t3 = datetime(2026, 9, 10, 9, 0, tzinfo=timezone.utc)
+        t4 = datetime(2026, 9, 10, 11, 0, tzinfo=timezone.utc)
+
+        rows = [
+            {
+                "tsnumber": 201,
+                "plant": "5100",
+                "serialnumber": "OP-WC-DIFF",
+                "order_no": "10001",
+                "operation_no": 10,
+                "workcentercode": "MILL-01",
+                "activitytype": "",
+                "longdate_checkin": t1,
+                "longdate_checkout": t2,
+                "raw_seconds": 7200,
+            },
+            {
+                "tsnumber": 202,
+                "plant": "5100",
+                "serialnumber": "OP-WC-DIFF",
+                "order_no": "10001",
+                "operation_no": 10,
+                "workcentercode": "LATHE-02",  # Different workcenter
+                "activitytype": "",
+                "longdate_checkin": t3,
+                "longdate_checkout": t4,
+                "raw_seconds": 7200,
+            },
+        ]
+
+        # In strict mode: no exception should be raised because workcenters are different
+        etl.validate_no_duplicate_activity_overlap(rows, plant="5100", quarantine=False)
+        self.assertIsNone(rows[0].get("status"))
+        self.assertIsNone(rows[1].get("status"))
+
+    def test_validate_no_duplicate_activity_overlap_same_workcenter_rejected(self):
+        t1 = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc)
+        t3 = datetime(2026, 9, 10, 9, 0, tzinfo=timezone.utc)
+        t4 = datetime(2026, 9, 10, 11, 0, tzinfo=timezone.utc)
+
+        rows = [
+            {
+                "tsnumber": 301,
+                "plant": "5100",
+                "serialnumber": "OP-WC-SAME",
+                "order_no": "10001",
+                "operation_no": 10,
+                "workcentercode": "MILL-01",
+                "activitytype": "",
+                "longdate_checkin": t1,
+                "longdate_checkout": t2,
+                "raw_seconds": 7200,
+            },
+            {
+                "tsnumber": 302,
+                "plant": "5100",
+                "serialnumber": "OP-WC-SAME",
+                "order_no": "00010001",
+                "operation_no": 10,
+                "workcentercode": " \t\r\n MILL-01 \t ",  # Whitespace variation of MILL-01
+                "activitytype": "",
+                "longdate_checkin": t3,
+                "longdate_checkout": t4,
+                "raw_seconds": 7200,
+            },
+        ]
+
+        with self.assertRaisesRegex(etl.EtlError, "DUPLICATE_ACTIVITY_OVERLAP"):
+            etl.validate_no_duplicate_activity_overlap(rows, plant="5100", quarantine=False)
+
+    def test_validate_no_duplicate_activity_overlap_legacy_null_empty_rejected(self):
+        t1 = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc)
+        t3 = datetime(2026, 9, 10, 9, 0, tzinfo=timezone.utc)
+        t4 = datetime(2026, 9, 10, 11, 0, tzinfo=timezone.utc)
+
+        rows = [
+            {
+                "tsnumber": 401,
+                "plant": "5100",
+                "serialnumber": "OP-WC-LEGACY",
+                "order_no": "10001",
+                "operation_no": 10,
+                "workcentercode": None,
+                "activitytype": "",
+                "longdate_checkin": t1,
+                "longdate_checkout": t2,
+                "raw_seconds": 7200,
+            },
+            {
+                "tsnumber": 402,
+                "plant": "5100",
+                "serialnumber": "OP-WC-LEGACY",
+                "order_no": "10001",
+                "operation_no": 10,
+                "workcentercode": "   ",
+                "activitytype": "",
+                "longdate_checkin": t3,
+                "longdate_checkout": t4,
+                "raw_seconds": 7200,
+            },
+        ]
+
+        with self.assertRaisesRegex(etl.EtlError, "DUPLICATE_ACTIVITY_OVERLAP"):
+            etl.validate_no_duplicate_activity_overlap(rows, plant="5100", quarantine=False)
+
+    def test_validate_no_duplicate_activity_overlap_unicode_whitespace_rejected(self):
+        """Pastikan variasi whitespace ekstrem termasuk tab, newline, VT, FF, NBSP, dan BOM terdeteksi sama."""
+        t1 = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc)
+        t3 = datetime(2026, 9, 10, 9, 0, tzinfo=timezone.utc)
+        t4 = datetime(2026, 9, 10, 11, 0, tzinfo=timezone.utc)
+
+        rows = [
+            {
+                "tsnumber": 501,
+                "plant": "5100",
+                "serialnumber": "OP-WC-UNICODE",
+                "order_no": "000010001",
+                "operation_no": "0010",
+                "workcentercode": " \t\r\n\v\f WC-MAIN \u00a0\ufeff ",
+                "activitytype": "",
+                "longdate_checkin": t1,
+                "longdate_checkout": t2,
+                "raw_seconds": 7200,
+            },
+            {
+                "tsnumber": 502,
+                "plant": "5100",
+                "serialnumber": "OP-WC-UNICODE",
+                "order_no": "10001",
+                "operation_no": 10,
+                "workcentercode": "\ufeff\u00a0WC-MAIN\t\n",
+                "activitytype": "",
+                "longdate_checkin": t3,
+                "longdate_checkout": t4,
+                "raw_seconds": 7200,
+            },
+        ]
+
+        with self.assertRaisesRegex(etl.EtlError, "DUPLICATE_ACTIVITY_OVERLAP"):
+            etl.validate_no_duplicate_activity_overlap(rows, plant="5100", quarantine=False)
+
     def test_resolve_auto_window_up_to_date(self):
         cur = MagicMock()
         tz = ZoneInfo("Asia/Jakarta")

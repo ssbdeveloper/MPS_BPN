@@ -72,6 +72,8 @@ const TimesheetListPage = () => {
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteInput, setNoteInput] = useState('');
   const [activeRow, setActiveRow] = useState(null);
+  const [stoppingId, setStoppingId] = useState(null);
+  const [restartingId, setRestartingId] = useState(null);
 
   // Load timesheets on mount
   useEffect(() => {
@@ -114,6 +116,8 @@ const TimesheetListPage = () => {
 
   // Handle Stop button (checkout)
   const handleStop = async (item) => {
+    if (stoppingId === item.tsnumber) return;
+    setStoppingId(item.tsnumber);
     try {
       const res = await fetch(`${API_BASE}/timesheet/checkoutid/`, {
         method: 'PUT',
@@ -122,20 +126,24 @@ const TimesheetListPage = () => {
       });
 
       if (!res.ok) {
-        throw new Error('Gagal stop timesheet');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || errData.message || 'Gagal stop timesheet');
       }
 
       await res.json();
-      toast.success('Timesheet berhasil di-stop');
+      toast.success(`Timesheet #${item.tsnumber} berhasil di-stop`);
       loadTimesheet();
     } catch (err) {
       console.error('Error stop timesheet:', err);
       toast.error('Gagal stop timesheet', { description: err.message });
+    } finally {
+      setStoppingId(null);
     }
   };
 
   // Handle Restart button
   const handleRestart = async (item) => {
+    if (restartingId === item.tsnumber) return;
     // Record productive (bukan unproductive) tapi order_no/operation_no kosong →
     // data rusak, tidak boleh di-restart karena akan propagate null ke record baru.
     if (!item.activitytype && (!item.order_no || !item.operation_no)) {
@@ -145,6 +153,7 @@ const TimesheetListPage = () => {
       return;
     }
 
+    setRestartingId(item.tsnumber);
     try {
       const datakaryawan = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
       const mode = datakaryawan?.mode || 'single';
@@ -183,7 +192,7 @@ const TimesheetListPage = () => {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Gagal restart timesheet');
       }
 
@@ -193,6 +202,8 @@ const TimesheetListPage = () => {
     } catch (err) {
       console.error('Error restart timesheet:', err);
       toast.error('Gagal restart timesheet', { description: err.message });
+    } finally {
+      setRestartingId(null);
     }
   };
 
@@ -297,8 +308,9 @@ const TimesheetListPage = () => {
                   <tr key={index} className={`${rowBg} border-b border-slate-100 transition-colors`}>
                     {/* Order + Ident */}
                     <td className={`${cellBase} text-center`}>
-                      <div className="font-semibold font-mono" style={{ color: '#0096c7' }}>{item.order_no || '-'}</div>
-                      {item.ssbr_id && <div className="text-[10px] text-slate-500 leading-tight">{item.ssbr_id}</div>}
+                      <div className="font-semibold font-mono" style={{ color: '#0077b6' }}>{item.order_no || '-'}</div>
+                      <div className="text-xs font-mono font-medium text-slate-500 leading-tight">#{item.tsnumber}</div>
+                      {item.ssbr_id && <div className="text-xs text-slate-400 leading-tight">{item.ssbr_id}</div>}
                     </td>
 
                     {/* Operation */}
@@ -351,8 +363,11 @@ const TimesheetListPage = () => {
                     </td>
                         
                     {/* Workcenter */}
-                    <td className={`${cellBase} text-center text-gray-800 font-medium`}>
-                      {item.workcenterdescription || '-'}
+                    <td className={`${cellBase} text-center text-gray-800`}>
+                      <div className="font-semibold font-mono text-xs text-slate-800">{item.workcentercode || '-'}</div>
+                      {item.workcenterdescription && (
+                        <div className="text-xs text-slate-500 leading-tight">{item.workcenterdescription}</div>
+                      )}
                     </td>
 
                     {/* Actions */}
@@ -361,25 +376,31 @@ const TimesheetListPage = () => {
                         <button
                           onClick={() => handleNote(item)}
                           title="Note"
-                          className="w-8 h-8 flex items-center justify-center rounded-full text-[#0096c7] hover:bg-blue-100 active:scale-95 transition-all"
+                          className="w-8 h-8 flex items-center justify-center rounded-full text-[#0077b6] hover:bg-blue-100 active:scale-95 transition-all"
                         >
                           <NotebookPen className="w-4 h-4" />
                         </button>
                         {item.hour_checkout ? (
                           <button
                             onClick={() => handleRestart(item)}
+                            disabled={restartingId === item.tsnumber}
                             title="Restart"
-                            className="w-8 h-8 flex items-center justify-center rounded-full text-[#0096c7] hover:bg-blue-100 active:scale-95 transition-all"
+                            className={`w-8 h-8 flex items-center justify-center rounded-full text-[#0077b6] hover:bg-blue-100 active:scale-95 transition-all ${
+                              restartingId === item.tsnumber ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
                           >
-                            <RotateCcw className="w-4 h-4" />
+                            <RotateCcw className={`w-4 h-4 ${restartingId === item.tsnumber ? 'animate-spin' : ''}`} />
                           </button>
                         ) : (
                           <button
                             onClick={() => handleStop(item)}
+                            disabled={stoppingId === item.tsnumber}
                             title="Stop"
-                            className="w-8 h-8 flex items-center justify-center rounded-full text-orange-500 hover:bg-orange-100 active:scale-95 transition-all"
+                            className={`w-8 h-8 flex items-center justify-center rounded-full text-orange-500 hover:bg-orange-100 active:scale-95 transition-all ${
+                              stoppingId === item.tsnumber ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
                           >
-                            <StopCircle className="w-4 h-4" />
+                            <StopCircle className={`w-4 h-4 ${stoppingId === item.tsnumber ? 'animate-pulse' : ''}`} />
                           </button>
                         )}
                       </div>

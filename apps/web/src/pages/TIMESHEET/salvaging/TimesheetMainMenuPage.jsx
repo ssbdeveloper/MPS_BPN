@@ -104,8 +104,9 @@ const TimesheetMainMenuPage = () => {
 
   const [mode, setMode] = useState(() => {
     const dk = JSON.parse(sessionStorage.getItem('datakaryawan') || '{}');
-    return dk.mode || 'single'; // DB adalah source of truth
+    return dk.mode || 'single';
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [userData, setUserData] = useState({
     name: '-', sn: '-',
     workcenterCode: '-', machineName: '-',
@@ -180,6 +181,8 @@ const TimesheetMainMenuPage = () => {
   const handleConsumable = () => toast.info('Consumable feature - Coming Soon');
 
   const postdata = async () => {
+    if (isSubmitting) return;
+
     try {
       const selectedactivity = JSON.parse(sessionStorage.getItem('selectedactivity'));
       const datakaryawan     = JSON.parse(sessionStorage.getItem('datakaryawan'));
@@ -189,14 +192,27 @@ const TimesheetMainMenuPage = () => {
         return;
       }
 
+      setIsSubmitting(true);
+
       if (mode === 'single') {
         const checkoutRes = await fetch(`${API_BASE}/timesheet/checkout`, {
           method:  'PUT',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ datakaryawan: { sn: datakaryawan.snssb } }),
         });
-        const checkedOut = await checkoutRes.json();
-        console.log('Checkout sukses:', checkedOut);
+        if (!checkoutRes.ok) {
+          const checkoutErr = await checkoutRes.json().catch(() => ({}));
+          const isNoActive = checkoutRes.status === 404 && (
+            checkoutErr.error === 'Data tidak ditemukan atau sudah checkout' ||
+            checkoutErr.error?.includes('tidak ditemukan')
+          );
+          if (!isNoActive) {
+            toast.error('Gagal checkout aktivitas sebelumnya', {
+              description: checkoutErr.error || `HTTP ${checkoutRes.status}`
+            });
+            return;
+          }
+        }
       }
 
       const postRes = await fetch(`${API_BASE}/timesheet/`, {
@@ -217,7 +233,7 @@ const TimesheetMainMenuPage = () => {
       });
 
       if (!postRes.ok) {
-        const error = await postRes.json();
+        const error = await postRes.json().catch(() => ({}));
         console.error('Gagal POST:', error);
         toast.error('Buat timesheet gagal', { description: error.error || 'Unknown error' });
         return;
@@ -231,6 +247,8 @@ const TimesheetMainMenuPage = () => {
     } catch (err) {
       console.error('Error postdata:', err);
       toast.error('Terjadi kesalahan', { description: err.message });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -318,7 +336,12 @@ const TimesheetMainMenuPage = () => {
     active:scale-95 hover:scale-105`;
 
   const MENU_ITEMS = [
-    { icon: Play,          label: 'Start',           onClick: postdata        },
+    {
+      icon: Play,
+      label: isSubmitting ? 'Starting...' : 'Start',
+      onClick: postdata,
+      disabled: isSubmitting,
+    },
     { icon: ClipboardList, label: 'Select Job',       onClick: gotojob         },
     { icon: Monitor,       label: 'Select Machine',   onClick: gotomesin       },
     { icon: Settings,      label: 'Process Control',  onClick: gotoparameter   },
@@ -445,8 +468,13 @@ const TimesheetMainMenuPage = () => {
 
         {/* ── Menu grid (60%): 2 cols × 3 rows ── */}
         <section className="grid grid-cols-2 grid-rows-3 gap-3 min-h-0">
-          {MENU_ITEMS.map(({ icon: Icon, label, onClick }) => (
-            <button key={label} onClick={onClick} className={actionBtn}>
+          {MENU_ITEMS.map(({ icon: Icon, label, onClick, disabled }) => (
+            <button
+              key={label}
+              disabled={disabled}
+              onClick={disabled ? undefined : onClick}
+              className={`${actionBtn} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
               {React.createElement(Icon, { className: 'w-8 h-8 sm:w-10 sm:h-10' })}
               <span>{label}</span>
             </button>
@@ -531,8 +559,13 @@ const TimesheetMainMenuPage = () => {
           className="flex-1 grid grid-cols-2 gap-3 overflow-hidden"
           style={{ gridTemplateRows: 'repeat(3, 1fr)' }}
         >
-          {MENU_ITEMS.map(({ icon: Icon, label, onClick }) => (
-            <button key={label} onClick={onClick} className={actionBtn}>
+          {MENU_ITEMS.map(({ icon: Icon, label, onClick, disabled }) => (
+            <button
+              key={label}
+              disabled={disabled}
+              onClick={disabled ? undefined : onClick}
+              className={`${actionBtn} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
               {React.createElement(Icon, { className: 'w-8 h-8 xl:w-10 xl:h-10' })}
               <span>{label}</span>
             </button>

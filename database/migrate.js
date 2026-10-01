@@ -68,6 +68,40 @@ const RELEASE_MANIFESTS = Object.freeze({
       },
     ]),
   }),
+  "timesheet-20261001": Object.freeze({
+    releaseId: "timesheet-20261001",
+    description: "Rilis unique index aktivitas produktif aktif dengan workcentercode (20261001)",
+    migrations: Object.freeze([
+      {
+        filename: "20260922_timesheet_derived_time_contract.sql",
+        sha256: "e290aec03a6a30b0997c21bd8057f0b2bba7cf3ec0e42a574df37955b407770a",
+      },
+      {
+        filename: "20260922b_timesheet_freeze_and_audit.sql",
+        sha256: "5922221a30350aa9488a1bafc3babab2199900c08de3e9852274239282a48411",
+      },
+      {
+        filename: "20260923_timesheet_etl_pipeline.sql",
+        sha256: "3b1addf8eb7d3310551346d7735399fa7e81ceb79bd4a74562ca2385bffd6d69",
+      },
+      {
+        filename: "20260925_timesheet_unique_active_productive_op.sql",
+        sha256: "e7c20b0c23ce172b07f60a9c49526d3f1a534fb650da62cd55cf830714022a54",
+      },
+      {
+        filename: "20261001_timesheet_unique_active_productive_op_wc.sql",
+        sha256: "91b01394d2d5c47a8e807997545ee618cdff2e9e771c25f3014c13ae7f25cbf9",
+      },
+      {
+        filename: "20261001b_timesheet_harden_unique_index.sql",
+        sha256: "ced5693e91f8b6be17f0dd446badd1ccfde7a4b1fa4df04fe5bf483e4f61e45e",
+      },
+      {
+        filename: "20261001c_timesheet_wc_index_exact_contract.sql",
+        sha256: "f2a8680669f2bd5e8e3e19c4a6ec6c2076f6c6e2c6888d4e7c42c9482a53542f",
+      },
+    ]),
+  }),
 });
 
 function loadEnv() {
@@ -396,26 +430,37 @@ function printManifestPlan(plan, args) {
   if (args.dryRun) console.log("(dry-run read-only — tidak ada DDL/DML yang dijalankan)");
 }
 
+// A release manifest is applied as ONE transaction: every pending file and its ledger row
+// commit together or not at all. Per-file commits would let an early file (e.g. one that
+// drops a legacy index) persist while a later verification file fails.
 async function applyManifestSelected(client, plan) {
-  for (const item of plan.selected) {
-    const { filename, sql } = item;
-    const noTx = /^--\s*migrate:no-transaction/.test(sql);
-    process.stdout.write(`apply ${filename}${noTx ? " [no-tx]" : ""} ... `);
-    try {
-      if (noTx) {
-        await client.query(sql);
-        await client.query("INSERT INTO public.schema_migrations(filename) VALUES ($1)", [filename]);
-      } else {
-        await client.query("BEGIN");
-        await client.query(sql);
-        await client.query("INSERT INTO public.schema_migrations(filename) VALUES ($1)", [filename]);
-        await client.query("COMMIT");
-      }
-      console.log("OK");
-    } catch (err) {
-      if (!noTx) await client.query("ROLLBACK").catch(() => {});
-      throw new Error(`Migration ${filename} gagal: ${err.message}`);
+  if (!plan.selected.length) return;
+  const noTxFiles = plan.selected.filter((item) => /^--\s*migrate:no-transaction/.test(item.sql));
+  if (noTxFiles.length) {
+    throw new Error(
+      `Rilis '${plan.manifest.releaseId}' memuat migration no-transaction (${noTxFiles.map((i) => i.filename).join(", ")}); ` +
+      "rilis manifest wajib atomik, apply ditolak."
+    );
+  }
+  await client.query("BEGIN");
+  let current = null;
+  try {
+    for (const item of plan.selected) {
+      current = item.filename;
+      process.stdout.write(`apply ${item.filename} ... `);
+      await client.query(item.sql);
+      await client.query("INSERT INTO public.schema_migrations(filename) VALUES ($1)", [item.filename]);
+      console.log("OK (belum commit)");
     }
+    current = null;
+    await client.query("COMMIT");
+    console.log(`COMMIT rilis ${plan.manifest.releaseId}: ${plan.selected.length} file.`);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    const where = current ? `Migration ${current} gagal` : "COMMIT rilis gagal";
+    throw new Error(
+      `${where}: ${err.message} — seluruh rilis ${plan.manifest.releaseId} di-ROLLBACK, ledger tidak berubah.`
+    );
   }
 }
 

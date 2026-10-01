@@ -30,18 +30,21 @@ const StatPill = ({ label, value }) => (
   </div>
 );
 
-const ActionButton = ({ icon: Icon, label, helper, tone = 'primary', onClick }) => {
-  const classes = tone === 'outline'
-    ? 'border border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
-    : tone === 'success'
-      ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-      : 'bg-[#0096c7] text-white hover:bg-[#0077b6]';
+const ActionButton = ({ icon: Icon, label, helper, tone = 'primary', onClick, disabled = false }) => {
+  const classes = disabled
+    ? 'border border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed opacity-60'
+    : tone === 'outline'
+      ? 'border border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+      : tone === 'success'
+        ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+        : 'bg-[#0077b6] text-white hover:bg-[#023e8a]';
 
   return (
     <button
       type="button"
-      onClick={onClick}
-      className={`flex min-h-[96px] flex-col items-start justify-between rounded-xl px-4 py-3 text-left font-bold transition-all duration-150 active:scale-95 ${classes}`}
+      disabled={disabled}
+      onClick={disabled ? undefined : onClick}
+      className={`flex min-h-[96px] flex-col items-start justify-between rounded-xl px-4 py-3 text-left font-bold transition-all duration-150 ${disabled ? '' : 'active:scale-95'} ${classes}`}
     >
       <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-white/20">
         {createElement(Icon, { size: 22 })}
@@ -58,6 +61,7 @@ const ActionButton = ({ icon: Icon, label, helper, tone = 'primary', onClick }) 
 
 export default function ManufacturingTimesheetMainMenuPage() {
   const navigate = useNavigate();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [mode, setMode] = useState(() => {
     const dk = readSessionJson('datakaryawan');
@@ -108,6 +112,8 @@ export default function ManufacturingTimesheetMainMenuPage() {
   // Check-in: mirrors salvaging postdata(), plus persists the manufacturing
   // bay-reservation link fields onto the timesheet row.
   const postdata = async () => {
+    if (isSubmitting) return;
+
     const activity = readSessionJson('selectedactivity');
     const employee = readSessionJson('datakaryawan');
 
@@ -121,6 +127,7 @@ export default function ManufacturingTimesheetMainMenuPage() {
       return;
     }
 
+    setIsSubmitting(true);
     try {
       if (mode === 'single') {
         const checkoutRes = await fetch(`${API_BASE}/timesheet/checkout`, {
@@ -128,8 +135,19 @@ export default function ManufacturingTimesheetMainMenuPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ datakaryawan: { sn: employee.snssb } }),
         });
-        const checkedOut = await checkoutRes.json().catch(() => ({}));
-        console.log('Checkout sukses:', checkedOut);
+        if (!checkoutRes.ok) {
+          const checkoutErr = await checkoutRes.json().catch(() => ({}));
+          const isNoActive = checkoutRes.status === 404 && (
+            checkoutErr.error === 'Data tidak ditemukan atau sudah checkout' ||
+            checkoutErr.error?.includes('tidak ditemukan')
+          );
+          if (!isNoActive) {
+            toast.error('Gagal checkout aktivitas sebelumnya', {
+              description: checkoutErr.error || `HTTP ${checkoutRes.status}`
+            });
+            return;
+          }
+        }
       }
 
       const postRes = await fetch(`${API_BASE}/timesheet/`, {
@@ -170,6 +188,8 @@ export default function ManufacturingTimesheetMainMenuPage() {
     } catch (err) {
       console.error('Error postdata:', err);
       toast.error('Terjadi kesalahan', { description: err.message });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -245,8 +265,9 @@ export default function ManufacturingTimesheetMainMenuPage() {
         <section className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
           <ActionButton
             icon={CheckCircle2}
-            label="Check In"
-            helper="Mulai pekerjaan"
+            label={isSubmitting ? 'Checking In...' : 'Check In'}
+            helper={isSubmitting ? 'Memproses timesheet...' : 'Mulai pekerjaan'}
+            disabled={isSubmitting}
             onClick={postdata}
           />
           <ActionButton

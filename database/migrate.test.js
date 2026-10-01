@@ -430,7 +430,7 @@ test("main --release --dry-run tanpa ledger: ditolak tanpa write", async () => {
   assert.deepEqual(client.queries.filter((q) => WRITE_SQL.test(q)), []);
 });
 
-test("manifest rilis terbaru mencakup index 20260925 dengan hash file aktual", () => {
+test("manifest rilis terbaru mencakup index 20261001 dengan hash file aktual", () => {
   const latest = RELEASE_MANIFESTS[Object.keys(RELEASE_MANIFESTS).at(-1)];
   const names = latest.migrations.map((m) => m.filename);
   assert.deepEqual(names, [
@@ -438,15 +438,28 @@ test("manifest rilis terbaru mencakup index 20260925 dengan hash file aktual", (
     "20260922b_timesheet_freeze_and_audit.sql",
     "20260923_timesheet_etl_pipeline.sql",
     "20260925_timesheet_unique_active_productive_op.sql",
+    "20261001_timesheet_unique_active_productive_op_wc.sql",
+    "20261001b_timesheet_harden_unique_index.sql",
+    "20261001c_timesheet_wc_index_exact_contract.sql",
   ]);
   assert.doesNotThrow(() => verifyReleaseManifest(latest, MIGRATIONS_DIR));
 });
 
-test("manifest 20260925: ledger yang sudah berisi 3 file lama hanya memilih index 20260925", () => {
+test("manifest 20261001: ledger berisi 6 file lama (termasuk 20261001b) hanya memilih koreksi 20261001c", () => {
   const latest = RELEASE_MANIFESTS[Object.keys(RELEASE_MANIFESTS).at(-1)];
-  const applied = new Set(latest.migrations.slice(0, 3).map((m) => m.filename));
+  const applied = new Set(latest.migrations.slice(0, 6).map((m) => m.filename));
   const plan = computeManifestPlan(latest, applied, MIGRATIONS_DIR);
-  assert.deepEqual(plan.pending, ["20260925_timesheet_unique_active_productive_op.sql"]);
+  assert.deepEqual(plan.pending, ["20261001c_timesheet_wc_index_exact_contract.sql"]);
+});
+
+test("manifest 20261001: ledger berisi 5 file lama memilih 20261001b lalu 20261001c secara berurutan", () => {
+  const latest = RELEASE_MANIFESTS[Object.keys(RELEASE_MANIFESTS).at(-1)];
+  const applied = new Set(latest.migrations.slice(0, 5).map((m) => m.filename));
+  const plan = computeManifestPlan(latest, applied, MIGRATIONS_DIR);
+  assert.deepEqual(plan.pending, [
+    "20261001b_timesheet_harden_unique_index.sql",
+    "20261001c_timesheet_wc_index_exact_contract.sql",
+  ]);
 });
 
 test("discovery forward migration tidak memindai rollback file", () => {
@@ -473,3 +486,59 @@ test("discovery forward migration tidak memindai rollback file", () => {
 });
 
 
+
+test("applyManifestSelected: rilis multi-file atomik — gagal di file kedua me-ROLLBACK file pertama dan ledger-nya", async () => {
+  const { applyManifestSelected: apply } = require("./migrate");
+  const log = [];
+  const client = {
+    async query(sql, params) {
+      const text = String(sql);
+      log.push(params ? `${text} ${JSON.stringify(params)}` : text);
+      if (text === "SQL_B") throw new Error("boom di tengah");
+      return { rows: [] };
+    },
+  };
+  const plan = {
+    manifest: { releaseId: "rel-x" },
+    selected: [
+      { filename: "a.sql", sql: "SQL_A" },
+      { filename: "b.sql", sql: "SQL_B" },
+      { filename: "c.sql", sql: "SQL_C" },
+    ],
+  };
+  await assert.rejects(() => apply(client, plan), /b\.sql gagal: boom di tengah .*di-ROLLBACK/);
+  assert.deepEqual(log, [
+    "BEGIN",
+    "SQL_A",
+    'INSERT INTO public.schema_migrations(filename) VALUES ($1) ["a.sql"]',
+    "SQL_B",
+    "ROLLBACK",
+  ]);
+  assert.equal(log.includes("COMMIT"), false);
+  assert.equal(log.includes("SQL_C"), false);
+});
+
+test("applyManifestSelected: sukses = satu BEGIN dan satu COMMIT setelah semua file + ledger", async () => {
+  const { applyManifestSelected: apply } = require("./migrate");
+  const log = [];
+  const client = { async query(sql) { log.push(String(sql)); return { rows: [] }; } };
+  await apply(client, {
+    manifest: { releaseId: "rel-x" },
+    selected: [{ filename: "a.sql", sql: "SQL_A" }, { filename: "b.sql", sql: "SQL_B" }],
+  });
+  assert.equal(log.filter((q) => q === "BEGIN").length, 1);
+  assert.equal(log.filter((q) => q === "COMMIT").length, 1);
+  assert.equal(log.at(-1), "COMMIT");
+  assert.equal(log.filter((q) => /schema_migrations/.test(q)).length, 2);
+});
+
+test("applyManifestSelected: migration no-transaction dalam rilis ditolak sebelum query apa pun", async () => {
+  const { applyManifestSelected: apply } = require("./migrate");
+  const log = [];
+  const client = { async query(sql) { log.push(String(sql)); return { rows: [] }; } };
+  await assert.rejects(() => apply(client, {
+    manifest: { releaseId: "rel-x" },
+    selected: [{ filename: "a.sql", sql: "-- migrate:no-transaction\nCREATE INDEX CONCURRENTLY x ON y(z);" }],
+  }), /no-transaction/);
+  assert.deepEqual(log, []);
+});

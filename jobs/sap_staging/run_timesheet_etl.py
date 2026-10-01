@@ -35,6 +35,16 @@ import psycopg2.extras
 
 from timesheet_normalization import break_overlap_seconds, cap_minutes_for
 
+# Workcenter identity contract, identical in SQL (unique index 20261001c), the API (JS)
+# and this ETL: strip only these code points at both ends; keep casing and inner spaces.
+# U+0020 U+0009 U+000D U+000A U+000B U+000C U+00A0 U+FEFF. None -> "".
+WORKCENTER_STRIP_CHARS = "\u0020\u0009\u000d\u000a\u000b\u000c\u00a0\ufeff"
+
+
+def normalize_workcenter_code(value) -> str:
+    return str(value or "").strip(WORKCENTER_STRIP_CHARS)
+
+
 # Versi aturan. Ikut masuk unique key input / cleaned segment.
 ALLOCATION_VERSION = "ALLOC-V1"
 CLEAN_RULE_VERSION = "CLEAN-V2"
@@ -861,11 +871,11 @@ def validate_no_duplicate_activity_overlap(
     cur = None,
 ) -> None:
     """Kontrak F2: Untuk satu operator (serialnumber) dan plant, dua timesheet PRODUKTIF
-    dengan order_no dan operation_no yang sama tidak boleh overlap [checkin, checkout).
+    dengan order_no, operation_no, dan workcentercode yang sama tidak boleh overlap [checkin, checkout).
 
     Interval [08:00, 10:00) dan [10:00, 12:00) diperbolehkan (hanya bersentuhan / half-open).
-    Order berbeda atau operasi berbeda diperbolehkan overlap.
-    Jika ada overlap aktivitas produktif yang sama:
+    Order berbeda, operasi berbeda, atau workcenter berbeda diperbolehkan overlap.
+    Jika ada overlap aktivitas produktif yang sama pada workcenter yang sama:
     - Jika quarantine=True: tandai baris yang beririsan sebagai INVALIDATED pada input plan & DB (timesheet_etl_input).
     - Jika quarantine=False: gagalkan run secara atomik dengan EtlError DUPLICATE_ACTIVITY_OVERLAP.
     Jika target_ts_set diberikan, abaikan pasangan di mana KEDUA record berada di luar target window (companion vs companion).
@@ -891,6 +901,7 @@ def validate_no_duplicate_activity_overlap(
         raw_order = str(row.get("order_no") or "").strip()
         norm_order = raw_order.lstrip("0")
         raw_op = row.get("operation_no")
+        norm_wc = normalize_workcenter_code(row.get("workcentercode"))
 
         if not serial or not norm_order or raw_op is None or str(raw_op).strip() == "":
             continue
@@ -901,17 +912,18 @@ def validate_no_duplicate_activity_overlap(
             continue
 
         tsnum = row.get("source_tsnumber") or row.get("tsnumber")
-        groups[(row_plant, serial, norm_order, norm_op)].append({
+        groups[(row_plant, serial, norm_order, norm_op, norm_wc)].append({
             "tsnumber": tsnum,
             "checkin": checkin,
             "checkout": checkout,
             "serialnumber": serial,
             "order_no": norm_order,
             "operation_no": norm_op,
+            "workcentercode": norm_wc,
             "plant": row_plant,
         })
 
-    for (p, serial, order, op), rows in groups.items():
+    for (p, serial, order, op, wc), rows in groups.items():
         if len(rows) < 2:
             continue
         # Urutkan berdasarkan checkin, lalu checkout
@@ -951,9 +963,10 @@ def validate_no_duplicate_activity_overlap(
                                         (r_item["input_id"],),
                                     )
                         continue
+                    wc_desc = f" pada workcenter '{wc}'" if wc else ""
                     raise EtlError(
                         f"DUPLICATE_ACTIVITY_OVERLAP: Operator {serial} pada plant {p} memiliki 2 timesheet produktif "
-                        f"dengan order {order} op {op} yang overlap: tsnumber {r1['tsnumber']} [{r1['checkin']}, {r1['checkout']}) "
+                        f"dengan order {order} op {op}{wc_desc} yang overlap: tsnumber {r1['tsnumber']} [{r1['checkin']}, {r1['checkout']}) "
                         f"dan tsnumber {r2['tsnumber']} [{r2['checkin']}, {r2['checkout']})."
                     )
 

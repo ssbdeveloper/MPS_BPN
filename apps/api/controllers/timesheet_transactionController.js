@@ -212,6 +212,17 @@ const validateInput = (schema, data) => {
 
 const normalizeText = (value) => (value ?? "").toString().trim();
 
+// Workcenter identity contract, identical in SQL (unique index 20261001c), JS and the
+// Python ETL: strip only these code points at both ends; keep casing and inner spaces.
+// U+0020 U+0009 U+000D U+000A U+000B U+000C U+00A0 U+FEFF. NULL/undefined -> ''.
+// Note: in PostgreSQL E'\v' is the letter v, so vertical tab is written \x0B.
+const WORKCENTER_STRIP_SQL = "E' \\t\\r\\n\\x0B\\f\\u00A0\\uFEFF'";
+const WORKCENTER_EDGE_RE = /^[\u0020\u0009\u000D\u000A\u000B\u000C\u00A0\uFEFF]+|[\u0020\u0009\u000D\u000A\u000B\u000C\u00A0\uFEFF]+$/g;
+const normalizeWorkcenterCode = (value) =>
+  value === null || value === undefined ? "" : String(value).replace(WORKCENTER_EDGE_RE, "");
+module.exports.normalizeWorkcenterCode = normalizeWorkcenterCode;
+module.exports.WORKCENTER_STRIP_SQL = WORKCENTER_STRIP_SQL;
+
 const clampInteger = (value, fallback, min, max) => {
   if (String(value || "").trim().toLowerCase() === "all") return null;
   const parsed = Number.parseInt(value, 10);
@@ -545,27 +556,30 @@ exports.create = async (req, res) => {
     });
     const isProductive = !normalizedActivityType || String(normalizedActivityType).trim() === '';
 
-    // Gate: Operator tidak boleh memiliki dua timesheet produktif aktif untuk order & operasi yang sama.
+    // Gate: Operator tidak boleh memiliki dua timesheet produktif aktif untuk order & operasi yang sama pada workcenter yang sama.
     if (isProductive && serialnumber && order_no && operation_no !== null && operation_no !== undefined && String(operation_no).trim() !== '') {
       const normOrder = String(order_no).trim().replace(/^0+/, '');
       const normOp = parseInt(operation_no, 10);
+      const normWorkcenter = normalizeWorkcenterCode(workcentercode);
       if (normOrder && !isNaN(normOp)) {
         const activeCheck = await db.query(
-          `SELECT tsnumber
+          `SELECT tsnumber, workcentercode
            FROM timesheet_transaction
            WHERE COALESCE(plant::text, '') = COALESCE($1::text, '')
              AND serialnumber = $2
              AND ltrim(trim(order_no), '0') = $3
              AND operation_no = $4
+             AND btrim(COALESCE(workcentercode, ''), ${WORKCENTER_STRIP_SQL}) = $5
              AND longdate_checkout IS NULL
              AND COALESCE(state_flag, 0) <> 5
              AND (activitytype IS NULL OR trim(activitytype) = '')
            LIMIT 1`,
-          [PLANT_SSB || '', serialnumber, normOrder, normOp]
+          [PLANT_SSB || '', serialnumber, normOrder, normOp, normWorkcenter]
         );
         if (activeCheck.rows && activeCheck.rows.length > 0) {
+          const wcDisplay = normWorkcenter ? ` pada workcenter ${normWorkcenter}` : '';
           return res.status(409).json({
-            error: 'Operasi produktif ini sedang aktif untuk operator tersebut',
+            error: `Operasi produktif ini sedang aktif untuk operator tersebut${wcDisplay}`,
             code: 'DUPLICATE_ACTIVE_OPERATION',
           });
         }
@@ -659,11 +673,17 @@ exports.create = async (req, res) => {
       }
       if (
         txErr.code === '23505' &&
-        (txErr.constraint === 'idx_timesheet_active_productive_op' ||
-         (txErr.message && txErr.message.includes('idx_timesheet_active_productive_op')))
+        (txErr.constraint === 'idx_timesheet_active_productive_op_wc' ||
+         txErr.constraint === 'idx_timesheet_active_productive_op' ||
+         (txErr.message && (
+           txErr.message.includes('idx_timesheet_active_productive_op_wc') ||
+           txErr.message.includes('idx_timesheet_active_productive_op')
+         )))
       ) {
+        const normWorkcenter = normalizeWorkcenterCode(workcentercode);
+        const wcDisplay = normWorkcenter ? ` pada workcenter ${normWorkcenter}` : '';
         return res.status(409).json({
-          error: 'Operasi produktif ini sedang aktif untuk operator tersebut',
+          error: `Operasi produktif ini sedang aktif untuk operator tersebut${wcDisplay}`,
           code: 'DUPLICATE_ACTIVE_OPERATION',
         });
       }

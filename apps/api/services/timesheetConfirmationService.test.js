@@ -37,6 +37,7 @@ const makeHarness = ({ plan, lockedRows = [sourceRow] }) => {
         return { rows: [{ plant_code: "5100", timezone: "Asia/Jakarta" }] };
       }
       if (normalized.includes("FOR UPDATE")) return { rows: lockedRows };
+      if (normalized.includes("set_config('mps.correction_actor'")) return { rows: [] };
       if (normalized.includes("FROM public.sap_staging_exclusion")) return { rows: [] };
       if (normalized.includes("FROM public.sap_staging_source")) return { rows: [] };
       if (normalized === "SELECT clock_timestamp() AS checkout_at") {
