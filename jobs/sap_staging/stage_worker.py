@@ -48,17 +48,27 @@ def _handle_signal(signum, frame):
 
 
 def run_machinehours_cycle(plant: str) -> None:
-    """Jalankan siklus staging machine hours jika diaktifkan untuk plant ini."""
-    try:
-        import stage_machinehours as smh
-        # stage_machinehours memiliki guard plant (5051, 5071, 5153).
-        # Untuk 5100, smh.run() akan log warning dan return tanpa error.
-        parser = smh.build_parser()
-        args = parser.parse_args(["--catchup"])
-        log.info("[MCH] Menjalankan staging machine hours (catchup)...")
-        smh.run(args)
-    except Exception as exc:
-        log.exception("[MCH] Gagal staging machine hours: %s", exc)
+    """Jalankan siklus staging machine hours jika diaktifkan untuk plant ini.
+
+    TIDAK menelan exception. Versi sebelumnya membungkus seluruh isi dengan
+    try/except + log.exception, sehingga pemeriksaan di run_cycle tidak pernah
+    terpicu dan `--once` keluar 0 walau MCH gagal. Kegagalan harus naik sampai
+    exit code.
+    """
+    import stage_machinehours as smh
+    env_plant = plant_code()
+    if plant != env_plant:
+        # stage_machinehours membaca PLANT_SSB, bukan argumen --plant. Kalau berbeda,
+        # MCH akan men-stage plant lain dari yang diminta: tolak.
+        raise RuntimeError(
+            f"--plant {plant} berbeda dengan PLANT_SSB {env_plant!r}; staging MCH_HOURS ditolak."
+        )
+    # stage_machinehours memiliki guard plant (5051, 5071, 5153).
+    # Untuk 5100, smh.run() akan log warning dan return tanpa error (skip sah).
+    parser = smh.build_parser()
+    args = parser.parse_args(["--catchup"])
+    log.info("[MCH] Menjalankan staging machine hours (catchup)...")
+    smh.run(args)
 
 
 def run_timesheet_cycle(
@@ -166,12 +176,15 @@ def run_cycle(
     Mengembalikan True bila seluruh tahapan berhasil (atau skipped sesuai aturan).
     """
     log.info("========== Memulai siklus staging plant %s ==========", plant)
-    # 1. Machine hours
+    mch_ok = True
+    # 1. Machine hours. Kegagalan dicatat dan MEMBUAT SIKLUS GAGAL, tapi timesheet
+    #    tetap dijalankan: keduanya independen, dan MCH yang rusak tidak boleh
+    #    menghentikan staging timesheet di mode --loop.
     try:
         run_machinehours_cycle(plant)
     except Exception as exc:
         log.exception("[MCH] Siklus machine hours gagal: %s", exc)
-        return False
+        mch_ok = False
 
     # 2. Timesheet ETL
     ts_res = run_timesheet_cycle(
@@ -183,10 +196,15 @@ def run_cycle(
     )
     if ts_res is None:
         log.error("[TS] Siklus timesheet ETL gagal.")
-        return False
 
-    log.info("========== Siklus staging selesai (status TS: %s) ==========", ts_res.get("status"))
-    return True
+    ok = mch_ok and ts_res is not None
+    log.info(
+        "========== Siklus staging %s (MCH: %s, status TS: %s) ==========",
+        "selesai" if ok else "GAGAL",
+        "ok" if mch_ok else "GAGAL",
+        ts_res.get("status") if ts_res else "GAGAL",
+    )
+    return ok
 
 
 def main() -> int:

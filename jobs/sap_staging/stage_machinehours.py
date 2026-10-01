@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from stage_sap_timesheet import fetch_machine_hour_rows, parse_dt, previous_completed_hour, stage_rows
 from sap_staging_common import (
@@ -95,24 +95,18 @@ def fetch_blocked_today_production_rows() -> list[dict]:
 def managed_floor():
     """Tanggal paling awal yang BOLEH disentuh catch-up.
 
-    LANTAI PENGAMAN — jangan hapus. Diprioritaskan dari plant_config.timesheet_allocation_cutoff_date
-    agar sinkron dengan tanggal cutoff plant resmi.
+    LANTAI PENGAMAN — jangan hapus. Sumbernya plant_config.timesheet_allocation_cutoff_date.
+    Fail-closed: gagal membaca atau cutoff kosong = exception. Dulu kegagalan ditelan
+    lalu jatuh ke min(bucket_start) antrean, yang bisa jauh sebelum cutoff.
     """
-    try:
-        from sap_staging_common import load_plant_cutoff
-        cutoff = load_plant_cutoff(plant_code())
-        if cutoff:
-            return cutoff
-    except Exception:
-        pass
-
-    with connect_staging() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT min(bucket_start)::date FROM sap_timesheet_staging WHERE source_system = 'MCH_HOURS'"
-            )
-            row = cur.fetchone()
-            return row[0] if row else None
+    from sap_staging_common import load_plant_cutoff
+    cutoff = load_plant_cutoff(plant_code())
+    if not cutoff:
+        raise RuntimeError(
+            f"timesheet_allocation_cutoff_date plant {plant_code()} belum dikonfigurasi; "
+            "catch-up MCH_HOURS dihentikan."
+        )
+    return cutoff
 
 
 def find_catchup_days(days: int, floor) -> list:
@@ -153,10 +147,15 @@ def find_catchup_days(days: int, floor) -> list:
 
 def run_catchup(args: argparse.Namespace) -> None:
     """Stage ulang hari-hari yang punya record layak-tapi-belum-ter-bundle."""
-    floor = args.catchup_since or managed_floor()
-    if floor is None:
-        log.info("Catch-up dilewati: antrian kosong, belum ada rentang yang dikelola")
-        return
+    # Lantai cutoff selalu dibaca (fail-closed). --catchup-since hanya boleh
+    # MENAIKKAN lantai, tidak pernah menurunkannya ke bawah cutoff.
+    floor = managed_floor()
+    if args.catchup_since:
+        since = date.fromisoformat(str(args.catchup_since)[:10])
+        if since > floor:
+            floor = since
+        elif since < floor:
+            log.warning("--catchup-since %s di bawah cutoff %s; memakai cutoff", since, floor)
 
     days = find_catchup_days(args.catchup_days, floor)
     if not days:
@@ -193,20 +192,16 @@ def run_once(args: argparse.Namespace) -> bool:
             ensure_staging_schema(staging_conn)
             cursor_value = get_stage_cursor(staging_conn, "MCH_HOURS", plant_code())
         
-        # Jaga agar from_ts tidak pernah lebih kecil dari cutoff plant
-        cutoff = None
-        try:
-            from sap_staging_common import load_plant_cutoff
-            cutoff = load_plant_cutoff(plant_code())
-        except Exception:
-            pass
+        # Jaga agar from_ts tidak pernah lebih kecil dari cutoff plant (fail-closed).
+        cutoff = managed_floor()
 
         from_ts = cursor_value or cursor_initial_from()
-        if cutoff:
-            cutoff_dt = datetime.combine(cutoff, datetime.min.time())
-            from_ts = max(from_ts, cutoff_dt)
+        cutoff_dt = datetime.combine(cutoff, datetime.min.time())
         if args.overlap_minutes > 0:
             from_ts = from_ts - timedelta(minutes=args.overlap_minutes)
+        # Clamp SETELAH overlap: dulu overlap 30 menit dikurangkan sesudah clamp,
+        # sehingga window bisa mundur ke 23:30 hari sebelum cutoff.
+        from_ts = max(from_ts, cutoff_dt)
         max_to_ts = from_ts + timedelta(hours=args.max_hours)
         if max_to_ts < to_ts:
             to_ts = max_to_ts

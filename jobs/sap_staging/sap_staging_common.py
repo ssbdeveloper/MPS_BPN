@@ -73,21 +73,22 @@ def connect_staging():
 
 def load_plant_cutoff(plant: str | None = None) -> date | None:
     """Baca timesheet_allocation_cutoff_date dari plant_config di source DB.
-    Mengembalikan None jika belum diset.
+
+    Mengembalikan None HANYA bila baris plant ada tapi cutoff belum diset (atau
+    baris plant tidak ada). Kegagalan membaca (koneksi/SQL) DILEMPAR ke pemanggil.
+    Versi sebelumnya menelan exception dan mengembalikan None, sehingga poster
+    menyusun query TANPA batas cutoff — pengaman hilang tepat saat DB bermasalah.
+    Pemanggil yang mengirim ke SAP wajib fail-closed (lihat post_sap_staging).
     """
     p = plant or plant_code()
-    try:
-        with connect_source() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT timesheet_allocation_cutoff_date FROM public.plant_config WHERE plant_code = %s ORDER BY id LIMIT 1",
-                    (p,)
-                )
-                row = cur.fetchone()
-                return row[0] if row and row[0] else None
-    except Exception as exc:
-        log.warning("load_plant_cutoff gagal membaca plant_config: %s", exc)
-        return None
+    with connect_source() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT timesheet_allocation_cutoff_date FROM public.plant_config WHERE plant_code = %s ORDER BY id LIMIT 1",
+                (p,)
+            )
+            row = cur.fetchone()
+            return row[0] if row and row[0] else None
 
 
 def plant_code() -> str:

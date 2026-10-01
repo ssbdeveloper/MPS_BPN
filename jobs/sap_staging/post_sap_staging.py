@@ -202,8 +202,124 @@ def exclusion_guard_sql() -> str:
     """
 
 
+class CutoffUnavailable(RuntimeError):
+    """Cutoff plant tidak bisa dipastikan -> posting WAJIB berhenti (fail-closed)."""
+
+
+class PreCutoffRowClaimed(RuntimeError):
+    """Baris sebelum cutoff lolos sampai tahap claim -> transaksi dibatalkan."""
+
+
+# Status yang boleh dikirim lewat jalur pilih-manual (--ids/--ztimesheetids).
+# SKIPPED = TERTAHAN (pra-cutoff yang sudah diposting manual, konflik segmen,
+# ZTIMESHEETID terbakar, NFC SUBCONT). POSTING = sedang diklaim proses lain.
+# Keduanya TIDAK BOLEH dikirim dari jalur mana pun, termasuk selected-ID.
+SELECTED_POSTABLE_STATUSES = ("PENDING", "FAILED")
+
+
+def require_plant_cutoff(plant: str | None) -> date:
+    """Cutoff plant yang WAJIB ada sebelum satu baris pun boleh dikirim ke SAP.
+
+    Fail-closed pada tiga kondisi: plant tidak diketahui (mis. --all-plants),
+    pembacaan plant_config gagal, atau cutoff belum diset. Dulu kegagalan baca
+    ditelan dan query disusun TANPA batas cutoff — pengaman hilang persis saat
+    DB bermasalah.
+    """
+    if not plant:
+        raise CutoffUnavailable(
+            "Plant tidak ditentukan (PLANT_SSB kosong atau --all-plants): cutoff per plant "
+            "tidak bisa dipastikan, posting dihentikan."
+        )
+    try:
+        cutoff = load_plant_cutoff(plant)
+    except Exception as exc:
+        raise CutoffUnavailable(
+            f"Gagal membaca timesheet_allocation_cutoff_date plant {plant}: {exc}. Posting dihentikan."
+        ) from exc
+    if not cutoff:
+        raise CutoffUnavailable(
+            f"timesheet_allocation_cutoff_date plant {plant} belum dikonfigurasi di plant_config. "
+            "Posting dihentikan."
+        )
+    return cutoff
+
+
+def cutoff_guard_sql() -> str:
+    """Guard cutoff: satu definisi untuk SEMUA jalur (auto, tanggal, operator, --ids).
+
+    Dijangkarkan ke ISDD (tanggal kerja yang benar-benar dikirim ke SAP), bukan
+    bucket_start: di central, TIMESHEET 5051 punya bucket_start NULL dan
+    bucket_start::date bergantung TimeZone sesi. ISDD yang tidak 8 digit = tidak
+    bisa dibuktikan setelah cutoff -> tidak dikirim.
+    Param: [cutoff 'YYYYMMDD'].
+    """
+    return "(payload->>'ISDD' ~ '^[0-9]{8}$' AND payload->>'ISDD' >= %s)"
+
+
+def assert_rows_after_cutoff(rows: list[dict], cutoff: date) -> None:
+    """Pertahanan lapis kedua di Python, dijalankan SEBELUM status POSTING ditulis.
+
+    Bila SQL guard suatu saat rusak, exception di sini membuat transaksi claim
+    rollback, sehingga tidak ada baris yang diklaim maupun dikirim.
+    """
+    floor = cutoff.strftime("%Y%m%d")
+    bad = []
+    for row in rows:
+        isdd = str((row.get("payload") or {}).get("ISDD") or "")
+        if not (len(isdd) == 8 and isdd.isdigit() and isdd >= floor):
+            bad.append(f"{row.get('id')}:{isdd or '-'}")
+    if bad:
+        raise PreCutoffRowClaimed(
+            f"{len(bad)} baris sebelum cutoff {cutoff} lolos ke claim ({', '.join(bad[:10])}); "
+            "claim dibatalkan, tidak ada yang dikirim."
+        )
+
+
+def selected_predicate(
+    *,
+    ids: list[str],
+    ztimesheetids: list[str],
+    allow_posted: bool,
+    plant: str | None,
+    cutoff: date,
+    source_system: str | None = None,
+) -> tuple[str, list]:
+    """Predikat jalur pilih-manual, dipakai bersama claim_selected_rows dan --dry-run.
+
+    Memilih id tidak berarti boleh melewati safety: status tertahan, cutoff, plant,
+    dan exclusion tetap berlaku. --allow-posted hanya menambah POSTED (kirim ulang
+    eksplisit); SKIPPED/POSTING tidak pernah ikut.
+    """
+    ors: list[str] = []
+    params: list[Any] = []
+    if ids:
+        ors.append("id = ANY(%s::bigint[])")
+        params.append([int(value) for value in ids])
+    if ztimesheetids:
+        ors.append("ztimesheetid = ANY(%s::text[])")
+        params.append(ztimesheetids)
+    if not ors:
+        raise ValueError("selected_predicate butuh ids atau ztimesheetids")
+
+    statuses = list(SELECTED_POSTABLE_STATUSES) + (["POSTED"] if allow_posted else [])
+    filters = ["(" + " OR ".join(f"({item})" for item in ors) + ")"]
+    filters.append("status = ANY(%s)")
+    params.append(statuses)
+    filters.append(cutoff_guard_sql())
+    params.append(cutoff.strftime("%Y%m%d"))
+    if source_system:
+        filters.append("source_system = %s")
+        params.append(source_system)
+    if plant:
+        filters.append("werks = %s")
+        params.append(plant)
+    filters.append(exclusion_guard_sql())
+    return " AND ".join(filters), params
+
+
 def eligibility_predicate(
     *,
+    cutoff: date | None = None,
     statuses: list[str] | None = None,
     source_system: str | None = None,
     plant: str | None = None,
@@ -246,17 +362,12 @@ def eligibility_predicate(
         )
         params.append(app_timezone())
 
-    # GERBANG CUTOFF: baris dengan tanggal sebelum cutoff plant tidak boleh dikirim
-    cutoff = None
-    try:
-        cutoff = load_plant_cutoff(plant)
-    except Exception:
-        pass
-    if cutoff:
-        filters.append(
-            "(bucket_start::date >= %s OR (source_system = 'TIMESHEET' AND payload->>'ISDD' >= %s))"
-        )
-        params.extend([cutoff, cutoff.strftime("%Y%m%d")])
+    # GERBANG CUTOFF (fail-closed): baris dengan ISDD sebelum cutoff plant tidak
+    # boleh dikirim. Gagal membaca cutoff = exception, BUKAN query tanpa batas.
+    if cutoff is None:
+        cutoff = require_plant_cutoff(plant)
+    filters.append(cutoff_guard_sql())
+    params.append(cutoff.strftime("%Y%m%d"))
 
     if source_system:
         filters.append("source_system = %s")
@@ -315,8 +426,12 @@ def claim_rows(
     else:
         statuses = ["PENDING"]
 
+    # Cutoff dibaca SEBELUM koneksi claim dibuka: gagal = berhenti, tidak ada claim.
+    cutoff = require_plant_cutoff(plant)
+
     # #20: predikat yang SAMA dengan preview_rows/--dry-run.
     where_sql, params = eligibility_predicate(
+        cutoff=cutoff,
         statuses=statuses,
         source_system=source_system,
         plant=plant,
@@ -343,7 +458,9 @@ def claim_rows(
         ensure_staging_schema(conn)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
-            rows = apply_current_nfc_roles(cur, [dict(row) for row in cur.fetchall()])
+            fetched = [dict(row) for row in cur.fetchall()]
+            assert_rows_after_cutoff(fetched, cutoff)
+            rows = apply_current_nfc_roles(cur, fetched)
             if rows:
                 cur.execute(
                     """
@@ -364,37 +481,38 @@ def parse_csv_values(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def claim_selected_rows(ids: list[str], ztimesheetids: list[str], allow_posted: bool, plant: str | None = None) -> list[dict]:
-    filters = []
-    params: list[Any] = []
+def claim_selected_rows(
+    ids: list[str],
+    ztimesheetids: list[str],
+    allow_posted: bool,
+    plant: str | None = None,
+    source_system: str | None = None,
+) -> list[dict]:
+    """Claim jalur pilih-manual (UI post_bundles/post_corrections, CLI --ids).
 
-    if ids:
-        filters.append("id = ANY(%s::bigint[])")
-        params.append([int(value) for value in ids])
-    if ztimesheetids:
-        filters.append("ztimesheetid = ANY(%s::text[])")
-        params.append(ztimesheetids)
-    if not filters:
+    Dulu hanya mengecualikan POSTED: baris SKIPPED (termasuk 29.403 baris pra-cutoff
+    yang ditahan karena sudah diposting manual) dan baris sebelum cutoff tetap
+    bisa diklaim lalu dikirim ulang ke SAP. Sekarang memakai selected_predicate:
+    status PENDING/FAILED saja (+POSTED bila --allow-posted), cutoff wajib,
+    plant, dan exclusion.
+    """
+    if not ids and not ztimesheetids:
         return []
 
-    # Per-plant (2026-08-31): posting dari MPS satu plant hanya menyentuh werks-nya
-    # sendiri (PLANT_SSB di .env) — id/ztimesheetid plant lain tidak akan ikut.
-    plant_filter = ""
-    if plant:
-        plant_filter = "AND werks = %s"
-        params.append(plant)
-
-    status_filter = "" if allow_posted else "AND status <> 'POSTED'"
-    where_sql = " OR ".join(f"({item})" for item in filters)
+    # Fail-closed sebelum menyentuh antrean.
+    cutoff = require_plant_cutoff(plant)
+    where_sql, params = selected_predicate(
+        ids=ids,
+        ztimesheetids=ztimesheetids,
+        allow_posted=allow_posted,
+        plant=plant,
+        cutoff=cutoff,
+        source_system=source_system,
+    )
     sql = f"""
     SELECT id, source_system, source_ref_id, werks, status, pernr, pernr_origin, payload
     FROM sap_timesheet_staging
-    WHERE ({where_sql})
-      {status_filter}
-      {plant_filter}
-      -- #20: guard exclusion yang SAMA dengan claim_rows/preview_rows. Tanpa ini
-      -- bundel berisi record excluded bisa terkirim lewat --ids (over-post).
-      AND {exclusion_guard_sql()}
+    WHERE {where_sql}
     ORDER BY id
     FOR UPDATE SKIP LOCKED
     """
@@ -403,7 +521,9 @@ def claim_selected_rows(ids: list[str], ztimesheetids: list[str], allow_posted: 
         ensure_staging_schema(conn)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
-            rows = apply_current_nfc_roles(cur, [dict(row) for row in cur.fetchall()])
+            fetched = [dict(row) for row in cur.fetchall()]
+            assert_rows_after_cutoff(fetched, cutoff)
+            rows = apply_current_nfc_roles(cur, fetched)
             if rows:
                 cur.execute(
                     """
@@ -415,6 +535,13 @@ def claim_selected_rows(ids: list[str], ztimesheetids: list[str], allow_posted: 
                     ([row["id"] for row in rows],),
                 )
         conn.commit()
+    requested = len(ids) + len(ztimesheetids)
+    if len(rows) < requested:
+        log.warning(
+            "Selected-ID: %s diminta, %s diklaim. Sisanya ditolak guard "
+            "(status SKIPPED/POSTING/POSTED, sebelum cutoff %s, plant lain, atau excluded).",
+            requested, len(rows), cutoff,
+        )
     return rows
 
 
@@ -722,28 +849,17 @@ def preview_rows(args: argparse.Namespace) -> None:
     params: list[Any] = []
 
     if selected_ids or selected_zt:
-        # Jalur pilih-manual: cocokkan claim_selected_rows, yang juga tidak
-        # memfilter is_correction (koreksi memang di-post manual dari UI).
-        ors = []
-        if selected_ids:
-            ors.append("id = ANY(%s::bigint[])")
-            params.append([int(v) for v in selected_ids])
-        if selected_zt:
-            ors.append("ztimesheetid = ANY(%s::text[])")
-            params.append(selected_zt)
-        filters.append("(" + " OR ".join(ors) + ")")
-        if not args.allow_posted:
-            filters.append("status <> 'POSTED'")
-        if args.source_system:
-            filters.append("source_system = %s")
-            params.append(args.source_system)
-        if plant:
-            filters.append("werks = %s")
-            params.append(plant)
-        # #20: jalur dry-run --ids memakai guard exclusion yang sama dengan
-        # claim_selected_rows. Selected-id tidak berarti boleh bypass safety.
-        filters.append(exclusion_guard_sql())
-        where_sql = " AND ".join(filters)
+        # Jalur pilih-manual: predikat yang SAMA dengan claim_selected_rows
+        # (status tertahan, cutoff, plant, exclusion). Koreksi tidak difilter
+        # karena memang di-post manual dari UI.
+        where_sql, params = selected_predicate(
+            ids=selected_ids,
+            ztimesheetids=selected_zt,
+            allow_posted=args.allow_posted,
+            plant=plant,
+            cutoff=require_plant_cutoff(plant),
+            source_system=args.source_system,
+        )
     else:
         if args.failed_only:
             statuses = ["FAILED"]
@@ -827,7 +943,8 @@ def process_rows(args: argparse.Namespace) -> None:
     selected_ztimesheetids = parse_csv_values(args.ztimesheetids)
     if selected_ids or selected_ztimesheetids:
         plant = None if args.all_plants else (args.plant or plant_code())
-        rows = claim_selected_rows(selected_ids, selected_ztimesheetids, args.allow_posted, plant)
+        rows = claim_selected_rows(selected_ids, selected_ztimesheetids, args.allow_posted, plant,
+                                   args.source_system)
     else:
         plant = None if args.all_plants else (args.plant or plant_code())
         productive = None

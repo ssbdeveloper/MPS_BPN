@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from sap_staging_common import (
     connect_staging,
     ensure_staging_schema,
+    load_plant_cutoff,
     plant_code,
     setup_logging,
     update_stage_cursor,
@@ -149,6 +150,19 @@ def main() -> None:
     to_ts = parse_date(args.to_date)
     if from_ts >= to_ts:
         raise SystemExit("--from harus lebih awal dari --to")
+
+    # GUARD CUTOFF (fail-closed): rebuild MENGHAPUS baris belum-POSTED (termasuk
+    # SKIPPED pra-cutoff yang ditahan karena sudah diposting manual) lalu
+    # men-stage ulang sebagai PENDING. Di bawah cutoff itu menghidupkan kembali
+    # data historis. Gagal membaca cutoff = berhenti.
+    cutoff = load_plant_cutoff(plant_code())
+    if not cutoff:
+        raise SystemExit(f"timesheet_allocation_cutoff_date plant {plant_code()} belum dikonfigurasi; rebuild ditolak")
+    if from_ts.date() < cutoff:
+        raise SystemExit(
+            f"--from {from_ts.date()} sebelum cutoff plant {cutoff}: data pra-cutoff sudah diposting "
+            "manual dan ditahan (SKIPPED). Rebuild ditolak."
+        )
 
     if args.full_reset:
         full_reset(args.dry_run)

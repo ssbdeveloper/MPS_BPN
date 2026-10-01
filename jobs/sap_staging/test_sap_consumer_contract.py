@@ -121,10 +121,25 @@ class TestDryRunSharesGuards(unittest.TestCase):
 
     def test_preview_dan_claim_memakai_predikat_yang_sama(self):
         import post_sap_staging as p
+        from datetime import date
 
-        pred, _params = p.eligibility_predicate(statuses=["PENDING"])
+        # Cutoff kini wajib (fail-closed); tes kontrak memberinya eksplisit.
+        pred, _params = p.eligibility_predicate(statuses=["PENDING"], cutoff=date(2026, 9, 30))
         self.assertIn("exclusion", pred.lower(), "filter exclusion harus ada")
         self.assertIn("status", pred.lower(), "filter status harus ada")
+        self.assertIn("ISDD", pred, "filter cutoff harus ada")
+
+    def test_selected_predicate_memakai_guard_yang_sama(self):
+        import post_sap_staging as p
+        from datetime import date
+
+        pred, params = p.selected_predicate(
+            ids=["1"], ztimesheetids=[], allow_posted=False, plant="5100",
+            cutoff=date(2026, 9, 30),
+        )
+        self.assertIn("exclusion", pred.lower())
+        self.assertIn("ISDD", pred)
+        self.assertIn(["PENDING", "FAILED"], params, "SKIPPED tidak boleh bisa dipilih")
 
     def test_preview_rows_memakai_eligibility_predicate(self):
         import inspect
